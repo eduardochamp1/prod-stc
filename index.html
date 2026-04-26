@@ -326,6 +326,7 @@
     </div>
     <span class="mode-badge" id="mode-badge">MOCK</span>
     <button class="btn-header" onclick="openMetas()">⚙ Metas</button>
+    <button class="btn-header" onclick="openAdmin()">🔧 Admin</button>
   </div>
 </header>
 
@@ -338,7 +339,6 @@
     <button class="tab-btn"        id="tab-btn-ranking"    onclick="switchTab('ranking')">🏆 Ranking</button>
     <button class="tab-btn"        id="tab-btn-historico"  onclick="switchTab('historico')">📈 Histórico</button>
     <button class="tab-btn"        id="tab-btn-equipes"    onclick="switchTab('equipes')">👷 Equipes</button>
-    <button class="tab-btn"        id="tab-btn-admin"      onclick="switchTab('admin')">⚙️ Admin</button>
   </div>
 
   <!-- ── TAB: MONITOR ─────────────────────────────────────────────────── -->
@@ -573,86 +573,86 @@
 
 
   <!-- ── TAB: ADMIN ─────────────────────────────────────────────────────── -->
-  <div class="tab-panel" id="tab-admin">
-
-    <div style="max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:20px">
-
-      <!-- Backfill card -->
-      <div class="prod-section">
-        <div class="prod-header">
-          <div>
-            <span class="prod-title">Backfill Histórico</span>
-            <span class="prod-subtitle">Busca dados de dias anteriores no WPA e salva no Supabase</span>
-          </div>
-        </div>
-
-        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px">
-          <div class="filter-group" style="flex:1;min-width:140px">
-            <span class="filter-label">De</span>
-            <input type="date" class="month-input" id="bf-de" style="width:100%;border:none;outline:none" />
-          </div>
-          <div class="filter-group" style="flex:1;min-width:140px">
-            <span class="filter-label">Até</span>
-            <input type="date" class="month-input" id="bf-ate" style="width:100%;border:none;outline:none" />
-          </div>
-          <button class="btn-refresh" id="bf-btn" onclick="runBackfill()" style="height:40px;padding:0 20px;font-size:13px">
-            ▶ Iniciar Backfill
-          </button>
-        </div>
-
-        <!-- Barra de progresso -->
-        <div id="bf-progress-wrap" style="display:none;margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px">
-            <span id="bf-progress-label">Processando…</span>
-            <span id="bf-progress-pct">0%</span>
-          </div>
-          <div style="height:8px;background:var(--cinza2);border-radius:4px;overflow:hidden">
-            <div id="bf-progress-bar" style="height:100%;background:var(--verde);border-radius:4px;width:0;transition:width .3s ease"></div>
-          </div>
-        </div>
-
-        <!-- Log de resultado -->
-        <div id="bf-log" style="display:none;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px;font-family:monospace;max-height:300px;overflow-y:auto;line-height:1.7"></div>
-      </div>
-
-      <!-- Consolidar card -->
-      <div class="prod-section">
-        <div class="prod-header">
-          <div>
-            <span class="prod-title">Consolidar Dia</span>
-            <span class="prod-subtitle">Recalcula daily_totals a partir dos snapshots de um dia específico</span>
-          </div>
-        </div>
-        <div style="display:flex;gap:12px;align-items:flex-end">
-          <div class="filter-group" style="flex:1">
-            <span class="filter-label">Data</span>
-            <input type="date" class="month-input" id="cons-date" style="width:100%;border:none;outline:none" />
-          </div>
-          <button class="btn-refresh" onclick="runConsolidar()" style="height:40px;padding:0 20px;font-size:13px">
-            ↺ Consolidar
-          </button>
-        </div>
-        <div id="cons-result" style="display:none;margin-top:12px;font-size:13px;color:var(--verde);font-weight:500"></div>
-      </div>
-
-      <!-- Snapshot imediato -->
-      <div class="prod-section">
-        <div class="prod-header">
-          <div>
-            <span class="prod-title">Snapshot Manual</span>
-            <span class="prod-subtitle">Força coleta imediata das equipes ativas (como se o cron tivesse rodado agora)</span>
-          </div>
-        </div>
-        <button class="btn-refresh" onclick="runSnapshot()" style="height:40px;padding:0 20px;font-size:13px">
-          📸 Tirar Snapshot Agora
-        </button>
-        <div id="snap-result" style="display:none;margin-top:12px;font-size:13px;color:var(--verde);font-weight:500"></div>
-      </div>
-
-    </div>
-  </div>
 
 </main>
+
+<!-- MODAL ADMIN -->
+<div class="modal-overlay" id="admin-overlay" onclick="closeAdminModal(event)">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">🔧 Painel Admin</div>
+        <div class="modal-sub">Ferramentas de manutenção e backfill</div>
+      </div>
+      <button class="modal-close" onclick="closeAdminDirect()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;flex-direction:column;gap:20px">
+
+        <!-- Backfill card -->
+        <div>
+          <div class="modal-section-title">Backfill Histórico</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Busca dados de dias anteriores no WPA e salva no Supabase</div>
+
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px">
+            <div class="filter-group" style="flex:1;min-width:140px">
+              <span class="filter-label">De</span>
+              <input type="date" class="month-input" id="bf-de" style="width:100%;border:none;outline:none" />
+            </div>
+            <div class="filter-group" style="flex:1;min-width:140px">
+              <span class="filter-label">Até</span>
+              <input type="date" class="month-input" id="bf-ate" style="width:100%;border:none;outline:none" />
+            </div>
+            <button class="btn-refresh" id="bf-btn" onclick="runBackfill()" style="height:40px;padding:0 20px;font-size:13px">
+              ▶ Iniciar Backfill
+            </button>
+          </div>
+
+          <!-- Barra de progresso -->
+          <div id="bf-progress-wrap" style="display:none;margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px">
+              <span id="bf-progress-label">Processando…</span>
+              <span id="bf-progress-pct">0%</span>
+            </div>
+            <div style="height:8px;background:var(--cinza2);border-radius:4px;overflow:hidden">
+              <div id="bf-progress-bar" style="height:100%;background:var(--verde);border-radius:4px;width:0;transition:width .3s ease"></div>
+            </div>
+          </div>
+
+          <!-- Log de resultado -->
+          <div id="bf-log" style="display:none;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px;font-family:monospace;max-height:260px;overflow-y:auto;line-height:1.7"></div>
+        </div>
+
+        <!-- Consolidar card -->
+        <div>
+          <div class="modal-section-title">Consolidar Dia</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Recalcula daily_totals a partir dos snapshots de um dia específico</div>
+          <div style="display:flex;gap:12px;align-items:flex-end">
+            <div class="filter-group" style="flex:1">
+              <span class="filter-label">Data</span>
+              <input type="date" class="month-input" id="cons-date" style="width:100%;border:none;outline:none" />
+            </div>
+            <button class="btn-refresh" onclick="runConsolidar()" style="height:40px;padding:0 20px;font-size:13px">
+              ↺ Consolidar
+            </button>
+          </div>
+          <div id="cons-result" style="display:none;margin-top:12px;font-size:13px;font-weight:500"></div>
+        </div>
+
+        <!-- Snapshot imediato -->
+        <div>
+          <div class="modal-section-title">Snapshot Manual</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Força coleta imediata das equipes ativas (como se o cron tivesse rodado agora)</div>
+          <button class="btn-refresh" onclick="runSnapshot()" style="height:40px;padding:0 20px;font-size:13px">
+            📸 Tirar Snapshot Agora
+          </button>
+          <div id="snap-result" style="display:none;margin-top:12px;font-size:13px;font-weight:500"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- MODAL DETALHE EQUIPE -->
 <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
@@ -674,7 +674,7 @@
     <div class="modal-header">
       <div>
         <div class="modal-title">🔒 Acesso Restrito</div>
-        <div class="modal-sub">Digite a senha para configurar metas</div>
+        <div class="modal-sub" id="senha-sub">Digite a senha para configurar metas</div>
       </div>
       <button class="modal-close" onclick="closeSenhaDirect()">×</button>
     </div>
@@ -763,7 +763,6 @@
     if (tab === 'ranking')   loadRanking();
     if (tab === 'historico') loadHistorico();
     if (tab === 'equipes')   initEquipes();
-    if (tab === 'admin')     initAdmin();
   }
 
   // ── METAS (banco de dados via API) ─────────────────────────────────────
@@ -1321,31 +1320,38 @@
       </div>`;
   }
 
-  // ── SENHA METAS ───────────────────────────────────────────────────────
+  // ── SENHA (compartilhada entre Metas e Admin) ─────────────────────────
   // Hash SHA-256 da senha "engelmig2025" — altere conforme necessário
   // Para gerar outro hash: https://emn178.github.io/online-tools/sha256.html
   const SENHA_HASH = 'f8381e75ae951b00f47a1ab48077a9a4b33a59d7e004ddfa4e5833bcb3664d75'; // "engelmig2025"
+
+  let _pendingAction = 'metas'; // 'metas' | 'admin'
 
   async function sha256(str) {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
   }
 
-  function openMetas() {
-    // Limpa campo e erro antes de abrir
+  function _abrirSenhaModal(action, subtitulo) {
+    _pendingAction = action;
     const input = document.getElementById('senha-metas-input');
-    if (input) { input.value = ''; }
+    if (input) input.value = '';
     document.getElementById('senha-erro').style.display = 'none';
+    document.getElementById('senha-sub').textContent = subtitulo;
     document.getElementById('senha-overlay').classList.add('open');
     setTimeout(() => input?.focus(), 80);
   }
+
+  function openMetas()  { _abrirSenhaModal('metas', 'Digite a senha para configurar metas'); }
+  function openAdmin()  { _abrirSenhaModal('admin', 'Digite a senha para acessar o painel admin'); }
 
   async function confirmarSenha() {
     const input = document.getElementById('senha-metas-input');
     const hash  = await sha256(input.value);
     if (hash === SENHA_HASH) {
       closeSenhaDirect();
-      _abrirModalMetas();
+      if (_pendingAction === 'admin') _abrirModalAdmin();
+      else                            _abrirModalMetas();
     } else {
       document.getElementById('senha-erro').style.display = 'block';
       input.value = '';
@@ -1355,6 +1361,14 @@
 
   function closeSenhaModal(e) { if (e.target === document.getElementById('senha-overlay')) closeSenhaDirect(); }
   function closeSenhaDirect() { document.getElementById('senha-overlay').classList.remove('open'); }
+
+  // ── MODAL ADMIN ───────────────────────────────────────────────────────
+  function _abrirModalAdmin() {
+    initAdmin();
+    document.getElementById('admin-overlay').classList.add('open');
+  }
+  function closeAdminModal(e) { if (e.target === document.getElementById('admin-overlay')) closeAdminDirect(); }
+  function closeAdminDirect() { document.getElementById('admin-overlay').classList.remove('open'); }
 
   // ── MODAL METAS ───────────────────────────────────────────────────────
   function _abrirModalMetas() {
