@@ -509,6 +509,32 @@
   </div>
 </div>
 
+<!-- MODAL SENHA METAS -->
+<div class="modal-overlay" id="senha-overlay" onclick="closeSenhaModal(event)">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">🔒 Acesso Restrito</div>
+        <div class="modal-sub">Digite a senha para configurar metas</div>
+      </div>
+      <button class="modal-close" onclick="closeSenhaDirect()">×</button>
+    </div>
+    <div class="modal-body" style="padding-top:8px">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <input type="password" id="senha-metas-input"
+               style="width:100%;padding:10px 14px;border:1.5px solid var(--cinza2);border-radius:var(--radius);font-size:15px;font-family:'Roboto',sans-serif;outline:none;letter-spacing:0.2em;text-align:center"
+               placeholder="••••••"
+               onkeydown="if(event.key==='Enter')confirmarSenha()"
+               oninput="document.getElementById('senha-erro').style.display='none'" />
+        <div id="senha-erro" style="display:none;color:var(--vermelho);font-size:12px;text-align:center;font-weight:500">
+          Senha incorreta. Tente novamente.
+        </div>
+        <button class="btn-salvar" onclick="confirmarSenha()" style="margin-top:4px">Entrar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL METAS -->
 <div class="modal-overlay" id="metas-overlay" onclick="closeMetasModal(event)">
   <div class="modal" id="metas-modal" style="max-width:820px">
@@ -1049,8 +1075,43 @@
       </div>`;
   }
 
-  // ── MODAL METAS ───────────────────────────────────────────────────────
+  // ── SENHA METAS ───────────────────────────────────────────────────────
+  // Hash SHA-256 da senha "engelmig2025" — altere conforme necessário
+  // Para gerar outro hash: https://emn178.github.io/online-tools/sha256.html
+  const SENHA_HASH = 'f8381e75ae951b00f47a1ab48077a9a4b33a59d7e004ddfa4e5833bcb3664d75'; // "engelmig2025"
+
+  async function sha256(str) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+
   function openMetas() {
+    // Limpa campo e erro antes de abrir
+    const input = document.getElementById('senha-metas-input');
+    if (input) { input.value = ''; }
+    document.getElementById('senha-erro').style.display = 'none';
+    document.getElementById('senha-overlay').classList.add('open');
+    setTimeout(() => input?.focus(), 80);
+  }
+
+  async function confirmarSenha() {
+    const input = document.getElementById('senha-metas-input');
+    const hash  = await sha256(input.value);
+    if (hash === SENHA_HASH) {
+      closeSenhaDirect();
+      _abrirModalMetas();
+    } else {
+      document.getElementById('senha-erro').style.display = 'block';
+      input.value = '';
+      input.focus();
+    }
+  }
+
+  function closeSenhaModal(e) { if (e.target === document.getElementById('senha-overlay')) closeSenhaDirect(); }
+  function closeSenhaDirect() { document.getElementById('senha-overlay').classList.remove('open'); }
+
+  // ── MODAL METAS ───────────────────────────────────────────────────────
+  function _abrirModalMetas() {
     const metas = getMetas();
     ['GUA', 'CAC'].forEach(reg => {
       const grid = document.getElementById('metas-grid-' + reg);
