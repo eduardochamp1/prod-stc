@@ -295,6 +295,39 @@ router.get('/debug/notas', async (req, res) => {
   }
 });
 
+// GET /api/debug/historico?sectorId=DESG&date=2026-04-01
+// Inspeciona sessões históricas brutas sem filtro de empresa
+router.get('/debug/historico', async (req, res) => {
+  const { wpaFetch: wf } = require('../services/wpaService');
+  const sectorId = req.query.sectorId || 'DESG';
+  const date     = req.query.date     || '2026-04-01';
+  const [y, m, d] = date.split('-');
+  const wpaDate  = `${parseInt(m)}/${parseInt(d)}/${y}`;
+
+  try {
+    const raw  = await wf(`/api/Sessions/all/date?sectorId=${sectorId}&date=${encodeURIComponent(wpaDate)}`, { method: 'POST' });
+    const data = await raw.json();
+    const sessions = data.Data || [];
+
+    res.json({
+      status:        raw.status,
+      total:         sessions.length,
+      // Mostra os 3 primeiros com foco nos campos de empresa/equipe
+      amostra: sessions.slice(0, 3).map(s => ({
+        sessionId:   s.Id,
+        teamName:    s.Team?.Name,
+        teamId:      s.Team?.Id,
+        companyId:   s.Team?.CompanyId,
+        companyName: s.Team?.Company?.Name,
+        sectorId:    s.SectorId || s.Sector?.Code,
+        beginTime:   s.BeginTime,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/debug/preroute?sectorId=DESG  — inspeciona estrutura bruta do endpoint de carteira
 router.get('/debug/preroute', async (req, res) => {
   const { wpaFetch: wf } = require('../services/wpaService');
