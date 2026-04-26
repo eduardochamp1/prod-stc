@@ -7,6 +7,16 @@ const { getClient } = require('../services/supabaseClient');
 
 // ── UTILITÁRIOS ────────────────────────────────────────────────────────────────
 
+/** Aplica filtro de intervalo de datas para um mês inteiro (evita LIKE em coluna DATE) */
+function filterByMonth(query, yearMonth) {
+  const [y, m] = yearMonth.split('-').map(Number);
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  const start = `${yearMonth}-01`;
+  const end   = `${ny}-${String(nm).padStart(2, '0')}-01`;
+  return query.gte('date', start).lt('date', end);
+}
+
 /** Conta dias úteis (seg–sex) em um mês */
 function diasUteisNoMes(year, month) {
   const total = new Date(year, month, 0).getDate();
@@ -110,10 +120,10 @@ async function getTeamsFromSupabase(filters = {}) {
 
 async function getMonthTotals(yearMonth) {
   const sb = getClient();
-  const { data, error } = await sb
-    .from('daily_totals')
-    .select('regional, tipo_code, count')
-    .like('date', `${yearMonth}-%`);
+  const { data, error } = await filterByMonth(
+    sb.from('daily_totals').select('regional, tipo_code, count'),
+    yearMonth
+  );
   if (error) throw error;
 
   const totais = { GUA: {}, CAC: {} };
@@ -127,11 +137,10 @@ async function getMonthTotals(yearMonth) {
 
 async function getDailyHistory(yearMonth) {
   const sb = getClient();
-  const { data, error } = await sb
-    .from('daily_totals')
-    .select('date, regional, tipo_code, count')
-    .like('date', `${yearMonth}-%`)
-    .order('date');
+  const { data, error } = await filterByMonth(
+    sb.from('daily_totals').select('date, regional, tipo_code, count'),
+    yearMonth
+  ).order('date');
   if (error) throw error;
 
   const byDate = {};
@@ -152,10 +161,10 @@ async function getDailyHistory(yearMonth) {
  */
 async function getTeamRanking(yearMonth, regional) {
   const sb = getClient();
-  let query = sb
-    .from('team_daily_totals')
-    .select('team_name, regional, sector_id, tipo_code, count')
-    .like('date', `${yearMonth}-%`);
+  let query = filterByMonth(
+    sb.from('team_daily_totals').select('team_name, regional, sector_id, tipo_code, count'),
+    yearMonth
+  );
 
   if (regional && regional !== 'ALL') query = query.eq('regional', regional);
 
@@ -186,11 +195,10 @@ async function getTeamRanking(yearMonth, regional) {
  */
 async function getTeamDailyHistory(yearMonth, teamName) {
   const sb = getClient();
-  let query = sb
-    .from('team_daily_totals')
-    .select('date, team_name, regional, tipo_code, count')
-    .like('date', `${yearMonth}-%`)
-    .order('date');
+  let query = filterByMonth(
+    sb.from('team_daily_totals').select('date, team_name, regional, tipo_code, count'),
+    yearMonth
+  ).order('date');
 
   if (teamName) query = query.eq('team_name', teamName);
 
