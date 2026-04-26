@@ -295,6 +295,50 @@ router.get('/debug/notas', async (req, res) => {
   }
 });
 
+// GET /api/debug/historico-notas?sectorId=DESG&date=2026-04-01
+// Inspeciona estrutura bruta das notas históricas (Status vs ExecutionStatus)
+router.get('/debug/historico-notas', async (req, res) => {
+  const { wpaFetch: wf } = require('../services/wpaService');
+  const sectorId = req.query.sectorId || 'DESG';
+  const date     = req.query.date     || '2026-04-01';
+  const [y, m, d] = date.split('-');
+  const wpaDate  = `${parseInt(m)}/${parseInt(d)}/${y}`;
+
+  try {
+    const raw  = await wf(`/api/notes/execution?sectorId=${sectorId}&date=${encodeURIComponent(wpaDate)}`);
+    const data = await raw.json();
+    const notas = data.Data?.Notes || data.Data || [];
+
+    // Conta por Status e ExecutionStatus para descobrir qual campo usar
+    const byStatus     = {};
+    const byExecStatus = {};
+    notas.forEach(n => {
+      const s = n.Status          ?? 'undefined';
+      const e = n.ExecutionStatus ?? 'undefined';
+      byStatus[s]     = (byStatus[s]     || 0) + 1;
+      byExecStatus[e] = (byExecStatus[e] || 0) + 1;
+    });
+
+    res.json({
+      httpStatus:    raw.status,
+      total:         notas.length,
+      topLevelKeys:  data.Data ? Object.keys(data.Data) : Object.keys(data),
+      notaKeys:      notas[0] ? Object.keys(notas[0]) : [],
+      byStatus,
+      byExecStatus,
+      amostra: notas.slice(0, 5).map(n => ({
+        Status:          n.Status,
+        ExecutionStatus: n.ExecutionStatus,
+        Type:            n.Type,
+        TeamName:        n.Team?.Name,
+        TeamId:          n.Team?.Id,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/debug/historico?sectorId=DESG&date=2026-04-01
 // Inspeciona sessões históricas brutas sem filtro de empresa
 router.get('/debug/historico', async (req, res) => {
