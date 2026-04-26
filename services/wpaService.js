@@ -150,12 +150,18 @@ function _accReset() {
 function _accRecord(teams) {
   _accReset();
   teams.forEach(t => {
-    // Acumula executadas (status 2) E concluídas (status 9/4) — ambas contam como realizadas
+    // Acumula executadas (status 2) E concluídas (status 9/4) preservando o status original
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
       if (n.codigo && !_acc.notes.has(n.codigo)) {
-        _acc.notes.set(n.codigo, { tipoCode: n.tipoCode, teamName: t.teamName, regional: t.regional });
-        console.log(`[WPA] ★ Nota realizada acumulada: equipe=${t.teamName} tipo=${n.tipoCode} nota=${n.codigo} status=${n.status}`);
+        // FIX: guarda o status original (não força 'concluida')
+        _acc.notes.set(n.codigo, {
+          tipoCode:  n.tipoCode,
+          teamName:  t.teamName,
+          regional:  t.regional,
+          status:    n.status,   // preserva: 'executada' ou 'concluida'
+        });
+        console.log(`[WPA] ★ Nota acumulada: equipe=${t.teamName} tipo=${n.tipoCode} nota=${n.codigo} status=${n.status}`);
       }
     });
   });
@@ -165,25 +171,35 @@ function _accApply(teams) {
   _accReset();
   if (_acc.notes.size === 0) return teams;
 
-  // Monta extras por equipe vindas do acumulador
-  const extras = {};
+  // Separa extras por status para reinserir na lista correta
+  const extrasExec = {};
+  const extrasConc = {};
   _acc.notes.forEach((info, noteId) => {
-    if (!extras[info.teamName]) extras[info.teamName] = [];
-    extras[info.teamName].push({ codigo: noteId, tipoCode: info.tipoCode, tipoNome: info.tipoCode, status: 'concluida' });
+    const nota = { codigo: noteId, tipoCode: info.tipoCode, tipoNome: info.tipoCode, status: info.status };
+    if (info.status === 'executada') {
+      if (!extrasExec[info.teamName]) extrasExec[info.teamName] = [];
+      extrasExec[info.teamName].push(nota);
+    } else {
+      if (!extrasConc[info.teamName]) extrasConc[info.teamName] = [];
+      extrasConc[info.teamName].push(nota);
+    }
   });
 
   return teams.map(t => {
-    const ex = extras[t.teamName];
-    if (!ex || ex.length === 0) return t;
-    // IDs já presentes nas notas atuais (executadas + concluídas)
+    // IDs já presentes nas notas atuais
     const existentes = new Set([
       ...(t.notasExecutadas || []).map(n => n.codigo),
       ...(t.notasConcluidas || []).map(n => n.codigo),
     ]);
-    const novas = ex.filter(n => !existentes.has(n.codigo));
-    if (novas.length === 0) return t;
-    // Reinsere como concluídas (status final) para não duplicar categorias
-    return { ...t, notasConcluidas: [...(t.notasConcluidas || []), ...novas] };
+    const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.codigo));
+    const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.codigo));
+    if (novasExec.length === 0 && novasConc.length === 0) return t;
+    // FIX: reinsere cada nota na lista correta conforme seu status original
+    return {
+      ...t,
+      notasExecutadas: [...(t.notasExecutadas || []), ...novasExec],
+      notasConcluidas: [...(t.notasConcluidas || []), ...novasConc],
+    };
   });
 }
 
@@ -309,8 +325,12 @@ async function getTeamsBySector(sectorId) {
                || [];
 
     const conc     = notas.filter(n => n.status === 'concluida').length;
-    const carteira = walletMap[teamName] || 0;
-    console.log(`[WPA]   ${sectorId}/${teamName}: ${notas.length} notas (${conc} concluídas, ${carteira} carteira)`);
+    const carteira = walletMap[teamName] ?? 0;
+    if (walletMap[teamName] === undefined) {
+      console.warn(`[WPA]   ${sectorId}/${teamName}: ⚠️ não encontrado no preroute — carteira=0`);
+    } else {
+      console.log(`[WPA]   ${sectorId}/${teamName}: ${notas.length} notas (${conc} concluídas, ${carteira} carteira)`);
+    }
 
     return normalizarSessao(s, { [teamName]: notas }, carteira);
   });

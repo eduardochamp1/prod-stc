@@ -151,9 +151,13 @@ async function consolidateDay(date) {
   snaps.forEach(s => { if (!latest[s.team_name]) latest[s.team_name] = s; });
 
   // ── daily_totals (por regional/tipo) ─────────────────────────────────────────
+  // FIX: inclui executadas (status 2) + concluídas (status 9/4) — igual ao intraday
   const regionalAcc = {};
   Object.values(latest).forEach(s => {
-    const notas = s.data?.notasConcluidas || [];
+    const notas = [
+      ...(s.data?.notasExecutadas || []),
+      ...(s.data?.notasConcluidas || []),
+    ];
     notas.forEach(n => {
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
@@ -176,9 +180,13 @@ async function consolidateDay(date) {
   }
 
   // ── team_daily_totals (por equipe/tipo) ───────────────────────────────────────
+  // FIX: inclui executadas + concluídas
   const teamRows = [];
   Object.values(latest).forEach(s => {
-    const notas = s.data?.notasConcluidas || [];
+    const notas = [
+      ...(s.data?.notasExecutadas || []),
+      ...(s.data?.notasConcluidas || []),
+    ];
     const acc = {};
     notas.forEach(n => {
       const code = n.tipoCode || n.tipo_code;
