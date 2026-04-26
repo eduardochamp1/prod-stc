@@ -1134,7 +1134,7 @@
 
   // ── RENDER MÉTRICAS ───────────────────────────────────────────────────
   function renderMetrics(teams) {
-    const baixadas   = teams.reduce((s,t) => s + (t.notasBaixadas   || []).length, 0);
+    const baixadas   = teams.reduce((s,t) => s + (t.carteiraCount   || 0), 0);
     const executadas = teams.reduce((s,t) => s + (t.notasExecutadas || []).length, 0);
     const concluidas = teams.reduce((s,t) => s + (t.notasConcluidas || []).length, 0);
     const rejeitadas = teams.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
@@ -1186,7 +1186,7 @@
             <div class="team-row"><span class="team-row-label">Sessão</span><span style="color:var(--text);font-size:12px">${fmt(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}</span></div>
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
-              <div class="os-cell"><div class="os-num">${(t.notasBaixadas||[]).length}</div><div class="os-lbl">Carteira</div></div>
+              <div class="os-cell"><div class="os-num">${t.carteiraCount||0}</div><div class="os-lbl">Carteira</div></div>
               <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas||[]).length}</div><div class="os-lbl">Andamento</div></div>
               <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas||[]).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas||[]).length}</div><div class="os-lbl">Rejeitadas</div></div>
@@ -1253,7 +1253,7 @@
       <div class="modal-section">
         <div class="modal-section-title">Ordens de Serviço</div>
         <div class="notas-tabs" id="notas-tabs">
-          <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Em Carteira (${(t.notasBaixadas||[]).length})</button>
+          <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Em Carteira (${t.carteiraCount||0})</button>
           <button class="nota-tab" onclick="switchNotaTab('executada',this)">Em Andamento (${(t.notasExecutadas||[]).length})</button>
           <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Executadas (${(t.notasConcluidas||[]).length})</button>
           <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas||[]).length})</button>

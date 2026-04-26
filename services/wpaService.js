@@ -216,7 +216,7 @@ function normalizarNota(n) {
   };
 }
 
-function normalizarSessao(s, notasPorEquipe = {}) {
+function normalizarSessao(s, notasPorEquipe = {}, carteiraCount = 0) {
   const teamName = s.Team?.Name || '?';
   const sectorId = s.SectorId || s.Sector?.Code || 'DESG';
   const notas    = notasPorEquipe[teamName] || [];
@@ -241,6 +241,7 @@ function normalizarSessao(s, notasPorEquipe = {}) {
     deviceModel: s.Device?.Model || null,
     appVersion:  s.AppVersion || null,
     teamStatus:  s.TeamStatus,
+    carteiraCount,
     servicosPerfil: [...new Set(notas.map(n => n.tipoCode))],
     notasBaixadas:   notas.filter(n => n.status === 'baixada'),
     notasExecutadas: notas.filter(n => n.status === 'executada'),
@@ -254,10 +255,19 @@ function normalizarSessao(s, notasPorEquipe = {}) {
  * Retorna array de equipes normalizado.
  */
 async function getTeamsBySector(sectorId) {
-  const [sessions, notasRaw] = await Promise.all([
+  const [sessions, notasRaw, preroute] = await Promise.all([
     getSessions(sectorId),
     getNotesExecution(sectorId),
+    getPreroute(sectorId).catch(() => []),
   ]);
+
+  // Monta mapa teamName → WalletCount a partir do preroute
+  const walletMap = {};
+  preroute.forEach(item => {
+    const nome = (item.Name || '').trim();
+    if (nome) walletMap[nome] = item.WalletCount || 0;
+  });
+  console.log(`[WPA] ${sectorId}: preroute ${preroute.length} equipes, carteira total=${preroute.reduce((s,i) => s + (i.WalletCount||0), 0)}`);
 
   // Filtra apenas equipes da ENGELMIG
   const engelmigSessions = sessions.filter(s =>
@@ -298,10 +308,11 @@ async function getTeamsBySector(sectorId) {
                || (teamId ? notasPorId[teamId] : null)
                || [];
 
-    const conc = notas.filter(n => n.status === 'concluida').length;
-    console.log(`[WPA]   ${sectorId}/${teamName}: ${notas.length} notas (${conc} concluídas)`);
+    const conc     = notas.filter(n => n.status === 'concluida').length;
+    const carteira = walletMap[teamName] || 0;
+    console.log(`[WPA]   ${sectorId}/${teamName}: ${notas.length} notas (${conc} concluídas, ${carteira} carteira)`);
 
-    return normalizarSessao(s, { [teamName]: notas });
+    return normalizarSessao(s, { [teamName]: notas }, carteira);
   });
 
   // Registra concluídas no acumulador e reaplica (preserva notas status-4 que sumiram da API)
