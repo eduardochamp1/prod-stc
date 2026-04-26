@@ -340,12 +340,12 @@
         <div class="metric-sub" id="m-ativas"></div>
       </div>
       <div class="metric-card accent-verde">
-        <div class="metric-label">OS Concluídas</div>
+        <div class="metric-label">OS Executadas</div>
         <div class="metric-value verde" id="m-concluidas">—</div>
         <div class="metric-sub" id="m-concluidas-pct"></div>
       </div>
       <div class="metric-card accent-amarelo">
-        <div class="metric-label">OS Executadas</div>
+        <div class="metric-label">Em Andamento</div>
         <div class="metric-value amarelo" id="m-executadas">—</div>
       </div>
       <div class="metric-card accent-vermelho">
@@ -669,7 +669,7 @@
     const tipos = Object.keys(TIPOS_SERVICO);
     const tiposExibir = tipos.filter(c => metasReg[c] || totais[c]);
     if (tiposExibir.length === 0)
-      return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota executada ou concluída até o momento.</span>';
+      return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota em andamento ou executada até o momento.</span>';
     return `<div class="prod-grid">${tiposExibir.map(code => {
       const realizado  = totais[code] || 0;
       const meta       = parseInt(metasReg[code] || 0);
@@ -1187,8 +1187,8 @@
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
               <div class="os-cell"><div class="os-num">${(t.notasBaixadas||[]).length}</div><div class="os-lbl">Baixadas</div></div>
-              <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas||[]).length}</div><div class="os-lbl">Exec.</div></div>
-              <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas||[]).length}</div><div class="os-lbl">Concluídas</div></div>
+              <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas||[]).length}</div><div class="os-lbl">Andamento</div></div>
+              <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas||[]).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas||[]).length}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
             ${tiposHtml ? `<div class="tipos-row">${tiposHtml}</div>` : ''}
@@ -1254,8 +1254,8 @@
         <div class="modal-section-title">Ordens de Serviço</div>
         <div class="notas-tabs" id="notas-tabs">
           <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Baixadas (${(t.notasBaixadas||[]).length})</button>
-          <button class="nota-tab" onclick="switchNotaTab('executada',this)">Executadas (${(t.notasExecutadas||[]).length})</button>
-          <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Concluídas (${(t.notasConcluidas||[]).length})</button>
+          <button class="nota-tab" onclick="switchNotaTab('executada',this)">Em Andamento (${(t.notasExecutadas||[]).length})</button>
+          <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Executadas (${(t.notasConcluidas||[]).length})</button>
           <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas||[]).length})</button>
         </div>
         <div class="notas-list" id="notas-list"></div>
