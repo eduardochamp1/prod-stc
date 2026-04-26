@@ -77,8 +77,10 @@ router.get('/summary', async (req, res) => {
 router.get('/status', (req, res) => {
   res.json({
     status:   'ok',
+    version:  '1.1.0',
     mode:     process.env.DATA_MODE || 'mock',
     supabase: process.env.SUPABASE_SERVICE_KEY ? 'configurado ✓' : 'não configurado',
+    webhook:  process.env.WEBHOOK_SECRET ? 'configurado ✓' : 'não configurado',
     ts:       new Date().toISOString(),
   });
 });
