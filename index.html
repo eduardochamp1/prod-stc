@@ -125,7 +125,25 @@
     .relogin-0 { background: #e8f5ee; color: var(--verde); }
     .relogin-1 { background: #fff8e1; color: #c49000; }
     .relogin-2 { background: #fdecea; color: var(--vermelho); }
-    .os-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--cinza2); }
+    .os-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--cinza2); justify-content: center; }
+    .os-cell { flex: 1 1 60px; min-width: 56px; text-align: center; background: var(--cinza1); border-radius: 6px; padding: 6px 4px; }
+
+    /* ── FILTRO DE TIPOS ── */
+    .tipos-filter-wrap { position: relative; }
+    .tipos-filter-btn { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 7px 14px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: 'Roboto',sans-serif; color: var(--text); display: flex; align-items: center; gap: 6px; white-space: nowrap; transition: border-color 0.15s; }
+    .tipos-filter-btn:hover { border-color: var(--verde); }
+    .tipos-filter-btn.active { border-color: var(--verde); color: var(--verde); }
+    .tipos-filter-badge { background: var(--verde); color: #fff; border-radius: 20px; font-size: 10px; padding: 1px 6px; font-weight: 700; }
+    .tipos-filter-panel { display: none; position: absolute; right: 0; top: calc(100% + 6px); background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0,0,0,0.12); z-index: 200; min-width: 220px; padding: 10px; }
+    .tipos-filter-panel.open { display: block; }
+    .tipos-filter-actions { display: flex; gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--cinza2); }
+    .tipos-filter-action { font-size: 11px; font-weight: 600; color: var(--verde); cursor: pointer; background: none; border: none; font-family: 'Roboto',sans-serif; padding: 0; }
+    .tipos-filter-action:hover { text-decoration: underline; }
+    .tipo-check-item { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 4px; cursor: pointer; transition: background 0.1s; }
+    .tipo-check-item:hover { background: var(--cinza1); }
+    .tipo-check-item input[type=checkbox] { accent-color: var(--verde); width: 14px; height: 14px; cursor: pointer; }
+    .tipo-check-code { font-size: 11px; font-weight: 700; background: var(--verde); color: #fff; border-radius: 3px; padding: 1px 5px; min-width: 28px; text-align: center; }
+    .tipo-check-nome { font-size: 12px; color: var(--text); }
     .os-cell { text-align: center; }
     .os-num { font-size: 17px; font-weight: 700; color: var(--text); }
     .os-num.concluida { color: var(--verde); }
@@ -378,7 +396,21 @@
         <span class="section-title">Equipes</span>
         <span class="section-count" id="section-count"></span>
       </div>
-      <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div class="tipos-filter-wrap" id="tipos-filter-wrap">
+          <button class="tipos-filter-btn" id="tipos-filter-btn" onclick="toggleTiposPanel(event)">
+            🔧 Tipos <span class="tipos-filter-badge" id="tipos-badge"></span>
+          </button>
+          <div class="tipos-filter-panel" id="tipos-filter-panel">
+            <div class="tipos-filter-actions">
+              <button class="tipos-filter-action" onclick="toggleAllTipos(true)">Todos</button>
+              <button class="tipos-filter-action" onclick="toggleAllTipos(false)">Nenhum</button>
+            </div>
+            <div id="tipos-checkboxes"></div>
+          </div>
+        </div>
+        <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
+      </div>
     </div>
 
     <div class="teams-grid" id="teams-grid">
@@ -590,10 +622,11 @@
   };
 
   // ── ESTADO ────────────────────────────────────────────────────────────────
-  let allTeams       = [];
+  let allTeams        = [];
   let currentRegional = 'ALL';
-  let currentFilter  = '';
-  let currentTab     = 'monitor';
+  let currentFilter   = '';
+  let currentTab      = 'monitor';
+  let selectedTipos   = new Set(Object.keys(TIPOS_SERVICO)); // todos selecionados por padrão
 
   function mesAtualInput() {
     return new Date().toISOString().slice(0, 7);
@@ -703,7 +736,7 @@
 
   function renderBlockRegional(totais, metasReg) {
     const tipos = Object.keys(TIPOS_SERVICO);
-    const tiposExibir = tipos.filter(c => metasReg[c] || totais[c]);
+    const tiposExibir = tipos.filter(c => (metasReg[c] || totais[c]) && (selectedTipos.size === 0 || selectedTipos.has(c)));
     if (tiposExibir.length === 0)
       return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota em andamento ou executada até o momento.</span>';
     return `<div class="prod-grid">${tiposExibir.map(code => {
@@ -1233,6 +1266,60 @@
     }
   }
 
+  // ── FILTRO DE TIPOS ───────────────────────────────────────────────────
+  function initTiposFilter() {
+    const container = document.getElementById('tipos-checkboxes');
+    if (!container) return;
+    container.innerHTML = Object.entries(TIPOS_SERVICO).map(([code, nome]) => `
+      <label class="tipo-check-item">
+        <input type="checkbox" checked onchange="onTipoChange('${code}', this.checked)" id="chk-tipo-${code}" />
+        <span class="tipo-check-code">${code}</span>
+        <span class="tipo-check-nome">${nome}</span>
+      </label>`).join('');
+    updateTiposBadge();
+  }
+
+  function onTipoChange(code, checked) {
+    if (checked) selectedTipos.add(code);
+    else selectedTipos.delete(code);
+    updateTiposBadge();
+    renderAll();
+  }
+
+  function toggleAllTipos(selectAll) {
+    const all = Object.keys(TIPOS_SERVICO);
+    if (selectAll) { selectedTipos = new Set(all); }
+    else { selectedTipos = new Set(); }
+    all.forEach(code => {
+      const chk = document.getElementById(`chk-tipo-${code}`);
+      if (chk) chk.checked = selectAll;
+    });
+    updateTiposBadge();
+    renderAll();
+  }
+
+  function updateTiposBadge() {
+    const total  = Object.keys(TIPOS_SERVICO).length;
+    const sel    = selectedTipos.size;
+    const badge  = document.getElementById('tipos-badge');
+    const btn    = document.getElementById('tipos-filter-btn');
+    if (badge) badge.textContent = sel === total ? 'Todos' : `${sel}/${total}`;
+    if (btn)   btn.classList.toggle('active', sel < total);
+  }
+
+  function toggleTiposPanel(e) {
+    e.stopPropagation();
+    document.getElementById('tipos-filter-panel').classList.toggle('open');
+  }
+
+  // Fecha o painel ao clicar fora
+  document.addEventListener('click', e => {
+    const wrap = document.getElementById('tipos-filter-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      document.getElementById('tipos-filter-panel')?.classList.remove('open');
+    }
+  });
+
   // ── FILTROS ───────────────────────────────────────────────────────────
   function selectRegional(regional) {
     currentRegional = regional;
@@ -1292,7 +1379,10 @@
       const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
       const tiposCont = {};
-      (t.notasConcluidas || []).forEach(n => { tiposCont[n.tipoCode] = (tiposCont[n.tipoCode] || 0) + 1; });
+      (t.notasConcluidas || []).forEach(n => {
+        if (selectedTipos.size === 0 || selectedTipos.has(n.tipoCode))
+          tiposCont[n.tipoCode] = (tiposCont[n.tipoCode] || 0) + 1;
+      });
       const tiposHtml = Object.entries(tiposCont).map(([code, cnt]) =>
         `<span class="tipo-chip"><span class="tipo-chip-code">${code}</span><span class="tipo-chip-num">${cnt}</span></span>`
       ).join('');
@@ -1420,6 +1510,8 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); } });
 
   // ── INIT ──────────────────────────────────────────────────────────────
+  initTiposFilter();
+
   // Inicializa campo de data com hoje e define max = hoje (não permite datas futuras)
   const _dateInput = document.getElementById('monitor-date-input');
   if (_dateInput) {
