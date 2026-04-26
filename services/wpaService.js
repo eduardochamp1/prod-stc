@@ -220,103 +220,118 @@ async function getNotesByDate(sectorId, isoDate) {
 }
 
 /**
+ * Busca notas de uma sessão histórica por sessionId.
+ * GET /api/notes/{category}/{sessionId}
+ * Retorna array de notas com Number, Type, ConclusionDate.
+ */
+async function getNotesForSession(sessionId, category) {
+  try {
+    const res  = await wpaFetch(`/api/notes/${category}/${sessionId}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.Data || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Combina sessões + notas de um dia histórico para um setor.
- * Usa /api/notes/execution?date=X (estrutura clássica com n.Status).
- * Não usa acumulador diário nem getTeamStatusV2 — dados históricos são imutáveis.
+ *
+ * Nova abordagem (v3): por sessionId
+ *   1. POST /api/Sessions/all/date → lista de sessões do dia
+ *   2. Filtra sessões Engelmig pelo CompanyId
+ *   3. Para cada sessão: GET /api/notes/executed/{id} + /api/notes/downloaded/{id} + /api/notes/rejected/{id}
+ *      → notas diretamente vinculadas à sessão, sem necessidade de cruzar por TeamName
+ *
+ * O endpoint /api/notes/executed/{sessionId} retorna notas com ConclusionDate preenchida
+ * (confirmado via interceptor Postman) — essas são as "concluídas" do dia.
  */
 async function getTeamsByDate(sectorId, isoDate) {
-  // Mapeamento de status clássico (n.Status) usado pelo endpoint notes/execution histórico
-  const STATUS_HIST = { 1: 'baixada', 2: 'executada', 3: 'rejeitada', 4: 'concluida', 9: 'concluida' };
-  function normalizarNotaHist(n) {
+  function normalizarNotaHist(n, status) {
     return {
       codigo:   String(n.Number || n.Id || ''),
       tipoCode: n.Type || '??',
       tipoNome: n.Type || '??',
-      status:   STATUS_HIST[n.Status] || 'baixada',
+      status,
     };
   }
 
-  const [sessions, notasRaw] = await Promise.all([
-    getSessionsByDate(sectorId, isoDate),
-    getNotesByDate(sectorId, isoDate).catch(err => {
-      console.warn(`[WPA] getNotesByDate ${sectorId}/${isoDate} falhou: ${err.message}`);
-      return [];
-    }),
-  ]);
-
-  console.log(`[WPA] backfill raw: ${sectorId}/${isoDate} → ${sessions.length} sessões totais, ${notasRaw.length} notas`);
-
+  const sessions = await getSessionsByDate(sectorId, isoDate);
   const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
-  console.log(`[WPA] backfill Engelmig: ${engelmigSessions.length} sessões filtradas`);
+  console.log(`[WPA] backfill ${sectorId}/${isoDate}: ${sessions.length} sessões totais, ${engelmigSessions.length} Engelmig`);
 
-  // Indexa notas por nome e ID de equipe.
-  // ATENÇÃO: histórico usa estrutura PLANA — n.TeamName e n.TeamId direto (não n.Team?.Name)
-  const notasPorNome = {};
-  const notasPorId   = {};
-  notasRaw.forEach(n => {
-    const nome = (n.TeamName || n.Team?.Name || '').trim();
-    const id   = n.TeamId   || n.Team?.Id;
-    const nota = normalizarNotaHist(n);
-    if (nome) { if (!notasPorNome[nome]) notasPorNome[nome] = []; notasPorNome[nome].push(nota); }
-    if (id)   { if (!notasPorId[id])     notasPorId[id]     = []; notasPorId[id].push(nota); }
-  });
-  console.log(`[WPA] backfill índice: ${Object.keys(notasPorNome).length} nomes, ${Object.keys(notasPorId).length} ids`);
+  // Busca notas por sessionId para cada sessão Engelmig em paralelo
+  const sessionsWithNotes = await Promise.all(
+    engelmigSessions.map(async s => {
+      const sid = s.Id;
+      const [executedRaw, downloadedRaw, rejectedRaw] = await Promise.all([
+        getNotesForSession(sid, 'executed'),
+        getNotesForSession(sid, 'downloaded'),
+        getNotesForSession(sid, 'rejected'),
+      ]);
 
-  // Mescla múltiplas sessões da mesma equipe (relogins no mesmo dia)
-  // para evitar duplicatas de (date, team_name) no Supabase
+      const concluidas = executedRaw.map(n  => normalizarNotaHist(n, 'concluida'));
+      const baixadas   = downloadedRaw.map(n => normalizarNotaHist(n, 'baixada'));
+      const rejeitadas = rejectedRaw.map(n  => normalizarNotaHist(n, 'rejeitada'));
+
+      const teamName     = (s.Team?.Name || '').trim();
+      const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
+
+      console.log(`[WPA]   ${sectorId}/${teamName}: conc=${concluidas.length} baixadas=${baixadas.length} rej=${rejeitadas.length}`);
+
+      return { s, teamName, teamSectorId, concluidas, baixadas, rejeitadas };
+    })
+  );
+
+  // Mescla sessões da mesma equipe (relogins no mesmo dia)
   const teamMap = {};
-  engelmigSessions.forEach(s => {
-    const teamName     = (s.Team?.Name || '').trim();
-    const teamId       = s.Team?.Id;
-    const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
-    const notas        = notasPorNome[teamName] || (teamId ? notasPorId[teamId] : null) || [];
-
+  sessionsWithNotes.forEach(({ s, teamName, teamSectorId, concluidas, baixadas, rejeitadas }) => {
     if (!teamMap[teamName]) {
       teamMap[teamName] = {
-        id:             s.Id,
-        sigla:          teamName,
+        id:           s.Id,
+        sigla:        teamName,
         teamName,
-        sectorId:       teamSectorId,
-        regional:       REGIONAL_MAP[teamSectorId] || 'GUA',
-        date:           s.BeginTime?.slice(0, 10) || isoDate,
-        sessionBegin:   s.BeginTime,
-        sessionEnd:     s.EndTime || null,
-        vehiclePlate:   s.Vehicle?.Code || '—',
-        collaborators:  (s.Collaborators || []).map(normalizarColaborador),
-        relogins:       0,
-        sessions:       [],
-        deviceModel:    s.Device?.Model || null,
-        appVersion:     s.AppVersion   || null,
-        _notas:         [],
+        sectorId:     teamSectorId,
+        regional:     REGIONAL_MAP[teamSectorId] || 'GUA',
+        date:         s.BeginTime?.slice(0, 10) || isoDate,
+        sessionBegin: s.BeginTime,
+        sessionEnd:   s.EndTime || null,
+        vehiclePlate: s.Vehicle?.Code || '—',
+        collaborators:(s.Collaborators || []).map(normalizarColaborador),
+        relogins:     0,
+        sessions:     [],
+        deviceModel:  s.Device?.Model || null,
+        appVersion:   s.AppVersion   || null,
+        _conc:  [], _baix: [], _rej: [],
       };
     } else {
-      // Sessão adicional da mesma equipe (relogin) — conta como relogin
       teamMap[teamName].relogins += 1;
-      if (s.EndTime) teamMap[teamName].sessionEnd = s.EndTime; // usa a última sessão
+      if (s.EndTime) teamMap[teamName].sessionEnd = s.EndTime;
     }
-    // Acumula notas da sessão (deduplica por código)
-    notas.forEach(n => {
-      const already = teamMap[teamName]._notas.find(x => x.codigo === n.codigo && n.codigo);
-      if (!already) teamMap[teamName]._notas.push(n);
-    });
+
+    // Acumula notas dedupicando por código
+    const dedup = (arr, novas) => {
+      const seen = new Set(arr.map(n => n.codigo).filter(Boolean));
+      novas.forEach(n => { if (!seen.has(n.codigo)) { arr.push(n); seen.add(n.codigo); } });
+    };
+    dedup(teamMap[teamName]._conc, concluidas);
+    dedup(teamMap[teamName]._baix, baixadas);
+    dedup(teamMap[teamName]._rej,  rejeitadas);
   });
 
   return Object.values(teamMap).map(t => {
-    const notas    = t._notas;
-    delete t._notas;
-    const baixadas   = notas.filter(n => n.status === 'baixada');
-    const executadas = notas.filter(n => n.status === 'executada');
-    const concluidas = notas.filter(n => n.status === 'concluida');
-    const rejeitadas = notas.filter(n => n.status === 'rejeitada');
-    console.log(`[WPA]   backfill ${sectorId}/${t.teamName}: exec=${executadas.length} conc=${concluidas.length} relogins=${t.relogins}`);
+    const { _conc: notasConcluidas, _baix: notasBaixadas, _rej: notasRejeitadas } = t;
+    delete t._conc; delete t._baix; delete t._rej;
+    const allNotas = [...notasConcluidas, ...notasBaixadas, ...notasRejeitadas];
     return {
       ...t,
-      carteiraCount:   baixadas.length,
-      servicosPerfil:  [...new Set(notas.map(n => n.tipoCode))],
-      notasBaixadas:   baixadas,
-      notasExecutadas: executadas,
-      notasConcluidas: concluidas,
-      notasRejeitadas: rejeitadas,
+      carteiraCount:   notasBaixadas.length,
+      servicosPerfil:  [...new Set(allNotas.map(n => n.tipoCode))],
+      notasBaixadas,
+      notasExecutadas: [],   // histórico não distingue "em andamento" do dia
+      notasConcluidas,
+      notasRejeitadas,
     };
   });
 }
