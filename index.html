@@ -331,10 +331,14 @@
       </div>
       <div class="filter-controls">
         <div class="filter-group">
-          <span class="filter-label">Data</span>
-          <input type="date" class="filter-select" id="monitor-date-input"
-                 style="min-width:140px"
-                 onchange="onMonitorDateChange()" />
+          <span class="filter-label">De</span>
+          <input type="date" class="filter-select" id="monitor-date-de"
+                 style="min-width:140px" onchange="onMonitorDateChange()" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Até</span>
+          <input type="date" class="filter-select" id="monitor-date-ate"
+                 style="min-width:140px" onchange="onMonitorDateChange()" />
         </div>
         <div class="filter-group">
           <span class="filter-label">Regional</span>
@@ -1197,21 +1201,29 @@
     return new Date().toISOString().slice(0, 10);
   }
 
-  function isToday(dateStr) {
-    return !dateStr || dateStr === todayISO();
+  function isRangeToday(de, ate) {
+    const t = todayISO();
+    return (!de || de === t) && (!ate || ate === t);
+  }
+
+  function fmtDateBR(iso) {
+    return new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
   }
 
   function onMonitorDateChange() {
-    const val = document.getElementById('monitor-date-input').value;
-    if (isToday(val)) {
-      irParaHoje();
-    } else {
-      loadData();
+    // Garante que "Até" nunca seja anterior a "De"
+    const de  = document.getElementById('monitor-date-de').value;
+    const ate = document.getElementById('monitor-date-ate').value;
+    if (de && ate && ate < de) {
+      document.getElementById('monitor-date-ate').value = de;
     }
+    loadData();
   }
 
   function irParaHoje() {
-    document.getElementById('monitor-date-input').value = todayISO();
+    const t = todayISO();
+    document.getElementById('monitor-date-de').value  = t;
+    document.getElementById('monitor-date-ate').value = t;
     loadData();
   }
 
@@ -1219,21 +1231,21 @@
     document.getElementById('sync-label').textContent = 'Atualizando...';
     document.getElementById('prod-periodo').textContent = mesAtual();
 
-    const dateInput = document.getElementById('monitor-date-input');
-    const dateVal   = dateInput?.value || todayISO();
-    const hist      = !isToday(dateVal);
+    const de  = document.getElementById('monitor-date-de')?.value  || todayISO();
+    const ate = document.getElementById('monitor-date-ate')?.value || todayISO();
+    const hist = !isRangeToday(de, ate);
 
     // Badge e botão Hoje
-    document.getElementById('hist-badge').style.display  = hist ? '' : 'none';
-    document.getElementById('btn-hoje').style.display    = hist ? '' : 'none';
+    document.getElementById('hist-badge').style.display = hist ? '' : 'none';
+    document.getElementById('btn-hoje').style.display   = hist ? '' : 'none';
 
     // Label da data
-    const dtFmt = new Date(dateVal + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
-    document.getElementById('date-display').textContent = dtFmt;
+    const label = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} → ${fmtDateBR(ate)}`;
+    document.getElementById('date-display').textContent = label;
 
     try {
       const url = hist
-        ? `${API}/teams/historico?date=${dateVal}&regional=${currentRegional === 'ALL' ? '' : currentRegional}`
+        ? `${API}/teams/historico?de=${de}&ate=${ate}&regional=${currentRegional === 'ALL' ? '' : currentRegional}`
         : `${API}/teams`;
 
       const [res] = await Promise.all([
@@ -1248,12 +1260,12 @@
       document.getElementById('sync-label').textContent =
         new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       document.getElementById('last-update').textContent = hist
-        ? `Dados históricos de ${dtFmt} — ${allTeams.length} equipes`
+        ? `Histórico: ${label} — ${allTeams.length} equipes`
         : `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
 
       if (hist && allTeams.length === 0) {
         document.getElementById('teams-grid').innerHTML =
-          `<div class="empty-state">Nenhum snapshot encontrado para ${dtFmt}.<br><small>Execute o backfill para datas anteriores ao deploy.</small></div>`;
+          `<div class="empty-state">Nenhum snapshot encontrado para o período.<br><small>Execute o backfill para datas anteriores ao deploy.</small></div>`;
         renderMetrics([]);
         return;
       }
@@ -1512,17 +1524,18 @@
   // ── INIT ──────────────────────────────────────────────────────────────
   initTiposFilter();
 
-  // Inicializa campo de data com hoje e define max = hoje (não permite datas futuras)
-  const _dateInput = document.getElementById('monitor-date-input');
-  if (_dateInput) {
-    _dateInput.value = todayISO();
-    _dateInput.max   = todayISO();
-  }
+  // Inicializa campos De/Até com hoje (sem permitir datas futuras)
+  const _t = todayISO();
+  ['monitor-date-de', 'monitor-date-ate'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = _t; el.max = _t; }
+  });
   loadData();
   // Auto-refresh só quando visualizando hoje
   setInterval(() => {
-    const v = document.getElementById('monitor-date-input')?.value;
-    if (isToday(v)) loadData();
+    const de  = document.getElementById('monitor-date-de')?.value;
+    const ate = document.getElementById('monitor-date-ate')?.value;
+    if (isRangeToday(de, ate)) loadData();
   }, 5 * 60 * 1000);
 </script>
 </body>

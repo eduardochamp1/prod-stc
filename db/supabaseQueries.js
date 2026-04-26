@@ -117,16 +117,19 @@ async function getTeamsFromSupabase(filters = {}) {
 }
 
 /**
- * Retorna equipes de um dia histórico via tabela snapshots.
- * Pega o snapshot mais recente de cada equipe naquele dia.
- * date: 'YYYY-MM-DD'
+ * Retorna equipes de um período histórico via tabela snapshots.
+ * Para um único dia (de === ate): snapshot mais recente do dia.
+ * Para um intervalo: snapshot mais recente de cada equipe dentro do período,
+ * com notas concluídas acumuladas de todos os dias do intervalo.
+ * de, ate: 'YYYY-MM-DD'
  */
-async function getTeamsByDateFromSnapshots(date, regional) {
+async function getTeamsByDateFromSnapshots(de, ate, regional) {
   const sb = getClient();
   let query = sb
     .from('snapshots')
-    .select('team_name, regional, captured_at, data')
-    .eq('date', date)
+    .select('team_name, regional, sector_id, captured_at, date, data')
+    .gte('date', de)
+    .lte('date', ate)
     .order('captured_at', { ascending: false });
 
   if (regional && regional !== 'ALL') {
@@ -136,15 +139,60 @@ async function getTeamsByDateFromSnapshots(date, regional) {
   const { data: rows, error } = await query;
   if (error) throw error;
 
-  // Mantém apenas o snapshot mais recente por equipe
-  const latest = {};
-  (rows || []).forEach(r => {
-    if (!latest[r.team_name]) latest[r.team_name] = r;
+  if (!rows || rows.length === 0) return [];
+
+  const isSingleDay = de === ate;
+
+  if (isSingleDay) {
+    // Dia único: snapshot mais recente por equipe
+    const latest = {};
+    rows.forEach(r => { if (!latest[r.team_name]) latest[r.team_name] = r; });
+    return Object.values(latest)
+      .sort((a, b) => a.team_name.localeCompare(b.team_name))
+      .map(r => ({ ...r.data, _snapshotAt: r.captured_at }));
+  }
+
+  // Intervalo: snapshot base = o mais recente de cada equipe (para dados de sessão)
+  // Notas concluídas = acumuladas de todos os dias do período (sem duplicar por código)
+  const baseByTeam   = {};   // snapshot mais recente por equipe
+  const notasByTeam  = {};   // Set de códigos já vistos por equipe
+
+  // Percorre do mais recente para o mais antigo (já ordenado por captured_at desc)
+  rows.forEach(r => {
+    const name = r.team_name;
+    if (!baseByTeam[name]) baseByTeam[name] = r;  // snapshot mais recente = base
+    if (!notasByTeam[name]) notasByTeam[name] = { conc: [], exec: [], codigos: new Set() };
+
+    // Acumula notas concluídas de cada snapshot dedupicando por código
+    (r.data?.notasConcluidas || []).forEach(n => {
+      const cod = n.codigo || n.code;
+      if (cod && !notasByTeam[name].codigos.has(cod)) {
+        notasByTeam[name].codigos.add(cod);
+        notasByTeam[name].conc.push(n);
+      }
+    });
+    (r.data?.notasExecutadas || []).forEach(n => {
+      const cod = n.codigo || n.code;
+      if (cod && !notasByTeam[name].codigos.has(cod)) {
+        notasByTeam[name].codigos.add(cod);
+        notasByTeam[name].exec.push(n);
+      }
+    });
   });
 
-  return Object.values(latest)
+  return Object.values(baseByTeam)
     .sort((a, b) => a.team_name.localeCompare(b.team_name))
-    .map(r => ({ ...r.data, _snapshotAt: r.captured_at }));
+    .map(r => {
+      const name  = r.team_name;
+      const notas = notasByTeam[name] || { conc: [], exec: [] };
+      return {
+        ...r.data,
+        notasConcluidas: notas.conc,
+        notasExecutadas: notas.exec,
+        _snapshotAt: r.captured_at,
+        _period: `${de} → ${ate}`,
+      };
+    });
 }
 
 // ── HISTÓRICO REGIONAL ─────────────────────────────────────────────────────────

@@ -52,17 +52,18 @@ router.get('/teams', async (req, res) => {
   }
 });
 
-// GET /api/teams/historico?date=YYYY-MM-DD&regional=GUA
-// Retorna equipes de um dia específico via snapshots (Supabase)
+// GET /api/teams/historico?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=GUA
+// Retorna equipes de um período via snapshots (Supabase)
 router.get('/teams/historico', async (req, res) => {
-  const { date, regional } = req.query;
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'Parâmetro date obrigatório no formato YYYY-MM-DD' });
+  const { de, ate, regional } = req.query;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!de || !dateRe.test(de) || !ate || !dateRe.test(ate)) {
+    return res.status(400).json({ error: 'Parâmetros de e ate obrigatórios no formato YYYY-MM-DD' });
   }
   try {
     const sq    = sbq();
-    const teams = sq ? await sq.getTeamsByDateFromSnapshots(date, regional) : [];
-    res.json({ teams, count: teams.length, date, mode: MODE });
+    const teams = sq ? await sq.getTeamsByDateFromSnapshots(de, ate, regional) : [];
+    res.json({ teams, count: teams.length, de, ate, mode: MODE });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
