@@ -1,6 +1,6 @@
 /**
  * services/supabasePush.js
- * Escrita no Supabase — snapshots, teams_current e daily_totals.
+ * Escrita no Supabase — snapshots, teams_current, daily_totals e team_daily_totals.
  */
 
 const { getClient } = require('./supabaseClient');
@@ -59,8 +59,7 @@ async function pushTeams(teams) {
 }
 
 /**
- * Atualiza `daily_totals` com o estado atual das equipes (intraday).
- * Permite ver o acumulado do dia antes da consolidação das 20:30.
+ * Atualiza `daily_totals` por regional/tipo (intraday — visão da regional).
  */
 async function upsertDailyTotals(teams, date) {
   const sb = getClient();
@@ -91,8 +90,45 @@ async function upsertDailyTotals(teams, date) {
 }
 
 /**
- * Consolida os snapshots do dia em `daily_totals` (chamado às 20:30).
- * Usa o snapshot mais recente de cada equipe para calcular os totais finais.
+ * Atualiza `team_daily_totals` por equipe/tipo (intraday — visão individual).
+ */
+async function upsertTeamDailyTotals(teams, date) {
+  const sb = getClient();
+  date = date || new Date().toISOString().slice(0, 10);
+
+  const rows = [];
+  teams.forEach(t => {
+    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+    const acc = {};
+    realizadas.forEach(n => {
+      const code = n.tipoCode || n.tipo_code;
+      if (code) acc[code] = (acc[code] || 0) + 1;
+    });
+    Object.entries(acc).forEach(([tipo_code, count]) => {
+      rows.push({
+        date,
+        team_name: t.teamName || t.sigla,
+        regional:  t.regional,
+        sector_id: t.sectorId,
+        tipo_code,
+        count,
+      });
+    });
+  });
+
+  if (rows.length === 0) return;
+
+  const { error } = await sb
+    .from('team_daily_totals')
+    .upsert(rows, { onConflict: 'date,team_name,tipo_code' });
+
+  if (error) throw error;
+  console.log(`[SUPABASE] team_daily_totals: ${rows.length} registros para ${date}`);
+}
+
+/**
+ * Consolida os snapshots do dia em `daily_totals` e `team_daily_totals` (chamado às 20:30).
+ * Usa o snapshot mais recente de cada equipe como resultado final do dia.
  */
 async function consolidateDay(date) {
   const sb = getClient();
@@ -100,7 +136,7 @@ async function consolidateDay(date) {
 
   const { data: snaps, error: e1 } = await sb
     .from('snapshots')
-    .select('team_name, regional, captured_at, data')
+    .select('team_name, regional, sector_id, captured_at, data')
     .eq('date', date)
     .order('captured_at', { ascending: false });
 
@@ -114,34 +150,59 @@ async function consolidateDay(date) {
   const latest = {};
   snaps.forEach(s => { if (!latest[s.team_name]) latest[s.team_name] = s; });
 
-  // Agrega por regional + tipo_code a partir das notas concluídas
-  const acc = {};
+  // ── daily_totals (por regional/tipo) ─────────────────────────────────────────
+  const regionalAcc = {};
   Object.values(latest).forEach(s => {
     const notas = s.data?.notasConcluidas || [];
     notas.forEach(n => {
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
       const key = `${s.regional}|${code}`;
-      acc[key] = (acc[key] || 0) + 1;
+      regionalAcc[key] = (regionalAcc[key] || 0) + 1;
     });
   });
 
-  const rows = Object.entries(acc).map(([key, count]) => {
+  const regionalRows = Object.entries(regionalAcc).map(([key, count]) => {
     const [regional, tipo_code] = key.split('|');
     return { date, regional, tipo_code, count };
   });
 
-  if (rows.length === 0) {
-    console.log(`[SUPABASE] consolidateDay: nenhuma nota concluída para ${date}`);
-    return;
+  if (regionalRows.length > 0) {
+    const { error: e2 } = await sb
+      .from('daily_totals')
+      .upsert(regionalRows, { onConflict: 'date,regional,tipo_code' });
+    if (e2) throw e2;
+    console.log(`[SUPABASE] daily_totals consolidados: ${regionalRows.length} tipos para ${date}`);
   }
 
-  const { error: e2 } = await sb
-    .from('daily_totals')
-    .upsert(rows, { onConflict: 'date,regional,tipo_code' });
+  // ── team_daily_totals (por equipe/tipo) ───────────────────────────────────────
+  const teamRows = [];
+  Object.values(latest).forEach(s => {
+    const notas = s.data?.notasConcluidas || [];
+    const acc = {};
+    notas.forEach(n => {
+      const code = n.tipoCode || n.tipo_code;
+      if (code) acc[code] = (acc[code] || 0) + 1;
+    });
+    Object.entries(acc).forEach(([tipo_code, count]) => {
+      teamRows.push({
+        date,
+        team_name: s.team_name,
+        regional:  s.regional,
+        sector_id: s.sector_id,
+        tipo_code,
+        count,
+      });
+    });
+  });
 
-  if (e2) throw e2;
-  console.log(`[SUPABASE] daily_totals consolidados: ${rows.length} tipos para ${date}`);
+  if (teamRows.length > 0) {
+    const { error: e3 } = await sb
+      .from('team_daily_totals')
+      .upsert(teamRows, { onConflict: 'date,team_name,tipo_code' });
+    if (e3) throw e3;
+    console.log(`[SUPABASE] team_daily_totals consolidados: ${teamRows.length} registros para ${date}`);
+  }
 }
 
-module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, consolidateDay };
+module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, consolidateDay };

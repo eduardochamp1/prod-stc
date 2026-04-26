@@ -27,11 +27,12 @@ async function runSnapshot() {
     }
 
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const { saveSnapshot, pushTeams, upsertDailyTotals } = require('./supabasePush');
+    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals } = require('./supabasePush');
 
     await saveSnapshot(teams);
     await pushTeams(teams);
     await upsertDailyTotals(teams);
+    await upsertTeamDailyTotals(teams);
 
     console.log(`[CRON] Snapshot salvo — ${teams.length} equipes às ${ts}`);
   } catch (err) {

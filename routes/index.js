@@ -145,6 +145,54 @@ router.get('/historico/diario', async (req, res) => {
   }
 });
 
+// ── METAS CALCULADAS ──────────────────────────────────────────────────────────
+
+// GET /api/metas/calculadas?m=2026-04
+// Retorna metas mensais com meta diária, semanal e progresso até hoje
+router.get('/metas/calculadas', async (req, res) => {
+  try {
+    const sq = sbq();
+    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    if (!sq) return res.json({ mes: ym, regionais: {} });
+    const resultado = await sq.getMetasCalculadas(ym);
+    res.json(resultado);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── RANKING E HISTÓRICO DE EQUIPES ────────────────────────────────────────────
+
+// GET /api/ranking/equipes?m=2026-04&regional=GUA
+// Ranking de equipes por total de notas concluídas no mês
+router.get('/ranking/equipes', async (req, res) => {
+  try {
+    const sq       = sbq();
+    const ym       = req.query.m        || new Date().toISOString().slice(0, 7);
+    const regional = req.query.regional || null;
+    if (!sq) return res.json({ mes: ym, ranking: [] });
+    const ranking = await sq.getTeamRanking(ym, regional);
+    res.json({ mes: ym, regional: regional || 'ALL', ranking });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/historico/equipes?m=2026-04&team=EPICO30
+// Histórico diário de uma equipe (ou todas as equipes do mês)
+router.get('/historico/equipes', async (req, res) => {
+  try {
+    const sq   = sbq();
+    const ym   = req.query.m    || new Date().toISOString().slice(0, 7);
+    const team = req.query.team || null;
+    if (!sq) return res.json({ mes: ym, dias: [] });
+    const dias = await sq.getTeamDailyHistory(ym, team);
+    res.json({ mes: ym, team: team || 'ALL', dias });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── WPA PROXY / DEBUG ─────────────────────────────────────────────────────────
 
 router.post('/wpa/login', async (req, res) => {

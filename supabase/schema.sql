@@ -49,6 +49,22 @@ CREATE TABLE IF NOT EXISTS snapshots (
 CREATE INDEX IF NOT EXISTS idx_snapshots_date_team   ON snapshots (date, team_name);
 CREATE INDEX IF NOT EXISTS idx_snapshots_captured_at ON snapshots (captured_at DESC);
 
+-- Totais diários consolidados por equipe/tipo (para ranking e histórico individual)
+CREATE TABLE IF NOT EXISTS team_daily_totals (
+  id         BIGSERIAL   PRIMARY KEY,
+  date       DATE        NOT NULL,
+  team_name  TEXT        NOT NULL,
+  regional   TEXT        NOT NULL,
+  sector_id  TEXT        NOT NULL,
+  tipo_code  TEXT        NOT NULL,
+  count      INTEGER     NOT NULL DEFAULT 0,
+  UNIQUE (date, team_name, tipo_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_daily_totals_date     ON team_daily_totals (date);
+CREATE INDEX IF NOT EXISTS idx_team_daily_totals_team     ON team_daily_totals (team_name);
+CREATE INDEX IF NOT EXISTS idx_team_daily_totals_regional ON team_daily_totals (date, regional);
+
 -- Limpeza automática de snapshots com mais de 90 dias (opcional)
 -- Ativar se quiser controlar o tamanho da tabela:
 -- SELECT cron.schedule('cleanup-snapshots', '0 3 * * *',
