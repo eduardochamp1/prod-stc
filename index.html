@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WPA Monitor — Engelmig Energia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --verde:    #086738;
+      --verde2:   #054d29;
+      --amarelo:  #FEC40E;
+      --preto:    #231F20;
+      --vermelho: #ED1C24;
+      --branco:   #FFFFFF;
+      --cinza1:   #f5f5f3;
+      --cinza2:   #e8e8e5;
+      --cinza3:   #b0b0aa;
+      --text:     #231F20;
+      --text2:    #5a5855;
+      --radius:   8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Roboto', sans-serif;
+      background: var(--cinza1);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── HEADER ── */
+    header {
+      background: var(--verde);
+      height: 58px;
+      display: flex;
+      align-items: center;
+      padding: 0 28px;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    }
+    header::after {
+      content: '';
+      position: absolute;
+      right: 0; top: 0; bottom: 0;
+      width: 6px;
+      background: var(--amarelo);
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .raio { width: 22px; height: 22px; flex-shrink: 0; }
+    .brand-text { display: flex; flex-direction: column; line-height: 1.1; }
+    .brand-name { font-size: 13px; font-weight: 700; color: var(--amarelo); letter-spacing: 0.12em; text-transform: uppercase; }
+    .brand-sub  { font-size: 11px; font-weight: 400; color: rgba(255,255,255,0.7); letter-spacing: 0.06em; }
+    .header-sep { width: 1px; height: 24px; background: rgba(255,255,255,0.2); }
+    .header-title { font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.9); }
+    .header-right { display: flex; align-items: center; gap: 14px; }
+    .live-badge { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(255,255,255,0.7); }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amarelo); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    .mode-badge { font-size: 11px; background: rgba(254,196,14,0.18); color: var(--amarelo); border: 1px solid rgba(254,196,14,0.3); border-radius: 20px; padding: 3px 10px; font-weight: 500; }
+    .btn-header { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: 'Roboto',sans-serif; transition: background 0.15s; display: flex; align-items: center; gap: 5px; }
+    .btn-header:hover { background: rgba(255,255,255,0.22); }
+
+    /* ── MAIN ── */
+    main { padding: 20px 28px; max-width: 1400px; margin: 0 auto; }
+
+    /* ── FILTER BAR ── */
+    .filter-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+    .date-label { font-size: 13px; color: var(--text2); }
+    .date-label strong { color: var(--text); font-weight: 500; }
+    .filter-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .filter-group { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 4px 4px 4px 12px; }
+    .filter-label { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; }
+    .filter-select {
+      background: var(--verde);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 32px 6px 12px;
+      outline: none;
+      cursor: pointer;
+      font-family: 'Roboto', sans-serif;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23FEC40E' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      min-width: 170px;
+    }
+    .filter-select option { background: #fff; color: var(--text); font-weight: 500; }
+    .btn-refresh { background: var(--verde); color: #fff; border: none; border-radius: var(--radius); padding: 7px 16px; font-size: 12px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background 0.15s; font-family: 'Roboto',sans-serif; }
+    .btn-refresh:hover { background: var(--verde2); }
+
+    /* ── PRODUTIVIDADE ── */
+    .prod-section {
+      background: #fff;
+      border: 1px solid var(--cinza2);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      margin-bottom: 16px;
+    }
+    .prod-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .prod-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .prod-subtitle {
+      font-size: 11px;
+      color: var(--text2);
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+      margin-left: 8px;
+    }
+    .prod-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 600px) {
+      #metas-colunas { grid-template-columns: 1fr !important; }
+    }
+    .prod-item {
+      background: var(--cinza1);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .prod-item-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .prod-tipo-badge {
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--verde);
+      color: #fff;
+      border-radius: 4px;
+      padding: 2px 7px;
+      letter-spacing: 0.04em;
+    }
+    .prod-nums {
+      font-size: 11px;
+      color: var(--text2);
+    }
+    .prod-nums strong { color: var(--text); font-weight: 600; }
+    .prod-bar-track {
+      height: 6px;
+      background: var(--cinza2);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .prod-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: var(--verde);
+      transition: width 0.4s ease;
+    }
+    .prod-bar-fill.warn   { background: #c49000; }
+    .prod-bar-fill.danger { background: var(--vermelho); }
+    .prod-bar-fill.done   { background: var(--verde); }
+    .prod-sem-meta {
+      font-size: 11px;
+      color: var(--cinza3);
+      font-style: italic;
+    }
+
+    /* regional-tabs removido — substituído pelo filter-select */
+
+    /* ── SUMMARY CARDS ── */
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .metric-card { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 14px 16px; }
+    .metric-card.accent-verde   { border-top: 3px solid var(--verde); }
+    .metric-card.accent-amarelo { border-top: 3px solid var(--amarelo); }
+    .metric-card.accent-vermelho{ border-top: 3px solid var(--vermelho); }
+    .metric-card.accent-preto   { border-top: 3px solid var(--preto); }
+    .metric-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px; font-weight: 500; }
+    .metric-value { font-size: 26px; font-weight: 700; color: var(--text); line-height: 1; }
+    .metric-value.verde    { color: var(--verde); }
+    .metric-value.amarelo  { color: #c49000; }
+    .metric-value.vermelho { color: var(--vermelho); }
+    .metric-sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
+    /* ── SECTION HEADER ── */
+    .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .section-title { font-size: 14px; font-weight: 700; color: var(--text); }
+    .section-count { font-size: 12px; color: var(--text2); margin-left: 8px; font-weight: 400; }
+    .search-input { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); color: var(--text); font-size: 13px; padding: 7px 14px; outline: none; width: 220px; font-family: 'Roboto',sans-serif; transition: border-color 0.2s; }
+    .search-input:focus { border-color: var(--verde); }
+
+    /* ── TEAM CARDS ── */
+    .teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+
+    .team-card { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); overflow: hidden; cursor: pointer; transition: box-shadow 0.15s, transform 0.1s; }
+    .team-card:hover { box-shadow: 0 4px 16px rgba(8,103,56,0.1); transform: translateY(-1px); }
+
+    .team-card-header { background: var(--verde); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; }
+    .team-card-header.inativa { background: #555; }
+    .team-card-sigla { font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.06em; }
+    .team-card-meta { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 2px; }
+    .team-status-badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+    .status-ativa    { background: var(--amarelo); color: var(--preto); }
+    .status-encerrada{ background: rgba(255,255,255,0.18); color: rgba(255,255,255,0.75); }
+
+    .team-card-body { padding: 12px 14px; }
+
+    .team-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text2); margin-bottom: 7px; }
+    .team-row:last-child { margin-bottom: 0; }
+    .team-row-label { font-weight: 500; }
+    .tag-placa { background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: var(--preto); }
+    .relogin-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 8px; border-radius: 20px; }
+    .relogin-0 { background: #e8f5ee; color: var(--verde); }
+    .relogin-1 { background: #fff8e1; color: #c49000; }
+    .relogin-2 { background: #fdecea; color: var(--vermelho); }
+
+    /* OS bar */
+    .os-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--cinza2); }
+    .os-cell { text-align: center; }
+    .os-num { font-size: 17px; font-weight: 700; color: var(--text); }
+    .os-num.concluida { color: var(--verde); }
+    .os-num.rejeitada { color: var(--vermelho); }
+    .os-num.executada { color: #c49000; }
+    .os-lbl { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 1px; }
+
+    /* Tipos de serviço chips no card */
+    .tipos-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--cinza2);
+    }
+    .tipo-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--cinza1);
+      border: 1px solid var(--cinza2);
+      border-radius: 4px;
+      font-size: 11px;
+      padding: 2px 8px;
+      color: var(--text);
+    }
+    .tipo-chip-code { font-weight: 700; color: var(--verde); }
+    .tipo-chip-num  { color: var(--text2); }
+
+    /* ── MODAL ── */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(35,31,32,0.55); z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: #fff; border-radius: 12px; width: 100%; max-width: 720px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+    .modal-header { background: var(--verde); padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; }
+    .modal-title  { font-size: 16px; font-weight: 700; color: #fff; }
+    .modal-sub    { font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 2px; }
+    .modal-close  { background: rgba(255,255,255,0.15); border: none; border-radius: 50%; width: 30px; height: 30px; color: #fff; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
+    .modal-close:hover { background: rgba(255,255,255,0.25); }
+    .modal-body { padding: 20px 22px; }
+    .modal-section { margin-bottom: 22px; }
+    .modal-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--verde); border-bottom: 2px solid var(--amarelo); padding-bottom: 5px; margin-bottom: 12px; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .info-item .lbl { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+    .info-item .val { font-size: 14px; font-weight: 500; color: var(--text); }
+    .sessao-item { display: flex; align-items: center; gap: 10px; background: var(--cinza1); border-radius: 6px; padding: 8px 12px; font-size: 13px; margin-bottom: 6px; }
+    .sessao-num { width: 22px; height: 22px; border-radius: 50%; background: var(--verde); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sessao-time { font-weight: 500; }
+    .sessao-motivo { font-size: 11px; color: var(--text2); margin-left: auto; }
+    .notas-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+    .nota-tab { background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 6px; font-size: 12px; font-weight: 500; padding: 5px 14px; cursor: pointer; font-family: 'Roboto',sans-serif; color: var(--text2); transition: all 0.15s; }
+    .nota-tab.active-baixada    { background: var(--preto);    color: #fff; border-color: var(--preto); }
+    .nota-tab.active-executada  { background: #c49000;         color: #fff; border-color: #c49000; }
+    .nota-tab.active-concluida  { background: var(--verde);    color: #fff; border-color: var(--verde); }
+    .nota-tab.active-rejeitada  { background: var(--vermelho); color: #fff; border-color: var(--vermelho); }
+    .notas-list { display: flex; flex-wrap: wrap; gap: 5px; max-height: 160px; overflow-y: auto; }
+    .nota-chip { font-size: 11px; padding: 3px 9px; border-radius: 4px; font-weight: 500; font-family: monospace; }
+    .nota-baixada   { background: #f0f0ee; color: var(--preto);   border: 1px solid var(--cinza2); }
+    .nota-executada { background: #fff8e1; color: #8a6000;        border: 1px solid #f0d060; }
+    .nota-concluida { background: #e8f5ee; color: var(--verde2);  border: 1px solid #aaddc0; }
+    .nota-rejeitada { background: #fdecea; color: #a00;           border: 1px solid #f5b0b0; }
+    .nota-tipo      { font-size: 10px; font-weight: 400; font-family: 'Roboto',sans-serif; margin-left: 4px; opacity: 0.7; }
+
+    /* ── MODAL METAS ── */
+    .metas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+    .meta-item { display: flex; flex-direction: column; gap: 4px; }
+    .meta-item label { font-size: 12px; font-weight: 500; color: var(--text); display: flex; align-items: center; gap: 6px; }
+    .meta-badge { font-size: 10px; font-weight: 700; background: var(--verde); color: #fff; border-radius: 3px; padding: 1px 6px; }
+    .meta-input { border: 1px solid var(--cinza2); border-radius: 6px; padding: 7px 10px; font-size: 13px; font-family: 'Roboto',sans-serif; color: var(--text); outline: none; transition: border-color 0.2s; }
+    .meta-input:focus { border-color: var(--verde); }
+    .meta-hint { font-size: 11px; color: var(--text2); }
+    .btn-salvar { background: var(--verde); color: #fff; border: none; border-radius: var(--radius); padding: 10px 24px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: 'Roboto',sans-serif; transition: background 0.15s; margin-top: 16px; }
+    .btn-salvar:hover { background: var(--verde2); }
+
+    /* ── MISC ── */
+    .empty-state { text-align: center; padding: 48px; color: var(--text2); font-size: 14px; background: #fff; border-radius: var(--radius); border: 1px solid var(--cinza2); }
+    .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--cinza2); border-top-color: var(--verde); border-radius: 50%; animation: spin 0.7s linear infinite; margin-bottom: 10px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .last-update { font-size: 11px; color: var(--text2); text-align: right; margin-top: 14px; }
+    .colab-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+    .colab-chip  { background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 20px; font-size: 11px; padding: 3px 10px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <svg class="raio" viewBox="0 0 22 36" fill="none">
+      <polygon points="13,0 0,20 9,20 9,36 22,16 13,16" fill="#FEC40E"/>
+    </svg>
+    <div class="brand-text">
+      <span class="brand-name">Engelmig</span>
+      <span class="brand-sub">Energia</span>
+    </div>
+    <div class="header-sep"></div>
+    <span class="header-title">WPA Monitor</span>
+  </div>
+  <div class="header-right">
+    <div class="live-badge">
+      <div class="live-dot"></div>
+      <span id="sync-label">Carregando...</span>
+    </div>
+    <span class="mode-badge" id="mode-badge">MOCK</span>
+    <button class="btn-header" onclick="openMetas()">⚙ Metas</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- FILTER BAR -->
+  <div class="filter-bar">
+    <div class="date-label">Monitoramento do dia <strong id="date-display"></strong></div>
+    <div class="filter-controls">
+      <div class="filter-group">
+        <span class="filter-label">Regional</span>
+        <select class="filter-select" id="regional-select" onchange="selectRegional(this.value)">
+          <option value="ALL">Todas as Regionais</option>
+          <option value="GUA">Guarapari</option>
+          <option value="CAC">Cachoeiro</option>
+        </select>
+      </div>
+      <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
+    </div>
+  </div>
+
+  <!-- PRODUTIVIDADE -->
+  <div class="prod-section">
+    <div class="prod-header">
+      <div>
+        <span class="prod-title" id="prod-title">Produtividade do Mês</span>
+        <span class="prod-subtitle" id="prod-periodo"></span>
+      </div>
+    </div>
+    <div id="prod-grid">
+      <div style="color:var(--text2);font-size:13px">Carregando...</div>
+    </div>
+  </div>
+
+  <!-- MÉTRICAS -->
+  <div class="summary-grid">
+    <div class="metric-card accent-preto">
+      <div class="metric-label">Total equipes</div>
+      <div class="metric-value" id="m-total">—</div>
+      <div class="metric-sub" id="m-ativas"></div>
+    </div>
+    <div class="metric-card accent-verde">
+      <div class="metric-label">OS Concluídas</div>
+      <div class="metric-value verde" id="m-concluidas">—</div>
+      <div class="metric-sub" id="m-concluidas-pct"></div>
+    </div>
+    <div class="metric-card accent-amarelo">
+      <div class="metric-label">OS Executadas</div>
+      <div class="metric-value amarelo" id="m-executadas">—</div>
+    </div>
+    <div class="metric-card accent-vermelho">
+      <div class="metric-label">OS Rejeitadas</div>
+      <div class="metric-value vermelho" id="m-rejeitadas">—</div>
+    </div>
+    <div class="metric-card accent-preto">
+      <div class="metric-label">OS Baixadas</div>
+      <div class="metric-value" id="m-baixadas">—</div>
+    </div>
+    <div class="metric-card accent-verde">
+      <div class="metric-label">Re-logins</div>
+      <div class="metric-value" id="m-relogins">—</div>
+      <div class="metric-sub">desconexões no dia</div>
+    </div>
+  </div>
+
+  <!-- EQUIPES -->
+  <div class="section-header">
+    <div>
+      <span class="section-title">Equipes</span>
+      <span class="section-count" id="section-count"></span>
+    </div>
+    <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
+  </div>
+
+  <div class="teams-grid" id="teams-grid">
+    <div class="empty-state"><div class="spinner"></div><br>Carregando equipes...</div>
+  </div>
+
+  <div class="last-update" id="last-update"></div>
+</main>
+
+<!-- MODAL DETALHE EQUIPE -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal" id="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="modal-title">—</div>
+        <div class="modal-sub" id="modal-sub">—</div>
+      </div>
+      <button class="modal-close" onclick="closeModalDirect()">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- MODAL METAS -->
+<div class="modal-overlay" id="metas-overlay" onclick="closeMetasModal(event)">
+  <div class="modal" id="metas-modal" style="max-width:820px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Metas de Produtividade</div>
+        <div class="modal-sub">Meta mensal por tipo de serviço — por regional</div>
+      </div>
+      <button class="modal-close" onclick="closeMetasDirect()">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px" id="metas-colunas">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">Guarapari</div>
+          <div class="metas-grid" id="metas-grid-GUA"></div>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">Cachoeiro</div>
+          <div class="metas-grid" id="metas-grid-CAC"></div>
+        </div>
+      </div>
+      <button class="btn-salvar" onclick="salvarMetas()">Salvar Metas</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API = 'http://localhost:3002/api';
+
+  const TIPOS_SERVICO = {
+    LN: 'Ligação Nova',
+    LE: 'Ligação Existente',
+    DL: 'Desligamento',
+    MD: 'Modificação',
+    SF: 'Suspensão de Fornecimento',
+    RL: 'Religa',
+    UG: 'Uso Geral',
+    DD: 'Falhas para Distribuição',
+    II: 'Inspeção de Irregularidade',
+    PO: 'Ordem Prioritária',
+  };
+
+  // ── ESTADO ────────────────────────────────────────────────────────────────
+  let allTeams       = [];
+  let currentRegional = 'ALL';
+  let currentFilter  = '';
+
+  // ── METAS (banco de dados via API) ───────────────────────────────────────
+  let _metasCache = { GUA: {}, CAC: {} };
+
+  async function fetchMetas() {
+    try {
+      const res = await fetch(`${API}/metas`);
+      if (res.ok) {
+        _metasCache = await res.json();
+        // Migra metas antigas do localStorage para o banco (executa uma vez)
+        const legado = localStorage.getItem('wpa-metas-v2');
+        if (legado) {
+          try {
+            const obj = JSON.parse(legado);
+            const temDados = Object.values(obj).some(r => Object.keys(r).length > 0);
+            const bancVazio = Object.values(_metasCache).every(r => Object.keys(r).length === 0);
+            if (temDados && bancVazio) {
+              await saveMetas(obj);
+              console.log('[Metas] Migradas do localStorage para o banco.');
+            }
+            localStorage.removeItem('wpa-metas-v2');
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.warn('[Metas] Usando cache local (API indisponível):', err.message);
+    }
+    return _metasCache;
+  }
+
+  function getMetas() {
+    return _metasCache;
+  }
+
+  async function saveMetas(obj) {
+    try {
+      const res = await fetch(`${API}/metas`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(obj),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        _metasCache = data.metas || obj;
+      }
+    } catch (err) {
+      console.error('[Metas] Erro ao salvar:', err.message);
+    }
+  }
+
+  // ── UTILS ─────────────────────────────────────────────────────────────────
+  function fmt(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+  function duracao(inicio, fim) {
+    if (!inicio || !fim) return '—';
+    const ms = new Date(fim) - new Date(inicio);
+    const h  = Math.floor(ms / 3600000);
+    const m  = Math.floor((ms % 3600000) / 60000);
+    return `${h}h${String(m).padStart(2,'0')}m`;
+  }
+  function today() {
+    return new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+  }
+  function mesAtual() {
+    return new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  }
+
+  // ── PRODUTIVIDADE ─────────────────────────────────────────────────────────
+  const REGIONAIS_INFO = {
+    GUA: { nome: 'Guarapari', cor: '#086738' },
+    CAC: { nome: 'Cachoeiro', cor: '#1565c0' },
+  };
+
+  function calcTotaisPorRegional(teams) {
+    // Retorna { GUA: { LN: 3, RL: 5 }, CAC: { PO: 10 }, ALL: { LN: 3, PO: 10, ... } }
+    const result = { GUA: {}, CAC: {}, ALL: {} };
+    teams.forEach(t => {
+      const reg = t.regional;
+      if (!result[reg]) result[reg] = {};
+      (t.notasConcluidas || []).forEach(n => {
+        result[reg][n.tipoCode]  = (result[reg][n.tipoCode]  || 0) + 1;
+        result.ALL[n.tipoCode]   = (result.ALL[n.tipoCode]   || 0) + 1;
+      });
+    });
+    return result;
+  }
+
+  // Mescla metas das duas regionais (soma) para uso no modo ALL
+  function metasAcumuladas(metas) {
+    const acc = {};
+    ['GUA', 'CAC'].forEach(reg => {
+      Object.entries(metas[reg] || {}).forEach(([code, val]) => {
+        acc[code] = (acc[code] || 0) + val;
+      });
+    });
+    return acc;
+  }
+
+  function renderBlockRegional(totais, metasReg) {
+    const tipos = Object.keys(TIPOS_SERVICO);
+    const tiposExibir = tipos.filter(c => metasReg[c] || totais[c]);
+    if (tiposExibir.length === 0)
+      return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota concluída hoje.</span>';
+
+    return `<div class="prod-grid">${tiposExibir.map(code => {
+      const realizado  = totais[code] || 0;
+      const meta       = parseInt(metasReg[code] || 0);
+      const pct        = meta > 0 ? Math.min(Math.round((realizado / meta) * 100), 100) : 0;
+      const colorClass = pct >= 100 ? 'done' : pct >= 70 ? 'done' : pct >= 40 ? 'warn' : 'danger';
+      return `
+        <div class="prod-item">
+          <div class="prod-item-top">
+            <span class="prod-tipo-badge">${code}</span>
+            ${meta > 0
+              ? `<span class="prod-nums"><strong>${realizado}</strong> / ${meta}</span>`
+              : `<span class="prod-sem-meta">sem meta</span>`}
+          </div>
+          <div style="font-size:10px;color:var(--text2);margin-bottom:5px">${TIPOS_SERVICO[code]}</div>
+          ${meta > 0
+            ? `<div class="prod-bar-track"><div class="prod-bar-fill ${colorClass}" style="width:${pct}%"></div></div>
+               <div style="font-size:10px;color:var(--text2);margin-top:3px;text-align:right">${pct}%</div>`
+            : ''}
+        </div>`;
+    }).join('')}</div>`;
+  }
+
+  function renderProdutividade(teams) {
+    const metas  = getMetas();
+    const totais = calcTotaisPorRegional(teams);
+    const grid   = document.getElementById('prod-grid');
+    const title  = document.getElementById('prod-title');
+
+    // Atualiza título do painel conforme filtro
+    const labelRegional = currentRegional === 'ALL'
+      ? 'Todas as Regionais'
+      : REGIONAIS_INFO[currentRegional]?.nome || currentRegional;
+    title.textContent = `Produtividade do Mês — ${labelRegional}`;
+
+    if (currentRegional === 'ALL') {
+      // ── MODO ACUMULADO: soma metas e totais das duas regionais ──
+      const metasAcc = metasAcumuladas(metas);
+      const semMeta  = Object.keys(metasAcc).length === 0;
+      if (semMeta) {
+        grid.innerHTML = `<span style="color:var(--text2);font-size:13px">
+          Nenhuma meta configurada. Clique em <strong>⚙ Metas</strong> para definir as metas por regional.
+        </span>`;
+        return;
+      }
+      grid.innerHTML = renderBlockRegional(totais.ALL, metasAcc);
+
+    } else {
+      // ── MODO REGIONAL ESPECÍFICA ──
+      const met = metas[currentRegional] || {};
+      if (Object.keys(met).length === 0) {
+        const nome = REGIONAIS_INFO[currentRegional]?.nome || currentRegional;
+        grid.innerHTML = `<span style="color:var(--text2);font-size:13px">
+          Sem metas definidas para ${nome}. Clique em <strong>⚙ Metas</strong> para configurar.
+        </span>`;
+        return;
+      }
+      grid.innerHTML = renderBlockRegional(totais[currentRegional] || {}, met);
+    }
+  }
+
+  // ── MODAL METAS ───────────────────────────────────────────────────────────
+  function openMetas() {
+    const metas = getMetas();
+    ['GUA', 'CAC'].forEach(reg => {
+      const grid = document.getElementById('metas-grid-' + reg);
+      if (!grid) return;
+      grid.innerHTML = Object.entries(TIPOS_SERVICO).map(([code, nome]) => `
+        <div class="meta-item">
+          <label><span class="meta-badge">${code}</span>${nome}</label>
+          <input class="meta-input" type="number" min="0"
+                 id="meta-${reg}-${code}"
+                 value="${(metas[reg] || {})[code] || ''}"
+                 placeholder="0 = sem meta" />
+        </div>
+      `).join('');
+    });
+    document.getElementById('metas-overlay').classList.add('open');
+  }
+
+  async function salvarMetas() {
+    const btn = document.querySelector('#metas-overlay .btn-salvar');
+    if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
+
+    const obj = { GUA: {}, CAC: {} };
+    ['GUA', 'CAC'].forEach(reg => {
+      Object.keys(TIPOS_SERVICO).forEach(code => {
+        const val = parseInt(document.getElementById(`meta-${reg}-${code}`)?.value || '0');
+        if (val > 0) obj[reg][code] = val;
+      });
+    });
+
+    await saveMetas(obj);
+    if (btn) { btn.textContent = 'Salvar Metas'; btn.disabled = false; }
+    closeMetasDirect();
+    renderProdutividade(getVisible());
+  }
+
+  function closeMetasModal(e) { if (e.target === document.getElementById('metas-overlay')) closeMetasDirect(); }
+  function closeMetasDirect() { document.getElementById('metas-overlay').classList.remove('open'); }
+
+  // ── CARREGA DADOS ─────────────────────────────────────────────────────────
+  async function loadData() {
+    document.getElementById('sync-label').textContent = 'Atualizando...';
+    document.getElementById('date-display').textContent = today();
+    document.getElementById('prod-periodo').textContent = mesAtual();
+
+    try {
+      // Carrega equipes e metas em paralelo
+      const [res] = await Promise.all([
+        fetch(`${API}/teams`).then(r => r.json()),
+        fetchMetas(),
+      ]);
+
+      allTeams = res.teams || [];
+      document.getElementById('mode-badge').textContent = (res.mode || 'mock').toUpperCase();
+      document.getElementById('sync-label').textContent =
+        new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('last-update').textContent =
+        `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
+      renderAll();
+    } catch (err) {
+      document.getElementById('sync-label').textContent = 'Erro de conexão';
+      document.getElementById('teams-grid').innerHTML =
+        `<div class="empty-state">Não foi possível conectar ao backend.<br><small>Verifique se o servidor está rodando</small></div>`;
+    }
+  }
+
+  // ── FILTROS ───────────────────────────────────────────────────────────────
+  function selectRegional(regional) {
+    currentRegional = regional;
+    // Sincroniza o select caso chamado programaticamente
+    const sel = document.getElementById('regional-select');
+    if (sel && sel.value !== regional) sel.value = regional;
+    renderAll();
+  }
+
+  function filterCards(val) {
+    currentFilter = val.toLowerCase();
+    renderAll();
+  }
+
+  function getVisible() {
+    return allTeams.filter(t => {
+      const regionalOk = currentRegional === 'ALL' || t.regional === currentRegional;
+      const filterOk   = !currentFilter ||
+        (t.sigla || t.teamName || '').toLowerCase().includes(currentFilter) ||
+        (t.collaborators || []).some(c => c.nome.toLowerCase().includes(currentFilter));
+      return regionalOk && filterOk;
+    });
+  }
+
+  // ── RENDER MÉTRICAS ───────────────────────────────────────────────────────
+  function renderMetrics(teams) {
+    const baixadas   = teams.reduce((s,t) => s + (t.notasBaixadas   || []).length, 0);
+    const executadas = teams.reduce((s,t) => s + (t.notasExecutadas || []).length, 0);
+    const concluidas = teams.reduce((s,t) => s + (t.notasConcluidas || []).length, 0);
+    const rejeitadas = teams.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
+    const relogins   = teams.reduce((s,t) => s + (t.relogins || 0), 0);
+    const ativas     = teams.filter(t => !t.sessionEnd).length;
+    const pct        = baixadas > 0 ? Math.round((concluidas / baixadas) * 100) : 0;
+
+    document.getElementById('m-total').textContent         = teams.length;
+    document.getElementById('m-ativas').textContent        = `${ativas} em campo`;
+    document.getElementById('m-baixadas').textContent      = baixadas;
+    document.getElementById('m-executadas').textContent    = executadas;
+    document.getElementById('m-concluidas').textContent    = concluidas;
+    document.getElementById('m-rejeitadas').textContent    = rejeitadas;
+    document.getElementById('m-relogins').textContent      = relogins;
+    document.getElementById('m-concluidas-pct').textContent= `${pct}% das baixadas`;
+  }
+
+  // ── RENDER CARDS ──────────────────────────────────────────────────────────
+  function renderAll() {
+    const teams = getVisible();
+    renderMetrics(teams);
+    renderProdutividade(teams);
+
+    document.getElementById('section-count').textContent =
+      `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
+
+    if (teams.length === 0) {
+      document.getElementById('teams-grid').innerHTML =
+        `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
+      return;
+    }
+
+    document.getElementById('teams-grid').innerHTML = teams.map(t => {
+      const ativa = !t.sessionEnd;
+      const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
+      const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
+
+      // Agrupa concluídas por tipo para exibir no card
+      const tiposCont = {};
+      (t.notasConcluidas || []).forEach(n => {
+        tiposCont[n.tipoCode] = (tiposCont[n.tipoCode] || 0) + 1;
+      });
+      const tiposHtml = Object.entries(tiposCont).map(([code, cnt]) =>
+        `<span class="tipo-chip">
+          <span class="tipo-chip-code">${code}</span>
+          <span class="tipo-chip-num">${cnt}</span>
+        </span>`
+      ).join('');
+
+      return `
+        <div class="team-card" onclick="openModal('${t.id}')">
+          <div class="team-card-header ${ativa ? '' : 'inativa'}">
+            <div>
+              <div class="team-card-sigla">${t.sigla || t.teamName}</div>
+              <div class="team-card-meta">${regionalNome} · ${t.sectorId}</div>
+            </div>
+            <span class="team-status-badge ${ativa ? 'status-ativa' : 'status-encerrada'}">
+              ${ativa ? '● Em campo' : '○ Encerrada'}
+            </span>
+          </div>
+          <div class="team-card-body">
+            <div class="team-row">
+              <span class="team-row-label">Placa</span>
+              <span class="tag-placa">${t.vehiclePlate || '—'}</span>
+            </div>
+            <div class="team-row">
+              <span class="team-row-label">Sessão</span>
+              <span style="color:var(--text);font-size:12px">${fmt(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}</span>
+            </div>
+            <div class="team-row">
+              <span class="team-row-label">Re-logins</span>
+              <span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span>
+            </div>
+            <div class="os-row">
+              <div class="os-cell">
+                <div class="os-num">${(t.notasBaixadas||[]).length}</div>
+                <div class="os-lbl">Baixadas</div>
+              </div>
+              <div class="os-cell">
+                <div class="os-num executada">${(t.notasExecutadas||[]).length}</div>
+                <div class="os-lbl">Exec.</div>
+              </div>
+              <div class="os-cell">
+                <div class="os-num concluida">${(t.notasConcluidas||[]).length}</div>
+                <div class="os-lbl">Concluídas</div>
+              </div>
+              <div class="os-cell">
+                <div class="os-num rejeitada">${(t.notasRejeitadas||[]).length}</div>
+                <div class="os-lbl">Rejeitadas</div>
+              </div>
+            </div>
+            ${tiposHtml ? `<div class="tipos-row">${tiposHtml}</div>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  // ── MODAL EQUIPE ──────────────────────────────────────────────────────────
+  let activeNotaTab = 'concluida';
+
+  function openModal(teamId) {
+    const t = allTeams.find(x => x.id === teamId);
+    if (!t) return;
+
+    const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
+    document.getElementById('modal-title').textContent = t.sigla || t.teamName;
+    document.getElementById('modal-sub').textContent   = `${regionalNome} · ${t.sectorId} · ${t.date}`;
+
+    const dur     = duracao(t.sessionBegin, t.sessionEnd);
+    const colabs  = t.collaborators || [];
+    const sessoes = t.sessions || [];
+
+    const sesoesHtml = sessoes.length > 0
+      ? sessoes.map((s, i) => `
+          <div class="sessao-item">
+            <div class="sessao-num">${i+1}</div>
+            <span class="sessao-time">${s.inicio} → ${s.fim}</span>
+            ${s.motivo ? `<span class="sessao-motivo">${s.motivo}</span>` : ''}
+          </div>`).join('')
+      : '<span style="color:var(--text2);font-size:13px">Sem re-logins registrados.</span>';
+
+    // Agrupa totais por tipo para o perfil da equipe
+    const tiposPerfil = (t.servicosPerfil || []).map(code =>
+      `<span style="background:var(--verde);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:4px">${code}</span>`
+    ).join('') || '—';
+
+    document.getElementById('modal-body').innerHTML = `
+      <div class="modal-section">
+        <div class="modal-section-title">Sessão do dia</div>
+        <div class="info-grid">
+          <div class="info-item"><div class="lbl">Início</div><div class="val">${fmt(t.sessionBegin)}</div></div>
+          <div class="info-item"><div class="lbl">Fim</div><div class="val">${t.sessionEnd ? fmt(t.sessionEnd) : '— em andamento'}</div></div>
+          <div class="info-item"><div class="lbl">Duração</div><div class="val">${dur}</div></div>
+          <div class="info-item"><div class="lbl">Placa</div><div class="val"><span class="tag-placa">${t.vehiclePlate || '—'}</span></div></div>
+          <div class="info-item"><div class="lbl">Check-in GPS</div><div class="val">${fmt(t.checkinTime)}</div></div>
+          <div class="info-item"><div class="lbl">Re-logins</div><div class="val">${t.relogins} desconexão(ões)</div></div>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">Perfil de serviços</div>
+        <div style="margin-bottom:4px">${tiposPerfil}</div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">Histórico de conexões (${sessoes.length} sessão/ões)</div>
+        ${sesoesHtml}
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">Colaboradores (${colabs.length})</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${colabs.map(c => `
+            <div style="display:flex;align-items:center;gap:10px;background:var(--cinza1);border-radius:6px;padding:8px 12px;font-size:13px">
+              <div style="width:30px;height:30px;border-radius:50%;background:var(--verde);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">
+                ${c.nome.charAt(0)}
+              </div>
+              <div>
+                <div style="font-weight:500">${c.nome}</div>
+                <div style="font-size:11px;color:var(--text2)">${c.cargo} · Mat. ${c.matricula}</div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-section-title">Ordens de Serviço</div>
+        <div class="notas-tabs" id="notas-tabs">
+          <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Baixadas (${(t.notasBaixadas||[]).length})</button>
+          <button class="nota-tab" onclick="switchNotaTab('executada',this)">Executadas (${(t.notasExecutadas||[]).length})</button>
+          <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Concluídas (${(t.notasConcluidas||[]).length})</button>
+          <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas||[]).length})</button>
+        </div>
+        <div class="notas-list" id="notas-list"></div>
+      </div>
+    `;
+
+    window._modalTeam = t;
+    activeNotaTab = 'concluida';
+    renderNotas('concluida');
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+
+  function switchNotaTab(tipo, el) {
+    activeNotaTab = tipo;
+    document.querySelectorAll('.nota-tab').forEach(b => b.className = 'nota-tab');
+    el.classList.add(`active-${tipo}`);
+    renderNotas(tipo);
+  }
+
+  function renderNotas(tipo) {
+    const t = window._modalTeam;
+    if (!t) return;
+    const map = {
+      baixada:   t.notasBaixadas   || [],
+      executada: t.notasExecutadas || [],
+      concluida: t.notasConcluidas || [],
+      rejeitada: t.notasRejeitadas || [],
+    };
+    const notas = map[tipo] || [];
+    const el = document.getElementById('notas-list');
+    if (!el) return;
+    if (notas.length === 0) {
+      el.innerHTML = `<span style="font-size:13px;color:var(--text2)">Nenhuma OS ${tipo}.</span>`;
+      return;
+    }
+    el.innerHTML = notas.map(n =>
+      `<span class="nota-chip nota-${tipo}">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span></span>`
+    ).join('');
+  }
+
+  function closeModal(e) { if (e.target === document.getElementById('modal-overlay')) closeModalDirect(); }
+  function closeModalDirect() { document.getElementById('modal-overlay').classList.remove('open'); window._modalTeam = null; }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); } });
+
+  // ── INIT ──────────────────────────────────────────────────────────────────
+  loadData();
+  setInterval(loadData, 5 * 60 * 1000);
+</script>
+</body>
+</html>
