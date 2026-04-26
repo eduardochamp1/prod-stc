@@ -226,10 +226,16 @@ async function getNotesByDate(sectorId, isoDate) {
 async function getTeamsByDate(sectorId, isoDate) {
   const [sessions, notasRaw] = await Promise.all([
     getSessionsByDate(sectorId, isoDate),
-    getNotesByDate(sectorId, isoDate),
+    getNotesByDate(sectorId, isoDate).catch(err => {
+      console.warn(`[WPA] getNotesByDate ${sectorId}/${isoDate} falhou: ${err.message}`);
+      return [];
+    }),
   ]);
 
+  console.log(`[WPA] backfill raw: ${sectorId}/${isoDate} → ${sessions.length} sessões totais, ${notasRaw.length} notas`);
+
   const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
+  console.log(`[WPA] backfill Engelmig: ${engelmigSessions.length} sessões filtradas (companyId=${ENGELMIG_COMPANY_ID})`);
 
   const notasPorNome = {};
   const notasPorId   = {};
