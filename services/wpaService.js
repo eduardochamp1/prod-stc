@@ -4,6 +4,28 @@
  *
  * Auth:  POST https://edp-wpa-po.azurewebsites.net/identity/signin  → JWT
  * API:   https://edp-wpa-web-api.azurewebsites.net
+ *
+ * Estratégia de dados (2 chamadas paralelas por setor):
+ *   1. GET /api/sessions/current?sectorId=X
+ *      → Única fonte do Team.CompanyId — necessário para filtrar equipes Engelmig.
+ *        Também fornece Vehicle.Code (placa) que o V2 não retorna.
+ *   2. GET /api/teamsstatus/V2?sectorId=X&filterByExhibitionSector=true
+ *      → Fonte dos contadores de notas.
+ *        Inclui Concluded[] com ExecutionStatus 4/5 que some de /notes/execution.
+ *
+ * ExecutionStatus das notas no V2 (confirmado em campo):
+ *   1 → baixada   (na carteira, aguardando)
+ *   3 → executada (em andamento)
+ *   6 → executada ("Trabalhando na nota X" — nota ativa)
+ *   7 → executada (variante de nota ativa)
+ *   4 → concluida (exportada/sincronizada)
+ *   5 → concluida (exportada variante)
+ *   9 → concluida (mobile pendente sync)
+ *
+ * Estrutura de Collaborators:
+ *   sessions/current → Collaborators[].Collaborator.{Name, Code}  (aninhado)
+ *   teamsstatus/V2   → Session.Collaborators[].{Name, Code}        (plano)
+ *   O código trata ambos com fallback defensivo.
  */
 
 const fetch = require('node-fetch');
@@ -74,7 +96,7 @@ async function forceRefresh() {
 function getTokenStatus() {
   const now = Date.now();
   if (!_token) return { valid: false, reason: 'sem token', expiresAt: null, expiresIn: null };
-  if (now >= _expireAt)          return { valid: false, reason: 'expirado', expiresAt: new Date(_expireAt).toISOString(), expiresIn: '0s' };
+  if (now >= _expireAt) return { valid: false, reason: 'expirado', expiresAt: new Date(_expireAt).toISOString(), expiresIn: '0s' };
   const secsLeft = Math.round((_expireAt - now) / 1000);
   return { valid: true, reason: 'ok', expiresAt: new Date(_expireAt).toISOString(), expiresIn: `${secsLeft}s` };
 }
@@ -98,6 +120,8 @@ async function wpaFetch(path, options = {}) {
 
 /**
  * Retorna sessões ativas no setor.
+ * Única fonte de Team.CompanyId — necessário para filtrar equipes Engelmig.
+ * Também fornece Vehicle.Code (placa) que o V2 não retorna.
  * GET /api/sessions/current?sectorId={sectorId}
  */
 async function getSessions(sectorId) {
@@ -109,6 +133,7 @@ async function getSessions(sectorId) {
 
 /**
  * Retorna notas em execução no setor (dia corrente).
+ * ATENÇÃO: não retorna notas ExecutionStatus 4/5 (exportadas). Mantido apenas para debug.
  * GET /api/notes/execution?sectorId={sectorId}
  */
 async function getNotesExecution(sectorId) {
@@ -119,7 +144,8 @@ async function getNotesExecution(sectorId) {
 }
 
 /**
- * Retorna carteira de notas (wallet) por equipe no setor.
+ * Retorna carteira de notas por equipe no setor.
+ * Mantido para compatibilidade/debug. O V2 já fornece Downloaded[] que substitui este endpoint.
  * GET /api/route/preroute?sectorId={sectorId}
  */
 async function getPreroute(sectorId) {
@@ -129,13 +155,39 @@ async function getPreroute(sectorId) {
   return data.Data || [];
 }
 
+/**
+ * Retorna status completo das equipes do setor — mesmo endpoint do WPA Gestão Online.
+ * GET /api/teamsstatus/V2?sectorId={sectorId}&filterByExhibitionSector=true
+ *
+ * Estrutura de cada item (confirmada em campo):
+ *   Concluded[]  — notas concluídas (ExecutionStatus 4/5 — inclui o que some de /notes/execution)
+ *   Downloaded[] — notas na carteira do dispositivo
+ *                  ExecutionStatus: 1=aguardando, 3/6/7=em andamento ativo
+ *   Executed[]   — subconjunto de Downloaded em execução ativa (pode estar vazio mesmo
+ *                  com notas em andamento — usar ExecutionStatus do Downloaded como fonte)
+ *   Assigned[]   — notas atribuídas ainda não baixadas no dispositivo
+ *   Rejected[]   — notas rejeitadas (pode ser null)
+ *   Session      — dados de sessão; Team NÃO tem CompanyId (usar sessions/current para filtrar)
+ *                  Collaborators[] é plano: { Id, Code, Name, Phone }
+ *   Status       — texto descritivo: "Trabalhando na nota X", "Intervalo - 15...", etc.
+ *   Location     — GPS { Latitude, Longitude }
+ *   IsOnline, IsInLunchTime, LastUpdate, LastStatusUpdate
+ */
+async function getTeamStatusV2(sectorId) {
+  const res = await wpaFetch(
+    `/api/teamsstatus/V2?sectorId=${sectorId}&filterByExhibitionSector=true`
+  );
+  if (!res.ok) throw new Error(`WPA teamsstatus/V2 ${res.status}`);
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data.Data || []);
+}
+
 // ── ACUMULADOR DIÁRIO ─────────────────────────────────────────────────────────
-// Guarda IDs de notas concluídas observadas durante o dia.
-// Quando uma nota passa de status 9 → 4 (sincronizada), ela some do endpoint
-// de execução; o acumulador garante que o contador não caia para zero.
+// Preserva notas concluídas/executadas vistas durante o dia.
+// Garante que o contador não caia caso uma equipe encerre e reabra sessão.
 const _acc = {
-  date:  '',           // 'YYYY-MM-DD' do dia atual
-  notes: new Map(),    // noteId → { tipoCode, teamName, regional }
+  date:  '',
+  notes: new Map(),    // noteId → { tipoCode, teamName, regional, status }
 };
 
 function _accReset() {
@@ -150,16 +202,14 @@ function _accReset() {
 function _accRecord(teams) {
   _accReset();
   teams.forEach(t => {
-    // Acumula executadas (status 2) E concluídas (status 9/4) preservando o status original
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
       if (n.codigo && !_acc.notes.has(n.codigo)) {
-        // FIX: guarda o status original (não força 'concluida')
         _acc.notes.set(n.codigo, {
-          tipoCode:  n.tipoCode,
-          teamName:  t.teamName,
-          regional:  t.regional,
-          status:    n.status,   // preserva: 'executada' ou 'concluida'
+          tipoCode: n.tipoCode,
+          teamName: t.teamName,
+          regional: t.regional,
+          status:   n.status,
         });
         console.log(`[WPA] ★ Nota acumulada: equipe=${t.teamName} tipo=${n.tipoCode} nota=${n.codigo} status=${n.status}`);
       }
@@ -171,7 +221,6 @@ function _accApply(teams) {
   _accReset();
   if (_acc.notes.size === 0) return teams;
 
-  // Separa extras por status para reinserir na lista correta
   const extrasExec = {};
   const extrasConc = {};
   _acc.notes.forEach((info, noteId) => {
@@ -186,7 +235,6 @@ function _accApply(teams) {
   });
 
   return teams.map(t => {
-    // IDs já presentes nas notas atuais
     const existentes = new Set([
       ...(t.notasExecutadas || []).map(n => n.codigo),
       ...(t.notasConcluidas || []).map(n => n.codigo),
@@ -194,7 +242,6 @@ function _accApply(teams) {
     const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.codigo));
     const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.codigo));
     if (novasExec.length === 0 && novasConc.length === 0) return t;
-    // FIX: reinsere cada nota na lista correta conforme seu status original
     return {
       ...t,
       notasExecutadas: [...(t.notasExecutadas || []), ...novasExec],
@@ -214,130 +261,174 @@ const REGIONAL_MAP = {
 const ENGELMIG_COMPANY_ID = '92a2f98e-8877-433e-8358-173b94c13a54';
 
 /**
- * Status das notas no WPA:
- *   1 = Baixada       (nota enviada ao dispositivo)
- *   2 = Aceita        (equipe aceitou / em execução)
- *   3 = Rejeitada
- *   4 = Exportada     (concluída / sincronizada)
- *   9 = Concluída mobile (pendente sincronização)
+ * Normaliza uma nota do teamsstatus/V2.
+ *
+ * @param {object} n           - Objeto de nota do V2 (Concluded/Downloaded/Executed/Rejected)
+ * @param {string} statusForcado - Se fornecido, ignora ExecutionStatus e usa este valor
  */
-const STATUS_LABEL = { 1: 'baixada', 2: 'executada', 3: 'rejeitada', 4: 'concluida', 9: 'concluida' };
-
-function normalizarNota(n) {
+function normalizarNotaV2(n, statusForcado) {
+  // Mapeamento confirmado em campo com dados reais
+  const STATUS_V2 = {
+    1: 'baixada',
+    2: 'baixada',
+    3: 'executada',   // em andamento
+    6: 'executada',   // nota ativa ("Trabalhando na nota X")
+    7: 'executada',   // variante de nota ativa
+    4: 'concluida',   // exportada/sincronizada
+    5: 'concluida',   // exportada variante
+    9: 'concluida',   // mobile pendente sync
+  };
   return {
     codigo:   String(n.Number || n.Id || ''),
     tipoCode: n.Type || '??',
     tipoNome: n.Type || '??',
-    status:   STATUS_LABEL[n.Status] || 'baixada',
-  };
-}
-
-function normalizarSessao(s, notasPorEquipe = {}, carteiraCount = 0) {
-  const teamName = s.Team?.Name || '?';
-  const sectorId = s.SectorId || s.Sector?.Code || 'DESG';
-  const notas    = notasPorEquipe[teamName] || [];
-
-  return {
-    id:           s.Id,
-    sigla:        teamName,
-    teamName,
-    sectorId,
-    regional:     REGIONAL_MAP[sectorId] || 'GUA',
-    date:         s.BeginTime?.slice(0, 10) || new Date().toISOString().slice(0, 10),
-    sessionBegin: s.BeginTime,
-    sessionEnd:   s.EndTime || null,
-    vehiclePlate: s.Vehicle?.Code || '—',
-    collaborators: (s.Collaborators || []).map(c => ({
-      nome:      c.Collaborator?.Name || '—',
-      matricula: c.Collaborator?.Code || '—',
-      cargo:     '—',
-    })),
-    relogins:    0,
-    sessions:    [],
-    deviceModel: s.Device?.Model || null,
-    appVersion:  s.AppVersion || null,
-    teamStatus:  s.TeamStatus,
-    carteiraCount,
-    servicosPerfil: [...new Set(notas.map(n => n.tipoCode))],
-    notasBaixadas:   notas.filter(n => n.status === 'baixada'),
-    notasExecutadas: notas.filter(n => n.status === 'executada'),
-    notasConcluidas: notas.filter(n => n.status === 'concluida'),
-    notasRejeitadas: notas.filter(n => n.status === 'rejeitada'),
+    status:   statusForcado || STATUS_V2[n.ExecutionStatus] || 'baixada',
   };
 }
 
 /**
- * Combina sessões + notas de execução para um setor.
- * Retorna array de equipes normalizado.
+ * Normaliza colaboradores vindos de sessions/current.
+ * sessions/current usa estrutura aninhada: Collaborators[].Collaborator.{Name, Code}
+ * O fallback plano (c.Name) cobre variações futuras da API.
+ */
+function normalizarColaborador(c) {
+  return {
+    nome:      c.Collaborator?.Name || c.Name || '—',
+    matricula: c.Collaborator?.Code || c.Code || '—',
+    cargo:     '—',
+  };
+}
+
+/**
+ * Combina sessions/current (filtro Engelmig + metadados) + teamsstatus/V2 (notas).
+ * Retorna array de equipes normalizado com contagem correta de concluídas.
+ *
+ * Fluxo:
+ *   1. sessions/current  → lista de equipes Engelmig (CompanyId) + placa do veículo
+ *   2. teamsstatus/V2    → Concluded[], Downloaded[], Executed[] para cada equipe
+ *   3. Cruza os dois por Team.Id (fallback por Team.Name)
+ *   4. Aplica acumulador diário como segurança
  */
 async function getTeamsBySector(sectorId) {
-  const [sessions, notasRaw, preroute] = await Promise.all([
+  // Paralelo: sessions/current + V2
+  const [sessions, statusList] = await Promise.all([
     getSessions(sectorId),
-    getNotesExecution(sectorId),
-    getPreroute(sectorId).catch(() => []),
+    getTeamStatusV2(sectorId),
   ]);
 
-  // Monta mapa teamName → WalletCount a partir do preroute
-  const walletMap = {};
-  preroute.forEach(item => {
-    const nome = (item.Name || '').trim();
-    if (nome) walletMap[nome] = item.WalletCount || 0;
-  });
-  console.log(`[WPA] ${sectorId}: preroute ${preroute.length} equipes, carteira total=${preroute.reduce((s,i) => s + (i.WalletCount||0), 0)}`);
-
-  // Filtra apenas equipes da ENGELMIG
+  // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current)
   const engelmigSessions = sessions.filter(s =>
     s.Team?.CompanyId === ENGELMIG_COMPANY_ID
   );
 
-  console.log(`[WPA] ${sectorId}: ${sessions.length} sessões totais → ${engelmigSessions.length} Engelmig | ${notasRaw.length} notas no setor`);
-
-  // Indexa notas por nome de equipe E por ID de equipe (fallback)
-  const notasPorNome = {};
-  const notasPorId   = {};
-  notasRaw.forEach(n => {
-    const nome = (n.Team?.Name || '').trim();
-    const id   = n.Team?.Id   || n.TeamId;
-    const nota = normalizarNota(n);
-    if (nome) {
-      if (!notasPorNome[nome]) notasPorNome[nome] = [];
-      notasPorNome[nome].push(nota);
-    }
-    if (id) {
-      if (!notasPorId[id]) notasPorId[id] = [];
-      notasPorId[id].push(nota);
-    }
+  // Índices de V2 por teamId e por nome (fallback tolerante a mismatch)
+  const v2ByTeamId   = new Map();
+  const v2ByTeamName = new Map();
+  statusList.forEach(item => {
+    const id   = item.Session?.Team?.Id || item.Session?.TeamId;
+    const nome = (item.Session?.Team?.Name || '').trim();
+    if (id)   v2ByTeamId.set(id, item);
+    if (nome) v2ByTeamName.set(nome, item);
   });
 
-  // Log amostral: quais nomes aparecem nas notas (para detectar mismatch)
-  const nomesNasNotas = Object.keys(notasPorNome);
-  if (nomesNasNotas.length > 0) {
-    console.log(`[WPA] ${sectorId}: nomes nas notas (amostra): ${nomesNasNotas.slice(0, 8).join(', ')}`);
-  }
+  console.log(
+    `[WPA] ${sectorId}: ${sessions.length} sessões → ${engelmigSessions.length} Engelmig` +
+    ` | ${statusList.length} entradas V2`
+  );
 
   const result = engelmigSessions.map(s => {
-    const teamName = (s.Team?.Name || '').trim();
-    const teamId   = s.Team?.Id;
+    const teamName     = (s.Team?.Name || '').trim();
+    const teamId       = s.Team?.Id;
+    const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
 
-    // 1. Tenta por nome exato; 2. fallback por ID de equipe
-    const notas = notasPorNome[teamName]
-               || (teamId ? notasPorId[teamId] : null)
-               || [];
+    // Busca dado V2: por ID primeiro (mais confiável), nome como fallback
+    const v2 = (teamId && v2ByTeamId.get(teamId)) || v2ByTeamName.get(teamName);
 
-    const conc     = notas.filter(n => n.status === 'concluida').length;
-    const carteira = walletMap[teamName] ?? 0;
-    if (walletMap[teamName] === undefined) {
-      console.warn(`[WPA]   ${sectorId}/${teamName}: ⚠️ não encontrado no preroute — carteira=0`);
+    let baixadas, executadas, concluidas, rejeitadas;
+
+    if (v2) {
+      // Concluded[] → força 'concluida' (inclui ExecutionStatus 4/5 que sumia antes)
+      concluidas = (v2.Concluded || []).map(n => normalizarNotaV2(n, 'concluida'));
+
+      // Downloaded[] → classifica pelo ExecutionStatus
+      //   1/2   → baixada (aguardando na carteira)
+      //   3/6/7 → executada (nota em andamento ativo)
+      const downloadedNormed = (v2.Downloaded || []).map(n => normalizarNotaV2(n));
+      baixadas = downloadedNormed.filter(n => n.status === 'baixada');
+
+      // Executed[] → força 'executada' (subconjunto de Downloaded em execução ativa)
+      const execBase = (v2.Executed || []).map(n => normalizarNotaV2(n, 'executada'));
+      const execIds  = new Set(execBase.map(n => n.codigo));
+      // Merge: Executed[] + Downloaded com ExecutionStatus 3/6/7 (sem duplicatas)
+      const execFromDownloaded = downloadedNormed.filter(n => n.status === 'executada');
+      executadas = [...execBase, ...execFromDownloaded.filter(n => !execIds.has(n.codigo))];
+
+      // Rejected pode ser null na API
+      rejeitadas = (v2.Rejected || []).map(n => normalizarNotaV2(n, 'rejeitada'));
     } else {
-      console.log(`[WPA]   ${sectorId}/${teamName}: ${notas.length} notas (${conc} concluídas, ${carteira} carteira)`);
+      console.warn(`[WPA] ${sectorId}/${teamName}: ⚠️ sem dados V2`);
+      baixadas = []; executadas = []; concluidas = []; rejeitadas = [];
     }
 
-    return normalizarSessao(s, { [teamName]: notas }, carteira);
+    // carteiraCount = notas que a equipe tem no dispositivo (= "Em Campo" do WPA)
+    const carteiraCount = baixadas.length + executadas.length;
+    const allNotas      = [...baixadas, ...executadas, ...concluidas, ...rejeitadas];
+
+    console.log(
+      `[WPA]   ${sectorId}/${teamName}: ` +
+      `baixadas=${baixadas.length} exec=${executadas.length} ` +
+      `conc=${concluidas.length} rej=${rejeitadas.length} ` +
+      `carteira=${carteiraCount}${v2 ? '' : ' [SEM V2]'}`
+    );
+
+    return {
+      id:           s.Id,
+      sigla:        teamName,
+      teamName,
+      sectorId:     teamSectorId,
+      regional:     REGIONAL_MAP[teamSectorId] || 'GUA',
+      date:         s.BeginTime?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      sessionBegin: s.BeginTime,
+      sessionEnd:   s.EndTime || null,
+      // Placa: só existe em sessions/current (V2 tem apenas VehicleCategory)
+      vehiclePlate: s.Vehicle?.Code || '—',
+      // Colaboradores: sessions/current usa estrutura aninhada Collaborator.{Name,Code}
+      collaborators: (s.Collaborators || []).map(normalizarColaborador),
+      relogins:    0,
+      sessions:    [],
+      deviceModel: s.Device?.Model || null,
+      appVersion:  s.AppVersion   || null,
+      // Campos enriquecidos do V2
+      teamStatus:    v2?.Status        || s.TeamStatus || null,
+      isOnline:      v2?.IsOnline      || false,
+      isInLunchTime: v2?.IsInLunchTime || false,
+      lastUpdate:    v2?.LastUpdate    || null,
+      location:      v2?.Location      || null,
+      carteiraCount,
+      servicosPerfil: [...new Set(allNotas.map(n => n.tipoCode))],
+      notasBaixadas:   baixadas,
+      notasExecutadas: executadas,
+      notasConcluidas: concluidas,
+      notasRejeitadas: rejeitadas,
+    };
   });
 
-  // Registra concluídas no acumulador e reaplica (preserva notas status-4 que sumiram da API)
   _accRecord(result);
   return _accApply(result);
 }
 
-module.exports = { login, getToken, forceRefresh, getTokenStatus, wpaFetch, getSessions, getNotesExecution, getPreroute, getTeamsBySector, REGIONAL_MAP };
+module.exports = {
+  login,
+  getToken,
+  forceRefresh,
+  getTokenStatus,
+  wpaFetch,
+  // Endpoints individuais (usados em rotas de debug)
+  getSessions,
+  getNotesExecution,
+  getPreroute,
+  getTeamStatusV2,
+  // Principal
+  getTeamsBySector,
+  REGIONAL_MAP,
+};

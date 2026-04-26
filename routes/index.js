@@ -316,6 +316,132 @@ router.get('/debug/preroute', async (req, res) => {
   }
 });
 
+// GET /api/debug/teamsstatus?sectorId=DESC&team=ECCIT55&raw=1
+// Inspeciona teamsstatus/V2 cruzado com sessions/current (filtro Engelmig).
+// raw=1  → devolve os 3 primeiros itens sem filtro (inspecionar estrutura)
+// raw=0  → resumo filtrado por Engelmig via sessions/current (default)
+router.get('/debug/teamsstatus', async (req, res) => {
+  const { wpaFetch: wf } = require('../services/wpaService');
+  const ENGELMIG_ID = '92a2f98e-8877-433e-8358-173b94c13a54';
+  const sectorId   = req.query.sectorId || 'DESC';
+  const teamFilter = (req.query.team || '').toLowerCase();
+  const rawMode    = req.query.raw === '1';
+
+  try {
+    // Sempre busca V2; sessions/current só é chamado no modo filtrado
+    const [rawV2, rawSess] = await Promise.all([
+      wf(`/api/teamsstatus/V2?sectorId=${sectorId}&filterByExhibitionSector=true`),
+      rawMode ? Promise.resolve(null) : wf(`/api/sessions/current?sectorId=${sectorId}`),
+    ]);
+
+    const bodyV2 = await rawV2.json();
+    const list   = Array.isArray(bodyV2) ? bodyV2 : (bodyV2.Data || []);
+
+    // ── Modo raw: estrutura bruta sem filtro ────────────────────────────────
+    if (rawMode) {
+      return res.json({
+        sectorId,
+        httpStatus: rawV2.status,
+        totalItems: list.length,
+        topLevelKeys: list[0] ? Object.keys(list[0]) : [],
+        sessionKeys:  list[0]?.Session ? Object.keys(list[0].Session) : [],
+        teamKeys:     list[0]?.Session?.Team ? Object.keys(list[0].Session.Team) : [],
+        collaboratorKeys: list[0]?.Session?.Collaborators?.[0]
+          ? Object.keys(list[0].Session.Collaborators[0]) : [],
+        noteKeys: list[0]?.Concluded?.[0] ? Object.keys(list[0].Concluded[0]) : [],
+        first3: list.slice(0, 3),
+      });
+    }
+
+    // ── Modo filtrado: usa sessions/current para obter IDs Engelmig ─────────
+    const sessBody = await rawSess.json();
+    const sessions = sessBody.Data || [];
+
+    const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_ID);
+
+    // Conjunto de team IDs Engelmig (CompanyId só existe em sessions/current)
+    const engelmigIds = new Set(
+      engelmigSessions.map(s => s.Team?.Id).filter(Boolean)
+    );
+
+    // Índice V2 por team ID e por nome (fallback)
+    const v2ByTeamId   = new Map();
+    const v2ByTeamName = new Map();
+    list.forEach(item => {
+      const id   = item.Session?.Team?.Id || item.Session?.TeamId;
+      const nome = (item.Session?.Team?.Name || '').trim();
+      if (id)   v2ByTeamId.set(id, item);
+      if (nome) v2ByTeamName.set(nome, item);
+    });
+
+    // Diagnóstico de cruzamento — mostra equipes Engelmig que não acharam V2
+    const diagSess = engelmigSessions.map(s => {
+      const id   = s.Team?.Id;
+      const nome = (s.Team?.Name || '').trim();
+      const foundById   = id   ? v2ByTeamId.has(id)     : false;
+      const foundByName = nome ? v2ByTeamName.has(nome)  : false;
+      return { teamName: nome, teamId: id, foundById, foundByName };
+    });
+
+    // Filtra V2 pelos IDs Engelmig
+    let items = [...engelmigIds]
+      .map(id => v2ByTeamId.get(id))
+      .filter(Boolean);
+
+    // Filtro opcional por nome de equipe
+    if (teamFilter) {
+      items = items.filter(i =>
+        (i.Session?.Team?.Name || '').toLowerCase().includes(teamFilter)
+      );
+    }
+
+    const STATUS_V2 = { 1: 'baixada', 2: 'baixada', 3: 'executada', 6: 'executada', 7: 'executada', 4: 'concluida', 5: 'concluida', 9: 'concluida' };
+
+    const resumo = items.map(item => {
+      const s = item.Session || {};
+
+      // Classifica Downloaded[] por ExecutionStatus para mostrar divisão real
+      const downloaded = item.Downloaded || [];
+      const baixadasN  = downloaded.filter(n => (STATUS_V2[n.ExecutionStatus] || 'baixada') === 'baixada').length;
+      const execN      = downloaded.filter(n => STATUS_V2[n.ExecutionStatus] === 'executada').length;
+
+      return {
+        teamName:      s.Team?.Name || '?',
+        sectorId:      s.SectorId  || '?',
+        isOnline:      item.IsOnline,
+        status:        item.Status,
+        concluded:     (item.Concluded || []).length,
+        // Downloaded subdividido por ExecutionStatus
+        downloaded:    downloaded.length,
+        downloaded_baixadas:  baixadasN,
+        downloaded_executadas: execN,
+        executed:      (item.Executed  || []).length,
+        assigned:      (item.Assigned  || []).length,
+        rejected:      (item.Rejected  || []).length,
+        carteiraCount: baixadasN + execN + (item.Executed || []).length,
+        sampleConcluded:  (item.Concluded  || []).slice(0, 3),
+        sampleDownloaded: (item.Downloaded || []).slice(0, 2),
+      };
+    });
+
+    res.json({
+      sectorId,
+      httpStatus:        rawV2.status,
+      totalItemsV2:      list.length,
+      totalSessions:     sessions.length,
+      engelmigSessions:  engelmigSessions.length,
+      engelmigItems:     items.length,
+      // Diagnóstico: equipes Engelmig em sessions/current e se acharam par no V2
+      diagSessVsV2: diagSess,
+      // Nomes de todas as equipes presentes no V2 (para detectar mismatch de nome/ID)
+      v2TeamNames: [...v2ByTeamName.keys()],
+      resumo,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── PRODUÇÃO POR EQUIPE ───────────────────────────────────────────────────────
 
 // GET /api/equipes/producao?de=2026-04-01&ate=2026-04-30&regional=GUA&team=EPICO30
