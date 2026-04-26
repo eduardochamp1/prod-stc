@@ -673,6 +673,7 @@
 
     try {
       const data = await fetch(`${API}/metas/calculadas?m=${ym}`).then(r => r.json());
+      if (data.error) throw new Error(data.error);
       renderMetasCalculadas(data);
     } catch (err) {
       document.getElementById('metas-info-cards').innerHTML =
@@ -681,7 +682,10 @@
   }
 
   function renderMetasCalculadas(data) {
-    const { diasUteisNoMes, diasUteisDecorridos, semanaAtual, regionais } = data;
+    const diasUteisNoMes     = data.diasUteisNoMes     || 0;
+    const diasUteisDecorridos = data.diasUteisDecorridos || 0;
+    const semanaAtual        = data.semanaAtual        || 1;
+    const regionais          = data.regionais          || {};
 
     document.getElementById('metas-info-cards').innerHTML = `
       <div class="info-card">
