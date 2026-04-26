@@ -5,7 +5,7 @@
 
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
-const { login, wpaFetch }                     = require('../services/wpaService');
+const { login, wpaFetch, getTokenStatus }     = require('../services/wpaService');
 
 const router = express.Router();
 
@@ -202,6 +202,11 @@ router.post('/wpa/login', async (req, res) => {
   } catch (err) {
     res.status(401).json({ ok: false, error: err.message });
   }
+});
+
+// GET /api/wpa/token-status — estado atual do token em memória
+router.get('/wpa/token-status', (req, res) => {
+  res.json({ ...getTokenStatus(), ts: new Date().toISOString() });
 });
 
 router.get('/wpa/probe', async (req, res) => {

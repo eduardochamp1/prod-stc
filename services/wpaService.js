@@ -65,6 +65,20 @@ async function getToken() {
   return _token;
 }
 
+/** Força novo login independente do TTL atual (usado pelo cron de renovação proativa). */
+async function forceRefresh() {
+  return login();
+}
+
+/** Retorna o estado atual do token sem fazer nenhuma chamada de rede. */
+function getTokenStatus() {
+  const now = Date.now();
+  if (!_token) return { valid: false, reason: 'sem token', expiresAt: null, expiresIn: null };
+  if (now >= _expireAt)          return { valid: false, reason: 'expirado', expiresAt: new Date(_expireAt).toISOString(), expiresIn: '0s' };
+  const secsLeft = Math.round((_expireAt - now) / 1000);
+  return { valid: true, reason: 'ok', expiresAt: new Date(_expireAt).toISOString(), expiresIn: `${secsLeft}s` };
+}
+
 // ── FETCH HELPER ──────────────────────────────────────────────────────────────
 
 async function wpaFetch(path, options = {}) {
@@ -295,4 +309,4 @@ async function getTeamsBySector(sectorId) {
   return _accApply(result);
 }
 
-module.exports = { login, getToken, wpaFetch, getSessions, getNotesExecution, getPreroute, getTeamsBySector, REGIONAL_MAP };
+module.exports = { login, getToken, forceRefresh, getTokenStatus, wpaFetch, getSessions, getNotesExecution, getPreroute, getTeamsBySector, REGIONAL_MAP };
