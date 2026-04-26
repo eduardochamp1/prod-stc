@@ -21,36 +21,12 @@
       --text2:    #5a5855;
       --radius:   8px;
     }
-
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: 'Roboto', sans-serif;
-      background: var(--cinza1);
-      color: var(--text);
-      min-height: 100vh;
-    }
+    body { font-family: 'Roboto', sans-serif; background: var(--cinza1); color: var(--text); min-height: 100vh; }
 
     /* ── HEADER ── */
-    header {
-      background: var(--verde);
-      height: 58px;
-      display: flex;
-      align-items: center;
-      padding: 0 28px;
-      justify-content: space-between;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
-    }
-    header::after {
-      content: '';
-      position: absolute;
-      right: 0; top: 0; bottom: 0;
-      width: 6px;
-      background: var(--amarelo);
-    }
+    header { background: var(--verde); height: 58px; display: flex; align-items: center; padding: 0 28px; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+    header::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; background: var(--amarelo); }
     .header-left { display: flex; align-items: center; gap: 14px; }
     .raio { width: 22px; height: 22px; flex-shrink: 0; }
     .brand-text { display: flex; flex-direction: column; line-height: 1.1; }
@@ -69,6 +45,14 @@
     /* ── MAIN ── */
     main { padding: 20px 28px; max-width: 1400px; margin: 0 auto; }
 
+    /* ── TABS ── */
+    .tab-nav { display: flex; gap: 3px; margin-bottom: 20px; background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 4px; }
+    .tab-btn { flex: 1; padding: 9px 12px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; font-family: 'Roboto', sans-serif; color: var(--text2); background: transparent; transition: all 0.15s; white-space: nowrap; }
+    .tab-btn:hover { background: var(--cinza1); color: var(--text); }
+    .tab-btn.active { background: var(--verde); color: #fff; font-weight: 600; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
     /* ── FILTER BAR ── */
     .filter-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
     .date-label { font-size: 13px; color: var(--text2); }
@@ -76,112 +60,29 @@
     .filter-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .filter-group { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 4px 4px 4px 12px; }
     .filter-label { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; }
-    .filter-select {
-      background: var(--verde);
-      border: none;
-      border-radius: 6px;
-      color: #fff;
-      font-size: 13px;
-      font-weight: 600;
-      padding: 6px 32px 6px 12px;
-      outline: none;
-      cursor: pointer;
-      font-family: 'Roboto', sans-serif;
-      appearance: none;
-      -webkit-appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23FEC40E' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-      min-width: 170px;
-    }
+    .filter-select { background: var(--verde); border: none; border-radius: 6px; color: #fff; font-size: 13px; font-weight: 600; padding: 6px 32px 6px 12px; outline: none; cursor: pointer; font-family: 'Roboto', sans-serif; appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23FEC40E' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; min-width: 170px; }
     .filter-select option { background: #fff; color: var(--text); font-weight: 500; }
     .btn-refresh { background: var(--verde); color: #fff; border: none; border-radius: var(--radius); padding: 7px 16px; font-size: 12px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background 0.15s; font-family: 'Roboto',sans-serif; }
     .btn-refresh:hover { background: var(--verde2); }
+    .month-input { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); color: var(--text); font-size: 13px; padding: 6px 12px; outline: none; font-family: 'Roboto',sans-serif; cursor: pointer; }
+    .month-input:focus { border-color: var(--verde); }
 
-    /* ── PRODUTIVIDADE ── */
-    .prod-section {
-      background: #fff;
-      border: 1px solid var(--cinza2);
-      border-radius: var(--radius);
-      padding: 16px 20px;
-      margin-bottom: 16px;
-    }
-    .prod-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 14px;
-    }
-    .prod-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--text);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-    .prod-subtitle {
-      font-size: 11px;
-      color: var(--text2);
-      font-weight: 400;
-      text-transform: none;
-      letter-spacing: 0;
-      margin-left: 8px;
-    }
-    .prod-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      gap: 10px;
-    }
-    @media (max-width: 600px) {
-      #metas-colunas { grid-template-columns: 1fr !important; }
-    }
-    .prod-item {
-      background: var(--cinza1);
-      border-radius: 6px;
-      padding: 10px 12px;
-    }
-    .prod-item-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 6px;
-    }
-    .prod-tipo-badge {
-      font-size: 11px;
-      font-weight: 700;
-      background: var(--verde);
-      color: #fff;
-      border-radius: 4px;
-      padding: 2px 7px;
-      letter-spacing: 0.04em;
-    }
-    .prod-nums {
-      font-size: 11px;
-      color: var(--text2);
-    }
+    /* ── PRODUTIVIDADE ATUAL ── */
+    .prod-section { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 16px; }
+    .prod-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .prod-title { font-size: 13px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.06em; }
+    .prod-subtitle { font-size: 11px; color: var(--text2); font-weight: 400; text-transform: none; letter-spacing: 0; margin-left: 8px; }
+    .prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .prod-item { background: var(--cinza1); border-radius: 6px; padding: 10px 12px; }
+    .prod-item-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .prod-tipo-badge { font-size: 11px; font-weight: 700; background: var(--verde); color: #fff; border-radius: 4px; padding: 2px 7px; letter-spacing: 0.04em; }
+    .prod-nums { font-size: 11px; color: var(--text2); }
     .prod-nums strong { color: var(--text); font-weight: 600; }
-    .prod-bar-track {
-      height: 6px;
-      background: var(--cinza2);
-      border-radius: 3px;
-      overflow: hidden;
-    }
-    .prod-bar-fill {
-      height: 100%;
-      border-radius: 3px;
-      background: var(--verde);
-      transition: width 0.4s ease;
-    }
+    .prod-bar-track { height: 6px; background: var(--cinza2); border-radius: 3px; overflow: hidden; }
+    .prod-bar-fill { height: 100%; border-radius: 3px; background: var(--verde); transition: width 0.4s ease; }
     .prod-bar-fill.warn   { background: #c49000; }
     .prod-bar-fill.danger { background: var(--vermelho); }
-    .prod-bar-fill.done   { background: var(--verde); }
-    .prod-sem-meta {
-      font-size: 11px;
-      color: var(--cinza3);
-      font-style: italic;
-    }
-
-    /* regional-tabs removido — substituído pelo filter-select */
+    .prod-sem-meta { font-size: 11px; color: var(--cinza3); font-style: italic; }
 
     /* ── SUMMARY CARDS ── */
     .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 18px; }
@@ -206,20 +107,16 @@
 
     /* ── TEAM CARDS ── */
     .teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
-
     .team-card { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); overflow: hidden; cursor: pointer; transition: box-shadow 0.15s, transform 0.1s; }
     .team-card:hover { box-shadow: 0 4px 16px rgba(8,103,56,0.1); transform: translateY(-1px); }
-
     .team-card-header { background: var(--verde); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; }
     .team-card-header.inativa { background: #555; }
     .team-card-sigla { font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.06em; }
     .team-card-meta { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 2px; }
     .team-status-badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
-    .status-ativa    { background: var(--amarelo); color: var(--preto); }
-    .status-encerrada{ background: rgba(255,255,255,0.18); color: rgba(255,255,255,0.75); }
-
+    .status-ativa     { background: var(--amarelo); color: var(--preto); }
+    .status-encerrada { background: rgba(255,255,255,0.18); color: rgba(255,255,255,0.75); }
     .team-card-body { padding: 12px 14px; }
-
     .team-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text2); margin-bottom: 7px; }
     .team-row:last-child { margin-bottom: 0; }
     .team-row-label { font-weight: 500; }
@@ -228,8 +125,6 @@
     .relogin-0 { background: #e8f5ee; color: var(--verde); }
     .relogin-1 { background: #fff8e1; color: #c49000; }
     .relogin-2 { background: #fdecea; color: var(--vermelho); }
-
-    /* OS bar */
     .os-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--cinza2); }
     .os-cell { text-align: center; }
     .os-num { font-size: 17px; font-weight: 700; color: var(--text); }
@@ -237,29 +132,83 @@
     .os-num.rejeitada { color: var(--vermelho); }
     .os-num.executada { color: #c49000; }
     .os-lbl { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 1px; }
-
-    /* Tipos de serviço chips no card */
-    .tipos-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid var(--cinza2);
-    }
-    .tipo-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      background: var(--cinza1);
-      border: 1px solid var(--cinza2);
-      border-radius: 4px;
-      font-size: 11px;
-      padding: 2px 8px;
-      color: var(--text);
-    }
+    .tipos-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--cinza2); }
+    .tipo-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 4px; font-size: 11px; padding: 2px 8px; color: var(--text); }
     .tipo-chip-code { font-weight: 700; color: var(--verde); }
     .tipo-chip-num  { color: var(--text2); }
+
+    /* ── METAS CALCULADAS ── */
+    .metas-calc-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 20px; }
+    .info-card { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 12px 16px; text-align: center; }
+    .info-card-val { font-size: 24px; font-weight: 700; color: var(--verde); }
+    .info-card-lbl { font-size: 11px; color: var(--text2); margin-top: 3px; text-transform: uppercase; letter-spacing: .06em; }
+
+    .metas-regional-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 768px) { .metas-regional-grid { grid-template-columns: 1fr; } }
+    .metas-regional-block { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); padding: 16px 20px; }
+    .metas-regional-title { font-size: 13px; font-weight: 700; color: var(--verde); text-transform: uppercase; letter-spacing: .07em; border-bottom: 2px solid var(--amarelo); padding-bottom: 6px; margin-bottom: 14px; }
+
+    .meta-calc-card { background: var(--cinza1); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+    .meta-calc-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .meta-calc-tipo { display: flex; align-items: center; gap: 8px; }
+    .meta-calc-badge { font-size: 12px; font-weight: 700; background: var(--verde); color: #fff; border-radius: 4px; padding: 3px 9px; }
+    .meta-calc-nome { font-size: 12px; color: var(--text2); }
+    .meta-status-pill { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; }
+    .pill-ok      { background: #e8f5ee; color: var(--verde); }
+    .pill-warn    { background: #fff8e1; color: #8a6000; }
+    .pill-danger  { background: #fdecea; color: #a00; }
+    .pill-nodata  { background: var(--cinza2); color: var(--text2); }
+
+    .meta-calc-nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+    .meta-calc-num-item { text-align: center; }
+    .meta-calc-num-val { font-size: 16px; font-weight: 700; color: var(--text); }
+    .meta-calc-num-val.destaque { color: var(--verde); font-size: 20px; }
+    .meta-calc-num-val.atrasado { color: var(--vermelho); }
+    .meta-calc-num-lbl { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; margin-top: 1px; }
+
+    .meta-calc-bar-wrap { margin-top: 4px; }
+    .meta-calc-bar-track { height: 8px; background: var(--cinza2); border-radius: 4px; overflow: hidden; }
+    .meta-calc-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s; }
+    .bar-ok     { background: var(--verde); }
+    .bar-warn   { background: #c49000; }
+    .bar-danger { background: var(--vermelho); }
+    .meta-calc-bar-info { display: flex; justify-content: space-between; font-size: 10px; color: var(--text2); margin-top: 3px; }
+    .saldo-positivo { color: var(--verde); font-weight: 600; }
+    .saldo-negativo { color: var(--vermelho); font-weight: 600; }
+
+    /* ── RANKING ── */
+    .ranking-table-wrap { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); overflow: hidden; }
+    .ranking-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .ranking-table th { background: var(--verde); color: #fff; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 10px 14px; text-align: left; white-space: nowrap; }
+    .ranking-table td { padding: 10px 14px; border-bottom: 1px solid var(--cinza2); vertical-align: middle; }
+    .ranking-table tr:last-child td { border-bottom: none; }
+    .ranking-table tr:hover td { background: var(--cinza1); }
+    .rank-num { font-weight: 700; font-size: 15px; }
+    .rank-1 { color: #c49000; }
+    .rank-2 { color: var(--cinza3); }
+    .rank-3 { color: #a05c2a; }
+    .rank-medal { font-size: 16px; }
+    .rank-team { font-weight: 600; color: var(--text); }
+    .rank-reg { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 20px; margin-left: 6px; }
+    .reg-GUA { background: #e8f5ee; color: var(--verde); }
+    .reg-CAC { background: #e3f0fb; color: #1565c0; }
+    .rank-total { font-size: 17px; font-weight: 700; color: var(--verde); }
+    .rank-tipo-chips { display: flex; flex-wrap: wrap; gap: 3px; }
+    .rank-tipo-chip { font-size: 10px; background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 3px; padding: 1px 6px; }
+    .rank-tipo-chip span { font-weight: 700; color: var(--verde); }
+
+    /* ── HISTÓRICO ── */
+    .hist-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+    .hist-table-wrap { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); overflow: auto; }
+    .hist-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 500px; }
+    .hist-table th { background: var(--verde); color: #fff; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 10px 14px; text-align: left; white-space: nowrap; }
+    .hist-table td { padding: 9px 14px; border-bottom: 1px solid var(--cinza2); vertical-align: middle; }
+    .hist-table tr:last-child td { border-bottom: none; }
+    .hist-table tr:hover td { background: var(--cinza1); }
+    .hist-date { font-weight: 600; color: var(--text); white-space: nowrap; }
+    .hist-team { font-weight: 500; }
+    .hist-total { font-weight: 700; color: var(--verde); font-size: 15px; }
+    .hist-zero { color: var(--cinza3); }
 
     /* ── MODAL ── */
     .modal-overlay { position: fixed; inset: 0; background: rgba(35,31,32,0.55); z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px; }
@@ -312,6 +261,11 @@
     .last-update { font-size: 11px; color: var(--text2); text-align: right; margin-top: 14px; }
     .colab-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
     .colab-chip  { background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 20px; font-size: 11px; padding: 3px 10px; }
+    @media (max-width: 600px) {
+      main { padding: 14px 12px; }
+      .tab-btn { font-size: 11px; padding: 7px 6px; }
+      .metas-calc-nums { grid-template-columns: repeat(2, 1fr); }
+    }
   </style>
 </head>
 <body>
@@ -340,80 +294,166 @@
 
 <main>
 
-  <!-- FILTER BAR -->
-  <div class="filter-bar">
-    <div class="date-label">Monitoramento do dia <strong id="date-display"></strong></div>
-    <div class="filter-controls">
-      <div class="filter-group">
-        <span class="filter-label">Regional</span>
-        <select class="filter-select" id="regional-select" onchange="selectRegional(this.value)">
-          <option value="ALL">Todas as Regionais</option>
-          <option value="GUA">Guarapari</option>
-          <option value="CAC">Cachoeiro</option>
-        </select>
-      </div>
-      <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
-    </div>
+  <!-- TABS -->
+  <div class="tab-nav">
+    <button class="tab-btn active" id="tab-btn-monitor"    onclick="switchTab('monitor')">📊 Monitor</button>
+    <button class="tab-btn"        id="tab-btn-metas"      onclick="switchTab('metas')">🎯 Metas</button>
+    <button class="tab-btn"        id="tab-btn-ranking"    onclick="switchTab('ranking')">🏆 Ranking</button>
+    <button class="tab-btn"        id="tab-btn-historico"  onclick="switchTab('historico')">📈 Histórico</button>
   </div>
 
-  <!-- PRODUTIVIDADE -->
-  <div class="prod-section">
-    <div class="prod-header">
+  <!-- ── TAB: MONITOR ─────────────────────────────────────────────────── -->
+  <div class="tab-panel active" id="tab-monitor">
+
+    <div class="filter-bar">
+      <div class="date-label">Monitoramento do dia <strong id="date-display"></strong></div>
+      <div class="filter-controls">
+        <div class="filter-group">
+          <span class="filter-label">Regional</span>
+          <select class="filter-select" id="regional-select" onchange="selectRegional(this.value)">
+            <option value="ALL">Todas as Regionais</option>
+            <option value="GUA">Guarapari</option>
+            <option value="CAC">Cachoeiro</option>
+          </select>
+        </div>
+        <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
+      </div>
+    </div>
+
+    <div class="prod-section">
+      <div class="prod-header">
+        <div>
+          <span class="prod-title" id="prod-title">Produtividade do Dia</span>
+          <span class="prod-subtitle" id="prod-periodo"></span>
+        </div>
+      </div>
+      <div id="prod-grid">
+        <div style="color:var(--text2);font-size:13px">Carregando...</div>
+      </div>
+    </div>
+
+    <div class="summary-grid">
+      <div class="metric-card accent-preto">
+        <div class="metric-label">Total equipes</div>
+        <div class="metric-value" id="m-total">—</div>
+        <div class="metric-sub" id="m-ativas"></div>
+      </div>
+      <div class="metric-card accent-verde">
+        <div class="metric-label">OS Concluídas</div>
+        <div class="metric-value verde" id="m-concluidas">—</div>
+        <div class="metric-sub" id="m-concluidas-pct"></div>
+      </div>
+      <div class="metric-card accent-amarelo">
+        <div class="metric-label">OS Executadas</div>
+        <div class="metric-value amarelo" id="m-executadas">—</div>
+      </div>
+      <div class="metric-card accent-vermelho">
+        <div class="metric-label">OS Rejeitadas</div>
+        <div class="metric-value vermelho" id="m-rejeitadas">—</div>
+      </div>
+      <div class="metric-card accent-preto">
+        <div class="metric-label">OS Baixadas</div>
+        <div class="metric-value" id="m-baixadas">—</div>
+      </div>
+      <div class="metric-card accent-verde">
+        <div class="metric-label">Re-logins</div>
+        <div class="metric-value" id="m-relogins">—</div>
+        <div class="metric-sub">desconexões no dia</div>
+      </div>
+    </div>
+
+    <div class="section-header">
       <div>
-        <span class="prod-title" id="prod-title">Produtividade do Mês</span>
-        <span class="prod-subtitle" id="prod-periodo"></span>
+        <span class="section-title">Equipes</span>
+        <span class="section-count" id="section-count"></span>
+      </div>
+      <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
+    </div>
+
+    <div class="teams-grid" id="teams-grid">
+      <div class="empty-state"><div class="spinner"></div><br>Carregando equipes...</div>
+    </div>
+
+    <div class="last-update" id="last-update"></div>
+  </div>
+
+  <!-- ── TAB: METAS ────────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-metas">
+
+    <div class="filter-bar">
+      <div class="date-label">Acompanhamento de metas — <strong id="metas-mes-label"></strong></div>
+      <div class="filter-controls">
+        <div class="filter-group">
+          <span class="filter-label">Mês</span>
+          <input type="month" class="month-input" id="metas-mes-input" onchange="loadMetasCalculadas()" />
+        </div>
+        <button class="btn-refresh" onclick="loadMetasCalculadas()">↻ Atualizar</button>
       </div>
     </div>
-    <div id="prod-grid">
-      <div style="color:var(--text2);font-size:13px">Carregando...</div>
+
+    <div class="metas-calc-info" id="metas-info-cards">
+      <div class="empty-state"><div class="spinner"></div><br>Carregando...</div>
     </div>
+
+    <div class="metas-regional-grid" id="metas-regionais-grid">
+    </div>
+
   </div>
 
-  <!-- MÉTRICAS -->
-  <div class="summary-grid">
-    <div class="metric-card accent-preto">
-      <div class="metric-label">Total equipes</div>
-      <div class="metric-value" id="m-total">—</div>
-      <div class="metric-sub" id="m-ativas"></div>
+  <!-- ── TAB: RANKING ──────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-ranking">
+
+    <div class="filter-bar">
+      <div class="date-label">Ranking de equipes — <strong id="ranking-mes-label"></strong></div>
+      <div class="filter-controls">
+        <div class="filter-group">
+          <span class="filter-label">Mês</span>
+          <input type="month" class="month-input" id="ranking-mes-input" onchange="loadRanking()" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Regional</span>
+          <select class="filter-select" id="ranking-regional-select" onchange="loadRanking()">
+            <option value="ALL">Todas</option>
+            <option value="GUA">Guarapari</option>
+            <option value="CAC">Cachoeiro</option>
+          </select>
+        </div>
+        <button class="btn-refresh" onclick="loadRanking()">↻ Atualizar</button>
+      </div>
     </div>
-    <div class="metric-card accent-verde">
-      <div class="metric-label">OS Concluídas</div>
-      <div class="metric-value verde" id="m-concluidas">—</div>
-      <div class="metric-sub" id="m-concluidas-pct"></div>
+
+    <div id="ranking-content">
+      <div class="empty-state">Selecione um mês e clique em Atualizar.</div>
     </div>
-    <div class="metric-card accent-amarelo">
-      <div class="metric-label">OS Executadas</div>
-      <div class="metric-value amarelo" id="m-executadas">—</div>
-    </div>
-    <div class="metric-card accent-vermelho">
-      <div class="metric-label">OS Rejeitadas</div>
-      <div class="metric-value vermelho" id="m-rejeitadas">—</div>
-    </div>
-    <div class="metric-card accent-preto">
-      <div class="metric-label">OS Baixadas</div>
-      <div class="metric-value" id="m-baixadas">—</div>
-    </div>
-    <div class="metric-card accent-verde">
-      <div class="metric-label">Re-logins</div>
-      <div class="metric-value" id="m-relogins">—</div>
-      <div class="metric-sub">desconexões no dia</div>
-    </div>
+
   </div>
 
-  <!-- EQUIPES -->
-  <div class="section-header">
-    <div>
-      <span class="section-title">Equipes</span>
-      <span class="section-count" id="section-count"></span>
+  <!-- ── TAB: HISTÓRICO ────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-historico">
+
+    <div class="filter-bar">
+      <div class="date-label">Histórico diário — <strong id="hist-mes-label"></strong></div>
+      <div class="filter-controls">
+        <div class="filter-group">
+          <span class="filter-label">Mês</span>
+          <input type="month" class="month-input" id="hist-mes-input" onchange="loadHistorico()" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Equipe</span>
+          <select class="filter-select" id="hist-team-select" onchange="loadHistorico()" style="min-width:140px">
+            <option value="ALL">Todas</option>
+          </select>
+        </div>
+        <button class="btn-refresh" onclick="loadHistorico()">↻ Atualizar</button>
+      </div>
     </div>
-    <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
+
+    <div id="hist-content">
+      <div class="empty-state">Selecione um mês e clique em Atualizar.</div>
+    </div>
+
   </div>
 
-  <div class="teams-grid" id="teams-grid">
-    <div class="empty-state"><div class="spinner"></div><br>Carregando equipes...</div>
-  </div>
-
-  <div class="last-update" id="last-update"></div>
 </main>
 
 <!-- MODAL DETALHE EQUIPE -->
@@ -436,7 +476,7 @@
     <div class="modal-header">
       <div>
         <div class="modal-title">Metas de Produtividade</div>
-        <div class="modal-sub">Meta mensal por tipo de serviço — por regional</div>
+        <div class="modal-sub">Meta mensal por tipo de serviço — o sistema calcula diária (÷22) e semanal automaticamente</div>
       </div>
       <button class="modal-close" onclick="closeMetasDirect()">×</button>
     </div>
@@ -478,8 +518,26 @@
   let allTeams       = [];
   let currentRegional = 'ALL';
   let currentFilter  = '';
+  let currentTab     = 'monitor';
 
-  // ── METAS (banco de dados via API) ───────────────────────────────────────
+  function mesAtualInput() {
+    return new Date().toISOString().slice(0, 7);
+  }
+
+  // ── TABS ──────────────────────────────────────────────────────────────────
+  function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.getElementById('tab-btn-' + tab).classList.add('active');
+
+    if (tab === 'metas')    loadMetasCalculadas();
+    if (tab === 'ranking')  loadRanking();
+    if (tab === 'historico') loadHistorico();
+  }
+
+  // ── METAS (banco de dados via API) ─────────────────────────────────────
   let _metasCache = { GUA: {}, CAC: {} };
 
   async function fetchMetas() {
@@ -487,47 +545,33 @@
       const res = await fetch(`${API}/metas`);
       if (res.ok) {
         _metasCache = await res.json();
-        // Migra metas antigas do localStorage para o banco (executa uma vez)
         const legado = localStorage.getItem('wpa-metas-v2');
         if (legado) {
           try {
             const obj = JSON.parse(legado);
             const temDados = Object.values(obj).some(r => Object.keys(r).length > 0);
             const bancVazio = Object.values(_metasCache).every(r => Object.keys(r).length === 0);
-            if (temDados && bancVazio) {
-              await saveMetas(obj);
-              console.log('[Metas] Migradas do localStorage para o banco.');
-            }
+            if (temDados && bancVazio) await saveMetas(obj);
             localStorage.removeItem('wpa-metas-v2');
           } catch {}
         }
       }
     } catch (err) {
-      console.warn('[Metas] Usando cache local (API indisponível):', err.message);
+      console.warn('[Metas] Usando cache local:', err.message);
     }
     return _metasCache;
   }
 
-  function getMetas() {
-    return _metasCache;
-  }
+  function getMetas() { return _metasCache; }
 
   async function saveMetas(obj) {
-    // Atualiza cache local imediatamente (UI responde mesmo se API falhar)
     _metasCache = obj;
     try {
       const res = await fetch(`${API}/metas`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(obj),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj),
       });
-      if (res.ok) {
-        const data = await res.json();
-        _metasCache = data.metas || obj;
-      }
-    } catch (err) {
-      console.warn('[Metas] API indisponível, usando cache local:', err.message);
-    }
+      if (res.ok) { const d = await res.json(); _metasCache = d.metas || obj; }
+    } catch (err) { console.warn('[Metas] API indisponível:', err.message); }
   }
 
   // ── UTILS ─────────────────────────────────────────────────────────────────
@@ -548,16 +592,18 @@
   function mesAtual() {
     return new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
   }
+  function fmtMes(ym) {
+    const [y, m] = ym.split('-');
+    return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  }
+  function fmtData(dateStr) {
+    if (!dateStr) return '—';
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}`;
+  }
 
-  // ── PRODUTIVIDADE ─────────────────────────────────────────────────────────
-  const REGIONAIS_INFO = {
-    GUA: { nome: 'Guarapari', cor: '#086738' },
-    CAC: { nome: 'Cachoeiro', cor: '#1565c0' },
-  };
-
+  // ── PRODUTIVIDADE (monitor) ────────────────────────────────────────────
   function calcTotaisPorRegional(teams) {
-    // Conta notas REALIZADAS = executadas (status 2) + concluídas (status 9/4)
-    // Status 2 "Executada" no WPA significa que o serviço foi feito no campo.
     const result = { GUA: {}, CAC: {}, ALL: {} };
     teams.forEach(t => {
       const reg = t.regional;
@@ -571,13 +617,10 @@
     return result;
   }
 
-  // Mescla metas das duas regionais (soma) para uso no modo ALL
   function metasAcumuladas(metas) {
     const acc = {};
     ['GUA', 'CAC'].forEach(reg => {
-      Object.entries(metas[reg] || {}).forEach(([code, val]) => {
-        acc[code] = (acc[code] || 0) + val;
-      });
+      Object.entries(metas[reg] || {}).forEach(([code, val]) => { acc[code] = (acc[code] || 0) + val; });
     });
     return acc;
   }
@@ -586,27 +629,21 @@
     const tipos = Object.keys(TIPOS_SERVICO);
     const tiposExibir = tipos.filter(c => metasReg[c] || totais[c]);
     if (tiposExibir.length === 0)
-      return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota executada ou concluída até o momento. Os dados atualizam a cada 5 minutos.</span>';
-
+      return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota executada ou concluída até o momento.</span>';
     return `<div class="prod-grid">${tiposExibir.map(code => {
       const realizado  = totais[code] || 0;
       const meta       = parseInt(metasReg[code] || 0);
       const pct        = meta > 0 ? Math.min(Math.round((realizado / meta) * 100), 100) : 0;
       const colorClass = pct >= 100 ? 'done' : pct >= 60 ? 'warn' : 'danger';
-      return `
-        <div class="prod-item">
-          <div class="prod-item-top">
-            <span class="prod-tipo-badge">${code}</span>
-            ${meta > 0
-              ? `<span class="prod-nums"><strong>${realizado}</strong> / ${meta}</span>`
-              : `<span class="prod-sem-meta">sem meta</span>`}
-          </div>
-          <div style="font-size:10px;color:var(--text2);margin-bottom:5px">${TIPOS_SERVICO[code]}</div>
-          ${meta > 0
-            ? `<div class="prod-bar-track"><div class="prod-bar-fill ${colorClass}" style="width:${pct}%"></div></div>
-               <div style="font-size:10px;color:var(--text2);margin-top:3px;text-align:right">${pct}%</div>`
-            : ''}
-        </div>`;
+      return `<div class="prod-item">
+        <div class="prod-item-top">
+          <span class="prod-tipo-badge">${code}</span>
+          ${meta > 0 ? `<span class="prod-nums"><strong>${realizado}</strong> / ${meta}</span>` : `<span class="prod-sem-meta">sem meta</span>`}
+        </div>
+        <div style="font-size:10px;color:var(--text2);margin-bottom:5px">${TIPOS_SERVICO[code]}</div>
+        ${meta > 0 ? `<div class="prod-bar-track"><div class="prod-bar-fill ${colorClass}" style="width:${pct}%"></div></div>
+          <div style="font-size:10px;color:var(--text2);margin-top:3px;text-align:right">${pct}%</div>` : ''}
+      </div>`;
     }).join('')}</div>`;
   }
 
@@ -615,38 +652,266 @@
     const totais = calcTotaisPorRegional(teams);
     const grid   = document.getElementById('prod-grid');
     const title  = document.getElementById('prod-title');
-
-    // Atualiza título do painel conforme filtro
-    const labelRegional = currentRegional === 'ALL'
-      ? 'Todas as Regionais'
-      : REGIONAIS_INFO[currentRegional]?.nome || currentRegional;
+    const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : (currentRegional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
     title.textContent = `Produtividade do Dia — ${labelRegional}`;
-
-    let metasReg, totaisReg;
-
-    if (currentRegional === 'ALL') {
-      metasReg  = metasAcumuladas(metas);
-      totaisReg = totais.ALL;
-    } else {
-      metasReg  = metas[currentRegional] || {};
-      totaisReg = totais[currentRegional] || {};
-    }
-
-    const semMeta        = Object.keys(metasReg).length === 0;
-    const temConcluidas  = Object.keys(totaisReg).length > 0;
-
-    // Sempre renderiza o bloco (mostra notas mesmo sem metas)
-    const bloco = renderBlockRegional(totaisReg, metasReg);
-    const hint  = semMeta
-      ? `<div style="margin-top:10px;font-size:11px;color:var(--text2)">
-           Defina metas diárias em <strong>⚙ Metas</strong> para ver as barras de progresso.
-         </div>`
-      : '';
-
-    grid.innerHTML = bloco + hint;
+    const metasReg  = currentRegional === 'ALL' ? metasAcumuladas(metas) : (metas[currentRegional] || {});
+    const totaisReg = currentRegional === 'ALL' ? totais.ALL : (totais[currentRegional] || {});
+    const semMeta   = Object.keys(metasReg).length === 0;
+    grid.innerHTML  = renderBlockRegional(totaisReg, metasReg)
+      + (semMeta ? `<div style="margin-top:10px;font-size:11px;color:var(--text2)">Defina metas em <strong>⚙ Metas</strong> para ver barras de progresso.</div>` : '');
   }
 
-  // ── MODAL METAS ───────────────────────────────────────────────────────────
+  // ── METAS CALCULADAS ──────────────────────────────────────────────────
+  async function loadMetasCalculadas() {
+    const input = document.getElementById('metas-mes-input');
+    const ym    = input?.value || mesAtualInput();
+    if (input && !input.value) input.value = ym;
+    document.getElementById('metas-mes-label').textContent = fmtMes(ym);
+    document.getElementById('metas-info-cards').innerHTML =
+      '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
+    document.getElementById('metas-regionais-grid').innerHTML = '';
+
+    try {
+      const data = await fetch(`${API}/metas/calculadas?m=${ym}`).then(r => r.json());
+      renderMetasCalculadas(data);
+    } catch (err) {
+      document.getElementById('metas-info-cards').innerHTML =
+        `<div class="empty-state">Erro ao carregar: ${err.message}</div>`;
+    }
+  }
+
+  function renderMetasCalculadas(data) {
+    const { diasUteisNoMes, diasUteisDecorridos, semanaAtual, regionais } = data;
+
+    document.getElementById('metas-info-cards').innerHTML = `
+      <div class="info-card">
+        <div class="info-card-val">${diasUteisNoMes}</div>
+        <div class="info-card-lbl">Dias úteis no mês</div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-val">${diasUteisDecorridos}</div>
+        <div class="info-card-lbl">Dias úteis decorridos</div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-val">${diasUteisNoMes - diasUteisDecorridos}</div>
+        <div class="info-card-lbl">Dias úteis restantes</div>
+      </div>
+      <div class="info-card">
+        <div class="info-card-val">${semanaAtual}ª</div>
+        <div class="info-card-lbl">Semana do mês</div>
+      </div>
+    `;
+
+    const nomes = { GUA: 'Guarapari', CAC: 'Cachoeiro' };
+    document.getElementById('metas-regionais-grid').innerHTML = ['GUA', 'CAC'].map(reg => {
+      const tipos = Object.entries(regionais[reg] || {});
+      if (tipos.length === 0) return `
+        <div class="metas-regional-block">
+          <div class="metas-regional-title">${nomes[reg]}</div>
+          <div style="font-size:13px;color:var(--text2)">Nenhuma meta cadastrada. Configure em ⚙ Metas.</div>
+        </div>`;
+
+      return `
+        <div class="metas-regional-block">
+          <div class="metas-regional-title">${nomes[reg]}</div>
+          ${tipos.map(([tipo, m]) => {
+            const pct = m.ateHoje > 0 ? Math.min((m.realizado / m.ateHoje) * 100, 150) : 0;
+            const pctBar = Math.min(pct, 100);
+            const status = m.realizado >= m.ateHoje ? 'ok' : (m.realizado >= m.ateHoje * 0.8 ? 'warn' : 'danger');
+            const pillTxt = status === 'ok' ? '✓ Em dia' : (status === 'warn' ? '⚠ Atenção' : '✗ Atrasado');
+            const barCls  = `bar-${status}`;
+            const saldoHtml = m.saldo >= 0
+              ? `<span class="saldo-positivo">+${m.saldo} adiantado</span>`
+              : `<span class="saldo-negativo">${m.saldo} atrasado</span>`;
+            return `
+              <div class="meta-calc-card">
+                <div class="meta-calc-top">
+                  <div class="meta-calc-tipo">
+                    <span class="meta-calc-badge">${tipo}</span>
+                    <span class="meta-calc-nome">${TIPOS_SERVICO[tipo] || tipo}</span>
+                  </div>
+                  <span class="meta-status-pill pill-${status}">${pillTxt}</span>
+                </div>
+                <div class="meta-calc-nums">
+                  <div class="meta-calc-num-item">
+                    <div class="meta-calc-num-val">${m.mensal}</div>
+                    <div class="meta-calc-num-lbl">Mensal</div>
+                  </div>
+                  <div class="meta-calc-num-item">
+                    <div class="meta-calc-num-val">${m.diaria}</div>
+                    <div class="meta-calc-num-lbl">Diária</div>
+                  </div>
+                  <div class="meta-calc-num-item">
+                    <div class="meta-calc-num-val">${m.semanal}</div>
+                    <div class="meta-calc-num-lbl">Semanal</div>
+                  </div>
+                  <div class="meta-calc-num-item">
+                    <div class="meta-calc-num-val destaque">${m.realizado}</div>
+                    <div class="meta-calc-num-lbl">Realizado</div>
+                  </div>
+                </div>
+                <div class="meta-calc-bar-wrap">
+                  <div class="meta-calc-bar-track">
+                    <div class="meta-calc-bar-fill ${barCls}" style="width:${pctBar}%"></div>
+                  </div>
+                  <div class="meta-calc-bar-info">
+                    <span>Previsto até hoje: ${m.ateHoje}</span>
+                    <span>${pct.toFixed(0)}% — ${saldoHtml}</span>
+                  </div>
+                </div>
+              </div>`;
+          }).join('')}
+        </div>`;
+    }).join('');
+  }
+
+  // ── RANKING ───────────────────────────────────────────────────────────
+  async function loadRanking() {
+    const input    = document.getElementById('ranking-mes-input');
+    const ym       = input?.value || mesAtualInput();
+    if (input && !input.value) input.value = ym;
+    const regional = document.getElementById('ranking-regional-select')?.value || 'ALL';
+    document.getElementById('ranking-mes-label').textContent = fmtMes(ym);
+    document.getElementById('ranking-content').innerHTML =
+      '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
+
+    try {
+      const url  = `${API}/ranking/equipes?m=${ym}${regional !== 'ALL' ? '&regional=' + regional : ''}`;
+      const data = await fetch(url).then(r => r.json());
+      renderRanking(data.ranking || []);
+    } catch (err) {
+      document.getElementById('ranking-content').innerHTML =
+        `<div class="empty-state">Erro: ${err.message}</div>`;
+    }
+  }
+
+  function renderRanking(ranking) {
+    if (ranking.length === 0) {
+      document.getElementById('ranking-content').innerHTML =
+        '<div class="empty-state">Nenhum dado encontrado para o período selecionado.</div>';
+      return;
+    }
+
+    const medals = ['🥇', '🥈', '🥉'];
+    const allTipos = [...new Set(ranking.flatMap(t => Object.keys(t.por_tipo || {})))].sort();
+
+    document.getElementById('ranking-content').innerHTML = `
+      <div class="ranking-table-wrap">
+        <table class="ranking-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Equipe</th>
+              <th>Setor</th>
+              ${allTipos.map(t => `<th>${t}</th>`).join('')}
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${ranking.map((t, i) => {
+              const rankCls = i < 3 ? `rank-${i+1}` : '';
+              return `
+                <tr>
+                  <td><span class="rank-num ${rankCls}">${medals[i] || (i+1)}</span></td>
+                  <td>
+                    <span class="rank-team">${t.team_name}</span>
+                    <span class="rank-reg reg-${t.regional}">${t.regional}</span>
+                  </td>
+                  <td style="color:var(--text2);font-size:12px">${t.sector_id}</td>
+                  ${allTipos.map(tipo => `<td style="text-align:center;color:var(--text2)">${t.por_tipo[tipo] || '—'}</td>`).join('')}
+                  <td><span class="rank-total">${t.total}</span></td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── HISTÓRICO ─────────────────────────────────────────────────────────
+  async function loadHistorico() {
+    const input  = document.getElementById('hist-mes-input');
+    const ym     = input?.value || mesAtualInput();
+    if (input && !input.value) input.value = ym;
+    const team   = document.getElementById('hist-team-select')?.value || 'ALL';
+    document.getElementById('hist-mes-label').textContent = fmtMes(ym);
+    document.getElementById('hist-content').innerHTML =
+      '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
+
+    try {
+      const url  = `${API}/historico/equipes?m=${ym}${team !== 'ALL' ? '&team=' + encodeURIComponent(team) : ''}`;
+      const data = await fetch(url).then(r => r.json());
+      popularTeamSelect(data.dias || [], team);
+      renderHistorico(data.dias || [], team);
+    } catch (err) {
+      document.getElementById('hist-content').innerHTML =
+        `<div class="empty-state">Erro: ${err.message}</div>`;
+    }
+  }
+
+  function popularTeamSelect(dias, currentTeam) {
+    const teams = [...new Set(dias.flatMap(d => (d.equipes || []).map(e => e.team_name)))].sort();
+    const sel   = document.getElementById('hist-team-select');
+    if (!sel) return;
+    const prev  = sel.value;
+    sel.innerHTML = '<option value="ALL">Todas as equipes</option>'
+      + teams.map(t => `<option value="${t}" ${t === prev ? 'selected' : ''}>${t}</option>`).join('');
+    if (currentTeam && currentTeam !== 'ALL') sel.value = currentTeam;
+  }
+
+  function renderHistorico(dias, teamFilter) {
+    if (dias.length === 0) {
+      document.getElementById('hist-content').innerHTML =
+        '<div class="empty-state">Nenhum dado encontrado para o período selecionado.</div>';
+      return;
+    }
+
+    const allTipos = [...new Set(
+      dias.flatMap(d => (d.equipes || []).flatMap(e => Object.keys(e.por_tipo || {})))
+    )].sort();
+
+    const rows = [];
+    dias.forEach(d => {
+      const equipes = teamFilter && teamFilter !== 'ALL'
+        ? (d.equipes || []).filter(e => e.team_name === teamFilter)
+        : (d.equipes || []);
+      equipes.forEach(e => {
+        rows.push({ date: d.date, team: e.team_name, regional: e.regional, total: e.total, por_tipo: e.por_tipo || {} });
+      });
+    });
+
+    if (rows.length === 0) {
+      document.getElementById('hist-content').innerHTML =
+        '<div class="empty-state">Nenhuma produção registrada para os filtros selecionados.</div>';
+      return;
+    }
+
+    document.getElementById('hist-content').innerHTML = `
+      <div class="hist-table-wrap">
+        <table class="hist-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Equipe</th>
+              <th>Regional</th>
+              ${allTipos.map(t => `<th>${t}</th>`).join('')}
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td><span class="hist-date">${fmtData(r.date)}</span></td>
+                <td><span class="hist-team">${r.team}</span></td>
+                <td><span class="rank-reg reg-${r.regional}">${r.regional}</span></td>
+                ${allTipos.map(t => `<td style="text-align:center">${r.por_tipo[t] ? `<strong>${r.por_tipo[t]}</strong>` : '<span class="hist-zero">—</span>'}</td>`).join('')}
+                <td><span class="hist-total">${r.total || '<span class="hist-zero">0</span>'}</span></td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── MODAL METAS ───────────────────────────────────────────────────────
   function openMetas() {
     const metas = getMetas();
     ['GUA', 'CAC'].forEach(reg => {
@@ -659,8 +924,8 @@
                  id="meta-${reg}-${code}"
                  value="${(metas[reg] || {})[code] || ''}"
                  placeholder="0 = sem meta" />
-        </div>
-      `).join('');
+          <span class="meta-hint">Diária: ${(metas[reg] || {})[code] ? (((metas[reg] || {})[code]) / 22).toFixed(1) : '—'} | Semanal: ${(metas[reg] || {})[code] ? ((((metas[reg] || {})[code]) / 22) * 5).toFixed(1) : '—'}</span>
+        </div>`).join('');
     });
     document.getElementById('metas-overlay').classList.add('open');
   }
@@ -668,7 +933,6 @@
   async function salvarMetas() {
     const btn = document.querySelector('#metas-overlay .btn-salvar');
     if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
-
     const obj = { GUA: {}, CAC: {} };
     ['GUA', 'CAC'].forEach(reg => {
       Object.keys(TIPOS_SERVICO).forEach(code => {
@@ -676,29 +940,26 @@
         if (val > 0) obj[reg][code] = val;
       });
     });
-
     await saveMetas(obj);
     if (btn) { btn.textContent = 'Salvar Metas'; btn.disabled = false; }
     closeMetasDirect();
     renderProdutividade(getVisible());
+    if (currentTab === 'metas') loadMetasCalculadas();
   }
 
   function closeMetasModal(e) { if (e.target === document.getElementById('metas-overlay')) closeMetasDirect(); }
   function closeMetasDirect() { document.getElementById('metas-overlay').classList.remove('open'); }
 
-  // ── CARREGA DADOS ─────────────────────────────────────────────────────────
+  // ── CARREGA DADOS ─────────────────────────────────────────────────────
   async function loadData() {
     document.getElementById('sync-label').textContent = 'Atualizando...';
     document.getElementById('date-display').textContent = today();
     document.getElementById('prod-periodo').textContent = mesAtual();
-
     try {
-      // Carrega equipes e metas em paralelo
       const [res] = await Promise.all([
         fetch(`${API}/teams`).then(r => r.json()),
         fetchMetas(),
       ]);
-
       allTeams = res.teams || [];
       document.getElementById('mode-badge').textContent = (res.mode || 'mock').toUpperCase();
       document.getElementById('sync-label').textContent =
@@ -713,19 +974,15 @@
     }
   }
 
-  // ── FILTROS ───────────────────────────────────────────────────────────────
+  // ── FILTROS ───────────────────────────────────────────────────────────
   function selectRegional(regional) {
     currentRegional = regional;
-    // Sincroniza o select caso chamado programaticamente
     const sel = document.getElementById('regional-select');
     if (sel && sel.value !== regional) sel.value = regional;
     renderAll();
   }
 
-  function filterCards(val) {
-    currentFilter = val.toLowerCase();
-    renderAll();
-  }
+  function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
 
   function getVisible() {
     return allTeams.filter(t => {
@@ -737,7 +994,7 @@
     });
   }
 
-  // ── RENDER MÉTRICAS ───────────────────────────────────────────────────────
+  // ── RENDER MÉTRICAS ───────────────────────────────────────────────────
   function renderMetrics(teams) {
     const baixadas   = teams.reduce((s,t) => s + (t.notasBaixadas   || []).length, 0);
     const executadas = teams.reduce((s,t) => s + (t.notasExecutadas || []).length, 0);
@@ -746,49 +1003,35 @@
     const relogins   = teams.reduce((s,t) => s + (t.relogins || 0), 0);
     const ativas     = teams.filter(t => !t.sessionEnd).length;
     const pct        = baixadas > 0 ? Math.round((concluidas / baixadas) * 100) : 0;
-
-    document.getElementById('m-total').textContent         = teams.length;
-    document.getElementById('m-ativas').textContent        = `${ativas} em campo`;
-    document.getElementById('m-baixadas').textContent      = baixadas;
-    document.getElementById('m-executadas').textContent    = executadas;
-    document.getElementById('m-concluidas').textContent    = concluidas;
-    document.getElementById('m-rejeitadas').textContent    = rejeitadas;
-    document.getElementById('m-relogins').textContent      = relogins;
-    document.getElementById('m-concluidas-pct').textContent= `${pct}% das baixadas`;
+    document.getElementById('m-total').textContent          = teams.length;
+    document.getElementById('m-ativas').textContent         = `${ativas} em campo`;
+    document.getElementById('m-baixadas').textContent       = baixadas;
+    document.getElementById('m-executadas').textContent     = executadas;
+    document.getElementById('m-concluidas').textContent     = concluidas;
+    document.getElementById('m-rejeitadas').textContent     = rejeitadas;
+    document.getElementById('m-relogins').textContent       = relogins;
+    document.getElementById('m-concluidas-pct').textContent = `${pct}% das baixadas`;
   }
 
-  // ── RENDER CARDS ──────────────────────────────────────────────────────────
+  // ── RENDER CARDS ──────────────────────────────────────────────────────
   function renderAll() {
     const teams = getVisible();
     renderMetrics(teams);
     renderProdutividade(teams);
-
-    document.getElementById('section-count').textContent =
-      `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
-
+    document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
     if (teams.length === 0) {
-      document.getElementById('teams-grid').innerHTML =
-        `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
+      document.getElementById('teams-grid').innerHTML = `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
       return;
     }
-
     document.getElementById('teams-grid').innerHTML = teams.map(t => {
       const ativa = !t.sessionEnd;
       const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
-
-      // Agrupa concluídas por tipo para exibir no card
       const tiposCont = {};
-      (t.notasConcluidas || []).forEach(n => {
-        tiposCont[n.tipoCode] = (tiposCont[n.tipoCode] || 0) + 1;
-      });
+      (t.notasConcluidas || []).forEach(n => { tiposCont[n.tipoCode] = (tiposCont[n.tipoCode] || 0) + 1; });
       const tiposHtml = Object.entries(tiposCont).map(([code, cnt]) =>
-        `<span class="tipo-chip">
-          <span class="tipo-chip-code">${code}</span>
-          <span class="tipo-chip-num">${cnt}</span>
-        </span>`
+        `<span class="tipo-chip"><span class="tipo-chip-code">${code}</span><span class="tipo-chip-num">${cnt}</span></span>`
       ).join('');
-
       return `
         <div class="team-card" onclick="openModal('${t.id}')">
           <div class="team-card-header ${ativa ? '' : 'inativa'}">
@@ -801,35 +1044,14 @@
             </span>
           </div>
           <div class="team-card-body">
-            <div class="team-row">
-              <span class="team-row-label">Placa</span>
-              <span class="tag-placa">${t.vehiclePlate || '—'}</span>
-            </div>
-            <div class="team-row">
-              <span class="team-row-label">Sessão</span>
-              <span style="color:var(--text);font-size:12px">${fmt(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}</span>
-            </div>
-            <div class="team-row">
-              <span class="team-row-label">Re-logins</span>
-              <span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span>
-            </div>
+            <div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>
+            <div class="team-row"><span class="team-row-label">Sessão</span><span style="color:var(--text);font-size:12px">${fmt(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}</span></div>
+            <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
-              <div class="os-cell">
-                <div class="os-num">${(t.notasBaixadas||[]).length}</div>
-                <div class="os-lbl">Baixadas</div>
-              </div>
-              <div class="os-cell">
-                <div class="os-num executada">${(t.notasExecutadas||[]).length}</div>
-                <div class="os-lbl">Exec.</div>
-              </div>
-              <div class="os-cell">
-                <div class="os-num concluida">${(t.notasConcluidas||[]).length}</div>
-                <div class="os-lbl">Concluídas</div>
-              </div>
-              <div class="os-cell">
-                <div class="os-num rejeitada">${(t.notasRejeitadas||[]).length}</div>
-                <div class="os-lbl">Rejeitadas</div>
-              </div>
+              <div class="os-cell"><div class="os-num">${(t.notasBaixadas||[]).length}</div><div class="os-lbl">Baixadas</div></div>
+              <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas||[]).length}</div><div class="os-lbl">Exec.</div></div>
+              <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas||[]).length}</div><div class="os-lbl">Concluídas</div></div>
+              <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas||[]).length}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
             ${tiposHtml ? `<div class="tipos-row">${tiposHtml}</div>` : ''}
           </div>
@@ -837,21 +1059,18 @@
     }).join('');
   }
 
-  // ── MODAL EQUIPE ──────────────────────────────────────────────────────────
+  // ── MODAL EQUIPE ──────────────────────────────────────────────────────
   let activeNotaTab = 'concluida';
 
   function openModal(teamId) {
     const t = allTeams.find(x => x.id === teamId);
     if (!t) return;
-
     const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
     document.getElementById('modal-title').textContent = t.sigla || t.teamName;
     document.getElementById('modal-sub').textContent   = `${regionalNome} · ${t.sectorId} · ${t.date}`;
-
     const dur     = duracao(t.sessionBegin, t.sessionEnd);
     const colabs  = t.collaborators || [];
     const sessoes = t.sessions || [];
-
     const sesoesHtml = sessoes.length > 0
       ? sessoes.map((s, i) => `
           <div class="sessao-item">
@@ -860,12 +1079,9 @@
             ${s.motivo ? `<span class="sessao-motivo">${s.motivo}</span>` : ''}
           </div>`).join('')
       : '<span style="color:var(--text2);font-size:13px">Sem re-logins registrados.</span>';
-
-    // Agrupa totais por tipo para o perfil da equipe
     const tiposPerfil = (t.servicosPerfil || []).map(code =>
       `<span style="background:var(--verde);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:4px">${code}</span>`
     ).join('') || '—';
-
     document.getElementById('modal-body').innerHTML = `
       <div class="modal-section">
         <div class="modal-section-title">Sessão do dia</div>
@@ -878,33 +1094,24 @@
           <div class="info-item"><div class="lbl">Re-logins</div><div class="val">${t.relogins} desconexão(ões)</div></div>
         </div>
       </div>
-
       <div class="modal-section">
         <div class="modal-section-title">Perfil de serviços</div>
         <div style="margin-bottom:4px">${tiposPerfil}</div>
       </div>
-
       <div class="modal-section">
         <div class="modal-section-title">Histórico de conexões (${sessoes.length} sessão/ões)</div>
         ${sesoesHtml}
       </div>
-
       <div class="modal-section">
         <div class="modal-section-title">Colaboradores (${colabs.length})</div>
         <div style="display:flex;flex-direction:column;gap:6px">
           ${colabs.map(c => `
             <div style="display:flex;align-items:center;gap:10px;background:var(--cinza1);border-radius:6px;padding:8px 12px;font-size:13px">
-              <div style="width:30px;height:30px;border-radius:50%;background:var(--verde);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">
-                ${c.nome.charAt(0)}
-              </div>
-              <div>
-                <div style="font-weight:500">${c.nome}</div>
-                <div style="font-size:11px;color:var(--text2)">${c.cargo} · Mat. ${c.matricula}</div>
-              </div>
+              <div style="width:30px;height:30px;border-radius:50%;background:var(--verde);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">${c.nome.charAt(0)}</div>
+              <div><div style="font-weight:500">${c.nome}</div><div style="font-size:11px;color:var(--text2)">${c.cargo} · Mat. ${c.matricula}</div></div>
             </div>`).join('')}
         </div>
       </div>
-
       <div class="modal-section">
         <div class="modal-section-title">Ordens de Serviço</div>
         <div class="notas-tabs" id="notas-tabs">
@@ -914,9 +1121,7 @@
           <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas||[]).length})</button>
         </div>
         <div class="notas-list" id="notas-list"></div>
-      </div>
-    `;
-
+      </div>`;
     window._modalTeam = t;
     activeNotaTab = 'concluida';
     renderNotas('concluida');
@@ -934,18 +1139,13 @@
     const t = window._modalTeam;
     if (!t) return;
     const map = {
-      baixada:   t.notasBaixadas   || [],
-      executada: t.notasExecutadas || [],
-      concluida: t.notasConcluidas || [],
-      rejeitada: t.notasRejeitadas || [],
+      baixada: t.notasBaixadas || [], executada: t.notasExecutadas || [],
+      concluida: t.notasConcluidas || [], rejeitada: t.notasRejeitadas || [],
     };
     const notas = map[tipo] || [];
     const el = document.getElementById('notas-list');
     if (!el) return;
-    if (notas.length === 0) {
-      el.innerHTML = `<span style="font-size:13px;color:var(--text2)">Nenhuma OS ${tipo}.</span>`;
-      return;
-    }
+    if (notas.length === 0) { el.innerHTML = `<span style="font-size:13px;color:var(--text2)">Nenhuma OS ${tipo}.</span>`; return; }
     el.innerHTML = notas.map(n =>
       `<span class="nota-chip nota-${tipo}">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span></span>`
     ).join('');
@@ -955,7 +1155,7 @@
   function closeModalDirect() { document.getElementById('modal-overlay').classList.remove('open'); window._modalTeam = null; }
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); } });
 
-  // ── INIT ──────────────────────────────────────────────────────────────────
+  // ── INIT ──────────────────────────────────────────────────────────────
   loadData();
   setInterval(loadData, 5 * 60 * 1000);
 </script>
