@@ -221,9 +221,21 @@ async function getNotesByDate(sectorId, isoDate) {
 
 /**
  * Combina sessões + notas de um dia histórico para um setor.
- * Não usa o acumulador diário (_acc) — dados históricos são imutáveis.
+ * Usa /api/notes/execution?date=X (estrutura clássica com n.Status).
+ * Não usa acumulador diário nem getTeamStatusV2 — dados históricos são imutáveis.
  */
 async function getTeamsByDate(sectorId, isoDate) {
+  // Mapeamento de status clássico (n.Status) usado pelo endpoint notes/execution histórico
+  const STATUS_HIST = { 1: 'baixada', 2: 'executada', 3: 'rejeitada', 4: 'concluida', 9: 'concluida' };
+  function normalizarNotaHist(n) {
+    return {
+      codigo:   String(n.Number || n.Id || ''),
+      tipoCode: n.Type || '??',
+      tipoNome: n.Type || '??',
+      status:   STATUS_HIST[n.Status] || 'baixada',
+    };
+  }
+
   const [sessions, notasRaw] = await Promise.all([
     getSessionsByDate(sectorId, isoDate),
     getNotesByDate(sectorId, isoDate).catch(err => {
@@ -235,25 +247,54 @@ async function getTeamsByDate(sectorId, isoDate) {
   console.log(`[WPA] backfill raw: ${sectorId}/${isoDate} → ${sessions.length} sessões totais, ${notasRaw.length} notas`);
 
   const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
-  console.log(`[WPA] backfill Engelmig: ${engelmigSessions.length} sessões filtradas (companyId=${ENGELMIG_COMPANY_ID})`);
+  console.log(`[WPA] backfill Engelmig: ${engelmigSessions.length} sessões filtradas`);
 
+  // Indexa notas por nome e ID de equipe
   const notasPorNome = {};
   const notasPorId   = {};
   notasRaw.forEach(n => {
     const nome = (n.Team?.Name || '').trim();
     const id   = n.Team?.Id   || n.TeamId;
-    const nota = normalizarNota(n);
+    const nota = normalizarNotaHist(n);
     if (nome) { if (!notasPorNome[nome]) notasPorNome[nome] = []; notasPorNome[nome].push(nota); }
     if (id)   { if (!notasPorId[id])     notasPorId[id]     = []; notasPorId[id].push(nota); }
   });
 
-  console.log(`[WPA] backfill ${isoDate}/${sectorId}: ${engelmigSessions.length} sessões, ${notasRaw.length} notas`);
-
   return engelmigSessions.map(s => {
-    const teamName = (s.Team?.Name || '').trim();
-    const teamId   = s.Team?.Id;
-    const notas    = notasPorNome[teamName] || (teamId ? notasPorId[teamId] : null) || [];
-    return normalizarSessao(s, { [teamName]: notas });
+    const teamName     = (s.Team?.Name || '').trim();
+    const teamId       = s.Team?.Id;
+    const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
+    const notas        = notasPorNome[teamName] || (teamId ? notasPorId[teamId] : null) || [];
+
+    const baixadas   = notas.filter(n => n.status === 'baixada');
+    const executadas = notas.filter(n => n.status === 'executada');
+    const concluidas = notas.filter(n => n.status === 'concluida');
+    const rejeitadas = notas.filter(n => n.status === 'rejeitada');
+
+    console.log(`[WPA]   backfill ${sectorId}/${teamName}: exec=${executadas.length} conc=${concluidas.length}`);
+
+    return {
+      id:             s.Id,
+      sigla:          teamName,
+      teamName,
+      sectorId:       teamSectorId,
+      regional:       REGIONAL_MAP[teamSectorId] || 'GUA',
+      date:           s.BeginTime?.slice(0, 10) || isoDate,
+      sessionBegin:   s.BeginTime,
+      sessionEnd:     s.EndTime || null,
+      vehiclePlate:   s.Vehicle?.Code || '—',
+      collaborators:  (s.Collaborators || []).map(normalizarColaborador),
+      relogins:       0,
+      sessions:       [],
+      deviceModel:    s.Device?.Model || null,
+      appVersion:     s.AppVersion   || null,
+      carteiraCount:  baixadas.length,
+      servicosPerfil: [...new Set(notas.map(n => n.tipoCode))],
+      notasBaixadas:   baixadas,
+      notasExecutadas: executadas,
+      notasConcluidas: concluidas,
+      notasRejeitadas: rejeitadas,
+    };
   });
 }
 
