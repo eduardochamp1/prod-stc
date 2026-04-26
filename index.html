@@ -353,7 +353,7 @@
         <div class="metric-value vermelho" id="m-rejeitadas">—</div>
       </div>
       <div class="metric-card accent-preto">
-        <div class="metric-label">OS Baixadas</div>
+        <div class="metric-label">OS em Carteira</div>
         <div class="metric-value" id="m-baixadas">—</div>
       </div>
       <div class="metric-card accent-verde">
@@ -1148,7 +1148,7 @@
     document.getElementById('m-concluidas').textContent     = concluidas;
     document.getElementById('m-rejeitadas').textContent     = rejeitadas;
     document.getElementById('m-relogins').textContent       = relogins;
-    document.getElementById('m-concluidas-pct').textContent = `${pct}% das baixadas`;
+    document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
   }
 
   // ── RENDER CARDS ──────────────────────────────────────────────────────
@@ -1186,7 +1186,7 @@
             <div class="team-row"><span class="team-row-label">Sessão</span><span style="color:var(--text);font-size:12px">${fmt(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}</span></div>
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
-              <div class="os-cell"><div class="os-num">${(t.notasBaixadas||[]).length}</div><div class="os-lbl">Baixadas</div></div>
+              <div class="os-cell"><div class="os-num">${(t.notasBaixadas||[]).length}</div><div class="os-lbl">Carteira</div></div>
               <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas||[]).length}</div><div class="os-lbl">Andamento</div></div>
               <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas||[]).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas||[]).length}</div><div class="os-lbl">Rejeitadas</div></div>
@@ -1253,7 +1253,7 @@
       <div class="modal-section">
         <div class="modal-section-title">Ordens de Serviço</div>
         <div class="notas-tabs" id="notas-tabs">
-          <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Baixadas (${(t.notasBaixadas||[]).length})</button>
+          <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Em Carteira (${(t.notasBaixadas||[]).length})</button>
           <button class="nota-tab" onclick="switchNotaTab('executada',this)">Em Andamento (${(t.notasExecutadas||[]).length})</button>
           <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Executadas (${(t.notasConcluidas||[]).length})</button>
           <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas||[]).length})</button>
