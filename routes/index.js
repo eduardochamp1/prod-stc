@@ -468,6 +468,54 @@ router.post('/admin/snapshot', async (req, res) => {
   }
 });
 
+// POST /api/admin/backfill?date=YYYY-MM-DD
+// Busca dados históricos do WPA e salva no Supabase como se o cron tivesse rodado naquele dia
+router.post('/admin/backfill', async (req, res) => {
+  const date = req.query.date;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Parâmetro date obrigatório no formato YYYY-MM-DD' });
+  }
+  try {
+    const { getTeamsByDate }                                          = require('../services/wpaService');
+    const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/supabasePush');
+
+    const SETORES = ['DESG', 'DEPT', 'DESC'];
+    console.log(`[BACKFILL] Iniciando para ${date}...`);
+
+    const resultados = await Promise.all(
+      SETORES.map(s => getTeamsByDate(s, date).catch(err => {
+        console.warn(`[BACKFILL] Setor ${s} falhou: ${err.message}`);
+        return [];
+      }))
+    );
+    const teams = resultados.flat();
+
+    if (teams.length === 0) {
+      return res.json({ ok: false, msg: 'Nenhuma equipe encontrada para essa data', date });
+    }
+
+    await saveSnapshot(teams, date);
+    await upsertDailyTotals(teams, date);
+    await upsertTeamDailyTotals(teams, date);
+
+    // Consolida ao final para garantir apenas concluídas nos totais históricos
+    const c = cron();
+    if (c) await c.runConsolidate(date);
+
+    console.log(`[BACKFILL] Concluído: ${teams.length} equipes para ${date}`);
+    res.json({
+      ok:     true,
+      date,
+      teams:  teams.length,
+      concluidas: teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0),
+      executadas: teams.reduce((s, t) => s + (t.notasExecutadas || []).length, 0),
+    });
+  } catch (err) {
+    console.error('[BACKFILL] Erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/admin/consolidar', async (req, res) => {
   try {
     const c    = cron();

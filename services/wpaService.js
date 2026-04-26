@@ -182,6 +182,75 @@ async function getTeamStatusV2(sectorId) {
   return Array.isArray(data) ? data : (data.Data || []);
 }
 
+// ── HISTÓRICO (endpoints com parâmetro date) ──────────────────────────────────
+
+/** Converte YYYY-MM-DD → M/D/YYYY (formato aceito pela API WPA) */
+function toWpaDate(isoDate) {
+  const [y, m, d] = isoDate.split('-');
+  return `${parseInt(m)}/${parseInt(d)}/${y}`;
+}
+
+/**
+ * Sessões de um dia específico.
+ * POST /api/Sessions/all/date?sectorId={sid}&date=M/D/YYYY
+ */
+async function getSessionsByDate(sectorId, isoDate) {
+  const wpaDate = toWpaDate(isoDate);
+  const res = await wpaFetch(
+    `/api/Sessions/all/date?sectorId=${sectorId}&date=${encodeURIComponent(wpaDate)}`,
+    { method: 'POST' }
+  );
+  if (!res.ok) throw new Error(`WPA sessions/date ${res.status}`);
+  const data = await res.json();
+  return data.Data || [];
+}
+
+/**
+ * Notas de execução de um dia específico.
+ * GET /api/notes/execution?sectorId={sid}&date=M/D/YYYY
+ */
+async function getNotesByDate(sectorId, isoDate) {
+  const wpaDate = toWpaDate(isoDate);
+  const res = await wpaFetch(
+    `/api/notes/execution?sectorId=${sectorId}&date=${encodeURIComponent(wpaDate)}`
+  );
+  if (!res.ok) throw new Error(`WPA notes/date ${res.status}`);
+  const data = await res.json();
+  return data.Data?.Notes || [];
+}
+
+/**
+ * Combina sessões + notas de um dia histórico para um setor.
+ * Não usa o acumulador diário (_acc) — dados históricos são imutáveis.
+ */
+async function getTeamsByDate(sectorId, isoDate) {
+  const [sessions, notasRaw] = await Promise.all([
+    getSessionsByDate(sectorId, isoDate),
+    getNotesByDate(sectorId, isoDate),
+  ]);
+
+  const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
+
+  const notasPorNome = {};
+  const notasPorId   = {};
+  notasRaw.forEach(n => {
+    const nome = (n.Team?.Name || '').trim();
+    const id   = n.Team?.Id   || n.TeamId;
+    const nota = normalizarNota(n);
+    if (nome) { if (!notasPorNome[nome]) notasPorNome[nome] = []; notasPorNome[nome].push(nota); }
+    if (id)   { if (!notasPorId[id])     notasPorId[id]     = []; notasPorId[id].push(nota); }
+  });
+
+  console.log(`[WPA] backfill ${isoDate}/${sectorId}: ${engelmigSessions.length} sessões, ${notasRaw.length} notas`);
+
+  return engelmigSessions.map(s => {
+    const teamName = (s.Team?.Name || '').trim();
+    const teamId   = s.Team?.Id;
+    const notas    = notasPorNome[teamName] || (teamId ? notasPorId[teamId] : null) || [];
+    return normalizarSessao(s, { [teamName]: notas });
+  });
+}
+
 // ── ACUMULADOR DIÁRIO ─────────────────────────────────────────────────────────
 // Preserva notas concluídas/executadas vistas durante o dia.
 // Garante que o contador não caia caso uma equipe encerre e reabra sessão.
@@ -430,5 +499,7 @@ module.exports = {
   getTeamStatusV2,
   // Principal
   getTeamsBySector,
+  // Histórico
+  getTeamsByDate,
   REGIONAL_MAP,
 };

@@ -9,10 +9,10 @@ const { getClient } = require('./supabaseClient');
  * Salva snapshot histórico das equipes na tabela `snapshots`.
  * Chamado a cada 15 min pelo cronService.
  */
-async function saveSnapshot(teams) {
+async function saveSnapshot(teams, date) {
   if (!teams || teams.length === 0) return;
-  const sb   = getClient();
-  const date = new Date().toISOString().slice(0, 10);
+  const sb = getClient();
+  date = date || new Date().toISOString().slice(0, 10);
 
   const rows = teams.map(t => ({
     date,
