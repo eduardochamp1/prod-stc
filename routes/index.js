@@ -290,6 +290,20 @@ router.get('/debug/notas', async (req, res) => {
   }
 });
 
+// ── PRODUÇÃO POR EQUIPE ───────────────────────────────────────────────────────
+
+// GET /api/equipes/producao?de=2026-04-01&ate=2026-04-30&regional=GUA&team=EPICO30
+router.get('/equipes/producao', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({ equipes: [], tipos: [] });
+    const resultado = await sq.getTeamProducao(req.query);
+    res.json(resultado);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
 
 router.post('/admin/snapshot', async (req, res) => {

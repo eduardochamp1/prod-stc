@@ -219,9 +219,49 @@ async function getTeamDailyHistory(yearMonth, teamName) {
   return Object.values(byDate).map(d => ({ date: d.date, equipes: Object.values(d.equipes) }));
 }
 
+/**
+ * Produção agregada por equipe com filtros livres de período, regional e equipe.
+ * filters: { de, ate, regional, team }
+ */
+async function getTeamProducao(filters = {}) {
+  const sb = getClient();
+  let query = sb
+    .from('team_daily_totals')
+    .select('team_name, regional, sector_id, tipo_code, count');
+
+  if (filters.de)                                     query = query.gte('date', filters.de);
+  if (filters.ate)                                    query = query.lte('date', filters.ate);
+  if (filters.regional && filters.regional !== 'ALL') query = query.eq('regional', filters.regional);
+  if (filters.team     && filters.team     !== 'ALL') query = query.eq('team_name', filters.team);
+
+  const { data, error } = await query.order('team_name');
+  if (error) throw error;
+
+  const teams = {};
+  (data || []).forEach(row => {
+    if (!teams[row.team_name]) {
+      teams[row.team_name] = {
+        team_name: row.team_name,
+        regional:  row.regional,
+        sector_id: row.sector_id,
+        total:     0,
+        por_tipo:  {},
+      };
+    }
+    teams[row.team_name].total += row.count;
+    teams[row.team_name].por_tipo[row.tipo_code] =
+      (teams[row.team_name].por_tipo[row.tipo_code] || 0) + row.count;
+  });
+
+  const lista  = Object.values(teams).sort((a, b) => a.team_name.localeCompare(b.team_name));
+  const tipos  = [...new Set((data || []).map(r => r.tipo_code))].sort();
+  return { equipes: lista, tipos };
+}
+
 module.exports = {
   getMetas, setMetas, getMetasCalculadas,
   getTeamsFromSupabase,
   getMonthTotals, getDailyHistory,
   getTeamRanking, getTeamDailyHistory,
+  getTeamProducao,
 };

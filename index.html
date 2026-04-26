@@ -300,6 +300,7 @@
     <button class="tab-btn"        id="tab-btn-metas"      onclick="switchTab('metas')">🎯 Metas</button>
     <button class="tab-btn"        id="tab-btn-ranking"    onclick="switchTab('ranking')">🏆 Ranking</button>
     <button class="tab-btn"        id="tab-btn-historico"  onclick="switchTab('historico')">📈 Histórico</button>
+    <button class="tab-btn"        id="tab-btn-equipes"    onclick="switchTab('equipes')">👷 Equipes</button>
   </div>
 
   <!-- ── TAB: MONITOR ─────────────────────────────────────────────────── -->
@@ -454,6 +455,44 @@
 
   </div>
 
+  <!-- ── TAB: EQUIPES ──────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-equipes">
+
+    <div class="filter-bar">
+      <div class="date-label">Produção por equipe — <strong id="eq-periodo-label"></strong></div>
+      <div class="filter-controls">
+        <div class="filter-group">
+          <span class="filter-label">De</span>
+          <input type="date" class="month-input" id="eq-de-input" onchange="loadEquipes()" style="width:130px" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Até</span>
+          <input type="date" class="month-input" id="eq-ate-input" onchange="loadEquipes()" style="width:130px" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Regional</span>
+          <select class="filter-select" id="eq-regional-select" onchange="loadEquipes()">
+            <option value="ALL">Todas</option>
+            <option value="GUA">Guarapari</option>
+            <option value="CAC">Cachoeiro</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Equipe</span>
+          <select class="filter-select" id="eq-team-select" onchange="loadEquipes()" style="min-width:140px">
+            <option value="ALL">Todas</option>
+          </select>
+        </div>
+        <button class="btn-refresh" onclick="loadEquipes()">↻ Atualizar</button>
+      </div>
+    </div>
+
+    <div id="eq-content">
+      <div class="empty-state">Selecione o período e clique em Atualizar.</div>
+    </div>
+
+  </div>
+
 </main>
 
 <!-- MODAL DETALHE EQUIPE -->
@@ -532,9 +571,10 @@
     document.getElementById('tab-' + tab).classList.add('active');
     document.getElementById('tab-btn-' + tab).classList.add('active');
 
-    if (tab === 'metas')    loadMetasCalculadas();
-    if (tab === 'ranking')  loadRanking();
+    if (tab === 'metas')     loadMetasCalculadas();
+    if (tab === 'ranking')   loadRanking();
     if (tab === 'historico') loadHistorico();
+    if (tab === 'equipes')   initEquipes();
   }
 
   // ── METAS (banco de dados via API) ─────────────────────────────────────
@@ -911,6 +951,100 @@
                 <td><span class="hist-total">${r.total || '<span class="hist-zero">0</span>'}</span></td>
               </tr>`).join('')}
           </tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── EQUIPES ───────────────────────────────────────────────────────────
+  function initEquipes() {
+    const today = new Date().toISOString().slice(0, 10);
+    const firstOfMonth = today.slice(0, 7) + '-01';
+    const de  = document.getElementById('eq-de-input');
+    const ate = document.getElementById('eq-ate-input');
+    if (de  && !de.value)  de.value  = firstOfMonth;
+    if (ate && !ate.value) ate.value = today;
+    loadEquipes();
+  }
+
+  async function loadEquipes() {
+    const de       = document.getElementById('eq-de-input')?.value  || '';
+    const ate      = document.getElementById('eq-ate-input')?.value || '';
+    const regional = document.getElementById('eq-regional-select')?.value || 'ALL';
+    const team     = document.getElementById('eq-team-select')?.value     || 'ALL';
+
+    const label = (de && ate) ? `${fmtData(de)} a ${fmtData(ate)}` : (de || ate || 'período completo');
+    document.getElementById('eq-periodo-label').textContent = label;
+    document.getElementById('eq-content').innerHTML =
+      '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
+
+    try {
+      const params = new URLSearchParams();
+      if (de)                    params.set('de', de);
+      if (ate)                   params.set('ate', ate);
+      if (regional !== 'ALL')    params.set('regional', regional);
+      if (team     !== 'ALL')    params.set('team', team);
+
+      const data = await fetch(`${API}/equipes/producao?${params}`).then(r => r.json());
+      if (data.error) throw new Error(data.error);
+      popularEqTeamSelect(data.equipes || [], team);
+      renderEquipes(data.equipes || [], data.tipos || []);
+    } catch (err) {
+      document.getElementById('eq-content').innerHTML =
+        `<div class="empty-state">Erro: ${err.message}</div>`;
+    }
+  }
+
+  function popularEqTeamSelect(equipes, currentTeam) {
+    const sel = document.getElementById('eq-team-select');
+    if (!sel) return;
+    const names = equipes.map(e => e.team_name).sort();
+    sel.innerHTML = '<option value="ALL">Todas as equipes</option>'
+      + names.map(n => `<option value="${n}" ${n === currentTeam ? 'selected' : ''}>${n}</option>`).join('');
+    if (currentTeam && currentTeam !== 'ALL') sel.value = currentTeam;
+  }
+
+  function renderEquipes(equipes, tipos) {
+    const el = document.getElementById('eq-content');
+    if (equipes.length === 0) {
+      el.innerHTML = '<div class="empty-state">Nenhum dado encontrado para os filtros selecionados.</div>';
+      return;
+    }
+
+    const tiposLabel = { LN:'LN', LE:'LE', DL:'DL', MD:'MD', SF:'SF', RL:'RL', UG:'UG', DD:'DD', II:'II', PO:'PO' };
+
+    el.innerHTML = `
+      <div class="hist-table-wrap">
+        <table class="hist-table">
+          <thead>
+            <tr>
+              <th style="text-align:left">Equipe</th>
+              <th>Regional</th>
+              ${tipos.map(t => `<th title="${(TIPOS_SERVICO[t]||t)}">${t}</th>`).join('')}
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${equipes.map((e, i) => `
+              <tr>
+                <td><span class="hist-team">${e.team_name}</span></td>
+                <td style="text-align:center"><span class="rank-reg reg-${e.regional}">${e.regional}</span></td>
+                ${tipos.map(t => `<td style="text-align:center">${e.por_tipo[t]
+                  ? `<strong>${e.por_tipo[t]}</strong>`
+                  : '<span class="hist-zero">—</span>'}</td>`).join('')}
+                <td style="text-align:center"><span class="hist-total">${e.total}</span></td>
+              </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:var(--bg2);font-weight:700">
+              <td>TOTAL</td>
+              <td></td>
+              ${tipos.map(t => {
+                const s = equipes.reduce((a, e) => a + (e.por_tipo[t] || 0), 0);
+                return `<td style="text-align:center">${s || '—'}</td>`;
+              }).join('')}
+              <td style="text-align:center">${equipes.reduce((a, e) => a + e.total, 0)}</td>
+            </tr>
+          </tfoot>
         </table>
       </div>`;
   }
