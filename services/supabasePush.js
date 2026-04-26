@@ -65,11 +65,14 @@ async function upsertDailyTotals(teams, date) {
   const sb = getClient();
   date = date || new Date().toISOString().slice(0, 10);
 
+  // Acumula por (regional, tipo_code) — evita duplicatas mesmo com múltiplas sessões por equipe
   const acc = {};
   teams.forEach(t => {
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
-      const key = `${t.regional}|${n.tipoCode}`;
+      const code = n.tipoCode || n.tipo_code;
+      if (!code) return;
+      const key = `${t.regional}|${code}`;
       acc[key] = (acc[key] || 0) + 1;
     });
   });
@@ -96,26 +99,24 @@ async function upsertTeamDailyTotals(teams, date) {
   const sb = getClient();
   date = date || new Date().toISOString().slice(0, 10);
 
-  const rows = [];
+  // Acumula por (team_name, tipo_code) para evitar duplicatas quando
+  // a mesma equipe aparece mais de uma vez no array (ex: múltiplas sessões no dia)
+  const acc = {};
   teams.forEach(t => {
+    const teamName = t.teamName || t.sigla;
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
-    const acc = {};
     realizadas.forEach(n => {
       const code = n.tipoCode || n.tipo_code;
-      if (code) acc[code] = (acc[code] || 0) + 1;
-    });
-    Object.entries(acc).forEach(([tipo_code, count]) => {
-      rows.push({
-        date,
-        team_name: t.teamName || t.sigla,
-        regional:  t.regional,
-        sector_id: t.sectorId,
-        tipo_code,
-        count,
-      });
+      if (!code) return;
+      const key = `${teamName}|${code}`;
+      if (!acc[key]) {
+        acc[key] = { date, team_name: teamName, regional: t.regional, sector_id: t.sectorId, tipo_code: code, count: 0 };
+      }
+      acc[key].count += 1;
     });
   });
 
+  const rows = Object.values(acc);
   if (rows.length === 0) return;
 
   const { error } = await sb

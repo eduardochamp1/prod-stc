@@ -260,36 +260,57 @@ async function getTeamsByDate(sectorId, isoDate) {
     if (id)   { if (!notasPorId[id])     notasPorId[id]     = []; notasPorId[id].push(nota); }
   });
 
-  return engelmigSessions.map(s => {
+  // Mescla múltiplas sessões da mesma equipe (relogins no mesmo dia)
+  // para evitar duplicatas de (date, team_name) no Supabase
+  const teamMap = {};
+  engelmigSessions.forEach(s => {
     const teamName     = (s.Team?.Name || '').trim();
     const teamId       = s.Team?.Id;
     const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
     const notas        = notasPorNome[teamName] || (teamId ? notasPorId[teamId] : null) || [];
 
+    if (!teamMap[teamName]) {
+      teamMap[teamName] = {
+        id:             s.Id,
+        sigla:          teamName,
+        teamName,
+        sectorId:       teamSectorId,
+        regional:       REGIONAL_MAP[teamSectorId] || 'GUA',
+        date:           s.BeginTime?.slice(0, 10) || isoDate,
+        sessionBegin:   s.BeginTime,
+        sessionEnd:     s.EndTime || null,
+        vehiclePlate:   s.Vehicle?.Code || '—',
+        collaborators:  (s.Collaborators || []).map(normalizarColaborador),
+        relogins:       0,
+        sessions:       [],
+        deviceModel:    s.Device?.Model || null,
+        appVersion:     s.AppVersion   || null,
+        _notas:         [],
+      };
+    } else {
+      // Sessão adicional da mesma equipe (relogin) — conta como relogin
+      teamMap[teamName].relogins += 1;
+      if (s.EndTime) teamMap[teamName].sessionEnd = s.EndTime; // usa a última sessão
+    }
+    // Acumula notas da sessão (deduplica por código)
+    notas.forEach(n => {
+      const already = teamMap[teamName]._notas.find(x => x.codigo === n.codigo && n.codigo);
+      if (!already) teamMap[teamName]._notas.push(n);
+    });
+  });
+
+  return Object.values(teamMap).map(t => {
+    const notas    = t._notas;
+    delete t._notas;
     const baixadas   = notas.filter(n => n.status === 'baixada');
     const executadas = notas.filter(n => n.status === 'executada');
     const concluidas = notas.filter(n => n.status === 'concluida');
     const rejeitadas = notas.filter(n => n.status === 'rejeitada');
-
-    console.log(`[WPA]   backfill ${sectorId}/${teamName}: exec=${executadas.length} conc=${concluidas.length}`);
-
+    console.log(`[WPA]   backfill ${sectorId}/${t.teamName}: exec=${executadas.length} conc=${concluidas.length} relogins=${t.relogins}`);
     return {
-      id:             s.Id,
-      sigla:          teamName,
-      teamName,
-      sectorId:       teamSectorId,
-      regional:       REGIONAL_MAP[teamSectorId] || 'GUA',
-      date:           s.BeginTime?.slice(0, 10) || isoDate,
-      sessionBegin:   s.BeginTime,
-      sessionEnd:     s.EndTime || null,
-      vehiclePlate:   s.Vehicle?.Code || '—',
-      collaborators:  (s.Collaborators || []).map(normalizarColaborador),
-      relogins:       0,
-      sessions:       [],
-      deviceModel:    s.Device?.Model || null,
-      appVersion:     s.AppVersion   || null,
-      carteiraCount:  baixadas.length,
-      servicosPerfil: [...new Set(notas.map(n => n.tipoCode))],
+      ...t,
+      carteiraCount:   baixadas.length,
+      servicosPerfil:  [...new Set(notas.map(n => n.tipoCode))],
       notasBaixadas:   baixadas,
       notasExecutadas: executadas,
       notasConcluidas: concluidas,
