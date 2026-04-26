@@ -226,7 +226,8 @@ async function getNotesByDate(sectorId, isoDate) {
  */
 async function getNotesForSession(sessionId, category) {
   try {
-    const res  = await wpaFetch(`/api/notes/${category}/${sessionId}`);
+    // Portal usa sufixo /session: GET /api/notes/{category}/{sessionId}/session
+    const res  = await wpaFetch(`/api/notes/${category}/${sessionId}/session`);
     if (!res.ok) return [];
     const data = await res.json();
     return data.Data || [];
@@ -265,28 +266,30 @@ async function getTeamsByDate(sectorId, isoDate) {
   const sessionsWithNotes = await Promise.all(
     engelmigSessions.map(async s => {
       const sid = s.Id;
-      const [executedRaw, downloadedRaw, rejectedRaw] = await Promise.all([
+      const [executedRaw, downloadedRaw, rejectedRaw, surveyedRaw] = await Promise.all([
         getNotesForSession(sid, 'executed'),
         getNotesForSession(sid, 'downloaded'),
         getNotesForSession(sid, 'rejected'),
+        getNotesForSession(sid, 'surveyed'),
       ]);
 
-      const concluidas = executedRaw.map(n  => normalizarNotaHist(n, 'concluida'));
-      const baixadas   = downloadedRaw.map(n => normalizarNotaHist(n, 'baixada'));
-      const rejeitadas = rejectedRaw.map(n  => normalizarNotaHist(n, 'rejeitada'));
+      const concluidas  = executedRaw.map(n  => normalizarNotaHist(n, 'concluida'));
+      const baixadas    = downloadedRaw.map(n => normalizarNotaHist(n, 'baixada'));
+      const rejeitadas  = rejectedRaw.map(n  => normalizarNotaHist(n, 'rejeitada'));
+      const vistoriadas = surveyedRaw.map(n  => normalizarNotaHist(n, 'vistoriada'));
 
       const teamName     = (s.Team?.Name || '').trim();
       const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
 
-      console.log(`[WPA]   ${sectorId}/${teamName}: conc=${concluidas.length} baixadas=${baixadas.length} rej=${rejeitadas.length}`);
+      console.log(`[WPA]   ${sectorId}/${teamName}: conc=${concluidas.length} baixadas=${baixadas.length} rej=${rejeitadas.length} vist=${vistoriadas.length}`);
 
-      return { s, teamName, teamSectorId, concluidas, baixadas, rejeitadas };
+      return { s, teamName, teamSectorId, concluidas, baixadas, rejeitadas, vistoriadas };
     })
   );
 
   // Mescla sessões da mesma equipe (relogins no mesmo dia)
   const teamMap = {};
-  sessionsWithNotes.forEach(({ s, teamName, teamSectorId, concluidas, baixadas, rejeitadas }) => {
+  sessionsWithNotes.forEach(({ s, teamName, teamSectorId, concluidas, baixadas, rejeitadas, vistoriadas }) => {
     if (!teamMap[teamName]) {
       teamMap[teamName] = {
         id:           s.Id,
@@ -303,7 +306,7 @@ async function getTeamsByDate(sectorId, isoDate) {
         sessions:     [],
         deviceModel:  s.Device?.Model || null,
         appVersion:   s.AppVersion   || null,
-        _conc:  [], _baix: [], _rej: [],
+        _conc: [], _baix: [], _rej: [], _vist: [],
       };
     } else {
       teamMap[teamName].relogins += 1;
@@ -318,12 +321,13 @@ async function getTeamsByDate(sectorId, isoDate) {
     dedup(teamMap[teamName]._conc, concluidas);
     dedup(teamMap[teamName]._baix, baixadas);
     dedup(teamMap[teamName]._rej,  rejeitadas);
+    dedup(teamMap[teamName]._vist, vistoriadas);
   });
 
   return Object.values(teamMap).map(t => {
-    const { _conc: notasConcluidas, _baix: notasBaixadas, _rej: notasRejeitadas } = t;
-    delete t._conc; delete t._baix; delete t._rej;
-    const allNotas = [...notasConcluidas, ...notasBaixadas, ...notasRejeitadas];
+    const { _conc: notasConcluidas, _baix: notasBaixadas, _rej: notasRejeitadas, _vist: notasVistoriadas } = t;
+    delete t._conc; delete t._baix; delete t._rej; delete t._vist;
+    const allNotas = [...notasConcluidas, ...notasBaixadas, ...notasRejeitadas, ...notasVistoriadas];
     return {
       ...t,
       carteiraCount:   notasBaixadas.length,
@@ -332,6 +336,7 @@ async function getTeamsByDate(sectorId, isoDate) {
       notasExecutadas: [],   // histórico não distingue "em andamento" do dia
       notasConcluidas,
       notasRejeitadas,
+      notasVistoriadas,
     };
   });
 }
