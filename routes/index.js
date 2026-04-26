@@ -6,18 +6,47 @@
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
 const { login, wpaFetch }                     = require('../services/wpaService');
-const { getMetas, setMetas, getMonthTotals, getDailyHistory } = require('../db/queries');
-const { runSnapshot, runConsolidate }          = require('../services/cronService');
 
 const router = express.Router();
+
+const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
+
+// Supabase: carregado para todos os modos que não sejam mock
+let _sbq = null;
+function sbq() {
+  if (_sbq) return _sbq;
+  if (MODE === 'mock') return null;
+  try {
+    _sbq = require('../db/supabaseQueries');
+    return _sbq;
+  } catch (err) {
+    console.warn('[SBQ] Módulo indisponível:', err.message);
+    return null;
+  }
+}
+
+// Fallback em memória para metas (apenas no modo mock)
+let _metasMemory = { GUA: {}, CAC: {} };
+
+// Cron: carregamento lazy
+function cron() {
+  try { return require('../services/cronService'); } catch { return null; }
+}
 
 // ── DADOS DO MONITOR ──────────────────────────────────────────────────────────
 
 // GET /api/teams?regional=GUA&sectorId=DESG
 router.get('/teams', async (req, res) => {
   try {
-    const teams = await getTeams(req.query);
-    res.json({ teams, count: teams.length, mode: process.env.DATA_MODE || 'mock' });
+    let teams;
+    if (MODE === 'supabase') {
+      // Vercel: lê último snapshot do Supabase
+      teams = await sbq().getTeamsFromSupabase(req.query);
+    } else {
+      // wpa / mock: dados ao vivo da API WPA ou mock
+      teams = await getTeams(req.query);
+    }
+    res.json({ teams, count: teams.length, mode: MODE });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -47,57 +76,68 @@ router.get('/summary', async (req, res) => {
 // GET /api/status
 router.get('/status', (req, res) => {
   res.json({
-    status: 'ok',
-    mode:   process.env.DATA_MODE || 'mock',
-    wpaUrl: process.env.WPA_URL   || 'https://edp-wpa-po.azurewebsites.net',
-    ts:     new Date().toISOString(),
+    status:   'ok',
+    mode:     process.env.DATA_MODE || 'mock',
+    supabase: process.env.SUPABASE_SERVICE_KEY ? 'configurado ✓' : 'não configurado',
+    ts:       new Date().toISOString(),
   });
 });
 
-// ── METAS (banco de dados) ────────────────────────────────────────────────────
+// ── METAS ─────────────────────────────────────────────────────────────────────
 
-// GET /api/metas → { GUA: { LN: 50 }, CAC: { RL: 100 } }
+// GET /api/metas
 router.get('/metas', async (req, res) => {
   try {
-    const metas = await getMetas();
+    const sq    = sbq();
+    const metas = sq ? await sq.getMetas() : _metasMemory;
     res.json(metas);
   } catch (err) {
-    console.error('[API] Erro ao buscar metas:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('[API] getMetas:', err.message);
+    res.json(_metasMemory);
   }
 });
 
-// POST /api/metas  body: { GUA: { LN: 50 }, CAC: { RL: 100 } }
+// POST /api/metas
 router.post('/metas', async (req, res) => {
   try {
-    await setMetas(req.body);
-    const metas = await getMetas();
-    res.json({ ok: true, metas });
+    const sq = sbq();
+    if (sq) {
+      await sq.setMetas(req.body);
+      const metas = await sq.getMetas();
+      res.json({ ok: true, metas });
+    } else {
+      _metasMemory = req.body;
+      res.json({ ok: true, metas: _metasMemory });
+    }
   } catch (err) {
-    console.error('[API] Erro ao salvar metas:', err.message);
+    console.error('[API] setMetas:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── HISTÓRICO (banco de dados) ────────────────────────────────────────────────
+// ── HISTÓRICO ─────────────────────────────────────────────────────────────────
 
-// GET /api/historico/mes?m=2026-04 → totais mensais por regional/tipo
+// GET /api/historico/mes?m=2026-04
 router.get('/historico/mes', async (req, res) => {
   try {
+    const sq = sbq();
     const ym = req.query.m || new Date().toISOString().slice(0, 7);
-    const totais = await getMonthTotals(ym);
+    if (!sq) return res.json({ mes: ym, totais: { GUA: {}, CAC: {} } });
+    const totais = await sq.getMonthTotals(ym);
     res.json({ mes: ym, totais });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/historico/diario?m=2026-04 → histórico dia a dia para gráfico
+// GET /api/historico/diario?m=2026-04
 router.get('/historico/diario', async (req, res) => {
   try {
+    const sq = sbq();
     const ym = req.query.m || new Date().toISOString().slice(0, 7);
-    const rows = await getDailyHistory(ym);
-    res.json({ mes: ym, dias: rows });
+    if (!sq) return res.json({ mes: ym, dias: [] });
+    const dias = await sq.getDailyHistory(ym);
+    res.json({ mes: ym, dias });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -105,7 +145,6 @@ router.get('/historico/diario', async (req, res) => {
 
 // ── WPA PROXY / DEBUG ─────────────────────────────────────────────────────────
 
-// POST /api/wpa/login — testa login e retorna info do token
 router.post('/wpa/login', async (req, res) => {
   try {
     const result = await login();
@@ -115,40 +154,109 @@ router.post('/wpa/login', async (req, res) => {
   }
 });
 
-// GET /api/wpa/probe?path=/api/sessions/current?sectorId=DESG
 router.get('/wpa/probe', async (req, res) => {
   const path = req.query.path || '/api/sessions/current?sectorId=DESG';
   try {
-    const wpaRes     = await wpaFetch(path);
+    const wpaRes      = await wpaFetch(path);
     const contentType = wpaRes.headers.get('content-type') || '';
     const text        = await wpaRes.text();
+    let firstNote = null;
+    try {
+      const json = JSON.parse(text);
+      firstNote = json?.Data?.Notes?.[0] || json?.Data?.[0] || null;
+    } catch {}
+    res.json({ status: wpaRes.status, contentType, preview: text.slice(0, 500), firstNote });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DEBUG ─────────────────────────────────────────────────────────────────────
+
+// GET /api/debug/notas?sectorId=DESG
+router.get('/debug/notas', async (req, res) => {
+  const { wpaFetch: wf } = require('../services/wpaService');
+  const ENGELMIG_ID = '92a2f98e-8877-433e-8358-173b94c13a54';
+  const sectorId = req.query.sectorId || 'DESG';
+
+  try {
+    const [rSess, rNotas] = await Promise.all([
+      wf(`/api/sessions/current?sectorId=${sectorId}`).then(r => r.json()),
+      wf(`/api/notes/execution?sectorId=${sectorId}`).then(r => r.json()),
+    ]);
+
+    const sessions = rSess.Data || [];
+    const notas    = rNotas.Data?.Notes || [];
+
+    const engSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_ID);
+
+    const notasPorNome = {};
+    const notasPorId   = {};
+    notas.forEach(n => {
+      const nome = (n.Team?.Name || '').trim();
+      const id   = n.Team?.Id || n.TeamId;
+      if (nome) { notasPorNome[nome] = (notasPorNome[nome] || []); notasPorNome[nome].push(n); }
+      if (id)   { notasPorId[id]     = (notasPorId[id]     || []); notasPorId[id].push(n); }
+    });
+
+    const nomesNasNotas = Object.keys(notasPorNome);
+
+    const porEquipe = engSessions.map(s => {
+      const nome   = (s.Team?.Name || '').trim();
+      const teamId = s.Team?.Id;
+      const nEqNome = notasPorNome[nome] || [];
+      const nEqId   = teamId ? (notasPorId[teamId] || []) : [];
+      const nEq = nEqNome.length > 0 ? nEqNome : nEqId;
+
+      const conc  = nEq.filter(n => n.Status === 4 || n.Status === 9);
+      const tipos = [...new Set(conc.map(n => n.Type))];
+      return {
+        equipe:       nome,
+        teamId:       teamId || null,
+        casamentoPor: nEqNome.length > 0 ? 'nome' : (nEqId.length > 0 ? 'id' : 'nenhum'),
+        total:        nEq.length,
+        concluidas:   conc.length,
+        tipos,
+        statusCounts: nEq.reduce((acc, n) => { acc[n.Status] = (acc[n.Status]||0)+1; return acc; }, {}),
+      };
+    });
+
     res.json({
-      status: wpaRes.status,
-      contentType,
-      preview:  text.slice(0, 500),
-      isJson:   contentType.includes('json'),
-      isHtml:   contentType.includes('html'),
+      sectorId,
+      totalSessoes:       sessions.length,
+      sessoesEngelmig:    engSessions.length,
+      totalNotas:         notas.length,
+      resumo: {
+        equipesComNotas:  porEquipe.filter(e => e.total > 0).length,
+        equipesSemNotas:  porEquipe.filter(e => e.total === 0).length,
+        totalConcluidas:  porEquipe.reduce((s, e) => s + e.concluidas, 0),
+      },
+      nomesNasNotas:          nomesNasNotas.slice(0, 30),
+      amostNomesEngelmig:     engSessions.slice(0, 5).map(s => s.Team?.Name),
+      porEquipe,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/admin/snapshot — força snapshot manual (útil pra testar)
+// ── ADMIN ─────────────────────────────────────────────────────────────────────
+
 router.post('/admin/snapshot', async (req, res) => {
   try {
-    await runSnapshot();
+    const c = cron();
+    if (c) await c.runSnapshot();
     res.json({ ok: true, ts: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/admin/consolidar?date=2026-04-26 — consolida daily_totals
 router.post('/admin/consolidar', async (req, res) => {
   try {
+    const c    = cron();
     const date = req.query.date || new Date().toISOString().slice(0, 10);
-    await runConsolidate(date);
+    if (c) await c.runConsolidate(date);
     res.json({ ok: true, date });
   } catch (err) {
     res.status(500).json({ error: err.message });

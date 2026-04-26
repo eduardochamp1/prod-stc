@@ -115,6 +115,64 @@ async function getPreroute(sectorId) {
   return data.Data || [];
 }
 
+// ── ACUMULADOR DIÁRIO ─────────────────────────────────────────────────────────
+// Guarda IDs de notas concluídas observadas durante o dia.
+// Quando uma nota passa de status 9 → 4 (sincronizada), ela some do endpoint
+// de execução; o acumulador garante que o contador não caia para zero.
+const _acc = {
+  date:  '',           // 'YYYY-MM-DD' do dia atual
+  notes: new Map(),    // noteId → { tipoCode, teamName, regional }
+};
+
+function _accReset() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (_acc.date !== today) {
+    _acc.date = today;
+    _acc.notes.clear();
+    console.log('[WPA] Acumulador diário resetado para', today);
+  }
+}
+
+function _accRecord(teams) {
+  _accReset();
+  teams.forEach(t => {
+    // Acumula executadas (status 2) E concluídas (status 9/4) — ambas contam como realizadas
+    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+    realizadas.forEach(n => {
+      if (n.codigo && !_acc.notes.has(n.codigo)) {
+        _acc.notes.set(n.codigo, { tipoCode: n.tipoCode, teamName: t.teamName, regional: t.regional });
+        console.log(`[WPA] ★ Nota realizada acumulada: equipe=${t.teamName} tipo=${n.tipoCode} nota=${n.codigo} status=${n.status}`);
+      }
+    });
+  });
+}
+
+function _accApply(teams) {
+  _accReset();
+  if (_acc.notes.size === 0) return teams;
+
+  // Monta extras por equipe vindas do acumulador
+  const extras = {};
+  _acc.notes.forEach((info, noteId) => {
+    if (!extras[info.teamName]) extras[info.teamName] = [];
+    extras[info.teamName].push({ codigo: noteId, tipoCode: info.tipoCode, tipoNome: info.tipoCode, status: 'concluida' });
+  });
+
+  return teams.map(t => {
+    const ex = extras[t.teamName];
+    if (!ex || ex.length === 0) return t;
+    // IDs já presentes nas notas atuais (executadas + concluídas)
+    const existentes = new Set([
+      ...(t.notasExecutadas || []).map(n => n.codigo),
+      ...(t.notasConcluidas || []).map(n => n.codigo),
+    ]);
+    const novas = ex.filter(n => !existentes.has(n.codigo));
+    if (novas.length === 0) return t;
+    // Reinsere como concluídas (status final) para não duplicar categorias
+    return { ...t, notasConcluidas: [...(t.notasConcluidas || []), ...novas] };
+  });
+}
+
 // ── NORMALIZAÇÃO ──────────────────────────────────────────────────────────────
 
 const REGIONAL_MAP = {
@@ -187,23 +245,54 @@ async function getTeamsBySector(sectorId) {
     getNotesExecution(sectorId),
   ]);
 
-  // Agrupa notas por nome de equipe
-  const notasPorEquipe = {};
-  notasRaw.forEach(n => {
-    const nome = n.Team?.Name;
-    if (!nome) return;
-    if (!notasPorEquipe[nome]) notasPorEquipe[nome] = [];
-    notasPorEquipe[nome].push(normalizarNota(n));
-  });
-
   // Filtra apenas equipes da ENGELMIG
   const engelmigSessions = sessions.filter(s =>
     s.Team?.CompanyId === ENGELMIG_COMPANY_ID
   );
 
-  console.log(`[WPA] ${sectorId}: ${sessions.length} sessões totais → ${engelmigSessions.length} da ENGELMIG`);
+  console.log(`[WPA] ${sectorId}: ${sessions.length} sessões totais → ${engelmigSessions.length} Engelmig | ${notasRaw.length} notas no setor`);
 
-  return engelmigSessions.map(s => normalizarSessao(s, notasPorEquipe));
+  // Indexa notas por nome de equipe E por ID de equipe (fallback)
+  const notasPorNome = {};
+  const notasPorId   = {};
+  notasRaw.forEach(n => {
+    const nome = (n.Team?.Name || '').trim();
+    const id   = n.Team?.Id   || n.TeamId;
+    const nota = normalizarNota(n);
+    if (nome) {
+      if (!notasPorNome[nome]) notasPorNome[nome] = [];
+      notasPorNome[nome].push(nota);
+    }
+    if (id) {
+      if (!notasPorId[id]) notasPorId[id] = [];
+      notasPorId[id].push(nota);
+    }
+  });
+
+  // Log amostral: quais nomes aparecem nas notas (para detectar mismatch)
+  const nomesNasNotas = Object.keys(notasPorNome);
+  if (nomesNasNotas.length > 0) {
+    console.log(`[WPA] ${sectorId}: nomes nas notas (amostra): ${nomesNasNotas.slice(0, 8).join(', ')}`);
+  }
+
+  const result = engelmigSessions.map(s => {
+    const teamName = (s.Team?.Name || '').trim();
+    const teamId   = s.Team?.Id;
+
+    // 1. Tenta por nome exato; 2. fallback por ID de equipe
+    const notas = notasPorNome[teamName]
+               || (teamId ? notasPorId[teamId] : null)
+               || [];
+
+    const conc = notas.filter(n => n.status === 'concluida').length;
+    console.log(`[WPA]   ${sectorId}/${teamName}: ${notas.length} notas (${conc} concluídas)`);
+
+    return normalizarSessao(s, { [teamName]: notas });
+  });
+
+  // Registra concluídas no acumulador e reaplica (preserva notas status-4 que sumiram da API)
+  _accRecord(result);
+  return _accApply(result);
 }
 
 module.exports = { login, getToken, wpaFetch, getSessions, getNotesExecution, getPreroute, getTeamsBySector, REGIONAL_MAP };
