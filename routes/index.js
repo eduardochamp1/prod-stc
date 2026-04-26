@@ -610,6 +610,75 @@ router.post('/admin/backfill', async (req, res) => {
   }
 });
 
+// POST /api/admin/backfill/range?de=YYYY-MM-DD&ate=YYYY-MM-DD
+// Backfill de múltiplos dias sequencialmente (um dia por vez para não sobrecarregar a API)
+router.post('/admin/backfill/range', async (req, res) => {
+  const { de, ate } = req.query;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!de || !dateRe.test(de) || !ate || !dateRe.test(ate)) {
+    return res.status(400).json({ error: 'Parâmetros de e ate obrigatórios no formato YYYY-MM-DD' });
+  }
+  if (de > ate) {
+    return res.status(400).json({ error: 'de não pode ser maior que ate' });
+  }
+
+  // Gera lista de datas no intervalo
+  const datas = [];
+  const cur = new Date(de + 'T12:00:00Z');
+  const end = new Date(ate + 'T12:00:00Z');
+  while (cur <= end) {
+    datas.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+
+  if (datas.length > 30) {
+    return res.status(400).json({ error: 'Intervalo máximo de 30 dias por chamada' });
+  }
+
+  const { getTeamsByDate }                                          = require('../services/wpaService');
+  const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/supabasePush');
+  const SETORES = ['DESG', 'DEPT', 'DESC'];
+
+  const resultados = [];
+  console.log(`[BACKFILL-RANGE] Iniciando ${datas.length} dias: ${de} → ${ate}`);
+
+  for (const date of datas) {
+    try {
+      const chunks = await Promise.all(
+        SETORES.map(s => getTeamsByDate(s, date).catch(err => {
+          console.warn(`[BACKFILL-RANGE] ${date}/${s} falhou: ${err.message}`);
+          return [];
+        }))
+      );
+      const teams = chunks.flat();
+
+      if (teams.length === 0) {
+        resultados.push({ date, ok: false, msg: 'Nenhuma equipe encontrada' });
+        continue;
+      }
+
+      await saveSnapshot(teams, date);
+      await upsertDailyTotals(teams, date);
+      await upsertTeamDailyTotals(teams, date);
+
+      const c = cron();
+      if (c) await c.runConsolidate(date);
+
+      const concluidas = teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0);
+      console.log(`[BACKFILL-RANGE] ${date}: ${teams.length} equipes, ${concluidas} concluídas`);
+      resultados.push({ date, ok: true, teams: teams.length, concluidas });
+    } catch (err) {
+      console.error(`[BACKFILL-RANGE] ${date} erro:`, err.message);
+      resultados.push({ date, ok: false, error: err.message });
+    }
+  }
+
+  const totalConcluidas = resultados.filter(r => r.ok).reduce((s, r) => s + (r.concluidas || 0), 0);
+  const diasOk          = resultados.filter(r => r.ok).length;
+  console.log(`[BACKFILL-RANGE] Concluído: ${diasOk}/${datas.length} dias, ${totalConcluidas} notas totais`);
+  res.json({ ok: true, de, ate, dias: datas.length, diasOk, totalConcluidas, resultados });
+});
+
 router.post('/admin/consolidar', async (req, res) => {
   try {
     const c    = cron();

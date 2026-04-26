@@ -319,6 +319,7 @@
     <button class="tab-btn"        id="tab-btn-ranking"    onclick="switchTab('ranking')">🏆 Ranking</button>
     <button class="tab-btn"        id="tab-btn-historico"  onclick="switchTab('historico')">📈 Histórico</button>
     <button class="tab-btn"        id="tab-btn-equipes"    onclick="switchTab('equipes')">👷 Equipes</button>
+    <button class="tab-btn"        id="tab-btn-admin"      onclick="switchTab('admin')">⚙️ Admin</button>
   </div>
 
   <!-- ── TAB: MONITOR ─────────────────────────────────────────────────── -->
@@ -537,6 +538,87 @@
 
   </div>
 
+
+  <!-- ── TAB: ADMIN ─────────────────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-admin">
+
+    <div style="max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:20px">
+
+      <!-- Backfill card -->
+      <div class="prod-section">
+        <div class="prod-header">
+          <div>
+            <span class="prod-title">Backfill Histórico</span>
+            <span class="prod-subtitle">Busca dados de dias anteriores no WPA e salva no Supabase</span>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px">
+          <div class="filter-group" style="flex:1;min-width:140px">
+            <span class="filter-label">De</span>
+            <input type="date" class="month-input" id="bf-de" style="width:100%;border:none;outline:none" />
+          </div>
+          <div class="filter-group" style="flex:1;min-width:140px">
+            <span class="filter-label">Até</span>
+            <input type="date" class="month-input" id="bf-ate" style="width:100%;border:none;outline:none" />
+          </div>
+          <button class="btn-refresh" id="bf-btn" onclick="runBackfill()" style="height:40px;padding:0 20px;font-size:13px">
+            ▶ Iniciar Backfill
+          </button>
+        </div>
+
+        <!-- Barra de progresso -->
+        <div id="bf-progress-wrap" style="display:none;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2);margin-bottom:4px">
+            <span id="bf-progress-label">Processando…</span>
+            <span id="bf-progress-pct">0%</span>
+          </div>
+          <div style="height:8px;background:var(--cinza2);border-radius:4px;overflow:hidden">
+            <div id="bf-progress-bar" style="height:100%;background:var(--verde);border-radius:4px;width:0;transition:width .3s ease"></div>
+          </div>
+        </div>
+
+        <!-- Log de resultado -->
+        <div id="bf-log" style="display:none;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px;font-family:monospace;max-height:300px;overflow-y:auto;line-height:1.7"></div>
+      </div>
+
+      <!-- Consolidar card -->
+      <div class="prod-section">
+        <div class="prod-header">
+          <div>
+            <span class="prod-title">Consolidar Dia</span>
+            <span class="prod-subtitle">Recalcula daily_totals a partir dos snapshots de um dia específico</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-end">
+          <div class="filter-group" style="flex:1">
+            <span class="filter-label">Data</span>
+            <input type="date" class="month-input" id="cons-date" style="width:100%;border:none;outline:none" />
+          </div>
+          <button class="btn-refresh" onclick="runConsolidar()" style="height:40px;padding:0 20px;font-size:13px">
+            ↺ Consolidar
+          </button>
+        </div>
+        <div id="cons-result" style="display:none;margin-top:12px;font-size:13px;color:var(--verde);font-weight:500"></div>
+      </div>
+
+      <!-- Snapshot imediato -->
+      <div class="prod-section">
+        <div class="prod-header">
+          <div>
+            <span class="prod-title">Snapshot Manual</span>
+            <span class="prod-subtitle">Força coleta imediata das equipes ativas (como se o cron tivesse rodado agora)</span>
+          </div>
+        </div>
+        <button class="btn-refresh" onclick="runSnapshot()" style="height:40px;padding:0 20px;font-size:13px">
+          📸 Tirar Snapshot Agora
+        </button>
+        <div id="snap-result" style="display:none;margin-top:12px;font-size:13px;color:var(--verde);font-weight:500"></div>
+      </div>
+
+    </div>
+  </div>
+
 </main>
 
 <!-- MODAL DETALHE EQUIPE -->
@@ -646,6 +728,7 @@
     if (tab === 'ranking')   loadRanking();
     if (tab === 'historico') loadHistorico();
     if (tab === 'equipes')   initEquipes();
+    if (tab === 'admin')     initAdmin();
   }
 
   // ── METAS (banco de dados via API) ─────────────────────────────────────
@@ -1535,6 +1618,122 @@
     const ate = document.getElementById('monitor-date-ate')?.value;
     if (isRangeToday(de, ate)) loadData();
   }, 5 * 60 * 1000);
+
+  // ── ADMIN ─────────────────────────────────────────────────────────────
+
+  function initAdmin() {
+    const hoje = new Date().toISOString().slice(0, 10);
+    // Padrão: ontem até hoje
+    const ontem = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const bfDe  = document.getElementById('bf-de');
+    const bfAte = document.getElementById('bf-ate');
+    if (!bfDe.value)  bfDe.value  = ontem;
+    if (!bfAte.value) bfAte.value = hoje;
+    bfDe.max  = hoje;
+    bfAte.max = hoje;
+
+    // Garante que Até >= De
+    bfDe.onchange = () => { if (bfAte.value < bfDe.value) bfAte.value = bfDe.value; };
+
+    const consDt = document.getElementById('cons-date');
+    if (!consDt.value) consDt.value = ontem;
+    consDt.max = hoje;
+  }
+
+  async function runBackfill() {
+    const de  = document.getElementById('bf-de').value;
+    const ate = document.getElementById('bf-ate').value;
+    if (!de || !ate) return alert('Selecione o intervalo de datas.');
+
+    const btn     = document.getElementById('bf-btn');
+    const progW   = document.getElementById('bf-progress-wrap');
+    const progBar = document.getElementById('bf-progress-bar');
+    const progLbl = document.getElementById('bf-progress-label');
+    const progPct = document.getElementById('bf-progress-pct');
+    const log     = document.getElementById('bf-log');
+
+    btn.disabled   = true;
+    btn.textContent = '⏳ Processando…';
+    progW.style.display = 'block';
+    log.style.display   = 'block';
+    log.innerHTML       = '';
+    progBar.style.width = '0%';
+
+    const logLine = (msg, ok) => {
+      const color = ok === false ? 'var(--vermelho)' : ok === true ? 'var(--verde)' : 'var(--text2)';
+      log.innerHTML += `<div style="color:${color}">${msg}</div>`;
+      log.scrollTop  = log.scrollHeight;
+    };
+
+    logLine(`▶ Iniciando backfill: ${de} → ${ate}…`);
+
+    try {
+      const res  = await fetch(`${API}/admin/backfill/range?de=${de}&ate=${ate}`, { method: 'POST' });
+      const data = await res.json();
+
+      if (!res.ok) {
+        logLine(`✗ Erro: ${data.error}`, false);
+      } else {
+        (data.resultados || []).forEach((r, i) => {
+          const pct = Math.round(((i + 1) / data.dias) * 100);
+          progBar.style.width = pct + '%';
+          progPct.textContent = pct + '%';
+          progLbl.textContent = `Processando ${r.date}…`;
+
+          if (r.ok) {
+            logLine(`✔ ${r.date} — ${r.teams} equipes | ${r.concluidas} concluídas`, true);
+          } else {
+            logLine(`✗ ${r.date} — ${r.msg || r.error}`, false);
+          }
+        });
+
+        progBar.style.width = '100%';
+        progPct.textContent = '100%';
+        progLbl.textContent = 'Concluído';
+        logLine(`─────────────────────────────────────`);
+        logLine(`✔ ${data.diasOk}/${data.dias} dias processados | ${data.totalConcluidas} notas concluídas no total`, true);
+      }
+    } catch (err) {
+      logLine(`✗ Falha de rede: ${err.message}`, false);
+    }
+
+    btn.disabled    = false;
+    btn.textContent = '▶ Iniciar Backfill';
+  }
+
+  async function runConsolidar() {
+    const date   = document.getElementById('cons-date').value;
+    const result = document.getElementById('cons-result');
+    if (!date) return;
+    result.style.display = 'none';
+    try {
+      const res  = await fetch(`${API}/admin/consolidar?date=${date}`, { method: 'POST' });
+      const data = await res.json();
+      result.style.display = 'block';
+      result.style.color   = data.ok ? 'var(--verde)' : 'var(--vermelho)';
+      result.textContent   = data.ok ? `✔ Consolidação concluída para ${data.date}` : `✗ ${data.error}`;
+    } catch (err) {
+      result.style.display = 'block';
+      result.style.color   = 'var(--vermelho)';
+      result.textContent   = `✗ Falha: ${err.message}`;
+    }
+  }
+
+  async function runSnapshot() {
+    const result = document.getElementById('snap-result');
+    result.style.display = 'none';
+    try {
+      const res  = await fetch(`${API}/admin/snapshot`, { method: 'POST' });
+      const data = await res.json();
+      result.style.display = 'block';
+      result.style.color   = data.ok ? 'var(--verde)' : 'var(--vermelho)';
+      result.textContent   = data.ok ? `✔ Snapshot salvo em ${new Date(data.ts).toLocaleTimeString('pt-BR')}` : `✗ ${data.error}`;
+    } catch (err) {
+      result.style.display = 'block';
+      result.style.color   = 'var(--vermelho)';
+      result.textContent   = `✗ Falha: ${err.message}`;
+    }
+  }
 </script>
 </body>
 </html>
