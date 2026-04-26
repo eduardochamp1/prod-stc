@@ -348,6 +348,18 @@
             <option value="CAC">Cachoeiro</option>
           </select>
         </div>
+        <div class="tipos-filter-wrap" id="tipos-filter-wrap">
+          <button class="tipos-filter-btn" id="tipos-filter-btn" onclick="toggleTiposPanel(event)">
+            🔧 Tipos <span class="tipos-filter-badge" id="tipos-badge"></span>
+          </button>
+          <div class="tipos-filter-panel" id="tipos-filter-panel">
+            <div class="tipos-filter-actions">
+              <button class="tipos-filter-action" onclick="toggleAllTipos(true)">Todos</button>
+              <button class="tipos-filter-action" onclick="toggleAllTipos(false)">Nenhum</button>
+            </div>
+            <div id="tipos-checkboxes"></div>
+          </div>
+        </div>
         <button class="btn-refresh" id="btn-hoje" onclick="irParaHoje()" style="display:none">↩ Hoje</button>
         <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
       </div>
@@ -400,21 +412,7 @@
         <span class="section-title">Equipes</span>
         <span class="section-count" id="section-count"></span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <div class="tipos-filter-wrap" id="tipos-filter-wrap">
-          <button class="tipos-filter-btn" id="tipos-filter-btn" onclick="toggleTiposPanel(event)">
-            🔧 Tipos <span class="tipos-filter-badge" id="tipos-badge"></span>
-          </button>
-          <div class="tipos-filter-panel" id="tipos-filter-panel">
-            <div class="tipos-filter-actions">
-              <button class="tipos-filter-action" onclick="toggleAllTipos(true)">Todos</button>
-              <button class="tipos-filter-action" onclick="toggleAllTipos(false)">Nenhum</button>
-            </div>
-            <div id="tipos-checkboxes"></div>
-          </div>
-        </div>
-        <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
-      </div>
+      <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
     </div>
 
     <div class="teams-grid" id="teams-grid">
