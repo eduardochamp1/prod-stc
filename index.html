@@ -1134,21 +1134,26 @@
 
   // ── RENDER MÉTRICAS ───────────────────────────────────────────────────
   function renderMetrics(teams) {
-    const baixadas   = teams.reduce((s,t) => s + (t.carteiraCount   || 0), 0);
+    const emCarteira = teams.reduce((s,t) => s + (t.carteiraCount   || 0), 0);
     const executadas = teams.reduce((s,t) => s + (t.notasExecutadas || []).length, 0);
     const concluidas = teams.reduce((s,t) => s + (t.notasConcluidas || []).length, 0);
+    const emAberto   = teams.reduce((s,t) => s + (t.notasBaixadas   || []).length, 0);
     const rejeitadas = teams.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
     const relogins   = teams.reduce((s,t) => s + (t.relogins || 0), 0);
     const ativas     = teams.filter(t => !t.sessionEnd).length;
-    const pct        = baixadas > 0 ? Math.round((concluidas / baixadas) * 100) : 0;
+
+    // OS Executadas = tudo que foi feito no campo (status 2 + status 9/4)
+    const realizadas = executadas + concluidas;
+    const pct        = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;
+
     document.getElementById('m-total').textContent          = teams.length;
     document.getElementById('m-ativas').textContent         = `${ativas} em campo`;
-    document.getElementById('m-baixadas').textContent       = baixadas;
-    document.getElementById('m-executadas').textContent     = executadas;
-    document.getElementById('m-concluidas').textContent     = concluidas;
-    document.getElementById('m-rejeitadas').textContent     = rejeitadas;
-    document.getElementById('m-relogins').textContent       = relogins;
+    document.getElementById('m-concluidas').textContent     = realizadas;   // OS Executadas
     document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
+    document.getElementById('m-executadas').textContent     = emAberto;     // Em Andamento = aguardando execução
+    document.getElementById('m-rejeitadas').textContent     = rejeitadas;
+    document.getElementById('m-baixadas').textContent       = emCarteira;
+    document.getElementById('m-relogins').textContent       = relogins;
   }
 
   // ── RENDER CARDS ──────────────────────────────────────────────────────
