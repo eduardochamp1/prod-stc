@@ -237,6 +237,23 @@ async function getNotesForSession(sessionId, category) {
 }
 
 /**
+ * Retorna detalhes completos de uma sessão individual.
+ * GET /api/Sessions/{sessionId}
+ * Único endpoint que retorna Collaborators[] com nome e matrícula.
+ * sessions/all/date retorna Collaborators vazio.
+ */
+async function getSessionDetail(sessionId) {
+  try {
+    const res  = await wpaFetch(`/api/Sessions/${sessionId}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.Data || data;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Combina sessões + notas de um dia histórico para um setor.
  *
  * Nova abordagem (v3): por sessionId
@@ -262,15 +279,16 @@ async function getTeamsByDate(sectorId, isoDate) {
   const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
   console.log(`[WPA] backfill ${sectorId}/${isoDate}: ${sessions.length} sessões totais, ${engelmigSessions.length} Engelmig`);
 
-  // Busca notas por sessionId para cada sessão Engelmig em paralelo
+  // Busca notas + detalhe da sessão (colaboradores) em paralelo por sessão
   const sessionsWithNotes = await Promise.all(
     engelmigSessions.map(async s => {
       const sid = s.Id;
-      const [executedRaw, downloadedRaw, rejectedRaw, surveyedRaw] = await Promise.all([
+      const [executedRaw, downloadedRaw, rejectedRaw, surveyedRaw, detail] = await Promise.all([
         getNotesForSession(sid, 'executed'),
         getNotesForSession(sid, 'downloaded'),
         getNotesForSession(sid, 'rejected'),
         getNotesForSession(sid, 'surveyed'),
+        getSessionDetail(sid),            // colaboradores reais (sessions/all/date retorna vazio)
       ]);
 
       const concluidas  = executedRaw.map(n  => normalizarNotaHist(n, 'concluida'));
@@ -278,18 +296,21 @@ async function getTeamsByDate(sectorId, isoDate) {
       const rejeitadas  = rejectedRaw.map(n  => normalizarNotaHist(n, 'rejeitada'));
       const vistoriadas = surveyedRaw.map(n  => normalizarNotaHist(n, 'vistoriada'));
 
+      // Colaboradores vêm do detalhe individual; fallback para o que vier na lista
+      const collaborators = (detail?.Collaborators || s.Collaborators || []).map(normalizarColaborador);
+
       const teamName     = (s.Team?.Name || '').trim();
       const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
 
-      console.log(`[WPA]   ${sectorId}/${teamName}: conc=${concluidas.length} baixadas=${baixadas.length} rej=${rejeitadas.length} vist=${vistoriadas.length}`);
+      console.log(`[WPA]   ${sectorId}/${teamName}: conc=${concluidas.length} baixadas=${baixadas.length} rej=${rejeitadas.length} vist=${vistoriadas.length} colab=${collaborators.length}`);
 
-      return { s, teamName, teamSectorId, concluidas, baixadas, rejeitadas, vistoriadas };
+      return { s, teamName, teamSectorId, concluidas, baixadas, rejeitadas, vistoriadas, collaborators };
     })
   );
 
   // Mescla sessões da mesma equipe (relogins no mesmo dia)
   const teamMap = {};
-  sessionsWithNotes.forEach(({ s, teamName, teamSectorId, concluidas, baixadas, rejeitadas, vistoriadas }) => {
+  sessionsWithNotes.forEach(({ s, teamName, teamSectorId, concluidas, baixadas, rejeitadas, vistoriadas, collaborators }) => {
     if (!teamMap[teamName]) {
       teamMap[teamName] = {
         id:           s.Id,
@@ -301,9 +322,9 @@ async function getTeamsByDate(sectorId, isoDate) {
         sessionBegin: s.BeginTime,
         sessionEnd:   s.EndTime || null,
         vehiclePlate: s.Vehicle?.Code || '—',
-        collaborators:(s.Collaborators || []).map(normalizarColaborador),
+        collaborators,
         relogins:     0,
-        sessions:     [],
+        sessions:     [{ begin: s.BeginTime, end: s.EndTime || null }],
         deviceModel:  s.Device?.Model || null,
         appVersion:   s.AppVersion   || null,
         _conc: [], _baix: [], _rej: [], _vist: [],
@@ -311,6 +332,13 @@ async function getTeamsByDate(sectorId, isoDate) {
     } else {
       teamMap[teamName].relogins += 1;
       if (s.EndTime) teamMap[teamName].sessionEnd = s.EndTime;
+      teamMap[teamName].sessions.push({ begin: s.BeginTime, end: s.EndTime || null });
+      // Acumula colaboradores sem duplicar por matrícula
+      collaborators.forEach(c => {
+        if (!teamMap[teamName].collaborators.some(x => x.matricula === c.matricula)) {
+          teamMap[teamName].collaborators.push(c);
+        }
+      });
     }
 
     // Acumula notas dedupicando por código
@@ -584,6 +612,7 @@ module.exports = {
   wpaFetch,
   // Endpoints individuais (usados em rotas de debug)
   getSessions,
+  getSessionDetail,
   getNotesExecution,
   getPreroute,
   getTeamStatusV2,

@@ -337,10 +337,92 @@ async function getTeamProducao(filters = {}) {
   return { equipes: lista, tipos };
 }
 
+/**
+ * Histórico de sessões por equipe no mês — com colaboradores, horários e notas por tipo.
+ * Fonte: tabela snapshots (snapshot mais recente por date+team_name).
+ * yearMonth: 'YYYY-MM'
+ * teamName: nome exato da equipe ou null para todas
+ * regional: 'GUA'|'CAC' ou null para todas
+ */
+async function getTeamSessionHistory(yearMonth, teamName, regional) {
+  const sb = getClient();
+  const [year, month] = yearMonth.split('-').map(Number);
+  const start = `${yearMonth}-01`;
+  const ny = month === 12 ? year + 1 : year;
+  const nm = month === 12 ? 1 : month + 1;
+  const end = `${ny}-${String(nm).padStart(2, '0')}-01`;
+
+  // Pagina até buscar todas as linhas do mês
+  const pageSize = 1000;
+  let allRows = [];
+  let page = 0;
+  while (true) {
+    let q = sb
+      .from('snapshots')
+      .select('team_name, regional, sector_id, date, captured_at, data')
+      .gte('date', start)
+      .lt('date', end)
+      .order('captured_at', { ascending: false })
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+
+    if (teamName && teamName !== 'ALL') q = q.eq('team_name', teamName);
+    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+
+    const { data: rows, error } = await q;
+    if (error) throw error;
+    if (!rows || rows.length === 0) break;
+    allRows = allRows.concat(rows);
+    if (rows.length < pageSize) break;
+    page++;
+  }
+
+  // Mantém apenas o snapshot mais recente por (date, team_name)
+  const latest = {};
+  allRows.forEach(r => {
+    const key = `${r.date}|${r.team_name}`;
+    if (!latest[key]) latest[key] = r;
+  });
+
+  // Agrupa por data → lista de equipes
+  const byDate = {};
+  Object.values(latest).forEach(r => {
+    const d = r.data || {};
+    const notas = [...(d.notasConcluidas || []), ...(d.notasExecutadas || [])];
+    const por_tipo = {};
+    notas.forEach(n => {
+      const code = n.tipoCode || n.tipo_code;
+      if (code) por_tipo[code] = (por_tipo[code] || 0) + 1;
+    });
+
+    if (!byDate[r.date]) byDate[r.date] = { date: r.date, equipes: [] };
+    byDate[r.date].equipes.push({
+      team_name:    r.team_name,
+      regional:     r.regional,
+      sector_id:    r.sector_id,
+      total:        notas.length,
+      por_tipo,
+      collaborators: d.collaborators || [],
+      sessionBegin:  d.sessionBegin  || null,
+      sessionEnd:    d.sessionEnd    || null,
+      vehiclePlate:  d.vehiclePlate  || null,
+      relogins:      d.relogins      || 0,
+      sessions:      d.sessions      || [],
+    });
+  });
+
+  return Object.values(byDate)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(d => ({
+      ...d,
+      equipes: d.equipes.sort((a, b) => a.team_name.localeCompare(b.team_name)),
+    }));
+}
+
 module.exports = {
   getMetas, setMetas, getMetasCalculadas,
   getTeamsFromSupabase, getTeamsByDateFromSnapshots,
   getMonthTotals, getDailyHistory,
   getTeamRanking, getTeamDailyHistory,
   getTeamProducao,
+  getTeamSessionHistory,
 };

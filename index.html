@@ -222,11 +222,30 @@
     .hist-table th { background: var(--verde); color: #fff; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 10px 14px; text-align: left; white-space: nowrap; }
     .hist-table td { padding: 9px 14px; border-bottom: 1px solid var(--cinza2); vertical-align: middle; }
     .hist-table tr:last-child td { border-bottom: none; }
-    .hist-table tr:hover td { background: var(--cinza1); }
+    .hist-row-data { cursor: pointer; transition: background 0.12s; }
+    .hist-row-data:hover td { background: var(--cinza1); }
+    .hist-row-data.expanded td { background: #f0f7f3; }
+    .hist-row-detail td { padding: 0; border-bottom: 2px solid var(--verde); }
+    .hist-detail-inner { padding: 14px 20px 16px; background: #f8fdf9; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .hist-detail-section { display: flex; flex-direction: column; gap: 6px; }
+    .hist-detail-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--verde); margin-bottom: 2px; }
+    .hist-detail-val { font-size: 13px; color: var(--text); font-weight: 500; }
+    .hist-detail-sub { font-size: 11px; color: var(--text2); }
+    .hist-session-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .hist-session-num { width: 18px; height: 18px; border-radius: 50%; background: var(--verde); color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .hist-colab-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--cinza2); }
+    .hist-colab-item:last-child { border-bottom: none; }
+    .hist-matricula { font-size: 11px; font-weight: 700; background: var(--preto); color: #fff; border-radius: 4px; padding: 2px 7px; font-family: monospace; flex-shrink: 0; }
+    .hist-colab-nome { font-size: 12px; color: var(--text); }
+    .hist-expand-icon { font-size: 10px; color: var(--cinza3); margin-left: auto; transition: transform 0.2s; }
+    .hist-row-data.expanded .hist-expand-icon { transform: rotate(180deg); color: var(--verde); }
     .hist-date { font-weight: 600; color: var(--text); white-space: nowrap; }
     .hist-team { font-weight: 500; }
     .hist-total { font-weight: 700; color: var(--verde); font-size: 15px; }
     .hist-zero { color: var(--cinza3); }
+    .hist-collab-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--cinza1); border: 1px solid var(--cinza2); border-radius: 20px; font-size: 10px; padding: 2px 8px; }
+    .hist-filter-colab { border: 1px solid var(--cinza2); border-radius: 6px; padding: 6px 12px; font-size: 13px; font-family: 'Roboto',sans-serif; outline: none; min-width: 180px; }
+    .hist-filter-colab:focus { border-color: var(--verde); }
 
     /* ── MODAL ── */
     .modal-overlay { position: fixed; inset: 0; background: rgba(35,31,32,0.55); z-index: 200; display: none; align-items: center; justify-content: center; padding: 20px; }
@@ -485,10 +504,24 @@
           <input type="month" class="month-input" id="hist-mes-input" onchange="loadHistorico()" />
         </div>
         <div class="filter-group">
-          <span class="filter-label">Equipe</span>
-          <select class="filter-select" id="hist-team-select" onchange="loadHistorico()" style="min-width:140px">
+          <span class="filter-label">Regional</span>
+          <select class="filter-select" id="hist-regional-select" onchange="loadHistorico()" style="min-width:120px">
             <option value="ALL">Todas</option>
+            <option value="GUA">Guarapari</option>
+            <option value="CAC">Cachoeiro</option>
           </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Equipe</span>
+          <select class="filter-select" id="hist-team-select" onchange="applyHistoricoFilters()" style="min-width:140px">
+            <option value="ALL">Todas as equipes</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Colaborador</span>
+          <input type="text" class="hist-filter-colab" id="hist-colab-input"
+                 placeholder="Nome ou matrícula…"
+                 oninput="applyHistoricoFilters()" />
         </div>
         <button class="btn-refresh" onclick="loadHistorico()">↻ Atualizar</button>
       </div>
@@ -1028,64 +1061,145 @@
   }
 
   // ── HISTÓRICO ─────────────────────────────────────────────────────────
+  let _histDias = [];   // cache dos dados carregados
+
   async function loadHistorico() {
-    const input  = document.getElementById('hist-mes-input');
-    const ym     = input?.value || mesAtualInput();
+    const input    = document.getElementById('hist-mes-input');
+    const ym       = input?.value || mesAtualInput();
     if (input && !input.value) input.value = ym;
-    const team   = document.getElementById('hist-team-select')?.value || 'ALL';
+    const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
     document.getElementById('hist-mes-label').textContent = fmtMes(ym);
     document.getElementById('hist-content').innerHTML =
-      '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
+      '<div class="empty-state"><div class="spinner"></div><br>Carregando histórico...</div>';
 
     try {
-      const url  = `${API}/historico/equipes?m=${ym}${team !== 'ALL' ? '&team=' + encodeURIComponent(team) : ''}`;
-      const data = await fetch(url).then(r => r.json());
-      popularTeamSelect(data.dias || [], team);
-      renderHistorico(data.dias || [], team);
+      const params = new URLSearchParams({ m: ym });
+      if (regional !== 'ALL') params.set('regional', regional);
+      const data = await fetch(`${API}/historico/sessoes?${params}`).then(r => r.json());
+      _histDias = data.dias || [];
+      popularHistTeamSelect(_histDias);
+      applyHistoricoFilters();
     } catch (err) {
       document.getElementById('hist-content').innerHTML =
         `<div class="empty-state">Erro: ${err.message}</div>`;
     }
   }
 
-  function popularTeamSelect(dias, currentTeam) {
+  function popularHistTeamSelect(dias) {
     const teams = [...new Set(dias.flatMap(d => (d.equipes || []).map(e => e.team_name)))].sort();
     const sel   = document.getElementById('hist-team-select');
     if (!sel) return;
     const prev  = sel.value;
     sel.innerHTML = '<option value="ALL">Todas as equipes</option>'
       + teams.map(t => `<option value="${t}" ${t === prev ? 'selected' : ''}>${t}</option>`).join('');
-    if (currentTeam && currentTeam !== 'ALL') sel.value = currentTeam;
+    if (prev && prev !== 'ALL') sel.value = prev;
   }
 
-  function renderHistorico(dias, teamFilter) {
-    if (dias.length === 0) {
-      document.getElementById('hist-content').innerHTML =
-        '<div class="empty-state">Nenhum dado encontrado para o período selecionado.</div>';
-      return;
-    }
+  function applyHistoricoFilters() {
+    const teamFilter  = document.getElementById('hist-team-select')?.value  || 'ALL';
+    const colabFilter = (document.getElementById('hist-colab-input')?.value || '').trim().toLowerCase();
 
-    const allTipos = [...new Set(
-      dias.flatMap(d => (d.equipes || []).flatMap(e => Object.keys(e.por_tipo || {})))
-    )].sort();
-
+    // Filtra e achata linhas
     const rows = [];
-    dias.forEach(d => {
-      const equipes = teamFilter && teamFilter !== 'ALL'
-        ? (d.equipes || []).filter(e => e.team_name === teamFilter)
-        : (d.equipes || []);
-      equipes.forEach(e => {
-        rows.push({ date: d.date, team: e.team_name, regional: e.regional, total: e.total, por_tipo: e.por_tipo || {} });
+    _histDias.forEach(d => {
+      (d.equipes || []).forEach(e => {
+        if (teamFilter !== 'ALL' && e.team_name !== teamFilter) return;
+        if (colabFilter) {
+          const match = (e.collaborators || []).some(c =>
+            (c.nome      || '').toLowerCase().includes(colabFilter) ||
+            (c.matricula || '').toLowerCase().includes(colabFilter)
+          );
+          if (!match) return;
+        }
+        rows.push({ date: d.date, ...e });
       });
     });
 
+    renderHistorico(rows);
+  }
+
+  function fmtHora(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderHistorico(rows) {
+    const cont = document.getElementById('hist-content');
+
     if (rows.length === 0) {
-      document.getElementById('hist-content').innerHTML =
-        '<div class="empty-state">Nenhuma produção registrada para os filtros selecionados.</div>';
+      cont.innerHTML = '<div class="empty-state">Nenhum dado encontrado para os filtros selecionados.</div>';
       return;
     }
 
-    document.getElementById('hist-content').innerHTML = `
+    const allTipos = [...new Set(rows.flatMap(r => Object.keys(r.por_tipo || {})))].sort();
+
+    const tbody = rows.map((r, idx) => {
+      const detailId = `hist-detail-${idx}`;
+      const rowId    = `hist-row-${idx}`;
+      const hasColab = (r.collaborators || []).length > 0;
+      const colabPreview = (r.collaborators || []).slice(0, 2)
+        .map(c => `<span class="hist-collab-badge"><b>${c.matricula}</b></span>`)
+        .join('') + ((r.collaborators || []).length > 2 ? `<span class="hist-collab-badge">+${r.collaborators.length - 2}</span>` : '');
+
+      // Linha principal
+      const dataRow = `
+        <tr class="hist-row-data" id="${rowId}" onclick="toggleHistDetail('${rowId}','${detailId}')">
+          <td><span class="hist-date">${fmtData(r.date)}</span></td>
+          <td><div style="display:flex;align-items:center;gap:6px"><span class="hist-team">${r.team_name}</span>${hasColab ? `<div style="display:flex;gap:3px">${colabPreview}</div>` : ''}</div></td>
+          <td><span class="rank-reg reg-${r.regional}">${r.regional}</span></td>
+          ${allTipos.map(t => `<td style="text-align:center">${r.por_tipo[t] ? `<strong>${r.por_tipo[t]}</strong>` : '<span class="hist-zero">—</span>'}</td>`).join('')}
+          <td><span class="hist-total">${r.total > 0 ? r.total : '<span class="hist-zero">0</span>'}</span></td>
+          <td style="width:24px"><span class="hist-expand-icon">▼</span></td>
+        </tr>`;
+
+      // Linha de detalhe (oculta por padrão)
+      const sessions = r.sessions?.length > 0 ? r.sessions : [{ begin: r.sessionBegin, end: r.sessionEnd }];
+      const sessHtml = sessions.map((s, i) => `
+        <div class="hist-session-item">
+          <span class="hist-session-num">${i + 1}</span>
+          <span><strong>${fmtHora(s.begin)}</strong> → <strong>${fmtHora(s.end)}</strong></span>
+          ${i > 0 ? '<span style="font-size:10px;color:var(--text2);background:var(--cinza2);border-radius:3px;padding:1px 5px">RELOGIN</span>' : ''}
+        </div>`).join('');
+
+      const colabHtml = hasColab
+        ? (r.collaborators || []).map(c => `
+            <div class="hist-colab-item">
+              <span class="hist-matricula">${c.matricula}</span>
+              <span class="hist-colab-nome">${c.nome}</span>
+            </div>`).join('')
+        : '<span style="font-size:12px;color:var(--cinza3)">Sem registro de colaboradores</span>';
+
+      const tiposHtml = Object.entries(r.por_tipo || {})
+        .sort((a, b) => b[1] - a[1])
+        .map(([tipo, qtd]) => `<span style="font-size:12px;background:var(--verde);color:#fff;border-radius:4px;padding:2px 9px;font-weight:600">${tipo} <span style="font-weight:400;opacity:.8">×${qtd}</span></span>`)
+        .join('');
+
+      const detailRow = `
+        <tr class="hist-row-detail" id="${detailId}" style="display:none">
+          <td colspan="${3 + allTipos.length + 2}">
+            <div class="hist-detail-inner">
+              <div class="hist-detail-section">
+                <div class="hist-detail-label">🕐 Sessão${sessions.length > 1 ? 'ões' : ''}</div>
+                ${sessHtml}
+                <div class="hist-detail-sub" style="margin-top:4px">🚗 ${r.vehiclePlate || '—'}</div>
+              </div>
+              <div class="hist-detail-section">
+                <div class="hist-detail-label">👷 Colaboradores</div>
+                ${colabHtml}
+              </div>
+              <div class="hist-detail-section">
+                <div class="hist-detail-label">📋 Notas (${r.total})</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">${tiposHtml || '<span style="font-size:12px;color:var(--cinza3)">Nenhuma</span>'}</div>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+
+      return dataRow + detailRow;
+    }).join('');
+
+    cont.innerHTML = `
       <div class="hist-table-wrap">
         <table class="hist-table">
           <thead>
@@ -1093,22 +1207,24 @@
               <th>Data</th>
               <th>Equipe</th>
               <th>Regional</th>
-              ${allTipos.map(t => `<th>${t}</th>`).join('')}
+              ${allTipos.map(t => `<th title="${TIPOS_SERVICO[t]||t}">${t}</th>`).join('')}
               <th>Total</th>
+              <th></th>
             </tr>
           </thead>
-          <tbody>
-            ${rows.map(r => `
-              <tr>
-                <td><span class="hist-date">${fmtData(r.date)}</span></td>
-                <td><span class="hist-team">${r.team}</span></td>
-                <td><span class="rank-reg reg-${r.regional}">${r.regional}</span></td>
-                ${allTipos.map(t => `<td style="text-align:center">${r.por_tipo[t] ? `<strong>${r.por_tipo[t]}</strong>` : '<span class="hist-zero">—</span>'}</td>`).join('')}
-                <td><span class="hist-total">${r.total || '<span class="hist-zero">0</span>'}</span></td>
-              </tr>`).join('')}
-          </tbody>
+          <tbody>${tbody}</tbody>
         </table>
-      </div>`;
+      </div>
+      <div class="last-update" style="margin-top:8px">${rows.length} registros encontrados</div>`;
+  }
+
+  function toggleHistDetail(rowId, detailId) {
+    const row    = document.getElementById(rowId);
+    const detail = document.getElementById(detailId);
+    if (!row || !detail) return;
+    const open = detail.style.display !== 'none';
+    detail.style.display = open ? 'none' : 'table-row';
+    row.classList.toggle('expanded', !open);
   }
 
   // ── EQUIPES ───────────────────────────────────────────────────────────
