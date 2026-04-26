@@ -116,6 +116,37 @@ async function getTeamsFromSupabase(filters = {}) {
   return (data || []).map(row => row.data);
 }
 
+/**
+ * Retorna equipes de um dia histórico via tabela snapshots.
+ * Pega o snapshot mais recente de cada equipe naquele dia.
+ * date: 'YYYY-MM-DD'
+ */
+async function getTeamsByDateFromSnapshots(date, regional) {
+  const sb = getClient();
+  let query = sb
+    .from('snapshots')
+    .select('team_name, regional, captured_at, data')
+    .eq('date', date)
+    .order('captured_at', { ascending: false });
+
+  if (regional && regional !== 'ALL') {
+    query = query.eq('regional', regional);
+  }
+
+  const { data: rows, error } = await query;
+  if (error) throw error;
+
+  // Mantém apenas o snapshot mais recente por equipe
+  const latest = {};
+  (rows || []).forEach(r => {
+    if (!latest[r.team_name]) latest[r.team_name] = r;
+  });
+
+  return Object.values(latest)
+    .sort((a, b) => a.team_name.localeCompare(b.team_name))
+    .map(r => ({ ...r.data, _snapshotAt: r.captured_at }));
+}
+
 // ── HISTÓRICO REGIONAL ─────────────────────────────────────────────────────────
 
 async function getMonthTotals(yearMonth) {
@@ -260,7 +291,7 @@ async function getTeamProducao(filters = {}) {
 
 module.exports = {
   getMetas, setMetas, getMetasCalculadas,
-  getTeamsFromSupabase,
+  getTeamsFromSupabase, getTeamsByDateFromSnapshots,
   getMonthTotals, getDailyHistory,
   getTeamRanking, getTeamDailyHistory,
   getTeamProducao,

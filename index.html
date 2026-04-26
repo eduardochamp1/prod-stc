@@ -307,8 +307,17 @@
   <div class="tab-panel active" id="tab-monitor">
 
     <div class="filter-bar">
-      <div class="date-label">Monitoramento do dia <strong id="date-display"></strong></div>
+      <div class="date-label">
+        Monitoramento — <strong id="date-display"></strong>
+        <span id="hist-badge" style="display:none;margin-left:8px;background:var(--amarelo);color:var(--preto);font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;letter-spacing:.05em">📅 HISTÓRICO</span>
+      </div>
       <div class="filter-controls">
+        <div class="filter-group">
+          <span class="filter-label">Data</span>
+          <input type="date" class="filter-select" id="monitor-date-input"
+                 style="min-width:140px"
+                 onchange="onMonitorDateChange()" />
+        </div>
         <div class="filter-group">
           <span class="filter-label">Regional</span>
           <select class="filter-select" id="regional-select" onchange="selectRegional(this.value)">
@@ -317,6 +326,7 @@
             <option value="CAC">Cachoeiro</option>
           </select>
         </div>
+        <button class="btn-refresh" id="btn-hoje" onclick="irParaHoje()" style="display:none">↩ Hoje</button>
         <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
       </div>
     </div>
@@ -1150,26 +1160,76 @@
   function closeMetasDirect() { document.getElementById('metas-overlay').classList.remove('open'); }
 
   // ── CARREGA DADOS ─────────────────────────────────────────────────────
+  function todayISO() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function isToday(dateStr) {
+    return !dateStr || dateStr === todayISO();
+  }
+
+  function onMonitorDateChange() {
+    const val = document.getElementById('monitor-date-input').value;
+    if (isToday(val)) {
+      irParaHoje();
+    } else {
+      loadData();
+    }
+  }
+
+  function irParaHoje() {
+    document.getElementById('monitor-date-input').value = todayISO();
+    loadData();
+  }
+
   async function loadData() {
     document.getElementById('sync-label').textContent = 'Atualizando...';
-    document.getElementById('date-display').textContent = today();
     document.getElementById('prod-periodo').textContent = mesAtual();
+
+    const dateInput = document.getElementById('monitor-date-input');
+    const dateVal   = dateInput?.value || todayISO();
+    const hist      = !isToday(dateVal);
+
+    // Badge e botão Hoje
+    document.getElementById('hist-badge').style.display  = hist ? '' : 'none';
+    document.getElementById('btn-hoje').style.display    = hist ? '' : 'none';
+
+    // Label da data
+    const dtFmt = new Date(dateVal + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+    document.getElementById('date-display').textContent = dtFmt;
+
     try {
+      const url = hist
+        ? `${API}/teams/historico?date=${dateVal}&regional=${currentRegional === 'ALL' ? '' : currentRegional}`
+        : `${API}/teams`;
+
       const [res] = await Promise.all([
-        fetch(`${API}/teams`).then(r => r.json()),
+        fetch(url).then(r => r.json()),
         fetchMetas(),
       ]);
+
+      if (res.error) throw new Error(res.error);
+
       allTeams = res.teams || [];
-      document.getElementById('mode-badge').textContent = (res.mode || 'mock').toUpperCase();
+      document.getElementById('mode-badge').textContent = hist ? 'HISTÓRICO' : (res.mode || 'mock').toUpperCase();
       document.getElementById('sync-label').textContent =
         new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      document.getElementById('last-update').textContent =
-        `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
+      document.getElementById('last-update').textContent = hist
+        ? `Dados históricos de ${dtFmt} — ${allTeams.length} equipes`
+        : `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
+
+      if (hist && allTeams.length === 0) {
+        document.getElementById('teams-grid').innerHTML =
+          `<div class="empty-state">Nenhum snapshot encontrado para ${dtFmt}.<br><small>Execute o backfill para datas anteriores ao deploy.</small></div>`;
+        renderMetrics([]);
+        return;
+      }
+
       renderAll();
     } catch (err) {
       document.getElementById('sync-label').textContent = 'Erro de conexão';
       document.getElementById('teams-grid').innerHTML =
-        `<div class="empty-state">Não foi possível conectar ao backend.<br><small>Verifique se o servidor está rodando</small></div>`;
+        `<div class="empty-state">Não foi possível carregar os dados.<br><small>${err.message}</small></div>`;
     }
   }
 
@@ -1360,8 +1420,18 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); } });
 
   // ── INIT ──────────────────────────────────────────────────────────────
+  // Inicializa campo de data com hoje e define max = hoje (não permite datas futuras)
+  const _dateInput = document.getElementById('monitor-date-input');
+  if (_dateInput) {
+    _dateInput.value = todayISO();
+    _dateInput.max   = todayISO();
+  }
   loadData();
-  setInterval(loadData, 5 * 60 * 1000);
+  // Auto-refresh só quando visualizando hoje
+  setInterval(() => {
+    const v = document.getElementById('monitor-date-input')?.value;
+    if (isToday(v)) loadData();
+  }, 5 * 60 * 1000);
 </script>
 </body>
 </html>
