@@ -1148,9 +1148,9 @@
 
     document.getElementById('m-total').textContent          = teams.length;
     document.getElementById('m-ativas').textContent         = `${ativas} em campo`;
-    document.getElementById('m-concluidas').textContent     = realizadas;   // OS Executadas
+    document.getElementById('m-concluidas').textContent     = realizadas;   // OS Executadas = realizadas total
     document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
-    document.getElementById('m-executadas').textContent     = emAberto;     // Em Andamento = aguardando execução
+    document.getElementById('m-executadas').textContent     = executadas;   // Em Andamento = feito no campo, pendente fechamento no app
     document.getElementById('m-rejeitadas').textContent     = rejeitadas;
     document.getElementById('m-baixadas').textContent       = emCarteira;
     document.getElementById('m-relogins').textContent       = relogins;
