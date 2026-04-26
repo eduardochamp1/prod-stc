@@ -249,16 +249,18 @@ async function getTeamsByDate(sectorId, isoDate) {
   const engelmigSessions = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
   console.log(`[WPA] backfill Engelmig: ${engelmigSessions.length} sessões filtradas`);
 
-  // Indexa notas por nome e ID de equipe
+  // Indexa notas por nome e ID de equipe.
+  // ATENÇÃO: histórico usa estrutura PLANA — n.TeamName e n.TeamId direto (não n.Team?.Name)
   const notasPorNome = {};
   const notasPorId   = {};
   notasRaw.forEach(n => {
-    const nome = (n.Team?.Name || '').trim();
-    const id   = n.Team?.Id   || n.TeamId;
+    const nome = (n.TeamName || n.Team?.Name || '').trim();
+    const id   = n.TeamId   || n.Team?.Id;
     const nota = normalizarNotaHist(n);
     if (nome) { if (!notasPorNome[nome]) notasPorNome[nome] = []; notasPorNome[nome].push(nota); }
     if (id)   { if (!notasPorId[id])     notasPorId[id]     = []; notasPorId[id].push(nota); }
   });
+  console.log(`[WPA] backfill índice: ${Object.keys(notasPorNome).length} nomes, ${Object.keys(notasPorId).length} ids`);
 
   // Mescla múltiplas sessões da mesma equipe (relogins no mesmo dia)
   // para evitar duplicatas de (date, team_name) no Supabase
