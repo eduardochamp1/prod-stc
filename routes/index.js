@@ -295,6 +295,27 @@ router.get('/debug/notas', async (req, res) => {
   }
 });
 
+// GET /api/debug/preroute?sectorId=DESG  — inspeciona estrutura bruta do endpoint de carteira
+router.get('/debug/preroute', async (req, res) => {
+  const { wpaFetch: wf } = require('../services/wpaService');
+  const sectorId = req.query.sectorId || 'DESG';
+  try {
+    const raw  = await wf(`/api/route/preroute?sectorId=${sectorId}`);
+    const data = await raw.json();
+    // Devolve estrutura bruta + amostra do primeiro item para inspeção
+    const firstItem = Array.isArray(data.Data) ? data.Data[0] : data;
+    res.json({
+      status:    raw.status,
+      topKeys:   Object.keys(data),
+      dataType:  Array.isArray(data.Data) ? 'array' : typeof data.Data,
+      dataLen:   Array.isArray(data.Data) ? data.Data.length : null,
+      firstItem,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── PRODUÇÃO POR EQUIPE ───────────────────────────────────────────────────────
 
 // GET /api/equipes/producao?de=2026-04-01&ate=2026-04-30&regional=GUA&team=EPICO30
