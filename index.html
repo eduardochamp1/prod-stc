@@ -28,7 +28,8 @@
     header { background: var(--preto); height: 58px; display: flex; align-items: center; padding: 0 28px; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.32); }
     header::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; background: var(--amarelo); }
     .header-left { display: flex; align-items: center; gap: 16px; }
-    .header-logo { display: block; height: 38px; width: auto; flex-shrink: 0; }
+    .header-logo-wrap { background: #fff; border-radius: 6px; padding: 3px 10px; display: flex; align-items: center; flex-shrink: 0; }
+    .header-logo { display: block; height: 34px; width: auto; }
     .header-sep { width: 1px; height: 26px; background: rgba(255,255,255,0.18); }
     .header-title { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.6); letter-spacing: 0.04em; }
     .header-right { display: flex; align-items: center; gap: 14px; }
@@ -305,24 +306,10 @@
 
 <header>
   <div class="header-left">
-    <!-- Logo Engelmig Energia (inline SVG — cores adaptadas para fundo escuro) -->
-    <svg class="header-logo" viewBox="0 0 480 88" aria-label="Engelmig Energia">
-      <defs>
-        <clipPath id="bc">
-          <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z"/>
-        </clipPath>
-      </defs>
-      <!-- Raio: corpo amarelo -->
-      <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z" fill="#FEC40E"/>
-      <!-- Raio: faixa vermelha esquerda -->
-      <polygon points="48,4 70,4 46,46 22,46" fill="#ED1C24" clip-path="url(#bc)"/>
-      <!-- ENGELMIG — branco no fundo escuro -->
-      <text x="76" y="64" font-family="'Roboto','Arial Black',Arial,sans-serif"
-            font-weight="700" font-size="60" fill="#ffffff" letter-spacing="-1">ENGELMIG</text>
-      <!-- ENERGIA — amarelo como acento da marca -->
-      <text x="79" y="83" font-family="'Roboto','Arial Black',Arial,sans-serif"
-            font-weight="500" font-size="20" fill="#FEC40E" letter-spacing="6">ENERGIA</text>
-    </svg>
+    <!-- Logo Engelmig Energia -->
+    <div class="header-logo-wrap">
+      <img src="/logo.svg" class="header-logo" alt="Engelmig Energia">
+    </div>
     <div class="header-sep"></div>
     <span class="header-title">WPA Monitor</span>
   </div>
