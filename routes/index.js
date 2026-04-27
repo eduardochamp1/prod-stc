@@ -279,6 +279,48 @@ router.get('/wpa/token-status', (req, res) => {
   res.json({ ...getTokenStatus(), ts: new Date().toISOString() });
 });
 
+/**
+ * Classifica a subcategoria de uma nota com base em Type, Code e Comments.
+ *
+ * Tipos com subcategorias:
+ *   SF  → Code SRED = Corte Disjuntor (L0) | SREB = Corte Borne (L1)
+ *   MD  → Code SPEB + Comments contém "TL11" = Subs TL11 | else = Subs Obsoleto
+ *   DD  → Code C93 = Subs Ramal | BTZ013 = Substituição CS
+ *         quantidade = Activities[?].Quantity (atividade com Code C93 ou BTZ013)
+ */
+function classificarSubCategoria(tipo, code, comments, activities) {
+  const act = activities || [];
+
+  if (tipo === 'SF') {
+    if (code === 'SRED') return { subCategoria: 'Corte Disjuntor', subcatCode: 'L0',     quantidade: null };
+    if (code === 'SREB') return { subCategoria: 'Corte Borne',     subcatCode: 'L1',     quantidade: null };
+    return { subCategoria: null, subcatCode: code || null, quantidade: null };
+  }
+
+  if (tipo === 'MD') {
+    if (code === 'SPEB') {
+      const isTL11 = (comments || '').toUpperCase().includes('TL11');
+      return {
+        subCategoria: isTL11 ? 'Subs TL11' : 'Subs Obsoleto',
+        subcatCode:   isTL11 ? 'TL11'      : 'OBSOLETO',
+        quantidade:   null,
+      };
+    }
+    return { subCategoria: null, subcatCode: code || null, quantidade: null };
+  }
+
+  if (tipo === 'DD') {
+    // Busca a atividade principal (C93 ou BTZ013) para extrair quantidade
+    const ativPrinc = act.find(a => a.Code === code) || act.find(a => a.Quantity != null) || null;
+    const quantidade = ativPrinc ? (ativPrinc.Quantity ?? null) : null;
+    if (code === 'C93')    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade };
+    if (code === 'BTZ013') return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade };
+    return { subCategoria: null, subcatCode: code || null, quantidade };
+  }
+
+  return { subCategoria: null, subcatCode: code || null, quantidade: null };
+}
+
 // GET /api/wpa/nota/:noteId — detalhes completos de uma OS pelo UUID (Data.Id)
 // Endpoint WPA confirmado: GET /api/Notes/{noteId}/details/optimized?sectorId=DESG
 // Retorna os dados da nota sem imagens Base64 (pesadas) a menos que ?fotos=1 seja passado.
@@ -347,11 +389,17 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
       flagDivergentSeal: s.FlagDivergentSeal,
     }));
 
+    // Classificação de subcategoria (Type + Code + Comments + Activities)
+    const subcat = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
+
     res.json({
       id:                  nota.Id,
       numero:              nota.Number,
       codigo:              nota.Code,
       tipo:                nota.Type,
+      subCategoria:        subcat.subCategoria,
+      subcatCode:          subcat.subcatCode,
+      quantidadeExec:      subcat.quantidade,
       status:              nota.Status,
       executionStatus:     nota.ExecutionStatus,
       cliente: {
