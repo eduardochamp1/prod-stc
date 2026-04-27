@@ -504,9 +504,26 @@ async function getTeamsBySector(sectorId) {
   ]);
 
   // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current)
-  const engelmigSessions = sessions.filter(s =>
-    s.Team?.CompanyId === ENGELMIG_COMPANY_ID
-  );
+  // Também filtra por data de hoje — sessões do dia anterior que não foram encerradas
+  // no WPA continuam aparecendo em /sessions/current indefinidamente.
+  const todayUTC = new Date().toISOString().slice(0, 10); // YYYY-MM-DD em UTC
+  // Janela tolerante: aceita sessões que começaram na data atual OU nas últimas 30h
+  // (cobre equipes que logam antes da meia-noite BRT e permanecem ativas)
+  const cutoff = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+
+  const allEngelmig = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
+  const engelmigSessions = allEngelmig.filter(s => {
+    if (!s.BeginTime) return true; // sem data → não filtra (seguro)
+    return s.BeginTime >= cutoff;  // descarta sessões iniciadas há mais de 30h
+  });
+
+  if (allEngelmig.length !== engelmigSessions.length) {
+    const descartadas = allEngelmig.length - engelmigSessions.length;
+    console.warn(
+      `[WPA] ${sectorId}: ⚠️ ${descartadas} sessão(ões) Engelmig descartada(s) por serem de dias anteriores` +
+      ` (cutoff=${cutoff.slice(0,16)})`
+    );
+  }
 
   // Índices de V2 por teamId e por nome (fallback tolerante a mismatch)
   const v2ByTeamId   = new Map();
@@ -519,7 +536,7 @@ async function getTeamsBySector(sectorId) {
   });
 
   console.log(
-    `[WPA] ${sectorId}: ${sessions.length} sessões → ${engelmigSessions.length} Engelmig` +
+    `[WPA] ${sectorId}: ${sessions.length} sessões totais → ${engelmigSessions.length} Engelmig hoje` +
     ` | ${statusList.length} entradas V2`
   );
 
@@ -563,6 +580,7 @@ async function getTeamsBySector(sectorId) {
 
     console.log(
       `[WPA]   ${sectorId}/${teamName}: ` +
+      `início=${s.BeginTime?.slice(0, 16) || '?'} ` +
       `baixadas=${baixadas.length} exec=${executadas.length} ` +
       `conc=${concluidas.length} rej=${rejeitadas.length} ` +
       `carteira=${carteiraCount}${v2 ? '' : ' [SEM V2]'}`
