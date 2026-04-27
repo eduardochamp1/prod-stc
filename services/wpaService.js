@@ -182,8 +182,12 @@ async function getTeamStatusV2(sectorId) {
   return Array.isArray(data) ? data : (data.Data || []);
 }
 
+// Todos os setores conhecidos — usados no fallback cross-setor do V2.
+// Se novos setores forem adicionados ao WPA, incluir aqui.
+const ALL_SECTORS = ['DESG', 'DEPT', 'DESC'];
+
 // Cache de V2 por setor — evita chamadas duplicadas quando equipes visitantes
-// precisam buscar V2 do setor home numa mesma rodada de coleta.
+// precisam buscar V2 em outros setores na mesma rodada de coleta.
 // TTL de 3 minutos (bem abaixo do ciclo de 15 min do cron).
 const _v2Cache   = new Map(); // sectorId → { list, ts }
 const V2_TTL_MS  = 3 * 60 * 1000;
@@ -564,18 +568,24 @@ async function getTeamsBySector(sectorId) {
     // Busca dado V2: por ID primeiro (mais confiável), nome como fallback
     let v2 = (teamId && v2ByTeamId.get(teamId)) || v2ByTeamName.get(teamName);
 
-    // Fallback: equipe visitante — busca V2 no setor home da equipe
-    // (ocorre quando uma equipe loga em setor diferente do seu setor de origem)
-    if (!v2 && teamSectorId !== sectorId) {
-      try {
-        const homeList = await getV2Cached(teamSectorId);
-        const { byId: homeById, byName: homeByName } = buildV2Index(homeList);
-        v2 = (teamId && homeById.get(teamId)) || homeByName.get(teamName);
-        if (v2) {
-          console.log(`[WPA] ${sectorId}/${teamName}: V2 encontrado no setor home (${teamSectorId}) ✓`);
+    // Fallback cross-setor: quando V2 do setor atual não retorna dados da equipe,
+    // tenta todos os outros setores conhecidos.
+    // Ocorre quando o "setor de exibição" configurado no WPA difere do setor de login,
+    // fazendo a equipe sumir do V2 com filterByExhibitionSector=true.
+    if (!v2) {
+      for (const altSector of ALL_SECTORS) {
+        if (altSector === sectorId) continue; // já tentamos este
+        try {
+          const altList = await getV2Cached(altSector);
+          const { byId: altById, byName: altByName } = buildV2Index(altList);
+          v2 = (teamId && altById.get(teamId)) || altByName.get(teamName);
+          if (v2) {
+            console.log(`[WPA] ${sectorId}/${teamName}: V2 encontrado em setor alternativo (${altSector}) ✓`);
+            break;
+          }
+        } catch (err) {
+          console.warn(`[WPA] ${sectorId}/${teamName}: falha ao buscar V2 em ${altSector}:`, err.message);
         }
-      } catch (err) {
-        console.warn(`[WPA] ${sectorId}/${teamName}: falha ao buscar V2 fallback (${teamSectorId}):`, err.message);
       }
     }
 
