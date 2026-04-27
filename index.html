@@ -496,7 +496,6 @@
     <button class="tab-btn"        id="tab-btn-metas"      onclick="switchTab('metas')">🎯 Metas</button>
     <button class="tab-btn"        id="tab-btn-ranking"    onclick="switchTab('ranking')">🏆 Ranking</button>
     <button class="tab-btn"        id="tab-btn-historico"  onclick="switchTab('historico')">📈 Histórico</button>
-    <button class="tab-btn"        id="tab-btn-equipes"    onclick="switchTab('equipes')">👷 Equipes</button>
   </div>
 
   <!-- ── TAB: MONITOR ─────────────────────────────────────────────────── -->
@@ -655,11 +654,15 @@
   <div class="tab-panel" id="tab-historico">
 
     <div class="filter-bar">
-      <div class="date-label">Histórico diário — <strong id="hist-mes-label"></strong></div>
+      <div class="date-label">Histórico diário — <strong id="hist-periodo-label"></strong></div>
       <div class="filter-controls">
         <div class="filter-group">
-          <span class="filter-label">Mês</span>
-          <input type="month" class="month-input" id="hist-mes-input" onchange="loadHistorico()" />
+          <span class="filter-label">De</span>
+          <input type="date" class="month-input" id="hist-de-input" onchange="loadHistorico()" style="width:130px" />
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">Até</span>
+          <input type="date" class="month-input" id="hist-ate-input" onchange="loadHistorico()" style="width:130px" />
         </div>
         <div class="filter-group">
           <span class="filter-label">Regional</span>
@@ -686,48 +689,11 @@
     </div>
 
     <div id="hist-content">
-      <div class="empty-state">Selecione um mês e clique em Atualizar.</div>
-    </div>
-
-  </div>
-
-  <!-- ── TAB: EQUIPES ──────────────────────────────────────────────────── -->
-  <div class="tab-panel" id="tab-equipes">
-
-    <div class="filter-bar">
-      <div class="date-label">Produção por equipe — <strong id="eq-periodo-label"></strong></div>
-      <div class="filter-controls">
-        <div class="filter-group">
-          <span class="filter-label">De</span>
-          <input type="date" class="month-input" id="eq-de-input" onchange="loadEquipes()" style="width:130px" />
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">Até</span>
-          <input type="date" class="month-input" id="eq-ate-input" onchange="loadEquipes()" style="width:130px" />
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">Regional</span>
-          <select class="filter-select" id="eq-regional-select" onchange="loadEquipes()">
-            <option value="ALL">Todas</option>
-            <option value="GUA">Guarapari</option>
-            <option value="CAC">Cachoeiro</option>
-          </select>
-        </div>
-        <div class="filter-group">
-          <span class="filter-label">Equipe</span>
-          <select class="filter-select" id="eq-team-select" onchange="loadEquipes()" style="min-width:140px">
-            <option value="ALL">Todas</option>
-          </select>
-        </div>
-        <button class="btn-refresh" onclick="loadEquipes()">↻ Atualizar</button>
-      </div>
-    </div>
-
-    <div id="eq-content">
       <div class="empty-state">Selecione o período e clique em Atualizar.</div>
     </div>
 
   </div>
+
 
 
   <!-- ── TAB: ADMIN ─────────────────────────────────────────────────────── -->
@@ -920,7 +886,6 @@
     if (tab === 'metas')     loadMetasCalculadas();
     if (tab === 'ranking')   loadRanking();
     if (tab === 'historico') loadHistorico();
-    if (tab === 'equipes')   initEquipes();
   }
 
   // ── METAS (banco de dados via API) ─────────────────────────────────────
@@ -1221,16 +1186,22 @@
   let _histDias = [];   // cache dos dados carregados
 
   async function loadHistorico() {
-    const input    = document.getElementById('hist-mes-input');
-    const ym       = input?.value || mesAtualInput();
-    if (input && !input.value) input.value = ym;
+    const today        = new Date().toISOString().slice(0, 10);
+    const firstOfMonth = today.slice(0, 7) + '-01';
+    const deInput  = document.getElementById('hist-de-input');
+    const ateInput = document.getElementById('hist-ate-input');
+    if (deInput  && !deInput.value)  deInput.value  = firstOfMonth;
+    if (ateInput && !ateInput.value) ateInput.value = today;
+    const de       = deInput?.value  || firstOfMonth;
+    const ate      = ateInput?.value || today;
     const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
-    document.getElementById('hist-mes-label').textContent = fmtMes(ym);
+
+    document.getElementById('hist-periodo-label').textContent = `${fmtData(de)} a ${fmtData(ate)}`;
     document.getElementById('hist-content').innerHTML =
       '<div class="empty-state"><div class="spinner"></div><br>Carregando histórico...</div>';
 
     try {
-      const params = new URLSearchParams({ m: ym });
+      const params = new URLSearchParams({ de, ate });
       if (regional !== 'ALL') params.set('regional', regional);
       const data = await fetch(`${API}/historico/sessoes?${params}`).then(r => r.json());
       _histDias = data.dias || [];
@@ -1294,16 +1265,13 @@
     const tbody = rows.map((r, idx) => {
       const detailId = `hist-detail-${idx}`;
       const rowId    = `hist-row-${idx}`;
-      const hasColab = (r.collaborators || []).length > 0;
-      const colabPreview = (r.collaborators || []).slice(0, 2)
-        .map(c => `<span class="hist-collab-badge"><b>${c.matricula}</b></span>`)
-        .join('') + ((r.collaborators || []).length > 2 ? `<span class="hist-collab-badge">+${r.collaborators.length - 2}</span>` : '');
+      const colabCount = (r.collaborators || []).length;
 
       // Linha principal
       const dataRow = `
         <tr class="hist-row-data" id="${rowId}" onclick="toggleHistDetail('${rowId}','${detailId}')">
           <td><span class="hist-date">${fmtData(r.date)}</span></td>
-          <td><div style="display:flex;align-items:center;gap:6px"><span class="hist-team">${r.team_name}</span>${hasColab ? `<div style="display:flex;gap:3px">${colabPreview}</div>` : ''}</div></td>
+          <td><div style="display:flex;align-items:center;gap:6px"><span class="hist-team">${r.team_name}</span>${colabCount > 0 ? `<span style="font-size:10px;color:var(--text2);background:var(--cinza2);border-radius:10px;padding:1px 7px">${colabCount} colab.</span>` : ''}</div></td>
           <td><span class="rank-reg reg-${r.regional}">${r.regional}</span></td>
           ${allTipos.map(t => `<td style="text-align:center">${r.por_tipo[t] ? `<strong>${r.por_tipo[t]}</strong>` : '<span class="hist-zero">—</span>'}</td>`).join('')}
           <td><span class="hist-total">${r.total > 0 ? r.total : '<span class="hist-zero">0</span>'}</span></td>
@@ -1382,100 +1350,6 @@
     const open = detail.style.display !== 'none';
     detail.style.display = open ? 'none' : 'table-row';
     row.classList.toggle('expanded', !open);
-  }
-
-  // ── EQUIPES ───────────────────────────────────────────────────────────
-  function initEquipes() {
-    const today = new Date().toISOString().slice(0, 10);
-    const firstOfMonth = today.slice(0, 7) + '-01';
-    const de  = document.getElementById('eq-de-input');
-    const ate = document.getElementById('eq-ate-input');
-    if (de  && !de.value)  de.value  = firstOfMonth;
-    if (ate && !ate.value) ate.value = today;
-    loadEquipes();
-  }
-
-  async function loadEquipes() {
-    const de       = document.getElementById('eq-de-input')?.value  || '';
-    const ate      = document.getElementById('eq-ate-input')?.value || '';
-    const regional = document.getElementById('eq-regional-select')?.value || 'ALL';
-    const team     = document.getElementById('eq-team-select')?.value     || 'ALL';
-
-    const label = (de && ate) ? `${fmtData(de)} a ${fmtData(ate)}` : (de || ate || 'período completo');
-    document.getElementById('eq-periodo-label').textContent = label;
-    document.getElementById('eq-content').innerHTML =
-      '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
-
-    try {
-      const params = new URLSearchParams();
-      if (de)                    params.set('de', de);
-      if (ate)                   params.set('ate', ate);
-      if (regional !== 'ALL')    params.set('regional', regional);
-      if (team     !== 'ALL')    params.set('team', team);
-
-      const data = await fetch(`${API}/equipes/producao?${params}`).then(r => r.json());
-      if (data.error) throw new Error(data.error);
-      popularEqTeamSelect(data.equipes || [], team);
-      renderEquipes(data.equipes || [], data.tipos || []);
-    } catch (err) {
-      document.getElementById('eq-content').innerHTML =
-        `<div class="empty-state">Erro: ${err.message}</div>`;
-    }
-  }
-
-  function popularEqTeamSelect(equipes, currentTeam) {
-    const sel = document.getElementById('eq-team-select');
-    if (!sel) return;
-    const names = equipes.map(e => e.team_name).sort();
-    sel.innerHTML = '<option value="ALL">Todas as equipes</option>'
-      + names.map(n => `<option value="${n}" ${n === currentTeam ? 'selected' : ''}>${n}</option>`).join('');
-    if (currentTeam && currentTeam !== 'ALL') sel.value = currentTeam;
-  }
-
-  function renderEquipes(equipes, tipos) {
-    const el = document.getElementById('eq-content');
-    if (equipes.length === 0) {
-      el.innerHTML = '<div class="empty-state">Nenhum dado encontrado para os filtros selecionados.</div>';
-      return;
-    }
-
-    const tiposLabel = { LN:'LN', LE:'LE', DL:'DL', MD:'MD', SF:'SF', RL:'RL', UG:'UG', DD:'DD', II:'II', PO:'PO' };
-
-    el.innerHTML = `
-      <div class="hist-table-wrap">
-        <table class="hist-table">
-          <thead>
-            <tr>
-              <th style="text-align:left">Equipe</th>
-              <th>Regional</th>
-              ${tipos.map(t => `<th title="${(TIPOS_SERVICO[t]||t)}">${t}</th>`).join('')}
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${equipes.map((e, i) => `
-              <tr>
-                <td><span class="hist-team">${e.team_name}</span></td>
-                <td style="text-align:center"><span class="rank-reg reg-${e.regional}">${e.regional}</span></td>
-                ${tipos.map(t => `<td style="text-align:center">${e.por_tipo[t]
-                  ? `<strong>${e.por_tipo[t]}</strong>`
-                  : '<span class="hist-zero">—</span>'}</td>`).join('')}
-                <td style="text-align:center"><span class="hist-total">${e.total}</span></td>
-              </tr>`).join('')}
-          </tbody>
-          <tfoot>
-            <tr style="background:var(--bg2);font-weight:700">
-              <td>TOTAL</td>
-              <td></td>
-              ${tipos.map(t => {
-                const s = equipes.reduce((a, e) => a + (e.por_tipo[t] || 0), 0);
-                return `<td style="text-align:center">${s || '—'}</td>`;
-              }).join('')}
-              <td style="text-align:center">${equipes.reduce((a, e) => a + e.total, 0)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>`;
   }
 
   // ── SENHA (compartilhada entre Metas e Admin) ─────────────────────────

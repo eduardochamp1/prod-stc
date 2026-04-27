@@ -344,15 +344,15 @@ async function getTeamProducao(filters = {}) {
  * teamName: nome exato da equipe ou null para todas
  * regional: 'GUA'|'CAC' ou null para todas
  */
-async function getTeamSessionHistory(yearMonth, teamName, regional) {
+async function getTeamSessionHistory(de, ate, teamName, regional) {
   const sb = getClient();
-  const [year, month] = yearMonth.split('-').map(Number);
-  const start = `${yearMonth}-01`;
-  const ny = month === 12 ? year + 1 : year;
-  const nm = month === 12 ? 1 : month + 1;
-  const end = `${ny}-${String(nm).padStart(2, '0')}-01`;
+  const start = de;
+  // ate é inclusivo — adiciona 1 dia para o upper bound exclusivo do Supabase
+  const ateDate = new Date(ate + 'T12:00:00Z');
+  ateDate.setDate(ateDate.getDate() + 1);
+  const end = ateDate.toISOString().slice(0, 10);
 
-  // Pagina até buscar todas as linhas do mês
+  // Pagina até buscar todas as linhas do intervalo
   const pageSize = 1000;
   let allRows = [];
   let page = 0;

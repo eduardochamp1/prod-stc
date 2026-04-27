@@ -149,15 +149,30 @@ router.get('/historico/mes', async (req, res) => {
   }
 });
 
-// GET /api/historico/sessoes?m=2026-04&team=EPGUI30&regional=CAC
+// GET /api/historico/sessoes?de=2026-04-01&ate=2026-04-30&team=EPGUI30&regional=CAC
 // Histórico de sessões com colaboradores, horários e notas por tipo (fonte: snapshots)
 router.get('/historico/sessoes', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
-    if (!sq) return res.json({ mes: ym, dias: [] });
-    const dias = await sq.getTeamSessionHistory(ym, req.query.team || null, req.query.regional || null);
-    res.json({ mes: ym, dias });
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    let de  = req.query.de;
+    let ate = req.query.ate;
+    // Fallback: se vier ?m=YYYY-MM (retrocompatibilidade), converte para de/ate
+    if (!de || !ate) {
+      const ym = req.query.m || new Date().toISOString().slice(0, 7);
+      de  = `${ym}-01`;
+      const [year, month] = ym.split('-').map(Number);
+      const ny = month === 12 ? year + 1 : year;
+      const nm = month === 12 ? 1 : month + 1;
+      const last = new Date(`${ny}-${String(nm).padStart(2, '0')}-01`);
+      last.setDate(last.getDate() - 1);
+      ate = last.toISOString().slice(0, 10);
+    }
+    if (!dateRe.test(de) || !dateRe.test(ate))
+      return res.status(400).json({ error: 'Formato inválido. Use YYYY-MM-DD' });
+    if (!sq) return res.json({ dias: [] });
+    const dias = await sq.getTeamSessionHistory(de, ate, req.query.team || null, req.query.regional || null);
+    res.json({ de, ate, dias });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
