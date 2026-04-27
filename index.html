@@ -28,7 +28,7 @@
     header { background: var(--preto); height: 58px; display: flex; align-items: center; padding: 0 28px; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.32); }
     header::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; background: var(--amarelo); }
     .header-left { display: flex; align-items: center; gap: 16px; }
-    .header-logo { display: block; height: 44px; width: auto; flex-shrink: 0; border-radius: 6px; }
+    .header-logo { display: block; height: 44px; width: auto; flex-shrink: 0; }
     .header-sep { width: 1px; height: 26px; background: rgba(255,255,255,0.18); }
     .header-title { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.6); letter-spacing: 0.04em; }
     .header-right { display: flex; align-items: center; gap: 14px; }
@@ -305,28 +305,8 @@
 
 <header>
   <div class="header-left">
-    <!-- Logo Engelmig Energia — cores originais da marca, fundo branco -->
-    <svg class="header-logo" viewBox="0 0 330 60" aria-label="Engelmig Energia" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <clipPath id="bolt-clip">
-          <path d="M38,4 L18,42 L28,42 L12,58 L48,28 L36,28 Z"/>
-        </clipPath>
-      </defs>
-      <!-- Fundo branco arredondado -->
-      <rect x="0" y="0" width="330" height="60" rx="6" ry="6" fill="#ffffff"/>
-      <!-- Raio — corpo amarelo -->
-      <path d="M38,4 L18,42 L28,42 L12,58 L48,28 L36,28 Z" fill="#FEC40E"/>
-      <!-- Raio — faixa vermelha -->
-      <polygon points="38,4 56,4 34,42 18,42" fill="#ED1C24" clip-path="url(#bolt-clip)"/>
-      <!-- ENGELMIG — cor original da marca -->
-      <text x="60" y="40"
-            font-family="'Arial Black','Franklin Gothic Heavy',Impact,Arial,sans-serif"
-            font-weight="900" font-size="36" fill="#231F20" letter-spacing="-1">ENGELMIG</text>
-      <!-- ENERGIA — verde original da marca -->
-      <text x="63" y="54"
-            font-family="'Arial Black','Franklin Gothic Heavy',Impact,Arial,sans-serif"
-            font-weight="700" font-size="13" fill="#086738" letter-spacing="5.5">ENERGIA</text>
-    </svg>
+    <!-- Logo Engelmig Energia — imagem original da empresa -->
+    <img src="/Cabeçalho Engelmig Energia.png" class="header-logo" alt="Engelmig Energia">
     <div class="header-sep"></div>
     <span class="header-title">WPA Monitor</span>
   </div>
