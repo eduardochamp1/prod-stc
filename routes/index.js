@@ -5,7 +5,7 @@
 
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
-const { login: wpaLogin, wpaFetch, getTokenStatus } = require('../services/wpaService');
+const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail } = require('../services/wpaService');
 const { login: authLogin, authMiddleware }    = require('../middleware/auth');
 
 const router = express.Router();
@@ -277,6 +277,125 @@ router.post('/wpa/login', async (req, res) => {
 // GET /api/wpa/token-status — estado atual do token em memória
 router.get('/wpa/token-status', (req, res) => {
   res.json({ ...getTokenStatus(), ts: new Date().toISOString() });
+});
+
+// GET /api/wpa/nota/:numero — detalhes completos de uma OS pelo número
+// Retorna os dados da nota mas sem as imagens Base64 (pesadas) a menos que
+// o cliente passe ?fotos=1 na query string.
+router.get('/wpa/nota/:numero', async (req, res) => {
+  const { numero } = req.params;
+  const incluirFotos = req.query.fotos === '1';
+
+  try {
+    const nota = await getNoteDetail(numero);
+    if (!nota) {
+      return res.status(404).json({ error: `Nota ${numero} não encontrada na API WPA` });
+    }
+
+    // Processa checkpoints: extrai metadados e (opcionalmente) fotos
+    const checkpoints = (nota.Checkpoints || [])
+      .sort((a, b) => new Date(a.RegisteredAt2 || a.TimeStamp) - new Date(b.RegisteredAt2 || b.TimeStamp))
+      .map(cp => {
+        const fotos = (cp.FileWrappers || []).map((fw, idx) => ({
+          index: idx,
+          // Inclui base64 só se ?fotos=1 — evita payloads de MBs na listagem
+          base64: incluirFotos ? fw.Base64 : undefined,
+          hasImage: Boolean(fw.Base64),
+        }));
+        return {
+          id:          cp.Id,
+          event:       cp.Event,
+          timestamp:   cp.RegisteredAt2 || cp.TimeStamp,
+          mileage:     cp.Mileage,
+          latitude:    cp.Latitude,
+          longitude:   cp.Longitude,
+          battery:     cp.BatteryLevel,
+          accuracy:    cp.Accuracy,
+          fotosCount:  fotos.length,
+          fotos:       incluirFotos ? fotos : undefined,
+        };
+      });
+
+    // Equipamentos (sem campos vazios para reduzir payload)
+    const equipamentos = (nota.Equipments || []).map(e => ({
+      id:          e.Id,
+      equipmentId: e.EquipmentId,
+      model:       e.Model,
+      serialNumber:e.SerialNumber,
+      prefix:      e.Prefix,
+      materialNumber: e.MaterialNumber,
+      installation: e.Installation,
+      constructionClass: e.ConstructionClass,
+      flagMainMeterRemoved: e.FlagMainMeterRemoved,
+      flagEquipmentSubstitution: e.FlagEquipmentSubstitution,
+    }));
+
+    // Lacres
+    const lacres = (nota.Seals || []).map(s => ({
+      id:         s.Id,
+      sealId:     s.SealId,
+      sealNumber: s.SealNumber,
+      sealType:   s.SealType,
+      sequenceNumber: s.SequenceNumber,
+      registryTypeId: s.RegistryTypeId,
+      installation: s.Installation,
+      flagRemoved: s.FlagRemoved,
+      flagNoCover: s.FlagNoCover,
+      flagNoDevice: s.FlagNoDevice,
+      flagDivergentSeal: s.FlagDivergentSeal,
+    }));
+
+    res.json({
+      id:                  nota.Id,
+      numero:              nota.Number,
+      codigo:              nota.Code,
+      tipo:                nota.Type,
+      status:              nota.Status,
+      executionStatus:     nota.ExecutionStatus,
+      cliente: {
+        nome:    nota.CustomerName,
+        telefone: nota.CustomerPhone,
+        unidade: nota.ConsumerUnit,
+        medidor: nota.MeterSerialNumber,
+        tensao:  nota.Voltage,
+        tarifaCategoria: nota.RateCategory,
+      },
+      endereco: {
+        logradouro: nota.Address,
+        bairro:     nota.Neighborhood,
+        cidade:     nota.City,
+        cep:        nota.ZipCode,
+        latitude:   nota.Latitude,
+        longitude:  nota.Longitude,
+      },
+      datas: {
+        emissao:      nota.IssueDate2      || nota.IssueDate,
+        desejada:     nota.DesiredConclusionDate2 || nota.DesiredConclusionDate,
+        conclusao:    nota.ConclusionDate2 || nota.ConclusionDate,
+        statusConclusao: nota.ConclusionStatus,
+        importacao:   nota.ImportDate2     || nota.ImportDate,
+      },
+      operacional: {
+        workCenter:  nota.WorkCenter,
+        gpm:         nota.GPM,
+        teamId:      nota.TeamId,
+        sectorId:    nota.SectorId,
+        tentativa:   nota.Try,
+        isHighPriority: nota.isHighPriorityNote,
+      },
+      texto:       nota.Text,
+      comentarios: nota.Comments,
+      checkpoints,
+      equipamentos,
+      lacres,
+      materiais:   (nota.Materials   || []).length,
+      atividades:  (nota.Activities  || []).length,
+      checklists:  (nota.Checklists  || []).length,
+    });
+  } catch (err) {
+    console.error(`[NOTA-DETAIL] ${numero}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/wpa/probe', async (req, res) => {

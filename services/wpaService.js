@@ -268,6 +268,31 @@ async function getNotesForSession(sessionId, category) {
 }
 
 /**
+ * Retorna detalhes completos de uma nota (OS) pelo número ou ID.
+ * GET /api/notes/{noteNumber}
+ *
+ * A resposta inclui:
+ *   Data.Checkpoints[]  — eventos GPS (Event 0=início, 1=chegada, 2=concluída, 3=saída, 4=retorno)
+ *                          Checkpoint com FileWrappers[] contém fotos em Base64
+ *   Data.Equipments[]   — medidores e equipamentos (SerialNumber, Model, Prefix, etc.)
+ *   Data.Seals[]        — lacres (SealNumber, SealId, SealType, etc.)
+ *   Data.Materials[]    — materiais utilizados
+ *   Data.Activities[]   — atividades registradas
+ *   Data.*Note          — formulários preenchidos pelo técnico (SFRLNote, MDNote, etc.)
+ *   Data.CustomerName, Address, City, Neighborhood, ZipCode — dados do cliente
+ */
+async function getNoteDetail(noteNumber) {
+  try {
+    const res  = await wpaFetch(`/api/notes/${encodeURIComponent(noteNumber)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.Data || data || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Retorna detalhes completos de uma sessão individual.
  * GET /api/Sessions/{sessionId}
  * Único endpoint que retorna Collaborators[] com nome e matrícula.
@@ -672,6 +697,7 @@ module.exports = {
   // Endpoints individuais (usados em rotas de debug)
   getSessions,
   getSessionDetail,
+  getNoteDetail,
   getNotesExecution,
   getPreroute,
   getTeamStatusV2,
