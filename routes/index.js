@@ -279,17 +279,19 @@ router.get('/wpa/token-status', (req, res) => {
   res.json({ ...getTokenStatus(), ts: new Date().toISOString() });
 });
 
-// GET /api/wpa/nota/:numero — detalhes completos de uma OS pelo número
-// Retorna os dados da nota mas sem as imagens Base64 (pesadas) a menos que
-// o cliente passe ?fotos=1 na query string.
-router.get('/wpa/nota/:numero', async (req, res) => {
-  const { numero } = req.params;
-  const incluirFotos = req.query.fotos === '1';
+// GET /api/wpa/nota/:noteId — detalhes completos de uma OS pelo UUID (Data.Id)
+// Endpoint WPA confirmado: GET /api/Notes/{noteId}/details/optimized?sectorId=DESG
+// Retorna os dados da nota sem imagens Base64 (pesadas) a menos que ?fotos=1 seja passado.
+// Requer também ?sectorId= (ex: DESG, DEPT, DESC) para que a API WPA retorne corretamente.
+router.get('/wpa/nota/:noteId', async (req, res) => {
+  const { noteId }    = req.params;
+  const sectorId      = req.query.sectorId || 'DESG';
+  const incluirFotos  = req.query.fotos === '1';
 
   try {
-    const nota = await getNoteDetail(numero);
+    const nota = await getNoteDetail(noteId, sectorId);
     if (!nota) {
-      return res.status(404).json({ error: `Nota ${numero} não encontrada na API WPA` });
+      return res.status(404).json({ error: `Nota ${noteId} não encontrada na API WPA` });
     }
 
     // Processa checkpoints: extrai metadados e (opcionalmente) fotos
@@ -383,6 +385,16 @@ router.get('/wpa/nota/:numero', async (req, res) => {
         tentativa:   nota.Try,
         isHighPriority: nota.isHighPriorityNote,
       },
+      // Campos de codificação visíveis no portal EDP WPA (Detalhes Adicionais)
+      codificacao: {
+        grupoCodificacao:   nota.NoteMeasurementTypeProposed || null,  // ex: MDBT
+        codificacao:        nota.Code,                                  // ex: SPEB
+        codigoMedidas:      nota.NoteMeasurementType,                   // ex: MDNB
+        unidadeLeitura:     nota.ReadUnit,                              // ex: B43GP46A
+        instalacao:         nota.InstallationId,                        // ex: 0000498401
+        dataCriacao:        nota.CreationDate2 || nota.CreationDate,
+        statusSurvey:       nota.StatusSurvey  || null,
+      },
       texto:       nota.Text,
       comentarios: nota.Comments,
       checkpoints,
@@ -393,7 +405,7 @@ router.get('/wpa/nota/:numero', async (req, res) => {
       checklists:  (nota.Checklists  || []).length,
     });
   } catch (err) {
-    console.error(`[NOTA-DETAIL] ${numero}:`, err.message);
+    console.error(`[NOTA-DETAIL] ${noteId}:`, err.message);
     res.status(500).json({ error: err.message });
   }
 });

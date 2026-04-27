@@ -268,8 +268,11 @@ async function getNotesForSession(sessionId, category) {
 }
 
 /**
- * Retorna detalhes completos de uma nota (OS) pelo número ou ID.
- * GET /api/notes/{noteNumber}
+ * Retorna detalhes completos de uma nota (OS) pelo UUID e sectorId.
+ * GET /api/Notes/{noteId}/details/optimized?sectorId={sectorId}
+ *
+ * Confirmado via interceptor Postman — endpoint usado pelo portal EDP WPA.
+ * O noteId é o UUID (Data.Id), NÃO o número da OS (Data.Number).
  *
  * A resposta inclui:
  *   Data.Checkpoints[]  — eventos GPS (Event 0=início, 1=chegada, 2=concluída, 3=saída, 4=retorno)
@@ -281,9 +284,10 @@ async function getNotesForSession(sessionId, category) {
  *   Data.*Note          — formulários preenchidos pelo técnico (SFRLNote, MDNote, etc.)
  *   Data.CustomerName, Address, City, Neighborhood, ZipCode — dados do cliente
  */
-async function getNoteDetail(noteNumber) {
+async function getNoteDetail(noteId, sectorId) {
   try {
-    const res  = await wpaFetch(`/api/notes/${encodeURIComponent(noteNumber)}`);
+    const qs  = sectorId ? `?sectorId=${encodeURIComponent(sectorId)}` : '';
+    const res = await wpaFetch(`/api/Notes/${encodeURIComponent(noteId)}/details/optimized${qs}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.Data || data || null;
@@ -324,6 +328,7 @@ async function getSessionDetail(sessionId) {
 async function getTeamsByDate(sectorId, isoDate) {
   function normalizarNotaHist(n, status) {
     return {
+      id:       n.Id   || null,                    // UUID — necessário para /details/optimized
       codigo:   String(n.Number || n.Id || ''),
       tipoCode: n.Type || '??',
       tipoNome: n.Type || '??',
@@ -514,6 +519,7 @@ function normalizarNotaV2(n, statusForcado) {
   const STATUS_V2 = {
     1: 'baixada',
     2: 'baixada',
+
     3: 'executada',   // em andamento
     6: 'executada',   // nota ativa ("Trabalhando na nota X")
     7: 'executada',   // variante de nota ativa
@@ -522,6 +528,7 @@ function normalizarNotaV2(n, statusForcado) {
     9: 'concluida',   // mobile pendente sync
   };
   return {
+    id:       n.Id   || null,                    // UUID — necessário para /details/optimized
     codigo:   String(n.Number || n.Id || ''),
     tipoCode: n.Type || '??',
     tipoNome: n.Type || '??',

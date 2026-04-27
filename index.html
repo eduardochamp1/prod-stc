@@ -2069,9 +2069,13 @@
     const el = document.getElementById('notas-list');
     if (!el) return;
     if (notas.length === 0) { el.innerHTML = `<span style="font-size:13px;color:var(--text2)">Nenhuma OS ${tipo}.</span>`; return; }
-    el.innerHTML = notas.map(n =>
-      `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${n.codigo}','${n.tipoCode||n.tipoNome||''}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span></span>`
-    ).join('');
+    const sectorId = (window._modalTeam && window._modalTeam.sectorId) || 'DESG';
+    el.innerHTML = notas.map(n => {
+      // Usa o UUID (n.id) para o endpoint /details/optimized; fallback para codigo (número) caso
+      // o UUID não esteja disponível (notas históricas mais antigas sem id mapeado).
+      const idParam = n.id || n.codigo;
+      return `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${idParam}','${sectorId}','${n.tipoCode||n.tipoNome||''}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span></span>`;
+    }).join('');
   }
 
   function closeModal(e) { if (e.target === document.getElementById('modal-overlay')) closeModalDirect(); }
@@ -2100,19 +2104,20 @@
     return map[executionStatus] || `Status ${executionStatus}`;
   }
 
-  function openNotaDetail(numero, tipo, evt) {
+  function openNotaDetail(noteId, sectorId, tipo, evt) {
     if (evt) evt.stopPropagation(); // não fecha o modal de equipe
-    document.getElementById('nota-modal-title').textContent = `OS ${numero}`;
+    document.getElementById('nota-modal-title').textContent = `OS …`;
     document.getElementById('nota-modal-sub').textContent   = tipo ? `Tipo ${tipo} · carregando...` : 'Carregando...';
     document.getElementById('nota-modal-body').innerHTML    = '<div class="nota-loading">⏳ Buscando dados na API WPA...</div>';
     document.getElementById('nota-overlay').classList.add('open');
 
-    fetch(`${API}/wpa/nota/${encodeURIComponent(numero)}`)
+    const url = `${API}/wpa/nota/${encodeURIComponent(noteId)}?sectorId=${encodeURIComponent(sectorId || 'DESG')}`;
+    fetch(url)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(nota => renderNotaDetail(nota))
       .catch(err  => {
         document.getElementById('nota-modal-body').innerHTML =
-          `<div class="nota-error">⚠️ Não foi possível carregar a OS ${numero}.<br><small>${err.message}</small></div>`;
+          `<div class="nota-error">⚠️ Não foi possível carregar a OS.<br><small>${err.message}</small></div>`;
       });
   }
 
@@ -2141,7 +2146,7 @@
             ? `<a href="https://maps.google.com/?q=${cp.latitude},${cp.longitude}" target="_blank" style="font-size:11px;color:var(--verde);text-decoration:none" title="Ver no mapa">🗺 Mapa</a>`
             : '';
           const fotosBtn = cp.fotosCount > 0
-            ? `<span class="cp-fotos-pill" onclick="loadNotaFotos('${nota.numero}',${cpIdx})">📷 ${cp.fotosCount} foto${cp.fotosCount>1?'s':''}</span>`
+            ? `<span class="cp-fotos-pill" onclick="loadNotaFotos('${nota.id}',${cpIdx})">📷 ${cp.fotosCount} foto${cp.fotosCount>1?'s':''}</span>`
             : '';
           const mileage = cp.mileage > 0 ? ` · ${(cp.mileage).toFixed(2)} km` : '';
           const acc     = cp.accuracy ? ` · ±${cp.accuracy}m` : '';
@@ -2207,6 +2212,17 @@
         </div>
       </div>
       <div class="modal-section">
+        <div class="modal-section-title">Detalhes Adicionais</div>
+        <div class="nota-info-grid">
+          <div class="nota-info-item"><div class="nota-info-lbl">Codificação</div><div class="nota-info-val">${nota.codificacao?.codificacao || '—'}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Código de Medidas</div><div class="nota-info-val">${nota.codificacao?.codigoMedidas || '—'}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Unidade de Leitura</div><div class="nota-info-val">${nota.codificacao?.unidadeLeitura || '—'}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Instalação</div><div class="nota-info-val">${nota.codificacao?.instalacao || '—'}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Data de Criação</div><div class="nota-info-val">${_fmtNotaDate(nota.codificacao?.dataCriacao)}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Importação</div><div class="nota-info-val">${_fmtNotaDate(nota.datas?.importacao)}</div></div>
+        </div>
+      </div>
+      <div class="modal-section">
         <div class="modal-section-title">Checkpoints GPS (${cps.length})</div>
         ${cpHtml}
       </div>
@@ -2228,13 +2244,15 @@
   }
 
   // Carrega fotos de um checkpoint específico (chamada ?fotos=1)
-  function loadNotaFotos(numero, cpIndex) {
+  function loadNotaFotos(noteId, cpIndex) {
     const container = document.getElementById(`fotos-cp-${cpIndex}`);
     if (!container) return;
     if (container.dataset.loaded) return; // já carregou
     container.innerHTML = '<span style="font-size:11px;color:var(--text2)">⏳ Carregando fotos...</span>';
 
-    fetch(`${API}/wpa/nota/${encodeURIComponent(numero)}?fotos=1`)
+    const nota = window._notaDetalheAtual;
+    const sectorId = (window._modalTeam && window._modalTeam.sectorId) || 'DESG';
+    fetch(`${API}/wpa/nota/${encodeURIComponent(noteId)}?fotos=1&sectorId=${encodeURIComponent(sectorId)}`)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(nota => {
         const cp = (nota.checkpoints || [])[cpIndex];
