@@ -5,11 +5,35 @@
 
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
-const { login, wpaFetch, getTokenStatus }     = require('../services/wpaService');
+const { login: wpaLogin, wpaFetch, getTokenStatus } = require('../services/wpaService');
+const { login: authLogin, authMiddleware }    = require('../middleware/auth');
 
 const router = express.Router();
 
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
+
+// ── AUTH ─────────────────────────────────────────────────────────────────────
+// POST /api/auth/login  — única rota pública
+router.post('/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password)
+    return res.status(400).json({ error: 'username e password obrigatórios' });
+
+  const result = authLogin(username, password);
+  if (!result)
+    return res.status(401).json({ error: 'Usuário ou senha incorretos' });
+
+  res.json({
+    token:    result.token,
+    username: result.username,
+    role:     result.role,
+    regional: result.regional,
+    exp:      result.exp,
+  });
+});
+
+// Protege TODAS as rotas abaixo com JWT
+router.use(authMiddleware);
 
 // Supabase: carregado para todos os modos que não sejam mock
 let _sbq = null;
@@ -243,7 +267,7 @@ router.get('/historico/equipes', async (req, res) => {
 
 router.post('/wpa/login', async (req, res) => {
   try {
-    const result = await login();
+    const result = await wpaLogin();
     res.json({ ok: true, userId: result.userId });
   } catch (err) {
     res.status(401).json({ ok: false, error: err.message });
