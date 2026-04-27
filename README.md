@@ -1,197 +1,336 @@
 # WPA Monitor — Engelmig Energia
 
-## PROJECT IDENTITY
-
-- **Domain**: Field-team productivity dashboard for Engelmig Energia (electrical utility subcontractor operating under EDP/Neoenergia concession in Espírito Santo, Brazil)
-- **Core problem solved**: EDP's WPA (Work Planning & Assignment) system exposes a real-time Azure API but provides no persistent productivity history. This project polls that API every 15 min, accumulates data in Supabase, and serves a multi-tab SPA dashboard.
-- **Deployment topology**: Two nodes with distinct roles. Node A = Linux server inside Engelmig's intranet (access to WPA API, runs cron, writes Supabase). Node B = Vercel serverless (public dashboard, reads Supabase only, no WPA access).
+> Dashboard operacional em tempo real para monitoramento de equipes de campo do sistema WPA (EDP), com histórico persistido no Supabase, metas configuráveis por regional, ranking diário/mensal e autenticação por papel (admin / regional).
 
 ---
 
-## RUNTIME MODES — `DATA_MODE` env var
+## Índice
 
-| Value | Where | Behavior |
-|---|---|---|
-| `wpa` | Linux server (PM2) | Fetches live from WPA API; cron writes Supabase every 15 min; full R/W |
-| `supabase` | Vercel serverless | Reads Supabase only; no WPA access; no cron capability |
-| `mock` | Local dev | Returns static fixture data; no external calls |
-
-**Critical invariant**: `server.js` starts `cronService` only when `DATA_MODE === 'wpa'`. `routes/index.js` loads `supabaseQueries` for all modes except `mock` (lazy singleton via `sbq()`). The Vercel entry-point is detected by `process.env.VERCEL`; when truthy, `server.js` exports `app` without calling `app.listen()`.
-
----
-
-## FILE MAP
-
-```
-server.js               Entry point. Express app. Webhook handler (MUST be before express.json()).
-routes/index.js         All API routes. Lazy-loads supabaseQueries (sbq()) and cronService.
-services/
-  wpaService.js         WPA Azure API auth + fetch. JWT cache. V2 note API. Historical fetch. Daily accumulator.
-  dataService.js        Mode-aware data abstraction (mock | wpa). Maps sectorId → regional.
-  supabaseClient.js     Singleton Supabase client (service_role key, server-only).
-  supabasePush.js       All Supabase writes: snapshots, teams_current, daily_totals, team_daily_totals.
-  cronService.js        node-cron: token refresh 45 min (24/7), snapshot 15 min (06-20h), consolidation 20:30.
-db/
-  supabaseQueries.js    All Supabase reads. filterByMonth() helper. Goal calculations. Historical snapshot query.
-mock/mockData.js        Static fixtures for DATA_MODE=mock.
-index.html              Single-file SPA. 5 tabs. Vanilla JS + CSS. No build step.
-vercel.json             Routes all traffic to server.js.
-supabase/schema.sql     Reference DDL for all 5 tables.
-```
+1. [Visão Geral](#1-visão-geral)
+2. [Arquitetura](#2-arquitetura)
+3. [Estrutura de Arquivos](#3-estrutura-de-arquivos)
+4. [Modos de Operação (DATA_MODE)](#4-modos-de-operação-data_mode)
+5. [Integração com a API WPA (EDP)](#5-integração-com-a-api-wpa-edp)
+6. [Banco de Dados — Supabase](#6-banco-de-dados--supabase)
+7. [Autenticação (JWT)](#7-autenticação-jwt)
+8. [Cron Jobs](#8-cron-jobs)
+9. [Webhook de Auto-Deploy](#9-webhook-de-auto-deploy)
+10. [Frontend — Abas e Funcionalidades](#10-frontend--abas-e-funcionalidades)
+11. [Variáveis de Ambiente (.env)](#11-variáveis-de-ambiente-env)
+12. [Como Rodar Localmente](#12-como-rodar-localmente)
+13. [Deploy em Produção (Linux + PM2)](#13-deploy-em-produção-linux--pm2)
+14. [Gerenciamento de Usuários](#14-gerenciamento-de-usuários)
+15. [Restrições Conhecidas e Armadilhas](#15-restrições-conhecidas-e-armadilhas)
+16. [Pendências e Roadmap](#16-pendências-e-roadmap)
 
 ---
 
-## WPA API INTEGRATION (`services/wpaService.js`)
+## 1. Visão Geral
 
-### Auth
-- **Auth URL**: `https://edp-wpa-po.azurewebsites.net/identity/signin`
-- **Method**: `POST application/x-www-form-urlencoded` with `Username`, `Password`
-- **Header required**: `X-Requested-With: XMLHttpRequest`
-- **Response**: `{ Token: "<JWT>", UserId: "..." }`
-- JWT cached in module-scope `_token`; refreshed 60 s before expiry (`_expireAt`). Fallback TTL = 1 h.
-- `forceRefresh()` — forces re-login regardless of TTL. Called by cron every 45 min and on server start.
-- `getTokenStatus()` — returns `{ valid, reason, expiresAt, expiresIn }` without making network call.
+O **WPA Monitor** é uma aplicação web interna da **Engelmig Energia** desenvolvida para acompanhar em tempo real o desempenho das equipes de campo que operam no sistema **WPA** da **EDP** (Energias do Brasil). O sistema exibe quantas ordens de serviço cada equipe baixou, está executando e concluiu no dia — o mesmo que os gestores acompanham no painel do WPA Gestão Online, porém consolidado, filtrado apenas para as equipes Engelmig, com histórico persistido, metas configuráveis e controle de acesso por regional.
 
-### API Bases
-- **Auth URL**: `https://edp-wpa-po.azurewebsites.net`
-- **API URL**: `https://edp-wpa-web-api.azurewebsites.net`
-- All API requests: `Authorization: Bearer <token>`
+### Problemas que o sistema resolve
 
-### Live Endpoints (current data)
+| Problema | Solução implementada |
+|----------|----------------------|
+| O WPA Gestão Online não filtra por empresa prestadora | Filtragem pelo `CompanyId` da Engelmig (`92a2f98e-8877-433e-8358-173b94c13a54`) |
+| Nenhuma retenção de histórico no WPA | Snapshots a cada 15 min gravados no Supabase; consulta por intervalo De/Até |
+| Notas com status 9→4 somem da API após sincronização | Acumulador em memória `_acc` no `wpaService.js` que reinjecta notas já vistas |
+| Sem visão consolidada por regional | Filtro por regional com agrupamentos automáticos; controle server-side no JWT |
+| Sem controle de metas | Metas mensais por tipo de OS configuráveis pelo admin; cálculo proporcional ao dia |
+| Sem ranking comparativo | Ranking diário/mensal por equipe, com pódio visual |
+| Acesso livre a dados de todas as regionais | JWT com roles (admin / gua / cac); filtro regional sobrescrito server-side |
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `GET /api/sessions/current?sectorId={sid}` | GET | Active sessions. Sole source of `Team.CompanyId` for Engelmig filter. Also has vehicle plate. |
-| `GET /api/teamsstatus/V2?sectorId={sid}&filterByExhibitionSector=true` | GET | V2 note arrays per team: `Concluded[]`, `Downloaded[]`, `Executed[]`, `Rejected[]` |
-| `GET /api/route/preroute?sectorId={sid}` | GET | Returns `WalletCount` per team (carteira size) |
+---
 
-### Historical Endpoints (past dates)
+## 2. Arquitetura
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `POST /api/Sessions/all/date?sectorId={sid}&date=M/D/YYYY` | POST | All sessions for a specific date. Body empty. |
-| `GET /api/notes/executed/{sessionId}` | GET | Concluded notes for a session. Array with `Number`, `Type`, `ConclusionDate`. |
-| `GET /api/notes/downloaded/{sessionId}` | GET | Downloaded notes for a session. |
-| `GET /api/notes/rejected/{sessionId}` | GET | Rejected notes for a session. |
-
-> **Historical note**: `GET /api/notes/execution?sectorId={sid}&date=M/D/YYYY` exists but returns only notes still in the system (not yet exported to ERP). Per-session endpoints are more reliable for historical data.
-
-### V2 Note Architecture (`getTeamsBySector`)
-
-Two parallel calls per sector:
-1. `GET /api/sessions/current` → filter Engelmig sessions by `CompanyId`, get vehicle plate
-2. `GET /api/teamsstatus/V2` → get note arrays per team
-
-V2 returns structured arrays instead of a flat note list. Match V2 data to sessions by `Team.Id` (primary) or `Team.Name` (fallback).
-
-**V2 ExecutionStatus mapping:**
 ```
-1 → baixada   (in wallet, waiting)
-2 → baixada   (in wallet variant)
-3 → executada (in progress)
-6 → executada (actively working on note)
-7 → executada (in progress variant)
-4 → concluida (exported/synced)
-5 → concluida (exported variant)
-9 → concluida (mobile pending sync)
+┌─────────────────────────────────────────────────────────────────────┐
+│                       SERVIDOR LINUX (PM2)                          │
+│                                                                     │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │                      server.js (Express)                       │ │
+│  │                                                                │ │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐  │ │
+│  │  │  routes/     │  │ middleware/  │  │   services/        │  │ │
+│  │  │  index.js    │  │  auth.js     │  │   wpaService.js    │  │ │
+│  │  │              │  │              │  │   cronService.js   │  │ │
+│  │  │  REST /api/* │  │  JWT HMAC    │  │   supabasePush.js  │  │ │
+│  │  │              │  │  RBAC        │  │   dataService.js   │  │ │
+│  │  └──────┬───────┘  └──────────────┘  └────────┬───────────┘  │ │
+│  │         │                                      │               │ │
+│  └─────────┼──────────────────────────────────────┼───────────────┘ │
+│            │                                      │                  │
+│            ▼                                      ▼                  │
+│   ┌─────────────────┐                  ┌──────────────────────┐     │
+│   │   index.html    │                  │   API WPA EDP        │     │
+│   │   (SPA vanilla) │                  │   Azure AppService   │     │
+│   └─────────────────┘                  │   edp-wpa-web-api    │     │
+│                                        └──────────────────────┘     │
+│                                                  │                   │
+│                                           escreve a cada 15 min     │
+│                                                  │                   │
+└──────────────────────────────────────────────────┼───────────────────┘
+                                                   ▼
+                                      ┌────────────────────────┐
+                                      │         Supabase       │
+                                      │  (PostgreSQL gerenciado)│
+                                      │                        │
+                                      │  snapshots             │
+                                      │  teams_current         │
+                                      │  daily_totals          │
+                                      │  team_daily_totals     │
+                                      │  metas                 │
+                                      └────────────────────────┘
 ```
 
-**`carteiraCount`**: sourced from `preroute` endpoint's `WalletCount` — this is the authoritative wallet size. The `Downloaded[]` array in V2 is used for note-level details but `WalletCount` is the count shown in the UI.
+### Fluxo principal de dados
 
-### Company Filter
-Only sessions where `session.Team.CompanyId === '92a2f98e-8877-433e-8358-173b94c13a54'` are kept. This is Engelmig's UUID in EDP's system.
+1. **Cron (a cada 15 min, 06h–20h BRT)**: servidor consulta a API WPA EDP → filtra equipes Engelmig pelo `CompanyId` → grava snapshot completo no Supabase.
+2. **Cliente (navegador)**: faz `GET /api/teams` com token JWT no header → servidor consulta WPA ao vivo → retorna dados frescos.
+3. **Histórico**: cliente faz `GET /api/historico/sessoes?de=YYYY-MM-DD&ate=YYYY-MM-DD` → servidor lê `daily_totals` / `snapshots` do Supabase → retorna resumo detalhado por dia.
+4. **Consolidação diária (20:30 BRT)**: cron lê os snapshots do dia, extrai o estado final de cada equipe e grava em `daily_totals` / `team_daily_totals` apenas as notas concluídas — valor definitivo do dia.
 
-### Sector → Regional Mapping
+---
+
+## 3. Estrutura de Arquivos
+
+```
+prod-stc/
+│
+├── server.js                  # Ponto de entrada — Express + webhook de deploy + inicialização
+├── index.html                 # SPA frontend (HTML, CSS, JS embutidos — sem bundler)
+├── package.json               # Dependências e scripts npm
+├── .env                       # Variáveis de ambiente reais (não versionado — git ignored)
+├── .env.example               # Modelo de configuração (versionado)
+├── iniciar.bat                # Atalho para iniciar em Windows (desenvolvimento)
+│
+├── routes/
+│   └── index.js               # Todas as rotas REST /api/* + middleware de autenticação
+│
+├── middleware/
+│   └── auth.js                # JWT (HMAC-SHA256 nativo), login, authMiddleware, RBAC regional
+│
+├── services/
+│   ├── wpaService.js          # Integração completa com API WPA EDP
+│   │                          #   auth (JWT cache + auto-renovação), getSessions,
+│   │                          #   getTeamsBySector (V2), getTeamsByDate (histórico),
+│   │                          #   getSessionDetail, acumulador _acc
+│   ├── dataService.js         # Abstração de fonte: mock | wpa — mapeia setores/regional
+│   ├── supabasePush.js        # Escrita no Supabase: saveSnapshot, pushTeams,
+│   │                          #   upsertDailyTotals, upsertTeamDailyTotals, consolidateDay
+│   ├── supabaseClient.js      # Singleton do cliente @supabase/supabase-js (service_role)
+│   └── cronService.js         # node-cron: renovação de token, snapshot 15 min, consolidação
+│
+├── db/
+│   ├── supabaseQueries.js     # Queries de leitura Supabase: histórico, metas, ranking,
+│   │                          #   getTeamSessionHistory (paginado), getMetasCalculadas
+│   ├── index.js               # Inicialização SQLite (legado — banco original, desativado)
+│   ├── schema.js              # Schema SQLite (legado, mantido para referência)
+│   └── queries.js             # Queries SQLite (legado, mantido para referência)
+│
+├── mock/
+│   └── mockData.js            # Dados simulados para DATA_MODE=mock (desenvolvimento offline)
+│
+└── node_modules/              # Dependências npm (não versionado)
+```
+
+### Dependências de produção
+
+| Pacote | Versão | Função |
+|--------|--------|--------|
+| `express` | ^4.18.2 | Servidor HTTP e roteamento |
+| `cors` | ^2.8.5 | Cabeçalhos CORS para desenvolvimento local |
+| `dotenv` | ^16.4.5 | Carregamento de `.env` |
+| `node-fetch` | ^2.7.0 | HTTP client para chamar a API WPA EDP |
+| `node-cron` | ^3.0.3 | Agendamento de jobs periódicos |
+| `@supabase/supabase-js` | ^2.49.4 | Cliente oficial Supabase |
+
+> **Zero dependências externas para autenticação.** O JWT é assinado e verificado com o módulo nativo `crypto` do Node.js (HMAC-SHA256), sem `jsonwebtoken` ou similar.
+
+---
+
+## 4. Modos de Operação (DATA_MODE)
+
+### `DATA_MODE=wpa` — Produção (servidor interno Engelmig)
+
+- Consulta a API WPA EDP diretamente em tempo real.
+- Cron jobs ativos: token renewal (45 min), snapshot (15 min), consolidação diária (20:30).
+- Grava snapshots e totais no Supabase.
+- **Requisito**: acesso à internet + credenciais WPA válidas no `.env`.
+
+### `DATA_MODE=supabase` — Produção alternativa (Vercel / edge)
+
+- Lê apenas o último estado salvo no Supabase (`teams_current`).
+- Não acessa a API WPA EDP (sem credenciais necessárias).
+- Cron desativado — todas as escritas vêm do servidor Linux.
+- **Requisito**: `SUPABASE_URL` e `SUPABASE_SERVICE_KEY` configurados.
+
+### `DATA_MODE=mock` — Desenvolvimento offline
+
+- Dados simulados fixos de `mock/mockData.js`.
+- Nenhuma conexão externa: sem WPA, sem Supabase.
+- Cron desativado.
+- Ideal para desenvolvimento de frontend sem dependências.
+
+---
+
+## 5. Integração com a API WPA (EDP)
+
+A API WPA não possui documentação oficial. Todos os endpoints, parâmetros e estruturas de dados foram mapeados via inspeção do DevTools do browser no painel WPA Gestão Online e via Postman.
+
+### URLs base
+
+| Propósito | URL |
+|-----------|-----|
+| Autenticação | `https://edp-wpa-po.azurewebsites.net` |
+| API de dados | `https://edp-wpa-web-api.azurewebsites.net` |
+
+### Autenticação WPA
+
+```
+POST /identity/signin
+Content-Type: application/x-www-form-urlencoded
+X-Requested-With: XMLHttpRequest
+
+Body: Username=...&Password=...
+```
+
+Resposta: `{ Token: "<JWT>", UserId: "..." }`
+
+O token é cacheado em memória (`_token`, `_expireAt`). Renovado automaticamente 60 segundos antes de expirar. Fallback de TTL = 1 hora se o JWT não contiver `exp`. `forceRefresh()` força novo login independente do cache — chamado pelo cron a cada 45 min e no startup do servidor.
+
+### Endpoints de dados ao vivo
+
+| Endpoint | Método | Propósito |
+|----------|--------|-----------|
+| `GET /api/sessions/current?sectorId={sid}` | GET | Sessões ativas — **única fonte** do `Team.CompanyId` para filtrar Engelmig; também fornece a placa do veículo |
+| `GET /api/teamsstatus/V2?sectorId={sid}&filterByExhibitionSector=true` | GET | Arrays de notas por equipe: `Concluded[]`, `Downloaded[]`, `Executed[]`, `Rejected[]` |
+| `GET /api/route/preroute?sectorId={sid}` | GET | `WalletCount` por equipe (tamanho da carteira) |
+
+### Endpoints históricos (datas passadas)
+
+| Endpoint | Método | Propósito |
+|----------|--------|-----------|
+| `POST /api/Sessions/all/date?sectorId={sid}&date=M/D/YYYY` | POST | Todas as sessões de um dia. Body vazio. **Sempre retorna `Collaborators: []`** — dados reais de colaboradores só vêm do endpoint individual. |
+| `GET /api/Sessions/{sessionId}` | GET | Detalhes completos de uma sessão, incluindo `Collaborators[{ Id, Code, Name, Phone }]` — **única fonte** de colaboradores reais |
+| `GET /api/notes/executed/{sessionId}/session` | GET | Notas concluídas da sessão |
+| `GET /api/notes/downloaded/{sessionId}/session` | GET | Notas baixadas da sessão |
+| `GET /api/notes/rejected/{sessionId}/session` | GET | Notas rejeitadas da sessão |
+| `GET /api/notes/surveyed/{sessionId}/session` | GET | Notas vistoriadas da sessão |
+
+> **Atenção ao sufixo `/session`**: todos os endpoints de notas por sessão exigem esse sufixo. Sem ele, o endpoint retorna uma estrutura diferente e não útil. Confirmado via DevTools do painel WPA.
+
+### Mapeamento de setores por regional
+
+| Código do Setor | Regional |
+|-----------------|----------|
+| `DESG` | Guarapari (GUA) |
+| `DEPT` | Guarapari (GUA) |
+| `DESC` | Cachoeiro (CAC) |
+
 ```javascript
 REGIONAL_MAP = { DESG: 'GUA', DEPT: 'GUA', DESC: 'CAC' }
 SETORES      = { GUA: ['DESG','DEPT'], CAC: ['DESC'], ALL: ['DESG','DEPT','DESC'] }
 ```
 
-### Daily Accumulator (`_acc`)
-**Problem**: Notes synced (status 9→4) disappear from the V2 API. If polled after sync, count drops.
-**Solution**: In-memory `Map` keyed by `noteId`. Every `getTeamsBySector` call records all executadas + concluidas. `_accApply()` re-injects previously seen notes on the next poll. Resets at midnight.
+### Filtragem de equipes Engelmig
 
-### Historical Fetch (`getTeamsByDate`)
-Used by the backfill endpoint. Per-sector strategy:
-1. `POST /api/Sessions/all/date` → get sessions for the date, filter by Engelmig `CompanyId`
-2. For each Engelmig session: call `GET /api/notes/executed/{sessionId}`, `downloaded/{sessionId}`, `rejected/{sessionId}` in parallel
-3. Map `executed` → `notasConcluidas`, `downloaded` → `notasBaixadas`, `rejected` → `notasRejeitadas`
-4. Merge multiple sessions for same team (relogins) deduplicating by note code
+O WPA retorna **todas** as equipes do setor (incluindo outras prestadoras). O filtro é feito pelo campo `session.Team.CompanyId`. O UUID da Engelmig no sistema EDP é:
 
-> **Limitation**: Per-session note endpoints only return data while the session is still active or recently closed. Fully exported historical sessions return empty arrays. This means backfill data is partial for dates more than ~1 day old.
-
-### Note Object (normalized)
-```javascript
-{
-  codigo:   string,   // note number (e.g. "015001763337")
-  tipoCode: string,   // service type (e.g. "LN", "LE", "DL")
-  tipoNome: string,   // same as tipoCode for historical (full name from V2 when available)
-  status:   string,   // "baixada" | "executada" | "concluida" | "rejeitada"
-}
+```
+92a2f98e-8877-433e-8358-173b94c13a54
 ```
 
-### Normalized Team Object
+### ExecutionStatus das notas (V2)
+
+| Código | Classificação | Significado |
+|--------|---------------|-------------|
+| `1` | baixada | Na carteira, aguardando execução |
+| `2` | baixada | Variante na carteira |
+| `3` | executada | Em andamento |
+| `6` | executada | Trabalhando ativamente na nota |
+| `7` | executada | Variante em andamento |
+| `4` | concluída | Exportada/sincronizada com ERP |
+| `5` | concluída | Exportada variante |
+| `9` | concluída | Concluída no mobile, pendente sincronização |
+
+> **Status 4 e 5 somem do V2 após sincronização**: o endpoint `/api/notes/execution` não retorna notas com esses status. Apenas o array `Concluded[]` do V2 as contém. Por isso o V2 é a fonte canônica dos contadores. Adicionalmente, o acumulador `_acc` em memória (reinjetado a cada poll do mesmo dia) evita queda no contador quando notas transitam de status 9→4.
+
+### Estratégia de dois endpoints paralelos por setor (`getTeamsBySector`)
+
+Para cada setor, duas chamadas paralelas:
+1. `GET /api/sessions/current` → sessões Engelmig (fonte do `CompanyId` e da placa)
+2. `GET /api/teamsstatus/V2` → arrays de notas
+
+Matching entre as duas respostas: por `Team.Id` (primário) ou `Team.Name` (fallback).
+
+### Busca histórica (`getTeamsByDate`)
+
+Usada pelo backfill. Fluxo por setor:
+1. `POST /api/Sessions/all/date` → sessões do dia, filtradas por `CompanyId`
+2. Para cada sessão Engelmig em paralelo:
+   - `executed`, `downloaded`, `rejected`, `surveyed` — notas
+   - `GET /api/Sessions/{sessionId}` — colaboradores reais
+3. Agrupamento por equipe, merge de re-logins (múltiplas sessões do mesmo dia)
+4. Deduplicação de notas por código e de colaboradores por matrícula
+
+### Objeto normalizado de equipe
+
 ```javascript
 {
   id:             string,          // WPA session ID
-  sigla:          string,          // team code (e.g. "EPVGA30")
-  teamName:       string,          // same as sigla
+  sigla:          string,          // ex.: "EPVGA30"
+  teamName:       string,          // igual a sigla
   sectorId:       string,          // "DESG" | "DEPT" | "DESC"
   regional:       string,          // "GUA" | "CAC"
   date:           string,          // "YYYY-MM-DD"
   sessionBegin:   string|null,     // ISO datetime
-  sessionEnd:     string|null,     // ISO datetime, null if still active
+  sessionEnd:     string|null,     // ISO datetime, null se sessão ativa
   vehiclePlate:   string,
-  collaborators:  [{nome, matricula, cargo}],
-  relogins:       number,
+  collaborators:  [{ nome, matricula, cargo }],
+  relogins:       number,          // sessões extras (0 = apenas uma sessão no dia)
+  sessions:       [{ begin, end }],// todas as sessões do dia
   deviceModel:    string|null,
   appVersion:     string|null,
-  carteiraCount:  number,          // WalletCount from preroute (authoritative)
-  servicosPerfil: string[],        // unique tipoCode values across all notes
-  notasBaixadas:   [Note],         // status baixada
-  notasExecutadas: [Note],         // status executada (em andamento)
-  notasConcluidas: [Note],         // status concluida (executadas no sentido de produção)
+  carteiraCount:  number,          // fonte: WalletCount do preroute
+  servicosPerfil: string[],        // tipos únicos de OS da carteira
+  notasBaixadas:   [Note],
+  notasExecutadas: [Note],
+  notasConcluidas: [Note],
   notasRejeitadas: [Note],
+  notasVistoriadas:[Note],
 }
 ```
 
-**UI nomenclature** (differs from internal field names):
-| Internal | UI label |
-|---|---|
-| `notasBaixadas` | OS em Carteira |
-| `notasExecutadas` | Em Andamento |
-| `notasConcluidas` | OS Executadas |
-| `carteiraCount` | OS em Carteira (count) |
+### Objeto normalizado de nota
+
+```javascript
+{
+  codigo:   string,   // número da OS, ex.: "015001763337"
+  tipoCode: string,   // código do tipo: "LN", "LE", "DL", ...
+  tipoNome: string,   // nome por extenso (quando disponível do V2)
+  status:   string,   // "baixada" | "executada" | "concluida" | "rejeitada" | "vistoriada"
+}
+```
 
 ---
 
-## CRON JOBS (`services/cronService.js`)
+## 6. Banco de Dados — Supabase
 
-All jobs use `timezone: 'America/Sao_Paulo'`. Only active when `DATA_MODE === 'wpa'`.
+Todas as escritas e leituras históricas passam pelo Supabase. O cliente (`@supabase/supabase-js`) usa a chave `service_role`, que contorna RLS — a chave nunca deve chegar ao browser.
 
-| Schedule | Job | Action |
-|---|---|---|
-| `*/45 * * * *` (every 45 min, 24/7) | Token refresh | `forceRefresh()` — renews WPA JWT proactively |
-| `*/15 6-20 * * *` (every 15 min, 06h–20h) | Snapshot | Fetches all teams, writes to 4 Supabase tables |
-| `30 20 * * *` (daily 20:30) | Consolidation | Finalizes `daily_totals` and `team_daily_totals` with concluidas-only counts |
+> **Atenção ao limite de 1.000 linhas**: o cliente Supabase retorna no máximo 1.000 linhas por query **sem emitir erro ou aviso**. Queries que possam exceder esse limite (ex.: `getTeamSessionHistory` com meses longos) usam paginação com `.range(page * size, (page+1)*size - 1)` em loop `while`.
 
-**On startup** (with 2 s and 5 s delays respectively):
-- Token refresh runs immediately
-- Snapshot runs immediately if current hour is between 06h–20h
+### Tabela `snapshots` — registro bruto histórico
 
----
-
-## SUPABASE SCHEMA
-
-All tables use `service_role` key (bypasses RLS). Client singleton in `supabaseClient.js`.
-
-### `snapshots` — raw historical record
 ```sql
-id            BIGSERIAL PK
-date          DATE                          -- YYYY-MM-DD
+id            BIGSERIAL PRIMARY KEY
+date          DATE           -- YYYY-MM-DD
 team_name     TEXT
-sector_id     TEXT
-regional      TEXT
+sector_id     TEXT           -- DESG | DEPT | DESC
+regional      TEXT           -- GUA | CAC
 session_begin TIMESTAMPTZ
 session_end   TIMESTAMPTZ
 vehicle_plate TEXT
@@ -200,44 +339,43 @@ executadas    INTEGER
 concluidas    INTEGER
 rejeitadas    INTEGER
 captured_at   TIMESTAMPTZ DEFAULT now()
-data          JSONB                         -- full normalized team object
+data          JSONB          -- objeto completo normalizado da equipe
 ```
-Write: `INSERT` (never upsert) — one row per team per poll. Grows continuously.
-Read: `consolidateDay()` reads to find last snapshot per team for end-of-day finalization.
-Read: `getTeamsByDateFromSnapshots(de, ate, regional)` — powers the Monitor date filter.
 
-### `teams_current` — latest state per team
+- **Escrita**: INSERT puro (nunca upsert) — um registro por equipe por ciclo de 15 min. Cresce continuamente.
+- **Leitura**: base para consolidação, para a aba Monitor em datas passadas (`getTeamsByDateFromSnapshots`) e para a aba Histórico (`getTeamSessionHistory`).
+
+### Tabela `teams_current` — estado mais recente por equipe
+
 ```sql
-team_name   TEXT UNIQUE PK
+team_name   TEXT UNIQUE PRIMARY KEY
 regional    TEXT
 sector_id   TEXT
-data        JSONB       -- full normalized team object
+data        JSONB          -- objeto completo mais recente
 updated_at  TIMESTAMPTZ
 ```
-Write: `UPSERT ON CONFLICT team_name`. Replaced on every snapshot cycle.
-Read: `GET /api/teams` in `supabase` mode (Vercel).
 
-### `daily_totals` — regional-level daily aggregation
+- **Escrita**: UPSERT ON CONFLICT `team_name`. Substituído em cada ciclo de snapshot.
+- **Leitura**: `GET /api/teams` no modo `supabase` (Vercel).
+
+### Tabela `daily_totals` — agregação diária por regional
+
 ```sql
-id         BIGSERIAL PK
+id         BIGSERIAL PRIMARY KEY
 date       DATE
 regional   TEXT
 tipo_code  TEXT
 count      INTEGER
 UNIQUE(date, regional, tipo_code)
 ```
-Intraday: accumulates `executadas + concluidas`. End-of-day: `consolidateDay()` overwrites with `concluidas` only.
 
-### `metas` — monthly productivity targets per regional
-```sql
-regional  TEXT UNIQUE PK   -- "GUA" | "CAC"
-data      JSONB             -- e.g. {"LN": 120, "LE": 80, "DL": 40}
-```
-Write: `UPSERT ON CONFLICT regional`. Set via dashboard modal (password protected).
+- **Durante o dia (intraday)**: soma `executadas + concluidas` (contagem inclui notas ainda em campo).
+- **Após consolidação (20:30)**: sobrescreve com `concluidas` apenas — valor definitivo do dia.
 
-### `team_daily_totals` — per-team daily aggregation
+### Tabela `team_daily_totals` — agregação diária por equipe
+
 ```sql
-id         BIGSERIAL PK
+id         BIGSERIAL PRIMARY KEY
 date       DATE
 team_name  TEXT
 regional   TEXT
@@ -246,281 +384,628 @@ tipo_code  TEXT
 count      INTEGER
 UNIQUE(date, team_name, tipo_code)
 ```
-Intraday: `executadas + concluidas`. End-of-day: `concluidas` only.
 
----
+Mesmo ciclo de vida que `daily_totals`, porém com granularidade por equipe. Usado no ranking e no histórico detalhado.
 
-## DATA WRITE PIPELINE (Linux server, DATA_MODE=wpa)
+### Tabela `metas` — metas mensais por regional
+
+```sql
+regional  TEXT UNIQUE PRIMARY KEY   -- "GUA" | "CAC"
+data      JSONB                      -- ex.: { "LN": 120, "LE": 80, "DL": 40 }
+```
+
+- **Escrita**: UPSERT pelo admin via interface.
+- **Leitura**: `getMetasCalculadas` para cálculo de progresso proporcional.
+
+### Pipeline de escrita (modo wpa)
 
 ```
-node-cron every 45 min (24/7)
-  └─ runTokenRefresh()  →  forceRefresh()  →  WPA auth endpoint
-
-node-cron every 15 min (06:00–20:00 BRT)
+Cron a cada 15 min (06h–20h)
   └─ runSnapshot()
-       ├─ getTeams()                    ← WPA API V2 (all sectors in parallel)
-       ├─ saveSnapshot(teams, date)     → INSERT into snapshots
-       ├─ pushTeams(teams)              → UPSERT into teams_current
-       ├─ upsertDailyTotals(teams)      → UPSERT into daily_totals    (exec+conc, deduped by key)
-       └─ upsertTeamDailyTotals(teams)  → UPSERT into team_daily_totals (exec+conc, deduped by key)
+       ├─ getTeams()                    ← API WPA (setores em paralelo)
+       ├─ saveSnapshot(teams)           → INSERT snapshots
+       ├─ pushTeams(teams)              → UPSERT teams_current
+       ├─ upsertDailyTotals(teams)      → UPSERT daily_totals    (exec + conc, deduplicado)
+       └─ upsertTeamDailyTotals(teams)  → UPSERT team_daily_totals (exec + conc, deduplicado)
 
-node-cron daily at 20:30 BRT
+Cron às 20:30 BRT
   └─ runConsolidate(date)
        └─ consolidateDay(date)
-            ├─ SELECT snapshots WHERE date=today ORDER BY captured_at DESC
-            ├─ keep latest row per team_name
-            ├─ UPSERT into daily_totals       (concluidas only — authoritative final)
-            └─ UPSERT into team_daily_totals  (concluidas only — authoritative final)
+            ├─ SELECT snapshots WHERE date=X ORDER BY captured_at DESC
+            ├─ último snapshot por equipe = estado final do dia
+            ├─ UPSERT daily_totals       (concluidas apenas — definitivo)
+            └─ UPSERT team_daily_totals  (concluidas apenas — definitivo)
 ```
 
-**Deduplication in upserts**: Before sending to Supabase, rows are accumulated by conflict key in memory. This prevents the PostgreSQL error `ON CONFLICT DO UPDATE command cannot affect row a second time` which occurs when the same team has multiple sessions (relogins) in one day.
+**Deduplicação antes do UPSERT**: antes de enviar ao Supabase, as linhas são acumuladas em memória por chave de conflito. Isso evita o erro PostgreSQL `ON CONFLICT DO UPDATE command cannot affect row a second time` quando uma equipe tem múltiplas sessões (re-logins) no mesmo dia.
 
----
-
-## HISTORICAL BACKFILL (`POST /api/admin/backfill?date=YYYY-MM-DD`)
-
-Populates Supabase with data from a past date using WPA historical endpoints.
-
-**Flow per sector** (`DESG`, `DEPT`, `DESC` run in parallel):
-1. `POST /api/Sessions/all/date` → sessions for that date
-2. Filter Engelmig sessions by `CompanyId`
-3. For each session: fetch `executed`, `downloaded`, `rejected` note arrays
-4. Merge sessions for the same team (relogins), deduplicate notes by code
-5. `saveSnapshot(teams, date)` + `upsertDailyTotals` + `upsertTeamDailyTotals`
-6. `runConsolidate(date)` — finalize totals
-
-**Limitation**: Notes from fully-exported sessions are not accessible via the per-session endpoints. Backfill data is partial for dates before ~24 h ago.
-
-**Manual loop for April:**
-```bash
-for d in 01 02 03 04 07 08 09 10 11 14 15 16 17 18 21 22 23 24 25; do
-  echo -n "2026-04-$d → "
-  curl -s -X POST "http://localhost:3002/api/admin/backfill?date=2026-04-$d"
-  echo ""
-  sleep 3
-done
-```
-
----
-
-## GOAL CALCULATION (`getMetasCalculadas`)
+### Cálculo de metas (`getMetasCalculadas`)
 
 ```javascript
-// Input: yearMonth = "YYYY-MM"
-totalDU    = diasUteisNoMes(year, month)         // Mon–Fri count in full month
-decorridos = diasUteisAte(year, month, diaRef)   // Mon–Fri from day 1 to today (or last day if past month)
-semanaAtual = Math.ceil(diaRef / 7)
-
-// Per tipo, per regional:
-diaria     = mensal / 22          // 22 = fixed constant agreed with management (NOT totalDU)
-semanal    = diaria * 5
-ateHoje    = diaria * decorridos  // proportional target up to today
-realizado  = SUM(count) FROM daily_totals WHERE month = yearMonth AND regional = X AND tipo_code = Y
+// Constante histórica acordada com a gestão: meta mensal ÷ 22 = meta diária
+diaria    = mensal / 22               // NÃO usa dias úteis reais do mês
+semanal   = diaria * 5
+ateHoje   = diaria * diasUteisAte()   // proporcional ao dia atual
+realizado = SUM(count) FROM daily_totals WHERE month = X AND regional = Y AND tipo_code = Z
 percentual = (realizado / ateHoje) * 100
-saldo      = realizado - ateHoje  // positive = ahead, negative = behind
+saldo     = realizado - ateHoje       // positivo = adiantado, negativo = atrasado
 ```
-
-`diaria = mensal / 22` uses the fixed constant 22. Intentional — targets were agreed on a 22-day basis.
 
 ---
 
-## API ROUTES (`routes/index.js`)
+## 7. Autenticação (JWT)
 
-All routes under `/api`. `sbq()` = lazy singleton for `supabaseQueries`.
+### Visão geral
 
-### Monitor
-| Method | Path | Query params | Notes |
-|---|---|---|---|
-| GET | `/api/teams` | `regional`, `sectorId` | `supabase` → `teams_current`; `wpa`/`mock` → live |
-| GET | `/api/teams/historico` | `de=YYYY-MM-DD`, `ate=YYYY-MM-DD`, `regional` | Snapshots for date range. Single day = latest snapshot per team. Range = latest snapshot + accumulated notes. |
-| GET | `/api/teams/:teamId` | — | Searches all sectors |
-| GET | `/api/summary` | — | Aggregated per regional |
-| GET | `/api/status` | — | Health check + mode/config status |
+Autenticação implementada **sem dependências externas** usando o módulo nativo `crypto` do Node.js. Tokens JWT com assinatura HMAC-SHA256.
 
-### Metas
-| Method | Path | Query params | Notes |
-|---|---|---|---|
-| GET | `/api/metas` | — | Raw `{GUA:{},CAC:{}}` |
-| POST | `/api/metas` | — | Body: `{GUA:{LN:120,...},CAC:{...}}` |
-| GET | `/api/metas/calculadas` | `m=YYYY-MM` | diaria/semanal/ateHoje/realizado/percentual/saldo |
+- **Sessões**: 8 horas
+- **Armazenamento no cliente**: `localStorage` (`wpa-token`, `wpa-user`)
+- **Transmissão**: header `Authorization: Bearer <token>` em todas as chamadas `/api/*`
 
-### Histórico
-| Method | Path | Query params | Notes |
-|---|---|---|---|
-| GET | `/api/historico/mes` | `m=YYYY-MM` | Month totals by regional/tipo |
-| GET | `/api/historico/diario` | `m=YYYY-MM` | Daily breakdown by regional/tipo |
-| GET | `/api/ranking/equipes` | `m=YYYY-MM`, `regional` | Teams ranked by total concluidas |
-| GET | `/api/historico/equipes` | `m=YYYY-MM`, `team` | Day-by-day per team |
-| GET | `/api/equipes/producao` | `de`, `ate`, `regional`, `team` | Aggregated production, free date range |
+### Rota pública de login
 
-### WPA / Admin
-| Method | Path | Query params | Notes |
-|---|---|---|---|
-| GET | `/api/wpa/token-status` | — | Current JWT state without network call |
-| POST | `/api/wpa/login` | — | Force WPA re-login |
-| GET | `/api/wpa/probe` | `path` | Proxy any WPA endpoint for debugging |
-| POST | `/api/admin/snapshot` | — | Manual snapshot trigger |
-| POST | `/api/admin/consolidar` | `date=YYYY-MM-DD` | Manual consolidation |
-| POST | `/api/admin/backfill` | `date=YYYY-MM-DD` | Historical data import from WPA |
+```
+POST /api/auth/login
+Content-Type: application/json
 
-### Debug
-| Method | Path | Query params | Notes |
-|---|---|---|---|
-| GET | `/api/debug/notas` | `sectorId` | Session↔note matching diagnostic (live) |
-| GET | `/api/debug/historico` | `sectorId`, `date` | Raw historical sessions (all companies) |
-| GET | `/api/debug/historico-notas` | `sectorId`, `date` | Raw historical note structure — shows `byStatus`, `byExecStatus`, field names |
-| GET | `/api/debug/preroute` | `sectorId` | Raw preroute/WalletCount structure |
-| GET | `/api/debug/teamsstatus` | `sectorId`, `team`, `raw=1` | V2 teamsstatus diagnostic. `raw=1` = raw structure; default = filtered to Engelmig |
+{ "username": "admin", "password": "suasenha" }
+```
+
+Resposta de sucesso:
+```json
+{
+  "token":    "<JWT>",
+  "username": "admin",
+  "role":     "admin",
+  "regional": "ALL",
+  "exp":      1234567890
+}
+```
+
+Esta é a **única rota pública**. Todas as demais rotas `/api/*` exigem Bearer token válido.
+
+### Middleware server-side (`authMiddleware`)
+
+1. Verifica presença do header `Authorization: Bearer`.
+2. Valida assinatura HMAC-SHA256 do token com `JWT_SECRET`.
+3. Verifica expiração (`payload.exp < now`).
+4. Seta `req.user = { username, role, regional, exp }`.
+5. **Para usuários não-admin**: sobrescreve `req.query.regional` e `req.body.regional` com o regional do JWT. Isso impede contorno via manipulação de URL — a restrição é aplicada no servidor.
+
+### Papéis (roles)
+
+| Role | Descrição | Regional no JWT |
+|------|-----------|-----------------|
+| `admin` | Acesso total — todas as regionais, aba Admin, edição de metas | `ALL` |
+| `gua` | Somente Guarapari — dados GUA, sem Admin | `GUA` |
+| `cac` | Somente Cachoeiro — dados CAC, sem Admin | `CAC` |
+
+### Configuração de usuários
+
+Usuários são definidos na variável `AUTH_USERS` do `.env`. Formato:
+
+```
+usuario1:sha256(senha1):role1:regional1,usuario2:sha256(senha2):role2:regional2
+```
+
+Exemplo completo:
+```dotenv
+AUTH_USERS=admin:HASH_ADMIN:admin:ALL,guarapari:HASH_GUA:gua:GUA,cachoeiro:HASH_CAC:cac:CAC
+```
+
+Geração de hash SHA-256:
+```bash
+# Linux / macOS
+echo -n "suasenha" | sha256sum
+
+# PowerShell (Windows)
+[System.BitConverter]::ToString(
+  [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+    [System.Text.Encoding]::UTF8.GetBytes("suasenha")
+  )
+).Replace("-","").ToLower()
+```
+
+### Hashes de exemplo (senhas para configuração inicial — altere imediatamente em produção)
+
+| Usuário | Senha de exemplo | Hash SHA-256 |
+|---------|------------------|--------------|
+| `admin` | `Engelmig@2025` | `a1a15919c9895c3e7f52c2e5fb9bf0be412eff2f0e05e4b91733ed304a5a5797` |
+| `guarapari` | `Guarapari@2025` | `e1e7753b136e9a059eb1a685e25e949e9f6f3f82fdda685949ff269d458fb303` |
+| `cachoeiro` | `Cachoeiro@2025` | `204b0f28183908cf80a3920798e7be6c89db96fd7a17ecb51cf82a0589d98309` |
+
+### Status da autenticação (abril/2026)
+
+| Componente | Status |
+|------------|--------|
+| `middleware/auth.js` (backend) | ✅ Implementado e em produção |
+| `routes/index.js` — `POST /api/auth/login` | ✅ Implementado |
+| `routes/index.js` — `router.use(authMiddleware)` | ✅ Implementado |
+| `.env.example` — campos `JWT_SECRET` e `AUTH_USERS` | ✅ Documentado |
+| Frontend — tela de login, overlay, gestão de token no `index.html` | ⏳ Pendente |
 
 ---
 
-## FRONTEND SPA (`index.html`)
+## 8. Cron Jobs
 
-Single HTML file. No build step, no bundler, no framework. Vanilla JS + CSS custom properties.
+Gerenciados por `services/cronService.js` usando `node-cron`. Só ativados quando `DATA_MODE=wpa`.
 
-### Tab Architecture
-```
-switchTab(tab)
-  monitor   → loadData() on interval; re-loads on date/regional/tipos change
-  metas     → loadMetasCalculadas() on switch + month input change
-  ranking   → loadRanking() on switch + month/regional change
-  historico → loadHistorico() on switch + month/team change
-  equipes   → initEquipes() on switch (sets default De/Até) → loadEquipes()
-```
+| Job | Expressão cron | Janela | Ação |
+|-----|---------------|--------|------|
+| Renovação de token WPA | `*/45 * * * *` | 24/7 | `forceRefresh()` — mantém JWT WPA sempre fresco |
+| Snapshot | `*/15 6-20 * * *` | 06h–20h BRT | Busca todas as equipes, grava em 4 tabelas Supabase |
+| Consolidação diária | `30 20 * * *` | Diariamente 20:30 BRT | Finaliza `daily_totals` e `team_daily_totals` com concluídas apenas |
 
-### Global State
-```javascript
-allTeams        // array: current teams (Monitor tab)
-currentRegional // "ALL" | "GUA" | "CAC"
-currentFilter   // string: team name search
-currentTab      // active tab name
-selectedTipos   // Set<string>: service type filter (default = all 10 types)
-_metasCache     // { GUA:{}, CAC:{} } — fetched once at load
-```
+Todos os jobs usam `timezone: 'America/Sao_Paulo'`.
 
-### TIPOS_SERVICO
-```javascript
-{ LN:'Ligação Nova', LE:'Ligação Existente', DL:'Desligamento', MD:'Modificação',
-  SF:'Suspensão de Fornecimento', RL:'Religa', UG:'Uso Geral',
-  DD:'Falhas para Distribuição', II:'Inspeção de Irregularidade', PO:'Ordem Prioritária' }
-```
-
-### Tab: Monitor
-**Filter bar**: De / Até (date range) + Regional + Tipos (checkbox dropdown) + Atualizar.
-
-- **De = Até = today** → live data from `GET /api/teams`; auto-refreshes every 5 min
-- **Past date or range** → historical data from `GET /api/teams/historico`; badge "📅 HISTÓRICO" shown; button "↩ Hoje" to return to live; auto-refresh paused
-- **"Até" validation**: never allowed before "De" (auto-corrected)
-- **Tipos filter**: dropdown with checkboxes per service type; "Todos" / "Nenhum" shortcuts; affects produtividade grid and tipo chips in team cards
-- **OS cards**: flex-wrap layout — reorganize and center when fewer items are visible
-
-Productivity section: `calcTotaisPorRegional(teams)` aggregates `notasExecutadas + notasConcluidas` filtered by `selectedTipos`. Progress bar per tipo vs `metas[regional][tipoCode]`.
-
-### Tab: Metas (configuração)
-**Password protected**: clicking "⚙ Metas" button in header opens a password modal first. Uses `crypto.subtle.digest('SHA-256')` to verify. Hash stored in frontend constant `SENHA_HASH`. Default password: `engelmig2025`.
-
-To change password: generate SHA-256 hash (e.g. https://emn178.github.io/online-tools/sha256.html) and update `SENHA_HASH` in `index.html`.
-
-After authentication: input grid for each `TIPOS_SERVICO × ['GUA','CAC']`. Diária/semanal hints inline. `salvarMetas()` POSTs to `/api/metas`.
-
-Info cards: dias úteis total/decorridos/restantes/semana. Per-regional blocks: one card per tipo with progress bar + saldo pill (green ≥ 0, yellow ≥ −2×diária, red below).
-
-### Tab: Ranking
-`GET /api/ranking/equipes`. Table: position (medals top 3), team, regional badge, one column per tipo, total. Tipo columns dynamic from data.
-
-### Tab: Histórico
-`GET /api/historico/equipes`. Team select auto-populated. Table: date, team, regional, tipo columns, total.
-
-### Tab: Equipes
-`GET /api/equipes/producao`. `initEquipes()` sets De = first day of current month, Até = today. Team select auto-populated. Table: one row per team, tipo columns, footer totals.
+**Comportamento no startup do servidor:**
+- Token WPA renovado 2 segundos após iniciar.
+- Snapshot executado 5 segundos após iniciar, se `hora >= 6 && hora <= 20`.
 
 ---
 
-## WEBHOOK (`server.js`)
+## 9. Webhook de Auto-Deploy
 
-Route: `POST /webhook/deploy`
+Permite deploy automático via GitHub sem acesso SSH direto ao servidor.
 
-**Critical middleware ordering**: MUST be registered before `app.use(express.json())`. Uses `express.raw({ type: 'application/json' })` to preserve raw body for HMAC. If `express.json()` runs first, body is consumed and HMAC fails silently.
+### Endpoint
 
-Security: `crypto.timingSafeEqual` on `x-hub-signature-256` vs `sha256=HMAC(WEBHOOK_SECRET, rawBody)`.
+```
+POST /webhook/deploy
+```
 
-Trigger condition: `payload.ref === 'refs/heads/main'` only.
+**Importante**: este endpoint deve ser definido em `server.js` **antes** de `app.use(express.json())`. Usa `express.raw({ type: 'application/json' })` para preservar o body bruto para verificação HMAC. Se `express.json()` rodar primeiro, o body é consumido e o HMAC falha silenciosamente.
 
-Action: `git pull origin main && npm install --production && pm2 restart wpa-monitor`
+### Segurança
 
-> **Current status**: Port 3002 blocked by corporate firewall. Manual deploy in use:
+Verificação via `crypto.timingSafeEqual(assinatura_github, sha256=HMAC(WEBHOOK_SECRET, bodyBruto))`.
+
+### Ação executada
+
+```bash
+git pull origin main && npm install --production && pm2 restart wpa-monitor
+```
+
+Executado de forma assíncrona — o servidor responde `200 OK` imediatamente.
+
+### Configuração no GitHub
+
+1. **Settings → Webhooks → Add webhook**
+2. **Payload URL**: `https://ip-do-servidor:porta/webhook/deploy`
+3. **Content type**: `application/json`
+4. **Secret**: mesmo valor do `WEBHOOK_SECRET` no `.env`
+5. **Trigger**: "Just the push event"
+6. Ativa apenas para push no branch `main` (`payload.ref === 'refs/heads/main'`)
+
+> **Status atual**: a porta 3002 está bloqueada pelo firewall corporativo. O deploy manual é usado no momento:
 > ```bash
 > cd ~/zouain/prod && git pull origin main && pm2 restart wpa-monitor
 > ```
 
 ---
 
-## ENVIRONMENT VARIABLES
+## 10. Frontend — Abas e Funcionalidades
 
-| Variable | Required on | Description |
-|---|---|---|
-| `DATA_MODE` | both | `wpa` \| `supabase` \| `mock` |
-| `WPA_URL` | Linux server | Auth base URL (default: `https://edp-wpa-po.azurewebsites.net`) |
-| `WPA_API_URL` | Linux server | API base URL (default: `https://edp-wpa-web-api.azurewebsites.net`) |
-| `WPA_USERNAME` | Linux server | EDP WPA login |
-| `WPA_PASSWORD` | Linux server | EDP WPA password |
-| `SUPABASE_URL` | both | Project URL |
-| `SUPABASE_SERVICE_KEY` | both | `service_role` key — server-only, never browser |
-| `PORT` | Linux server | Default 3002 |
-| `WEBHOOK_SECRET` | Linux server | GitHub webhook HMAC secret |
-| `VERCEL` | Vercel (auto) | Set by Vercel runtime; disables `app.listen()` |
+Single Page Application implementada em um único arquivo `index.html`, sem bundler, sem framework, sem build step. Todo CSS e JavaScript estão embutidos.
+
+### Identidade Visual Engelmig
+
+A interface segue o [Manual de Marca Engelmig Energia](https://www.engelmig.com.br):
+
+- **Logo**: imagem original da empresa embarcada como data URI Base64 diretamente no HTML. Isso evita problemas de encoding com o nome do arquivo (`Cabeçalho Engelmig Energia.png`) e elimina dependência de serving de arquivo estático.
+- **Tipografia**: Tahoma Bold para títulos e cabeçalhos; Roboto / sans-serif para corpo de texto.
+- **Hierarquia de cores** (variáveis CSS `--amarelo`, `--verde`, `--preto`, `--vermelho`, `--branco`):
+  - `--amarelo: #FEC40E` — cor de ação primária, abas ativas, botões, destaques
+  - `--verde: #086738` — badges de sucesso, acentos regionais
+  - `--preto: #231F20` — cabeçalho da página, headers de tabelas e cards (não é preto 100%)
+  - `--vermelho: #ED1C24` — alertas, erros, rejeitadas
+- **Textura de raios**: padrão SVG inline de relâmpagos com opacidade 4,5% no fundo da página — elemento gráfico da marca.
+
+### Tipos de serviço (TIPOS_SERVICO)
+
+```javascript
+{
+  LN: 'Ligação Nova',
+  LE: 'Ligação Existente',
+  DL: 'Desligamento',
+  MD: 'Modificação',
+  SF: 'Suspensão de Fornecimento',
+  RL: 'Religa',
+  UG: 'Uso Geral',
+  DD: 'Falhas para Distribuição',
+  II: 'Inspeção de Irregularidade',
+  PO: 'Ordem Prioritária',
+  SO: 'SO',   // nome completo a confirmar com EDP
+  RD: 'RD',   // nome completo a confirmar com EDP
+}
+```
+
+### Aba Monitor (padrão)
+
+Visão ao vivo das equipes em campo.
+
+**Filtros disponíveis:**
+- **Regional**: ALL / Guarapari / Cachoeiro
+- **Período De/Até**: padrão = hoje. Quando De = Até = hoje → dados ao vivo com auto-refresh a cada 5 min. Quando qualquer data passada → dados históricos do Supabase, badge "📅 HISTÓRICO" visível, botão "↩ Hoje" para retornar ao vivo.
+- **Tipos de OS**: dropdown multi-seleção com checkboxes; atalhos "Todos" / "Nenhum"
+- **Busca textual**: filtra por nome de equipe
+
+**Cards de equipe:**
+- Cabeçalho: nome da equipe, regional, placa do veículo, horário de início de sessão
+- Contadores: Baixadas / Em Andamento / Concluídas / Rejeitadas
+- Lista de colaboradores
+- Chips de notas ativas (clicáveis → abre modal com detalhes)
+
+**Seção de produtividade:**
+- `calcTotaisPorRegional(teams)` agrega `notasExecutadas + notasConcluidas` filtradas pelos tipos selecionados
+- Barra de progresso por tipo vs. meta (`_metasCache[regional][tipoCode]`)
+
+**Modal de detalhes da equipe:**
+- Cabeçalho: nome + regional + setor
+- Todas as notas da equipe organizadas por status
+- Informações de colaboradores com matrícula e cargo
+- Dados da sessão: início, fim, veículo
+
+### Aba Metas
+
+Visualização e configuração das metas mensais.
+
+**Visão de progresso:**
+- Seletor de mês/ano
+- Cards informativos: dias úteis total/decorridos/restantes/semana atual
+- Por regional: um card por tipo de OS com valor realizado, meta proporcional ao dia, percentual e saldo (positivo = adiantado em verde; levemente negativo = amarelo; muito negativo = vermelho)
+
+**Edição de metas (somente admin):**
+- Formulário com um input por tipo × regional
+- Salva via `POST /api/metas` com persistência no Supabase
+- Protegido por senha (frontend)
+
+### Aba Ranking
+
+Ranking comparativo de produtividade.
+
+- Seletor de regional e período (mês)
+- Fonte: `GET /api/ranking/equipes`
+- Tabela: posição (medalhas para top 3), equipe, regional, colunas dinâmicas por tipo de OS, total
+- Destaque visual para ouro, prata e bronze
+
+### Aba Histórico
+
+Consulta detalhada do histórico de sessões por equipe e por dia.
+
+**Filtros:**
+- **De/Até** (datas livres — não limitado a um único mês como era antes)
+- **Regional**: recarrega dados ao mudar
+- **Equipe**: dropdown populado com as equipes presentes no período (client-side)
+- **Colaborador**: filtro de texto livre por nome ou matrícula (client-side)
+
+**Exibição por dia (agrupado):**
+- Linha principal: data, equipe, badge com número de colaboradores, colunas por tipo de OS, total de concluídas
+- O badge mostra "X colab." — **não** exibe matrícula EDP (a matrícula visível é a do sistema EDP, não da Engelmig)
+
+**Expansão de linha (click):**
+- 🕐 Sessão(ões): hora início/fim; badge RELOGIN se houver múltiplas sessões
+- 🚗 Placa do veículo
+- 👷 Colaboradores: matrícula (monospace) + nome completo
+- 📋 Notas por tipo com quantidade
+
+**Funções JS principais:**
+```javascript
+loadHistorico()           // fetch /api/historico/sessoes?de=&ate=, cacheia em _histDias
+popularHistTeamSelect()   // popula dropdown de equipes com os dados do cache
+applyHistoricoFilters()   // filtra client-side por equipe + colaborador
+renderHistorico(rows)     // constrói tabela expansível
+toggleHistDetail(rowId)   // expande/colapsa uma linha
+```
+
+### Aba Admin
+
+**Acesso**: somente role `admin`.
+
+Seções disponíveis:
+1. **Token WPA**: status atual (válido/expirado, tempo restante, timestamp de expiração), botão para renovação manual
+2. **Backfill Histórico**: inputs De/Até → `POST /api/admin/backfill/range` — importa dados históricos da API WPA para o Supabase; exibe barra de progresso e log linha a linha
+3. **Consolidar Dia**: input de data → `POST /api/admin/consolidar?date=YYYY-MM-DD` — reprocessa um dia específico
+4. **Snapshot Manual**: botão → `POST /api/admin/snapshot` — captura imediata como se o cron tivesse disparado
 
 ---
 
-## INFRASTRUCTURE
+## 11. Variáveis de Ambiente (.env)
 
-### Linux Server (DATA_MODE=wpa)
-- PM2 app name: `wpa-monitor`
-- Entry: `node server.js`
-- All cron TZ: `America/Sao_Paulo`
-- Project path: `~/zouain/prod`
-- Manual deploy:
-  ```bash
-  cd ~/zouain/prod && git pull origin main && pm2 restart wpa-monitor
-  ```
-- First-time setup: after deploy run `pm2 save` to survive reboots
+Copie `.env.example` para `.env` e preencha os valores reais antes de iniciar o servidor.
 
-### Vercel (DATA_MODE=supabase)
-- `vercel.json` routes all traffic to `server.js` via `@vercel/node`
-- `server.js` detects `process.env.VERCEL`, exports `app` without `app.listen()`
-- No cron on Vercel — all writes originate from Linux server
-- Public URL: `prod-stc.vercel.app`
-- GitHub repo: `eduardochamp1/prod-stc` — auto-deploys on push to `main`
+```dotenv
+# ── MODO DE DADOS ──────────────────────────────────────────────────────────────
+# "wpa"      → servidor interno Engelmig (API WPA ao vivo, grava no Supabase)
+# "supabase" → Vercel / edge (lê Supabase, sem acesso ao WPA)
+# "mock"     → dados simulados para desenvolvimento offline
+DATA_MODE=wpa
 
-### Supabase
-- Project URL: `https://iyadtjzehhebwojreudz.supabase.co`
-- All access via `service_role` (RLS bypassed)
-- 5 tables: `snapshots`, `teams_current`, `daily_totals`, `metas`, `team_daily_totals`
+# ── WPA API (somente no servidor interno) ─────────────────────────────────────
+WPA_URL=https://edp-wpa-po.azurewebsites.net
+WPA_API_URL=https://edp-wpa-web-api.azurewebsites.net
+WPA_USERNAME=seu_usuario@engelmig.com.br
+WPA_PASSWORD="sua_senha"
+
+# ── SUPABASE ──────────────────────────────────────────────────────────────────
+SUPABASE_URL=https://iyadtjzehhebwojreudz.supabase.co
+# service_role key — NUNCA expor no frontend; somente servidor e Vercel server-side
+SUPABASE_SERVICE_KEY=sua_service_role_key
+
+# ── SERVIDOR ──────────────────────────────────────────────────────────────────
+PORT=3002
+
+# ── WEBHOOK DE DEPLOY (GitHub → servidor Linux) ───────────────────────────────
+# Qualquer string secreta aleatória e longa — use a mesma no GitHub e aqui
+WEBHOOK_SECRET=sua_chave_secreta_aqui
+
+# ── AUTENTICAÇÃO ──────────────────────────────────────────────────────────────
+# Chave secreta para assinar JWT — use uma string longa e aleatória (mín. 32 chars)
+JWT_SECRET=mude-esta-chave-para-algo-seguro-e-longo
+
+# Usuários: usuario:sha256(senha):role:regional — separados por vírgula
+# Roles:     admin (acesso total) | gua (só Guarapari) | cac (só Cachoeiro)
+# Regionais: ALL                  | GUA                | CAC
+AUTH_USERS=admin:HASH_ADMIN:admin:ALL,guarapari:HASH_GUA:gua:GUA,cachoeiro:HASH_CAC:cac:CAC
+```
+
+### Referência de todas as variáveis
+
+| Variável | Obrigatória em | Descrição |
+|----------|----------------|-----------|
+| `DATA_MODE` | ambos | `wpa` \| `supabase` \| `mock` |
+| `WPA_URL` | Servidor Linux | Base URL de autenticação WPA |
+| `WPA_API_URL` | Servidor Linux | Base URL da API WPA |
+| `WPA_USERNAME` | Servidor Linux | Login EDP WPA |
+| `WPA_PASSWORD` | Servidor Linux | Senha EDP WPA |
+| `SUPABASE_URL` | ambos | URL do projeto Supabase |
+| `SUPABASE_SERVICE_KEY` | ambos | Chave `service_role` — somente servidor |
+| `PORT` | Servidor Linux | Padrão `3002` |
+| `WEBHOOK_SECRET` | Servidor Linux | Segredo HMAC do webhook GitHub |
+| `JWT_SECRET` | ambos | Segredo para assinar JWTs da aplicação |
+| `AUTH_USERS` | ambos | Lista de usuários com hashes SHA-256 |
+| `VERCEL` | Vercel (automático) | Definido pelo runtime Vercel; desativa `app.listen()` |
 
 ---
 
-## KNOWN CONSTRAINTS & GOTCHAS
+## 12. Como Rodar Localmente
 
-1. **WPA API is undocumented.** All field names (`n.Number`, `n.ExecutionStatus`, `s.Team.CompanyId`, etc.) were reverse-engineered via browser devtools, Postman interceptor, and debug endpoints.
+### Pré-requisitos
 
-2. **V2 vs historical endpoints differ in structure.** Live data uses V2 (`teamsstatus/V2`) with `ExecutionStatus`. Historical endpoints (`notes/execution?date=X`) use flat structure with `Status` and flat `TeamName`/`TeamId` fields (not `Team.Name`/`Team.Id`).
+- **Node.js** v18 ou superior
+- **npm** v9 ou superior
 
-3. **Note status 9→4 sync drop**: Notes completed on mobile (status 9) disappear from the V2 API after backend sync. The in-memory `_acc` accumulator in `wpaService.js` prevents count drops within the same day but resets at midnight.
+### Passo a passo
 
-4. **Historical data is partial**: Per-session note endpoints (`notes/executed/{sessionId}`) only return data for active or recently closed sessions. Fully exported sessions return empty arrays. Backfill for dates more than ~1 day old will have incomplete concluded counts.
+```bash
+# 1. Clone o repositório
+git clone git@github.com:engelmig/prod-stc.git
+cd prod-stc
 
-5. **Duplicate sessions (relogins)**: A team may have multiple sessions in one day (disconnect + reconnect). Both `getTeamsByDate` and `upsertTeamDailyTotals` merge/deduplicate by team name + note code to prevent the PostgreSQL error `ON CONFLICT DO UPDATE command cannot affect row a second time`.
+# 2. Instale as dependências
+npm install
 
-6. **22-day constant**: All `diaria = mensal / 22` use the fixed constant 22, not actual working days. Changing requires updating `getMetasCalculadas` in `db/supabaseQueries.js`.
+# 3. Configure o ambiente
+cp .env.example .env
+# Edite .env com suas credenciais
 
-7. **Intraday count inflation**: `upsertDailyTotals` counts `executadas + concluidas` during the day. `consolidateDay` at 20:30 overwrites with `concluidas` only. Historical months always show final values; current day may show a higher number.
+# 4. Inicie em modo de desenvolvimento (auto-reload com nodemon)
+npm run dev
 
-8. **PostgreSQL DATE columns**: `LIKE` / `~~` operator does not work on `DATE` columns. Always use `filterByMonth()` with `.gte()/.lt()` range. Error: `operator does not exist: date ~~ unknown`.
+# 5. Ou inicie em modo de produção
+npm start
+```
 
-9. **No RLS on Supabase**: All tables accessed via `service_role`. Key must never reach the browser — server-only (Linux `.env` and Vercel env vars).
+Acesse: `http://localhost:3002`
 
-10. **PM2 persistence**: Run `pm2 save` after first deploy to survive reboots. `pm2 restart wpa-monitor` required after every code change.
+### Desenvolvimento offline (sem WPA, sem Supabase)
 
-11. **`express.raw` middleware ordering**: `POST /webhook/deploy` MUST be defined before `app.use(express.json())`. Reversing this silently breaks HMAC.
+Configure `.env` com `DATA_MODE=mock`. Nenhuma conexão externa será feita.
 
-12. **Metas password is frontend-only**: The SHA-256 verification runs in the browser. It prevents casual access but is not a security boundary — the `/api/metas` POST endpoint has no server-side auth. Suitable for internal use only.
+### Windows — atalho rápido
+
+Execute `iniciar.bat` para iniciar com `npm start`.
+
+---
+
+## 13. Deploy em Produção (Linux + PM2)
+
+### Setup inicial (executado uma única vez)
+
+```bash
+# 1. Instalar Node.js via NVM
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+source ~/.bashrc
+nvm install 20
+nvm use 20
+
+# 2. Instalar PM2 globalmente
+npm install -g pm2
+
+# 3. Clonar o repositório
+mkdir -p ~/zouain
+cd ~/zouain
+git clone git@github.com:engelmig/prod-stc.git prod
+cd prod
+
+# 4. Configurar .env
+cp .env.example .env
+nano .env   # preencher com valores reais de produção
+
+# 5. Instalar dependências
+npm install --production
+
+# 6. Iniciar com PM2
+pm2 start server.js --name wpa-monitor
+
+# 7. Persistir configuração do PM2 (reinicia automaticamente após reboot do servidor)
+pm2 save
+pm2 startup   # execute o comando gerado por este comando
+```
+
+### Atualização manual (uso atual)
+
+```bash
+cd ~/zouain/prod
+git pull origin main
+npm install --production
+pm2 restart wpa-monitor
+```
+
+### Comandos PM2 úteis
+
+```bash
+pm2 status                          # Lista todos os processos
+pm2 logs wpa-monitor                # Logs em tempo real
+pm2 logs wpa-monitor --lines 200    # Últimas 200 linhas
+pm2 restart wpa-monitor             # Reinicia o processo
+pm2 stop wpa-monitor                # Para o processo
+pm2 monit                           # Monitor interativo de CPU/memória
+pm2 save                            # Salva lista de processos para persistência
+```
+
+### Verificar saúde do servidor
+
+```bash
+curl http://localhost:3002/health
+# Retorno esperado: { "ok": true, "ts": "2026-04-27T..." }
+```
+
+---
+
+## 14. Gerenciamento de Usuários
+
+O sistema de usuários é **baseado em variável de ambiente** — sem banco de dados de usuários. Usuários são definidos e gerenciados exclusivamente pelo `AUTH_USERS` no `.env`.
+
+### Adicionar um novo usuário
+
+**1. Gerar hash SHA-256 da senha:**
+```bash
+# Linux / macOS
+echo -n "NovaSenha@2025" | sha256sum
+
+# PowerShell (Windows)
+[System.BitConverter]::ToString(
+  [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+    [System.Text.Encoding]::UTF8.GetBytes("NovaSenha@2025")
+  )
+).Replace("-","").ToLower()
+```
+
+**2. Adicionar ao `AUTH_USERS` no `.env`:**
+```dotenv
+AUTH_USERS=...,novouser:HASH_AQUI:gua:GUA
+```
+
+**3. Reiniciar o servidor:**
+```bash
+pm2 restart wpa-monitor
+```
+
+O servidor lê `AUTH_USERS` a cada tentativa de login — não há cache de usuários.
+
+### Alterar senha
+
+Gere o novo hash, substitua no `AUTH_USERS`, reinicie. JWTs existentes com a senha antiga continuam válidos até expirarem (máximo 8 horas).
+
+### Revogar acesso imediato
+
+Para revogar acesso imediatamente (antes do JWT expirar), remova o usuário do `AUTH_USERS` **e** altere o `JWT_SECRET`. Alterar o `JWT_SECRET` invalida **todos** os tokens ativos de todos os usuários.
+
+---
+
+## 15. Restrições Conhecidas e Armadilhas
+
+1. **API WPA não documentada.** Todos os campos, endpoints e comportamentos foram descobertos por engenharia reversa via DevTools do navegador e Postman. Mudanças na API EDP podem quebrar o sistema sem aviso.
+
+2. **`sessions/all/date` retorna `Collaborators: []` sempre.** O endpoint de sessões históricas nunca retorna colaboradores reais. O único modo de obter colaboradores é chamando `GET /api/Sessions/{sessionId}` individualmente. O `getTeamsByDate()` faz isso em paralelo via `Promise.all`.
+
+3. **Sufixo `/session` obrigatório nos endpoints de notas.** `GET /api/notes/{categoria}/{sessionId}/session` — sem o sufixo, o endpoint retorna estrutura diferente e inútil. Confirmado via DevTools.
+
+4. **Status 9→4 desaparecem do V2 após sync.** Notas concluídas no mobile (status 9) somem da API quando o backend as sincroniza (status 4). O acumulador `_acc` em `wpaService.js` injeta de volta notas já vistas dentro do mesmo dia. Reinicia à meia-noite.
+
+5. **Limite de 1.000 linhas do Supabase é silencioso.** O cliente JS retorna exatamente 1.000 linhas sem erro quando o resultado foi truncado. `getTeamSessionHistory` usa paginação com `.range()` para contornar isso.
+
+6. **Múltiplas sessões (re-logins) no mesmo dia.** Uma equipe pode desconectar e reconectar. `upsertTeamDailyTotals` agrupa por `team_name` antes de enviar ao Supabase para evitar o erro `ON CONFLICT DO UPDATE command cannot affect row a second time`.
+
+7. **Colunas `DATE` do PostgreSQL não aceitam LIKE.** Sempre usar `filterByMonth()` com `.gte()/.lt()`. Usar `LIKE` em coluna `DATE` gera `operator does not exist: date ~~ unknown`.
+
+8. **Webhook requer ordem de middleware.** `POST /webhook/deploy` deve ser registrado **antes** de `app.use(express.json())`. Usar `express.raw()` no endpoint preserva o body bruto para HMAC.
+
+9. **`service_role` nunca deve chegar ao browser.** Esta chave contorna RLS no Supabase. Somente no `.env` do servidor Linux e nas variáveis de ambiente do Vercel (server-side).
+
+10. **Constante 22 para meta diária.** `diaria = mensal / 22` usa o número fixo 22, não os dias úteis reais do mês. Foi acordado assim com a gestão. Alterar exige mudança em `getMetasCalculadas` no `db/supabaseQueries.js`.
+
+11. **Inflação intraday no `daily_totals`.** Durante o dia, `daily_totals` contém `executadas + concluidas`. Após a consolidação das 20:30, é sobrescrito com `concluidas` apenas. Meses passados mostram sempre o valor definitivo; o dia atual pode mostrar número maior.
+
+12. **SO e RD sem nome completo.** Foram encontrados em produção no backfill de abril/2026. Mapeados como `SO: 'SO'` e `RD: 'RD'`. Confirmar nomes completos com EDP para atualizar `TIPOS_SERVICO` no `index.html`.
+
+13. **Logo embarcada como Base64.** O arquivo original `Cabeçalho Engelmig Energia.png` tem caracteres acentuados no nome que causam erros de encoding ao servir como arquivo estático. A solução implementada é embarcar o conteúdo como data URI Base64 diretamente no HTML — elimina a dependência de serving e funciona em qualquer ambiente.
+
+14. **PM2 persistence.** Após o primeiro deploy, executar `pm2 save` para garantir que o processo reinicie automaticamente após reboot do servidor. Sem isso, o processo não volta após reinicialização do OS.
+
+---
+
+## 16. Pendências e Roadmap
+
+### Alta prioridade
+
+#### Login Frontend (backend pronto, frontend pendente)
+
+O backend está 100% funcional e em produção. O `index.html` ainda precisa receber:
+
+**CSS (antes de `</style>`):**
+- Overlay full-screen escuro (`position: fixed; inset: 0; z-index: 9999`)
+- Card de login centralizado com identidade Engelmig (logo, fundo branco, botão amarelo `#FEC40E`)
+- Inputs de usuário/senha com label uppercase
+- Chip de usuário logado no header (`user-chip`) com nome, regional e botão "Sair"
+
+**HTML (após `<body>`):**
+- `<div id="login-overlay">` com inputs `#login-user` e `#login-pass`
+- Botão de login chamando `doLogin()`
+- `<div id="login-error">` para mensagens de erro
+- `<div id="user-chip">` no `header-right`
+
+**JavaScript (início do bloco `<script>`):**
+- `getStoredSession()` — valida sessão do `localStorage` (verifica `exp`)
+- `saveSession(data)` — grava token e metadados
+- `clearSession()` — remove sessão
+- Override de `window.fetch` — injeta `Authorization: Bearer` em chamadas `/api/*` e trata `401`
+- `doLogin()` — `POST /api/auth/login`, salva token, inicia app
+- `logout()` — limpa sessão, exibe login
+- `applyUserPermissions(user)` — oculta botão Admin para não-admin, bloqueia seletor regional
+- `showLogin(msg)` / `hideLogin()` — controla overlay
+- Encapsular `initTiposFilter()` + `loadData()` + `setInterval` em `function init()` — chamada após auth
+- `boot()` — verifica sessão no `localStorage` ao carregar; se válida: `applyUserPermissions()` + `hideLogin()` + `init()`; se inválida: `showLogin()`
+- Enter em `#login-pass` → `doLogin()`; Enter em `#login-user` → foco em `#login-pass`
+
+**Configuração em produção:**
+- Definir `JWT_SECRET` com string aleatória longa no `.env` do servidor
+- Definir `AUTH_USERS` com hashes reais das senhas escolhidas
+
+### Melhorias futuras consideradas
+
+| Feature | Descrição | Complexidade |
+|---------|-----------|-------------|
+| Exportação CSV/Excel | Download do histórico filtrado | Baixa |
+| Deploy Vercel público | Dashboard externo via Vercel + Supabase para acesso de gestores remotos | Baixa |
+| Notificações push | Alerta quando equipe para de reportar notas por mais de X horas | Média |
+| Alertas de meta | Aviso quando regional está abaixo da meta diária proporcional | Média |
+| Gestão de usuários via UI | Tela admin para criar/remover usuários sem editar `.env` | Média |
+| Nomes completos SO e RD | Confirmar com EDP e atualizar `TIPOS_SERVICO` | Baixa |
+| Mapa de equipes | Exibir localização das equipes via Google Maps API | Alta |
+
+---
+
+## Infraestrutura de Produção
+
+| Componente | Detalhe |
+|------------|---------|
+| **Servidor Linux** | PM2 process name: `wpa-monitor` · Entry: `server.js` · Path: `~/zouain/prod` |
+| **Supabase** | `https://iyadtjzehhebwojreudz.supabase.co` · 5 tabelas · Acesso via `service_role` |
+| **Repositório** | Privado (Engelmig) · Branch principal: `main` · Auto-deploy via webhook (pendente desbloqueio de porta) |
+
+---
+
+*Documentação atualizada em abril de 2026 — versão 2.0. Abrange todas as features implementadas até a presente data, incluindo autenticação JWT, filtro De/Até no Histórico, identidade visual Engelmig e remoção da aba Equipes.*
