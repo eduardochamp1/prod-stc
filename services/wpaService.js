@@ -182,6 +182,33 @@ async function getTeamStatusV2(sectorId) {
   return Array.isArray(data) ? data : (data.Data || []);
 }
 
+// Cache de V2 por setor — evita chamadas duplicadas quando equipes visitantes
+// precisam buscar V2 do setor home numa mesma rodada de coleta.
+// TTL de 3 minutos (bem abaixo do ciclo de 15 min do cron).
+const _v2Cache   = new Map(); // sectorId → { list, ts }
+const V2_TTL_MS  = 3 * 60 * 1000;
+
+async function getV2Cached(sectorId) {
+  const cached = _v2Cache.get(sectorId);
+  if (cached && Date.now() - cached.ts < V2_TTL_MS) return cached.list;
+  const list = await getTeamStatusV2(sectorId);
+  _v2Cache.set(sectorId, { list, ts: Date.now() });
+  return list;
+}
+
+/** Constrói índice (teamId → item, teamName → item) a partir de uma lista V2 */
+function buildV2Index(statusList) {
+  const byId   = new Map();
+  const byName = new Map();
+  statusList.forEach(item => {
+    const id   = item.Session?.Team?.Id || item.Session?.TeamId;
+    const nome = (item.Session?.Team?.Name || '').trim();
+    if (id)   byId.set(id, item);
+    if (nome) byName.set(nome, item);
+  });
+  return { byId, byName };
+}
+
 // ── HISTÓRICO (endpoints com parâmetro date) ──────────────────────────────────
 
 /** Converte YYYY-MM-DD → M/D/YYYY (formato aceito pela API WPA) */
@@ -497,10 +524,10 @@ function normalizarColaborador(c) {
  *   4. Aplica acumulador diário como segurança
  */
 async function getTeamsBySector(sectorId) {
-  // Paralelo: sessions/current + V2
+  // Paralelo: sessions/current + V2 (via cache para evitar chamadas duplicadas)
   const [sessions, statusList] = await Promise.all([
     getSessions(sectorId),
-    getTeamStatusV2(sectorId),
+    getV2Cached(sectorId),
   ]);
 
   // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current).
@@ -520,28 +547,37 @@ async function getTeamsBySector(sectorId) {
     );
   }
 
-  // Índices de V2 por teamId e por nome (fallback tolerante a mismatch)
-  const v2ByTeamId   = new Map();
-  const v2ByTeamName = new Map();
-  statusList.forEach(item => {
-    const id   = item.Session?.Team?.Id || item.Session?.TeamId;
-    const nome = (item.Session?.Team?.Name || '').trim();
-    if (id)   v2ByTeamId.set(id, item);
-    if (nome) v2ByTeamName.set(nome, item);
-  });
+  // Índice V2 do setor consultado
+  const { byId: v2ByTeamId, byName: v2ByTeamName } = buildV2Index(statusList);
 
   console.log(
-    `[WPA] ${sectorId}: ${sessions.length} sessões totais → ${engelmigSessions.length} Engelmig hoje` +
+    `[WPA] ${sectorId}: ${sessions.length} sessões totais → ${engelmigSessions.length} Engelmig` +
     ` | ${statusList.length} entradas V2`
   );
 
-  const result = engelmigSessions.map(s => {
+  // Processamento assíncrono para suportar fallback de V2 entre setores
+  const result = await Promise.all(engelmigSessions.map(async s => {
     const teamName     = (s.Team?.Name || '').trim();
     const teamId       = s.Team?.Id;
     const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
 
     // Busca dado V2: por ID primeiro (mais confiável), nome como fallback
-    const v2 = (teamId && v2ByTeamId.get(teamId)) || v2ByTeamName.get(teamName);
+    let v2 = (teamId && v2ByTeamId.get(teamId)) || v2ByTeamName.get(teamName);
+
+    // Fallback: equipe visitante — busca V2 no setor home da equipe
+    // (ocorre quando uma equipe loga em setor diferente do seu setor de origem)
+    if (!v2 && teamSectorId !== sectorId) {
+      try {
+        const homeList = await getV2Cached(teamSectorId);
+        const { byId: homeById, byName: homeByName } = buildV2Index(homeList);
+        v2 = (teamId && homeById.get(teamId)) || homeByName.get(teamName);
+        if (v2) {
+          console.log(`[WPA] ${sectorId}/${teamName}: V2 encontrado no setor home (${teamSectorId}) ✓`);
+        }
+      } catch (err) {
+        console.warn(`[WPA] ${sectorId}/${teamName}: falha ao buscar V2 fallback (${teamSectorId}):`, err.message);
+      }
+    }
 
     let baixadas, executadas, concluidas, rejeitadas;
 
@@ -611,7 +647,7 @@ async function getTeamsBySector(sectorId) {
       notasConcluidas: concluidas,
       notasRejeitadas: rejeitadas,
     };
-  });
+  }));
 
   _accRecord(result);
   return _accApply(result);
