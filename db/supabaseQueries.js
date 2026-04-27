@@ -106,20 +106,27 @@ async function getMetasCalculadas(yearMonth) {
 async function getTeamsFromSupabase(filters = {}) {
   const sb = getClient();
 
-  // Só retorna equipes cujo último snapshot foi no dia de hoje (BRT/UTC-3).
-  // teams_current guarda o último estado de TODAS as equipes que já foram
-  // capturadas — sem este filtro, equipes de dias anteriores aparecem como ativas.
+  // Filtra pelo campo `date` dentro do JSONB de cada equipe.
+  // Este campo é preenchido com s.BeginTime.slice(0,10) no wpaService — representa
+  // a data real da sessão, não quando o registro foi escrito no banco.
+  // Isso é necessário porque teams_current retém histórico: quando o cron re-escrevia
+  // sessões obsoletas (bug corrigido), o updated_at ficava com data de hoje mas
+  // o date interno ainda apontava para ontem.
   //
-  // Cutoff: início do dia atual em BRT (UTC-3) convertido para UTC.
-  //   Ex.: 27/04 00:00 BRT = 27/04 03:00 UTC
-  // Para ser tolerante com equipes que logam cedo (antes de 03:00 UTC = 00:00 BRT)
-  // usamos um cutoff de 30h atrás, igual ao filtro do wpaService.
-  const cutoff = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+  // Usa dois candidatos de "hoje" para ser tolerante com timezone:
+  //   - data UTC atual (servidor Linux está em UTC)
+  //   - data BRT = UTC - 3h (BeginTime da API WPA parece ser BRT sem sufixo Z)
+  const nowUTC = new Date();
+  const todayUTC = nowUTC.toISOString().slice(0, 10);  // "2026-04-27"
+  const todayBRT = new Date(nowUTC - 3 * 3600 * 1000).toISOString().slice(0, 10); // "2026-04-27" ou "2026-04-26" próximo à meia-noite
+
+  // Aceita a data mais antiga dos dois (cobre ambos os fusos sem excluir ninguém)
+  const dateFilter = todayBRT < todayUTC ? todayBRT : todayUTC;
 
   let query = sb
     .from('teams_current')
     .select('data, regional, updated_at')
-    .gte('updated_at', cutoff);
+    .filter('data->>date', 'gte', dateFilter);
 
   if (filters.regional && filters.regional !== 'ALL') {
     query = query.eq('regional', filters.regional);
