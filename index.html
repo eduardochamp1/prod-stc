@@ -25,22 +25,18 @@
     body { font-family: 'Roboto', sans-serif; background: var(--cinza1); color: var(--text); min-height: 100vh; }
 
     /* ── HEADER ── */
-    header { background: var(--verde); height: 58px; display: flex; align-items: center; padding: 0 28px; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+    header { background: var(--preto); height: 58px; display: flex; align-items: center; padding: 0 28px; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 10px rgba(0,0,0,0.32); }
     header::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 6px; background: var(--amarelo); }
-    .header-left { display: flex; align-items: center; gap: 14px; }
-    .raio { width: 22px; height: 22px; flex-shrink: 0; }
-    .brand-text { display: flex; flex-direction: column; line-height: 1.1; }
-    .brand-name { font-size: 13px; font-weight: 700; color: var(--amarelo); letter-spacing: 0.12em; text-transform: uppercase; }
-    .brand-sub  { font-size: 11px; font-weight: 400; color: rgba(255,255,255,0.7); letter-spacing: 0.06em; }
-    .header-sep { width: 1px; height: 24px; background: rgba(255,255,255,0.2); }
-    .header-title { font-size: 14px; font-weight: 500; color: rgba(255,255,255,0.9); }
+    .header-left { display: flex; align-items: center; gap: 16px; }
+    .header-logo { display: block; height: 38px; width: auto; flex-shrink: 0; }
+    .header-sep { width: 1px; height: 26px; background: rgba(255,255,255,0.18); }
+    .header-title { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.6); letter-spacing: 0.04em; }
     .header-right { display: flex; align-items: center; gap: 14px; }
-    .live-badge { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(255,255,255,0.7); }
+    .live-badge { display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgba(255,255,255,0.6); }
     .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amarelo); animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-    .mode-badge { font-size: 11px; background: rgba(254,196,14,0.18); color: var(--amarelo); border: 1px solid rgba(254,196,14,0.3); border-radius: 20px; padding: 3px 10px; font-weight: 500; }
-    .btn-header { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); color: #fff; border-radius: 6px; padding: 5px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: 'Roboto',sans-serif; transition: background 0.15s; display: flex; align-items: center; gap: 5px; }
-    .btn-header:hover { background: rgba(255,255,255,0.22); }
+    .btn-header { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.18); color: rgba(255,255,255,0.88); border-radius: 6px; padding: 5px 14px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: 'Roboto',sans-serif; transition: background 0.15s; display: flex; align-items: center; gap: 5px; }
+    .btn-header:hover { background: rgba(254,196,14,0.18); border-color: rgba(254,196,14,0.4); color: var(--amarelo); }
 
     /* ── MAIN ── */
     main { padding: 20px 28px; max-width: 1400px; margin: 0 auto; }
@@ -309,13 +305,24 @@
 
 <header>
   <div class="header-left">
-    <svg class="raio" viewBox="0 0 22 36" fill="none">
-      <polygon points="13,0 0,20 9,20 9,36 22,16 13,16" fill="#FEC40E"/>
+    <!-- Logo Engelmig Energia (inline SVG — cores adaptadas para fundo escuro) -->
+    <svg class="header-logo" viewBox="0 0 480 88" aria-label="Engelmig Energia">
+      <defs>
+        <clipPath id="bc">
+          <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z"/>
+        </clipPath>
+      </defs>
+      <!-- Raio: corpo amarelo -->
+      <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z" fill="#FEC40E"/>
+      <!-- Raio: faixa vermelha esquerda -->
+      <polygon points="48,4 70,4 46,46 22,46" fill="#ED1C24" clip-path="url(#bc)"/>
+      <!-- ENGELMIG — branco no fundo escuro -->
+      <text x="76" y="64" font-family="'Roboto','Arial Black',Arial,sans-serif"
+            font-weight="700" font-size="60" fill="#ffffff" letter-spacing="-1">ENGELMIG</text>
+      <!-- ENERGIA — amarelo como acento da marca -->
+      <text x="79" y="83" font-family="'Roboto','Arial Black',Arial,sans-serif"
+            font-weight="500" font-size="20" fill="#FEC40E" letter-spacing="6">ENERGIA</text>
     </svg>
-    <div class="brand-text">
-      <span class="brand-name">Engelmig</span>
-      <span class="brand-sub">Energia</span>
-    </div>
     <div class="header-sep"></div>
     <span class="header-title">WPA Monitor</span>
   </div>
@@ -324,7 +331,6 @@
       <div class="live-dot"></div>
       <span id="sync-label">Carregando...</span>
     </div>
-    <span class="mode-badge" id="mode-badge">MOCK</span>
     <button class="btn-header" onclick="openMetas()">⚙ Metas</button>
     <button class="btn-header" onclick="openAdmin()">🔧 Admin</button>
   </div>
@@ -1469,7 +1475,6 @@
       if (res.error) throw new Error(res.error);
 
       allTeams = res.teams || [];
-      document.getElementById('mode-badge').textContent = hist ? 'HISTÓRICO' : (res.mode || 'mock').toUpperCase();
       document.getElementById('sync-label').textContent =
         new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       document.getElementById('last-update').textContent = hist

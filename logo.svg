@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 88" role="img" aria-label="Engelmig Energia">
+  <defs>
+    <clipPath id="bc">
+      <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Raio — corpo amarelo -->
+  <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z" fill="#FEC40E"/>
+  <!-- Raio — faixa diagonal vermelha (esquerda/superior) -->
+  <polygon points="48,4 70,4 46,46 22,46" fill="#ED1C24" clip-path="url(#bc)"/>
+
+  <!-- ENGELMIG -->
+  <text x="76" y="64"
+        font-family="'Arial Black','Franklin Gothic Heavy',Impact,Arial,sans-serif"
+        font-weight="900"
+        font-size="60"
+        fill="#231F20"
+        letter-spacing="-1">ENGELMIG</text>
+
+  <!-- ENERGIA -->
+  <text x="79" y="83"
+        font-family="'Arial Black','Franklin Gothic Heavy',Impact,Arial,sans-serif"
+        font-weight="700"
+        font-size="20"
+        fill="#086738"
+        letter-spacing="6">ENERGIA</text>
+</svg>
