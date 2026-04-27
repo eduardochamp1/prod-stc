@@ -458,6 +458,34 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   }
 });
 
+// POST /api/wpa/notas/subcategorias
+// Body: { notes: [ { id: "uuid", sectorId: "DESG" }, ... ] }
+// Retorna: { subcats: { [uuid]: { subCategoria, subcatCode, quantidadeExec, tipo } } }
+// Busca detalhes em paralelo (até 6 simultâneos) para classificar subcategorias.
+router.post('/wpa/notas/subcategorias', async (req, res) => {
+  const { notes } = req.body || {};
+  if (!Array.isArray(notes) || notes.length === 0) return res.json({ subcats: {} });
+
+  const CONCURRENCY = 6;
+  const subcats = {};
+
+  for (let i = 0; i < notes.length; i += CONCURRENCY) {
+    const chunk = notes.slice(i, i + CONCURRENCY);
+    await Promise.all(chunk.map(async ({ id, sectorId }) => {
+      if (!id) return;
+      try {
+        const nota = await getNoteDetail(id, sectorId || 'DESG');
+        if (nota) {
+          const sc = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
+          subcats[id] = { ...sc, tipo: nota.Type };
+        }
+      } catch {}
+    }));
+  }
+
+  res.json({ subcats });
+});
+
 router.get('/wpa/probe', async (req, res) => {
   const path = req.query.path || '/api/sessions/current?sectorId=DESG';
   try {

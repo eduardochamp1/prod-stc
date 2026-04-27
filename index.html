@@ -564,6 +564,7 @@
     .nota-info-lbl  { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--verde); }
     .nota-info-val  { font-size: 13px; color: var(--text); font-weight: 500; word-break: break-all; }
     .nota-qty-badge { display: inline-block; background: var(--verde); color: #fff; font-size: 11px; font-weight: 700; border-radius: 4px; padding: 1px 7px; margin-left: 6px; vertical-align: middle; }
+    .nota-subcat { display: inline-block; font-size: 10px; font-weight: 600; font-family: sans-serif; opacity: .75; margin-left: 4px; }
     .checkpoint-list { display: flex; flex-direction: column; gap: 8px; }
     .checkpoint-item { display: flex; gap: 10px; align-items: flex-start; }
     .cp-badge { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; }
@@ -1823,6 +1824,8 @@
       }
 
       renderAll();
+      // Enriquece subcategorias em background (re-renderiza cards quando pronto)
+      enrichSubcategorias(allTeams);
     } catch (err) {
       document.getElementById('sync-label').textContent = 'Erro de conexão';
       document.getElementById('teams-grid').innerHTML =
@@ -1928,6 +1931,40 @@
     document.getElementById('m-relogins').textContent       = relogins;
   }
 
+  // ── SUBCATEGORIAS (enriquecimento lazy) ──────────────────────────────
+  // Mapa UUID → { subCategoria, subcatCode, quantidadeExec, tipo }
+  window._subcatMap = window._subcatMap || {};
+
+  async function enrichSubcategorias(teams) {
+    // Coleta todos os UUIDs com seus sectorIds
+    const notes = [];
+    (teams || []).forEach(t => {
+      const allN = [
+        ...(t.notasConcluidas  || []),
+        ...(t.notasExecutadas  || []),
+        ...(t.notasBaixadas    || []),
+        ...(t.notasRejeitadas  || []),
+        ...(t.notasVistoriadas || []),
+      ];
+      allN.forEach(n => {
+        if (n.id && !window._subcatMap[n.id])          // pula UUIDs já conhecidos
+          notes.push({ id: n.id, sectorId: t.sectorId || 'DESG' });
+      });
+    });
+    if (notes.length === 0) return;
+
+    try {
+      const r = await fetch(`${API}/wpa/notas/subcategorias`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      const data = await r.json();
+      Object.assign(window._subcatMap, data.subcats || {});
+      renderAll(); // re-renderiza com dados enriquecidos
+    } catch {}
+  }
+
   // ── RENDER CARDS ──────────────────────────────────────────────────────
   function renderAll() {
     const teams = getVisible();
@@ -1942,13 +1979,19 @@
       const ativa = !t.sessionEnd;
       const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
-      const tiposCont = {};
+      // Agrupa por subcategoria (quando disponível) ou por tipo
+      const subcatCont = {};
       (t.notasConcluidas || []).forEach(n => {
-        if (selectedTipos.size === 0 || selectedTipos.has(n.tipoCode))
-          tiposCont[n.tipoCode] = (tiposCont[n.tipoCode] || 0) + 1;
+        if (selectedTipos.size === 0 || selectedTipos.has(n.tipoCode)) {
+          const sc    = window._subcatMap?.[n.id];
+          const label = sc?.subCategoria || n.tipoCode;
+          if (!subcatCont[label]) subcatCont[label] = { count: 0, qtdTotal: 0 };
+          subcatCont[label].count++;
+          if (sc?.quantidadeExec != null) subcatCont[label].qtdTotal += sc.quantidadeExec;
+        }
       });
-      const tiposHtml = Object.entries(tiposCont).map(([code, cnt]) =>
-        `<span class="tipo-chip"><span class="tipo-chip-code">${code}</span><span class="tipo-chip-num">${cnt}</span></span>`
+      const tiposHtml = Object.entries(subcatCont).map(([label, { count, qtdTotal }]) =>
+        `<span class="tipo-chip"><span class="tipo-chip-code">${label}</span><span class="tipo-chip-num">${count}${qtdTotal > 0 ? ` · ${qtdTotal}m` : ''}</span></span>`
       ).join('');
       return `
         <div class="team-card" onclick="openModal('${t.id}')">
@@ -2077,7 +2120,11 @@
       // Usa o UUID (n.id) para o endpoint /details/optimized; fallback para codigo (número) caso
       // o UUID não esteja disponível (notas históricas mais antigas sem id mapeado).
       const idParam = n.id || n.codigo;
-      return `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${idParam}','${sectorId}','${n.tipoCode||n.tipoNome||''}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span></span>`;
+      const sc = window._subcatMap?.[n.id];
+      const subcatLabel = sc?.subCategoria
+        ? `<span class="nota-subcat">${sc.subCategoria}${sc.quantidadeExec != null ? ' ×'+sc.quantidadeExec : ''}</span>`
+        : '';
+      return `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${idParam}','${sectorId}','${n.tipoCode||n.tipoNome||''}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span>${subcatLabel}</span>`;
     }).join('');
   }
 
