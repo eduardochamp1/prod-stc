@@ -299,6 +299,174 @@
       .tab-btn { font-size: 11px; padding: 7px 6px; }
       .metas-calc-nums { grid-template-columns: repeat(2, 1fr); }
     }
+
+    /* ══════════════════════════════════════════════════════
+       ENGELMIG BRAND IDENTITY — Aplicação visual oficial
+       Manual de Marca v6: Tahoma, paleta primária, raio
+    ══════════════════════════════════════════════════════ */
+
+    /* Tipografia oficial: Tahoma para títulos e rótulos */
+    .prod-title, .section-title, .metas-regional-title,
+    .modal-title, .metric-label, .filter-label,
+    .tab-btn, .ranking-table th, .hist-table th,
+    .hist-detail-label, .modal-section-title, .info-card-lbl,
+    .os-lbl, .team-card-sigla, .metric-value, .header-title,
+    .rank-total, .hist-total, .prod-tipo-badge {
+      font-family: Tahoma, 'Franklin Gothic Medium', 'Arial Narrow', Arial, sans-serif;
+    }
+
+    /* Raio como textura de fundo (muito sutil, 4% opacidade — brand guideline) */
+    body {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cpath d='M55,8 L36,44 L46,44 L28,82 L66,40 L54,40 Z' fill='%23FEC40E' opacity='0.045'/%3E%3C/svg%3E");
+      background-size: 90px 90px;
+    }
+
+    /* Header: título WPA Monitor estilo Tahoma uppercase */
+    .header-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.72);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    /* Tab ativa: verde + texto amarelo (combinação institucional premium do manual) */
+    .tab-btn.active {
+      background: var(--verde);
+      color: var(--amarelo);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .tab-btn {
+      letter-spacing: 0.01em;
+    }
+
+    /* Seção de produtividade: acento amarelo à esquerda */
+    .prod-section {
+      border-left: 4px solid var(--amarelo);
+    }
+
+    /* Título de seção: Tahoma bold com underline amarelo */
+    .prod-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    /* Cards de equipe: faixa amarela no rodapé do header (acento de energia) */
+    .team-card-header {
+      position: relative;
+    }
+    .team-card-header::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--amarelo);
+    }
+
+    /* Tabelas: cabeçalho verde + borda amarela inferior (institucional premium) */
+    .ranking-table th,
+    .hist-table th {
+      border-bottom: 2px solid var(--amarelo);
+      letter-spacing: 0.07em;
+    }
+
+    /* Modal: header verde com borda amarela inferior */
+    .modal-header {
+      border-bottom: 3px solid var(--amarelo);
+    }
+    .modal-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    /* Modal section titles: Tahoma com underline amarelo mais espesso */
+    .modal-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      border-bottom: 2px solid var(--amarelo);
+    }
+
+    /* Metric cards: valor em Tahoma bold para impacto */
+    .metric-value {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    /* Metric label: uppercase Tahoma */
+    .metric-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    /* Summary cards: acento verde mais espesso */
+    .metric-card.accent-verde   { border-top: 4px solid var(--verde); }
+    .metric-card.accent-amarelo { border-top: 4px solid var(--amarelo); }
+    .metric-card.accent-vermelho{ border-top: 4px solid var(--vermelho); }
+    .metric-card.accent-preto   { border-top: 4px solid var(--preto); }
+
+    /* Metas regional: Tahoma bold com borda amarela (já existente) */
+    .metas-regional-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    /* Botão Salvar / Atualizar: Tahoma */
+    .btn-salvar, .btn-refresh {
+      font-family: Tahoma, 'Franklin Gothic Medium', Arial, sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    /* Badges de tipo nas produtividade: Tahoma bold */
+    .prod-tipo-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+
+    /* Ranking: números de total em Tahoma grande */
+    .rank-total {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    /* Histórico: total em Tahoma */
+    .hist-total {
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    /* Filter label: Tahoma uppercase */
+    .filter-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+    }
+
+    /* Info cards (Metas tab): valor em Tahoma */
+    .info-card-val {
+      font-family: Tahoma, 'Franklin Gothic Medium', Arial, sans-serif;
+      font-size: 26px;
+      font-weight: 700;
+    }
+    .info-card-lbl {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+    }
   </style>
 </head>
 <body>
