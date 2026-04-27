@@ -467,9 +467,109 @@
       font-weight: 700;
       letter-spacing: 0.1em;
     }
+
+    /* ── AUTH OVERLAY ─────────────────────────────────────────────────── */
+    #login-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(8,103,56,.93);
+      align-items: center;
+      justify-content: center;
+    }
+    #login-overlay.show { display: flex; }
+    .login-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 36px 40px 32px;
+      width: 320px;
+      box-shadow: 0 8px 40px rgba(0,0,0,.35);
+      text-align: center;
+    }
+    .login-card .lc-title {
+      font-family: Tahoma, 'Franklin Gothic Medium', Arial, sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      color: #086738;
+      margin: 0 0 4px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .login-card .lc-sub {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 24px;
+      letter-spacing: .04em;
+    }
+    .login-card input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      border: 1.5px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .login-card input:focus { border-color: #086738; }
+    .login-card .btn-login {
+      width: 100%;
+      padding: 11px;
+      background: #086738;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-family: Tahoma, 'Franklin Gothic Medium', Arial, sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: .05em;
+      transition: background .2s;
+      margin-top: 4px;
+    }
+    .login-card .btn-login:hover { background: #054d28; }
+    .login-card .btn-login:disabled { background: #9ab; cursor: default; }
+    .login-card .login-error {
+      color: #c0392b;
+      font-size: 12px;
+      min-height: 16px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    /* user chip in header */
+    #user-chip {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #fff;
+      background: rgba(255,255,255,.18);
+      border-radius: 20px;
+      padding: 4px 12px 4px 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    #user-chip.show { display: flex; }
+    #user-chip:hover { background: rgba(255,255,255,.28); }
   </style>
 </head>
 <body>
+
+<!-- ── LOGIN OVERLAY ──────────────────────────────────────────────────────── -->
+<div id="login-overlay">
+  <div class="login-card">
+    <div class="lc-title">⚡ Engelmig</div>
+    <div class="lc-sub">WPA Monitor — acesso restrito</div>
+    <input type="text"     id="login-user" placeholder="Usuário" autocomplete="username"
+           onkeydown="if(event.key==='Enter') document.getElementById('login-pass').focus()">
+    <input type="password" id="login-pass" placeholder="Senha"   autocomplete="current-password"
+           onkeydown="if(event.key==='Enter') doLogin()">
+    <div class="login-error" id="login-error"></div>
+    <button class="btn-login" id="btn-login" onclick="doLogin()">Entrar</button>
+  </div>
+</div>
 
 <header>
   <div class="header-left">
@@ -482,6 +582,9 @@
     <div class="live-badge">
       <div class="live-dot"></div>
       <span id="sync-label">Carregando...</span>
+    </div>
+    <div id="user-chip" onclick="logout()" title="Clique para sair">
+      👤 <span id="user-chip-name"></span> &middot; Sair
     </div>
     <button class="btn-header" onclick="openMetas()">⚙ Metas</button>
     <button class="btn-header" onclick="openAdmin()">🔧 Admin</button>
@@ -845,6 +948,122 @@
 </div>
 
 <script>
+  // ── AUTH ──────────────────────────────────────────────────────────────────
+  const SESSION_KEY  = 'wpa_session';
+  const _nativeFetch = window.fetch.bind(window); // ref ao fetch nativo (antes do patch)
+
+  function getStoredSession() {
+    try {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return null;
+      const s = JSON.parse(raw);
+      if (!s || !s.token || !s.exp) return null;
+      if (Date.now() / 1000 > s.exp - 30) { clearSession(); return null; }
+      return s;
+    } catch { return null; }
+  }
+
+  function saveSession(data)  { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); }
+  function clearSession()     { localStorage.removeItem(SESSION_KEY); }
+
+  // Patch global de window.fetch: injeta Bearer e redireciona 401 → login
+  (function patchFetch() {
+    window.fetch = async function(resource, options = {}) {
+      const sess = getStoredSession();
+      if (sess) {
+        options = Object.assign({}, options);
+        options.headers = Object.assign({}, options.headers, {
+          'Authorization': 'Bearer ' + sess.token,
+        });
+      }
+      const res = await _nativeFetch(resource, options);
+      if (res.status === 401) {
+        clearSession();
+        showLogin('Sessão expirada. Faça login novamente.');
+        throw new Error('401');
+      }
+      return res;
+    };
+  })();
+
+  function showLogin(msg) {
+    document.getElementById('login-overlay').classList.add('show');
+    document.getElementById('login-error').textContent = msg || '';
+    document.getElementById('user-chip').classList.remove('show');
+    setTimeout(() => document.getElementById('login-user').focus(), 80);
+  }
+
+  function hideLogin() {
+    document.getElementById('login-overlay').classList.remove('show');
+  }
+
+  async function doLogin() {
+    const username = document.getElementById('login-user').value.trim();
+    const password = document.getElementById('login-pass').value;
+    const errEl    = document.getElementById('login-error');
+    const btnEl    = document.getElementById('btn-login');
+    if (!username || !password) { errEl.textContent = 'Preencha usuário e senha.'; return; }
+    errEl.textContent = '';
+    btnEl.disabled = true;
+    btnEl.textContent = 'Aguarde…';
+    try {
+      const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? `http://${window.location.hostname}:3002/api`
+        : '/api';
+      // Usa _nativeFetch (sem patch) para não interceptar 401 de credencial errada
+      const res = await _nativeFetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        errEl.textContent = body.error || 'Usuário ou senha incorretos.';
+        return;
+      }
+      const data = await res.json();
+      saveSession(data);
+      applyUserPermissions(data);
+      hideLogin();
+      init();
+    } catch (err) {
+      errEl.textContent = 'Erro de conexão. Tente novamente.';
+    } finally {
+      btnEl.disabled = false;
+      btnEl.textContent = 'Entrar';
+    }
+  }
+
+  function logout() {
+    if (!confirm('Deseja sair?')) return;
+    clearSession();
+    document.getElementById('user-chip').classList.remove('show');
+    showLogin();
+  }
+
+  function applyUserPermissions(sess) {
+    document.getElementById('user-chip-name').textContent = sess.username;
+    document.getElementById('user-chip').classList.add('show');
+    // Restringe regional no seletor para usuários não-admin
+    if (sess.regional && sess.regional !== 'ALL') {
+      ['regional-select','ranking-regional-select','hist-regional-select'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value    = sess.regional;
+        el.disabled = true;
+      });
+      currentRegional = sess.regional;
+    }
+  }
+
+  function boot() {
+    const sess = getStoredSession();
+    if (!sess) { showLogin(); return; }
+    applyUserPermissions(sess);
+    init();
+  }
+  // ── /AUTH ─────────────────────────────────────────────────────────────────
+
   const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? `http://${window.location.hostname}:3002/api`
     : '/api';
@@ -1766,21 +1985,25 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); } });
 
   // ── INIT ──────────────────────────────────────────────────────────────
-  initTiposFilter();
+  function init() {
+    initTiposFilter();
 
-  // Inicializa campos De/Até com hoje (sem permitir datas futuras)
-  const _t = todayISO();
-  ['monitor-date-de', 'monitor-date-ate'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.value = _t; el.max = _t; }
-  });
-  loadData();
-  // Auto-refresh só quando visualizando hoje
-  setInterval(() => {
-    const de  = document.getElementById('monitor-date-de')?.value;
-    const ate = document.getElementById('monitor-date-ate')?.value;
-    if (isRangeToday(de, ate)) loadData();
-  }, 5 * 60 * 1000);
+    // Inicializa campos De/Até com hoje (sem permitir datas futuras)
+    const _t = todayISO();
+    ['monitor-date-de', 'monitor-date-ate'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.value = _t; el.max = _t; }
+    });
+    loadData();
+    // Auto-refresh só quando visualizando hoje
+    setInterval(() => {
+      const de  = document.getElementById('monitor-date-de')?.value;
+      const ate = document.getElementById('monitor-date-ate')?.value;
+      if (isRangeToday(de, ate)) loadData();
+    }, 5 * 60 * 1000);
+  }
+
+  boot(); // ponto de entrada: verifica sessão e chama init() ou showLogin()
 
   // ── ADMIN ─────────────────────────────────────────────────────────────
 
