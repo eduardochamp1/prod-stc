@@ -1287,7 +1287,7 @@
           ${i > 0 ? '<span style="font-size:10px;color:var(--text2);background:var(--cinza2);border-radius:3px;padding:1px 5px">RELOGIN</span>' : ''}
         </div>`).join('');
 
-      const colabHtml = hasColab
+      const colabHtml = colabCount > 0
         ? (r.collaborators || []).map(c => `
             <div class="hist-colab-item">
               <span class="hist-matricula">${c.matricula}</span>
