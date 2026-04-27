@@ -105,7 +105,21 @@ async function getMetasCalculadas(yearMonth) {
 
 async function getTeamsFromSupabase(filters = {}) {
   const sb = getClient();
-  let query = sb.from('teams_current').select('data, regional, updated_at');
+
+  // Só retorna equipes cujo último snapshot foi no dia de hoje (BRT/UTC-3).
+  // teams_current guarda o último estado de TODAS as equipes que já foram
+  // capturadas — sem este filtro, equipes de dias anteriores aparecem como ativas.
+  //
+  // Cutoff: início do dia atual em BRT (UTC-3) convertido para UTC.
+  //   Ex.: 27/04 00:00 BRT = 27/04 03:00 UTC
+  // Para ser tolerante com equipes que logam cedo (antes de 03:00 UTC = 00:00 BRT)
+  // usamos um cutoff de 30h atrás, igual ao filtro do wpaService.
+  const cutoff = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+
+  let query = sb
+    .from('teams_current')
+    .select('data, regional, updated_at')
+    .gte('updated_at', cutoff);
 
   if (filters.regional && filters.regional !== 'ALL') {
     query = query.eq('regional', filters.regional);
