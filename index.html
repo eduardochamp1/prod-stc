@@ -1149,6 +1149,29 @@
     if (!iso) return '—';
     return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   }
+
+  // Retorna a data de hoje no fuso BRT (UTC-3) no formato YYYY-MM-DD
+  function todayBRT() {
+    return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+
+  // Formata data+hora: mostra só hora se for hoje (BRT), ou "DD/MM HH:mm" se for outro dia
+  function fmtInicio(iso) {
+    if (!iso) return '—';
+    const d     = new Date(iso);
+    const hora  = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const dataS = iso.slice(0, 10); // YYYY-MM-DD do BeginTime (como string)
+    if (dataS === todayBRT()) return hora; // mesma data → só hora
+    // Dia diferente → mostra DD/MM + hora
+    const dia = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    return `${dia} ${hora}`;
+  }
+
+  // Retorna true se o BeginTime é de um dia anterior ao dia de hoje (BRT)
+  function sessaoAnterior(iso) {
+    if (!iso) return false;
+    return iso.slice(0, 10) < todayBRT();
+  }
   function duracao(inicio, fim) {
     if (!inicio || !fim) return '—';
     const ms = new Date(fim) - new Date(inicio);
@@ -1874,7 +1897,15 @@
           </div>
           <div class="team-card-body">
             <div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>
-            <div class="team-row"><span class="team-row-label">Sessão</span><span style="color:var(--text);font-size:12px">${fmt(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}</span></div>
+            <div class="team-row">
+              <span class="team-row-label">Sessão</span>
+              <span style="color:var(--text);font-size:12px;display:flex;align-items:center;gap:5px">
+                ${sessaoAnterior(t.sessionBegin)
+                  ? `<span style="background:#f39c12;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;letter-spacing:.03em">📅 DIA ANT.</span>`
+                  : ''}
+                ${fmtInicio(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}
+              </span>
+            </div>
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
               <div class="os-cell"><div class="os-num">${t.carteiraCount||0}</div><div class="os-lbl">Carteira</div></div>

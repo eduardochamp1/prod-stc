@@ -106,27 +106,18 @@ async function getMetasCalculadas(yearMonth) {
 async function getTeamsFromSupabase(filters = {}) {
   const sb = getClient();
 
-  // Filtra pelo campo `date` dentro do JSONB de cada equipe.
-  // Este campo é preenchido com s.BeginTime.slice(0,10) no wpaService — representa
-  // a data real da sessão, não quando o registro foi escrito no banco.
-  // Isso é necessário porque teams_current retém histórico: quando o cron re-escrevia
-  // sessões obsoletas (bug corrigido), o updated_at ficava com data de hoje mas
-  // o date interno ainda apontava para ontem.
+  // Sem filtro de data estrita: exibe todas as sessões abertas, inclusive de dias anteriores
+  // (equipes que esqueceram de encerrar a sessão ficam visíveis até encerrar no WPA).
+  // A data de início aparece no card do monitor para identificação visual.
   //
-  // Usa dois candidatos de "hoje" para ser tolerante com timezone:
-  //   - data UTC atual (servidor Linux está em UTC)
-  //   - data BRT = UTC - 3h (BeginTime da API WPA parece ser BRT sem sufixo Z)
-  const nowUTC = new Date();
-  const todayUTC = nowUTC.toISOString().slice(0, 10);  // "2026-04-27"
-  const todayBRT = new Date(nowUTC - 3 * 3600 * 1000).toISOString().slice(0, 10); // "2026-04-27" ou "2026-04-26" próximo à meia-noite
-
-  // Aceita a data mais antiga dos dois (cobre ambos os fusos sem excluir ninguém)
-  const dateFilter = todayBRT < todayUTC ? todayBRT : todayUTC;
+  // Janela de segurança: descarta registros com mais de 7 dias para não acumular
+  // lixo indefinidamente em casos extremos.
+  const cutoff7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
   let query = sb
     .from('teams_current')
     .select('data, regional, updated_at')
-    .filter('data->>date', 'gte', dateFilter);
+    .filter('data->>date', 'gte', cutoff7);
 
   if (filters.regional && filters.regional !== 'ALL') {
     query = query.eq('regional', filters.regional);

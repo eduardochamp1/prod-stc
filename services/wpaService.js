@@ -503,25 +503,20 @@ async function getTeamsBySector(sectorId) {
     getTeamStatusV2(sectorId),
   ]);
 
-  // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current)
-  // Também filtra por data de hoje — sessões do dia anterior que não foram encerradas
-  // no WPA continuam aparecendo em /sessions/current indefinidamente.
-  const todayUTC = new Date().toISOString().slice(0, 10); // YYYY-MM-DD em UTC
-  // Janela tolerante: aceita sessões que começaram na data atual OU nas últimas 30h
-  // (cobre equipes que logam antes da meia-noite BRT e permanecem ativas)
-  const cutoff = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+  // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current).
+  // Não filtramos por data: sessões abertas de dias anteriores (equipe esqueceu de encerrar)
+  // devem aparecer — a data de início fica visível no card para identificação.
+  const todayBRT = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 
-  const allEngelmig = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
-  const engelmigSessions = allEngelmig.filter(s => {
-    if (!s.BeginTime) return true; // sem data → não filtra (seguro)
-    return s.BeginTime >= cutoff;  // descarta sessões iniciadas há mais de 30h
-  });
+  const allEngelmig     = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
+  const engelmigSessions = allEngelmig; // sem corte de data — todas as sessões abertas
 
-  if (allEngelmig.length !== engelmigSessions.length) {
-    const descartadas = allEngelmig.length - engelmigSessions.length;
+  // Loga quantas sessões são de dias anteriores (informativo)
+  const antigas = allEngelmig.filter(s => s.BeginTime && s.BeginTime.slice(0, 10) < todayBRT);
+  if (antigas.length > 0) {
     console.warn(
-      `[WPA] ${sectorId}: ⚠️ ${descartadas} sessão(ões) Engelmig descartada(s) por serem de dias anteriores` +
-      ` (cutoff=${cutoff.slice(0,16)})`
+      `[WPA] ${sectorId}: ℹ️ ${antigas.length} sessão(ões) de dias anteriores ainda abertas` +
+      ` (serão exibidas com destaque no monitor)`
     );
   }
 
