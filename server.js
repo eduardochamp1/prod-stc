@@ -6,6 +6,7 @@ const express  = require('express');
 const cors     = require('cors');
 const path     = require('path');
 const routes   = require('./routes/index');
+const cronRoutes = require('./routes/cron');
 
 const app  = express();
 const PORT = process.env.PORT || 3002;
@@ -59,6 +60,10 @@ app.post('/webhook/deploy', express.raw({ type: 'application/json' }), (req, res
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Cron endpoints (autenticados via CRON_SECRET, não via JWT de usuário)
+// Devem ser montados ANTES de /api → /routes para escapar do authMiddleware
+app.use('/api/cron', cronRoutes);
 
 app.use('/api', routes);
 
