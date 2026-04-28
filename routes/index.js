@@ -458,26 +458,53 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   }
 });
 
+// ── Cache de subcategorias em memória (TTL 6h) ───────────────────────────────
+// Evita rebuscar a mesma nota repetidamente durante o dia.
+const _subcatCache     = new Map(); // uuid → { subCategoria, subcatCode, quantidadeExec, tipo }
+const _subcatCacheTime = new Map(); // uuid → timestamp
+const SUBCAT_TTL_MS    = 6 * 3600 * 1000;
+
+function subcatFromCache(id) {
+  const ts = _subcatCacheTime.get(id);
+  if (!ts || Date.now() - ts > SUBCAT_TTL_MS) return null;
+  return _subcatCache.get(id) || null;
+}
+function subcatToCache(id, val) {
+  _subcatCache.set(id, val);
+  _subcatCacheTime.set(id, Date.now());
+}
+
 // POST /api/wpa/notas/subcategorias
 // Body: { notes: [ { id: "uuid", sectorId: "DESG" }, ... ] }
 // Retorna: { subcats: { [uuid]: { subCategoria, subcatCode, quantidadeExec, tipo } } }
-// Busca detalhes em paralelo (até 6 simultâneos) para classificar subcategorias.
+// Serve do cache quando possível; busca detalhes WPA (10 simultâneos) para o restante.
 router.post('/wpa/notas/subcategorias', async (req, res) => {
   const { notes } = req.body || {};
   if (!Array.isArray(notes) || notes.length === 0) return res.json({ subcats: {} });
 
-  const CONCURRENCY = 6;
-  const subcats = {};
+  const subcats     = {};
+  const toFetch     = [];
 
-  for (let i = 0; i < notes.length; i += CONCURRENCY) {
-    const chunk = notes.slice(i, i + CONCURRENCY);
+  // 1. Serve hits do cache imediatamente
+  notes.forEach(({ id, sectorId }) => {
+    if (!id) return;
+    const cached = subcatFromCache(id);
+    if (cached) subcats[id] = cached;
+    else toFetch.push({ id, sectorId: sectorId || 'DESG' });
+  });
+
+  // 2. Busca apenas os não-cacheados (10 simultâneos)
+  const CONCURRENCY = 10;
+  for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
+    const chunk = toFetch.slice(i, i + CONCURRENCY);
     await Promise.all(chunk.map(async ({ id, sectorId }) => {
-      if (!id) return;
       try {
-        const nota = await getNoteDetail(id, sectorId || 'DESG');
+        const nota = await getNoteDetail(id, sectorId);
         if (nota) {
           const sc = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
-          subcats[id] = { ...sc, tipo: nota.Type };
+          const val = { ...sc, tipo: nota.Type };
+          subcats[id] = val;
+          subcatToCache(id, val);
         }
       } catch {}
     }));

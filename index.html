@@ -1824,6 +1824,7 @@
       }
 
       renderAll();
+      enrichSubcategorias(allTeams); // enriquece subcats em background (cache no backend)
     } catch (err) {
       document.getElementById('sync-label').textContent = 'Erro de conexão';
       document.getElementById('teams-grid').innerHTML =
@@ -1933,35 +1934,29 @@
   // Mapa UUID → { subCategoria, subcatCode, quantidadeExec, tipo }
   window._subcatMap = window._subcatMap || {};
 
-  // enrichSubcategorias: busca subcats APENAS das notas de uma equipe específica.
-  // Chamada quando o modal da equipe abre. Evita N×77 chamadas no carregamento.
-  // Retorna true se alguma subcat nova foi obtida.
-  async function enrichSubcategorias(team) {
-    if (!team) return false;
-    const allN = [
-      ...(team.notasConcluidas  || []),
-      ...(team.notasExecutadas  || []),
-      ...(team.notasBaixadas    || []),
-      ...(team.notasRejeitadas  || []),
-      ...(team.notasVistoriadas || []),
-    ];
-    const notes = allN
-      .filter(n => n.id && !window._subcatMap[n.id])
-      .map(n => ({ id: n.id, sectorId: team.sectorId || 'DESG' }));
-
-    if (notes.length === 0) return false;
-
+  // Busca subcategorias para todas as concluídas de todas as equipes.
+  // Chamada UMA vez após renderAll(). O backend serve do cache na maioria dos casos.
+  // Quando os dados chegam, re-renderiza todos os cards.
+  async function enrichSubcategorias(teams) {
+    const notes = [];
+    (teams || []).forEach(t => {
+      (t.notasConcluidas || []).forEach(n => {
+        if (n.id && !window._subcatMap[n.id])
+          notes.push({ id: n.id, sectorId: t.sectorId || 'DESG' });
+      });
+    });
+    if (notes.length === 0) return;
     try {
       const r = await fetch(`${API}/wpa/notas/subcategorias`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes }),
       });
-      if (!r.ok) return false;
+      if (!r.ok) return;
       const data = await r.json();
       Object.assign(window._subcatMap, data.subcats || {});
-      return Object.keys(data.subcats || {}).length > 0;
-    } catch { return false; }
+      renderAll(); // re-renderiza cards com subcategorias
+    } catch {}
   }
 
   // ── RENDER CARDS ──────────────────────────────────────────────────────
@@ -2094,31 +2089,6 @@
     activeNotaTab = 'concluida';
     renderNotas('concluida');
     document.getElementById('modal-overlay').classList.add('open');
-
-    // Enriquece subcategorias das notas desta equipe (em background)
-    // Quando termina: atualiza chips do modal + tipo-chips do card
-    enrichSubcategorias(t).then(houve => {
-      if (!houve) return;
-      if (window._modalTeam?.id === t.id) renderNotas(activeNotaTab); // atualiza modal aberto
-      // Atualiza o card desta equipe na grid (sem re-renderizar tudo)
-      const cardEl = document.querySelector(`[onclick="openModal('${t.id}')"]`);
-      if (cardEl) {
-        const tiposRow = cardEl.querySelector('.tipos-row');
-        if (tiposRow) {
-          const subcatCont = {};
-          (t.notasConcluidas || []).forEach(n => {
-            const sc    = window._subcatMap?.[n.id];
-            const label = sc?.subCategoria || n.tipoCode;
-            if (!subcatCont[label]) subcatCont[label] = { count: 0, qtdTotal: 0 };
-            subcatCont[label].count++;
-            if (sc?.quantidadeExec != null) subcatCont[label].qtdTotal += sc.quantidadeExec;
-          });
-          tiposRow.innerHTML = Object.entries(subcatCont).map(([label, { count, qtdTotal }]) =>
-            `<span class="tipo-chip"><span class="tipo-chip-code">${label}</span><span class="tipo-chip-num">${count}${qtdTotal > 0 ? ` · ${qtdTotal}m` : ''}</span></span>`
-          ).join('');
-        }
-      }
-    });
   }
 
   function switchNotaTab(tipo, el) {
