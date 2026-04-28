@@ -2371,7 +2371,7 @@
         // Cold-start: tenta acordar e refazer
         if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt === 0) {
           document.getElementById('nota-modal-body').innerHTML =
-            '<div class="nota-loading">⚡ WPA estava hibernado. Acordando o servidor da EDP... pode levar até 30s.</div>';
+            '<div class="nota-loading">⚡ WPA estava hibernado. Acordando o servidor da EDP... pode levar até 60s.<br><small style="color:#888;font-weight:400">(O Azure App Service da EDP fica em standby quando ocioso por 20min — voltará a responder em segundos depois)</small></div>';
           try { await fetch(`${API}/admin/warm`, { method: 'POST' }); } catch {}
           return fetchNotaComRecuperacao(url, 1);
         }

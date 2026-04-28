@@ -111,10 +111,13 @@ async function loginAttempt() {
  *
  * Erros legítimos (401 credencial errada, etc) não fazem retry — propaga já.
  */
-async function login() {
-  // Backoff calibrado p/ Azure cold-start do edp-wpa-po: o container costuma
-  // levar 10-25s pra subir. Total ~21s de espera distribuída em 3 retries.
-  const BACKOFF_MS = [3000, 6000, 12000]; // delays após tentativas 1, 2 e 3
+async function login(opts = {}) {
+  // Backoff calibrado p/ Azure cold-start do edp-wpa-po. Em produção foi
+  // observado cold-start de até 25-30s — backoff agressivo cobre isso.
+  // Cliente pode pedir backoff mais longo via opts.aggressive (rota /admin/warm).
+  const BACKOFF_MS = opts.aggressive
+    ? [5000, 10000, 15000, 18000]   // ~48s — para warm/admin onde tempo é OK
+    : [4000,  8000, 14000];          // ~26s — para chamadas de usuário
   const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -147,9 +150,10 @@ async function getToken() {
   return _token;
 }
 
-/** Força novo login independente do TTL atual (usado pelo cron de renovação proativa). */
-async function forceRefresh() {
-  return login();
+/** Força novo login independente do TTL atual.
+ *  opts.aggressive=true → backoff longo (até ~48s); usado pelo /admin/warm. */
+async function forceRefresh(opts = {}) {
+  return login(opts);
 }
 
 /** Retorna o estado atual do token sem fazer nenhuma chamada de rede. */

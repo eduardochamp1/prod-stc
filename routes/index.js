@@ -929,12 +929,14 @@ router.post('/admin/warm', async (_req, res) => {
   try {
     const { forceRefresh, getSessions } = require('../services/wpaService');
     const t0 = Date.now();
-    await forceRefresh();
+    // aggressive=true → backoff de até ~48s no login; tempo de espera aceitável
+    // já que usuário/auto-recovery sabem que estão acordando o WPA.
+    await forceRefresh({ aggressive: true });
     await getSessions('DESG').catch(() => null);
     res.json({ ok: true, ms: Date.now() - t0 });
   } catch (err) {
     console.error('[ADMIN warm]', err.message);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: err.message, ms: Date.now() - Date.now() });
   }
 });
 
