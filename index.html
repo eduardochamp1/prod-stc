@@ -2355,7 +2355,17 @@
 
     const url = `${API}/wpa/nota/${encodeURIComponent(noteId)}?sectorId=${encodeURIComponent(sectorId || 'DESG')}`;
     fetch(url)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(async r => {
+        if (!r.ok) {
+          let info = '';
+          try {
+            const j = await r.json();
+            if (j?.debug) info = `<br><small style="color:#888">noteId=${j.debug.noteIdOriginal} (${j.debug.resolvedFromCodigo ? 'resolvido p/ '+j.debug.noteIdUsed : 'não resolvido'}) · sector=${j.debug.sectorId}</small>`;
+          } catch {}
+          throw new Error(`HTTP ${r.status}${info}`);
+        }
+        return r.json();
+      })
       .then(nota => renderNotaDetail(nota))
       .catch(err  => {
         document.getElementById('nota-modal-body').innerHTML =

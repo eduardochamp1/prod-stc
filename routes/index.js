@@ -354,14 +354,17 @@ function classificarSubCategoria(tipo, code, comments, activities) {
 // Retorna os dados da nota sem imagens Base64 (pesadas) a menos que ?fotos=1 seja passado.
 // Requer também ?sectorId= (ex: DESG, DEPT, DESC) para que a API WPA retorne corretamente.
 router.get('/wpa/nota/:noteId', async (req, res) => {
-  let { noteId }      = req.params;
-  const sectorId      = req.query.sectorId || 'DESG';
-  const incluirFotos  = req.query.fotos === '1';
+  const noteIdOriginal = req.params.noteId;
+  let noteId           = noteIdOriginal;
+  const sectorId       = req.query.sectorId || 'DESG';
+  const incluirFotos   = req.query.fotos === '1';
 
   // Tolerância: se chegar número de OS em vez de UUID (cache antigo do front
   // ou notas históricas sem UUID mapeado), tenta resolver via teams_current.
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(noteId);
+  let resolvedFromCodigo = false;
   if (!isUuid) {
+    console.log(`[wpa/nota] não-UUID recebido: "${noteId}" (sectorId=${sectorId}) — tentando resolver via teams_current`);
     try {
       const sq = sbq();
       if (sq) {
@@ -369,9 +372,17 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
         outer: for (const t of all) {
           for (const k of ['notasConcluidas','notasExecutadas','notasBaixadas','notasRejeitadas']) {
             for (const n of (t[k] || [])) {
-              if (n.codigo === noteId && n.id) { noteId = n.id; break outer; }
+              if (n.codigo === noteId && n.id) {
+                noteId = n.id;
+                resolvedFromCodigo = true;
+                console.log(`[wpa/nota] resolvido: ${noteIdOriginal} → ${noteId} (team ${t.teamName})`);
+                break outer;
+              }
             }
           }
+        }
+        if (!resolvedFromCodigo) {
+          console.warn(`[wpa/nota] codigo "${noteIdOriginal}" não encontrado em teams_current`);
         }
       }
     } catch (e) {
@@ -382,7 +393,11 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   try {
     const nota = await getNoteDetail(noteId, sectorId);
     if (!nota) {
-      return res.status(404).json({ error: `Nota ${noteId} não encontrada na API WPA` });
+      console.warn(`[wpa/nota] WPA retornou null — noteId=${noteId} sectorId=${sectorId} resolvedFromCodigo=${resolvedFromCodigo}`);
+      return res.status(404).json({
+        error: `Nota não encontrada na API WPA`,
+        debug: { noteIdOriginal, noteIdUsed: noteId, sectorId, resolvedFromCodigo },
+      });
     }
 
     // Processa checkpoints: extrai metadados e (opcionalmente) fotos
