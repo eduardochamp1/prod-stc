@@ -293,13 +293,21 @@ async function getNotesForSession(sessionId, category) {
  *   Data.CustomerName, Address, City, Neighborhood, ZipCode — dados do cliente
  */
 async function getNoteDetail(noteId, sectorId) {
+  const qs   = sectorId ? `?sectorId=${encodeURIComponent(sectorId)}` : '';
+  const path = `/api/Notes/${encodeURIComponent(noteId)}/details/optimized${qs}`;
+  const t0   = Date.now();
   try {
-    const qs  = sectorId ? `?sectorId=${encodeURIComponent(sectorId)}` : '';
-    const res = await wpaFetch(`/api/Notes/${encodeURIComponent(noteId)}/details/optimized${qs}`);
-    if (!res.ok) return null;
+    const res = await wpaFetch(path);
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.warn(`[wpa] getNoteDetail !ok status=${res.status} path=${path} body=${body.slice(0,200)}`);
+      return null;
+    }
     const data = await res.json();
+    console.log(`[wpa] getNoteDetail OK noteId=${noteId} sector=${sectorId} ${Date.now()-t0}ms`);
     return data.Data || data || null;
-  } catch {
+  } catch (err) {
+    console.warn(`[wpa] getNoteDetail erro noteId=${noteId} sector=${sectorId} ${Date.now()-t0}ms — ${err.message}`);
     return null;
   }
 }
