@@ -923,6 +923,21 @@ router.get('/equipes/producao', async (req, res) => {
 
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
 
+// POST /api/admin/warm — acorda o WPA (force-refresh do token + ping leve na Web API)
+// Útil quando o Azure App Service hiberna e usuários começam a ver 502 cold-start.
+router.post('/admin/warm', async (_req, res) => {
+  try {
+    const { forceRefresh, getSessions } = require('../services/wpaService');
+    const t0 = Date.now();
+    await forceRefresh();
+    await getSessions('DESG').catch(() => null);
+    res.json({ ok: true, ms: Date.now() - t0 });
+  } catch (err) {
+    console.error('[ADMIN warm]', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 router.post('/admin/snapshot', async (req, res) => {
   try {
     const c = cron();

@@ -698,6 +698,7 @@
           </div>
         </div>
         <button class="btn-refresh" id="btn-hoje" onclick="irParaHoje()" style="display:none">↩ Hoje</button>
+        <button class="btn-refresh" id="btn-warm" onclick="acordarWpa()" title="Força um login no WPA — útil quando o Azure App Service hiberna e clicar em OS retorna 502">⚡ Acordar WPA</button>
         <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
       </div>
     </div>
@@ -2354,37 +2355,75 @@
     document.getElementById('nota-overlay').classList.add('open');
 
     const url = `${API}/wpa/nota/${encodeURIComponent(noteId)}?sectorId=${encodeURIComponent(sectorId || 'DESG')}`;
-    fetch(url)
-      .then(async r => {
-        if (!r.ok) {
-          let info = '';
-          try {
-            const j = await r.json();
-            if (j?.debug) {
-              const d = j.debug;
-              // Identifica como o noteId chegou (já-UUID, resolvido por código, ou não resolvido)
-              const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(d.noteIdOriginal || '');
-              const idInfo = isUuid
-                ? 'UUID válido'
-                : (d.resolvedFromCodigo ? 'resolvido p/ '+d.noteIdUsed : 'não resolvido');
-              // Se temos wpaStatus, mostra o status real do WPA (401/404/0/etc)
-              const wpaInfo = d.wpaStatus !== undefined
-                ? `<br>WPA retornou: <b>${d.wpaStatus === 0 ? 'erro de rede/timeout' : 'HTTP '+d.wpaStatus}</b>`
-                  + (d.wpaElapsed ? ` (${d.wpaElapsed}ms)` : '')
-                  + (d.wpaBody ? `<br><code style="font-size:11px;color:#aaa">${(d.wpaBody||'').slice(0,200).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</code>` : '')
-                : '';
-              info = `<br><small style="color:#888">noteId=${d.noteIdOriginal} (${idInfo}) · sector=${d.sectorId}${wpaInfo}</small>`;
-            }
-          } catch {}
-          throw new Error(`HTTP ${r.status}${info}`);
+    fetchNotaComRecuperacao(url, 0);
+  }
+
+  /**
+   * Faz a chamada da OS e, se receber 502/503 (cold-start típico do Azure),
+   * dispara /admin/warm uma vez e refaz a request transparentemente.
+   * Em situações de cold-start severo o usuário só percebe um delay maior;
+   * o erro vermelho de 404/etc. é mantido (são erros legítimos).
+   */
+  async function fetchNotaComRecuperacao(url, attempt) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) {
+        // Cold-start: tenta acordar e refazer
+        if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt === 0) {
+          document.getElementById('nota-modal-body').innerHTML =
+            '<div class="nota-loading">⚡ WPA estava hibernado. Acordando o servidor da EDP... pode levar até 30s.</div>';
+          try { await fetch(`${API}/admin/warm`, { method: 'POST' }); } catch {}
+          return fetchNotaComRecuperacao(url, 1);
         }
-        return r.json();
-      })
-      .then(nota => renderNotaDetail(nota))
-      .catch(err  => {
-        document.getElementById('nota-modal-body').innerHTML =
-          `<div class="nota-error">⚠️ Não foi possível carregar a OS.<br><small>${err.message}</small></div>`;
-      });
+        // Demais erros: monta a mensagem detalhada (debug do backend)
+        let info = '';
+        try {
+          const j = await r.json();
+          if (j?.debug) {
+            const d = j.debug;
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(d.noteIdOriginal || '');
+            const idInfo = isUuid
+              ? 'UUID válido'
+              : (d.resolvedFromCodigo ? 'resolvido p/ '+d.noteIdUsed : 'não resolvido');
+            const wpaInfo = d.wpaStatus !== undefined
+              ? `<br>WPA retornou: <b>${d.wpaStatus === 0 ? 'erro de rede/timeout' : 'HTTP '+d.wpaStatus}</b>`
+                + (d.wpaElapsed ? ` (${d.wpaElapsed}ms)` : '')
+                + (d.wpaBody ? `<br><code style="font-size:11px;color:#aaa">${(d.wpaBody||'').slice(0,200).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</code>` : '')
+              : '';
+            info = `<br><small style="color:#888">noteId=${d.noteIdOriginal} (${idInfo}) · sector=${d.sectorId}${wpaInfo}</small>`;
+          }
+        } catch {}
+        throw new Error(`HTTP ${r.status}${info}`);
+      }
+      const nota = await r.json();
+      renderNotaDetail(nota);
+    } catch (err) {
+      document.getElementById('nota-modal-body').innerHTML =
+        `<div class="nota-error">⚠️ Não foi possível carregar a OS.<br><small>${err.message}</small></div>`;
+    }
+  }
+
+  /** Botão "⚡ Acordar WPA" do header — chama /admin/warm explicitamente. */
+  async function acordarWpa() {
+    const btn = document.getElementById('btn-warm');
+    if (!btn) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Acordando WPA...';
+    try {
+      const r = await fetch(`${API}/admin/warm`, { method: 'POST' });
+      const j = await r.json();
+      if (r.ok && j.ok) {
+        btn.innerHTML = `✓ WPA pronto (${(j.ms/1000).toFixed(1)}s)`;
+      } else {
+        btn.innerHTML = '⚠️ Falhou — reabra um card';
+        console.warn('[warm]', j);
+      }
+    } catch (err) {
+      btn.innerHTML = '⚠️ Falhou — reabra um card';
+      console.warn('[warm]', err.message);
+    }
+    setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 5000);
   }
 
   function renderNotaDetail(nota) {
