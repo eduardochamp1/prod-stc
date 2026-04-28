@@ -354,9 +354,30 @@ function classificarSubCategoria(tipo, code, comments, activities) {
 // Retorna os dados da nota sem imagens Base64 (pesadas) a menos que ?fotos=1 seja passado.
 // Requer também ?sectorId= (ex: DESG, DEPT, DESC) para que a API WPA retorne corretamente.
 router.get('/wpa/nota/:noteId', async (req, res) => {
-  const { noteId }    = req.params;
+  let { noteId }      = req.params;
   const sectorId      = req.query.sectorId || 'DESG';
   const incluirFotos  = req.query.fotos === '1';
+
+  // Tolerância: se chegar número de OS em vez de UUID (cache antigo do front
+  // ou notas históricas sem UUID mapeado), tenta resolver via teams_current.
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(noteId);
+  if (!isUuid) {
+    try {
+      const sq = sbq();
+      if (sq) {
+        const all = await sq.getTeamsFromSupabase({});
+        outer: for (const t of all) {
+          for (const k of ['notasConcluidas','notasExecutadas','notasBaixadas','notasRejeitadas']) {
+            for (const n of (t[k] || [])) {
+              if (n.codigo === noteId && n.id) { noteId = n.id; break outer; }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[wpa/nota] resolve por codigo falhou:', e.message);
+    }
+  }
 
   try {
     const nota = await getNoteDetail(noteId, sectorId);
