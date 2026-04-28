@@ -154,6 +154,19 @@ async function classificarDD(noteId, sectorId) {
     sub_categoria = nomeFallback('DD');
   }
 
+  // Fallback: notas DD CAPEX de RAMAL DE LIGACAO geralmente vêm com Activities=[]
+  // (visto em ~27 notas em prod com GroupDescription "RAMAL DE LIGACAO - CAPEX").
+  // Os campos Component/EletricEquipment do /api/notes/dd já indicam Subs Ramal,
+  // então classificamos via GroupDescription quando Activities[] está vazio.
+  // Quantidade fica null porque não temos Activities[].Amount nesse caminho.
+  if (sub_code === 'OUTROS') {
+    const desc = (groupDesc || '').toUpperCase();
+    if (/RAMAL\s+DE\s+LIGAC/.test(desc)) {
+      sub_code = 'C93';
+      sub_categoria = 'Subs Ramal';
+    }
+  }
+
   // Guarda apenas campos relevantes no raw — descarta photos/checkpoints (1.6 MB)
   const activitiesLight = activities.map(a => ({
     Code:      a.Activity?.Code      ?? null,

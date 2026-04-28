@@ -308,20 +308,30 @@ router.get('/wpa/token-status', (req, res) => {
 });
 
 /**
- * Classifica a subcategoria de uma nota com base em Type, Code e Comments.
+ * Heurística de fallback (best-effort) para classificar subcategoria a partir
+ * dos campos JÁ presentes no payload de /details/optimized — SEM fazer chamadas
+ * adicionais ao WPA. Usada apenas quando o cache (note_subcategorias) não tem
+ * a nota. A fonte autoritativa é services/classifierService.js, populado pelo
+ * cron e pelos scripts de backfill.
  *
- * Tipos com subcategorias:
- *   SF  → Code SRED = Corte Disjuntor (L0) | SREB = Corte Borne (L1)
- *   MD  → Code SPEB + Comments contém "TL11" = Subs TL11 | else = Subs Obsoleto
- *   DD  → Code C93 = Subs Ramal | BTZ013 = Substituição CS
- *         quantidade = Activities[?].Quantity (atividade com Code C93 ou BTZ013)
+ * Limitações conhecidas vs classifier:
+ *   MD: classifier usa /api/notepriorities → SubProject (TL11/OBSOLETO).
+ *       Aqui só temos Comments — checagem por substring "TL11" é menos confiável.
+ *   SF: classifier consulta /api/notes/sfdl ou /sfrl que devolvem Code SRED/SREB.
+ *       Aqui só temos o Code top-level de details/optimized — pode não bater.
+ *   DD: aqui não temos GroupDescription (vem só de /api/notes/dd), então o
+ *       fallback "RAMAL DE LIGACAO - CAPEX → C93" do classifier não roda.
+ *       Activities[] segue a mesma estrutura aninhada (a.Activity.Code, a.Amount).
+ *
+ * Sub_codes canônicos (mesmos do classifier): TL11, OBSOLETO, L0, L1, C93,
+ * BTZ013, ou null/code-original quando indeterminado.
  */
 function classificarSubCategoria(tipo, code, comments, activities) {
   const act = activities || [];
 
   if (tipo === 'SF') {
-    if (code === 'SRED') return { subCategoria: 'Corte Disjuntor', subcatCode: 'L0',     quantidade: null };
-    if (code === 'SREB') return { subCategoria: 'Corte Borne',     subcatCode: 'L1',     quantidade: null };
+    if (code === 'SRED') return { subCategoria: 'Corte Disjuntor', subcatCode: 'L0', quantidade: null };
+    if (code === 'SREB') return { subCategoria: 'Corte Borne',     subcatCode: 'L1', quantidade: null };
     return { subCategoria: null, subcatCode: code || null, quantidade: null };
   }
 
@@ -338,12 +348,20 @@ function classificarSubCategoria(tipo, code, comments, activities) {
   }
 
   if (tipo === 'DD') {
-    // Busca a atividade principal (C93 ou BTZ013) para extrair quantidade
-    const ativPrinc = act.find(a => a.Code === code) || act.find(a => a.Quantity != null) || null;
-    const quantidade = ativPrinc ? (ativPrinc.Quantity ?? null) : null;
-    if (code === 'C93')    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade };
-    if (code === 'BTZ013') return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade };
-    return { subCategoria: null, subcatCode: code || null, quantidade };
+    // Estrutura real (alinhada com classifierService.classificarDD):
+    // cada item é { Activity: { Code, ... }, Amount, IsPrimary, ... }.
+    // Prefere a atividade primária quando há duplicatas do mesmo Code.
+    const findByCode = (c) =>
+      act.find(a => a.Activity?.Code === c && a.IsPrimary) ||
+      act.find(a => a.Activity?.Code === c);
+
+    const ativC93    = findByCode('C93');
+    const ativBTZ013 = findByCode('BTZ013');
+
+    if (ativC93)    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: ativC93.Amount    ?? null };
+    if (ativBTZ013) return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: ativBTZ013.Amount ?? null };
+
+    return { subCategoria: null, subcatCode: code || null, quantidade: null };
   }
 
   return { subCategoria: null, subcatCode: code || null, quantidade: null };

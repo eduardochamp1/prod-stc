@@ -99,9 +99,37 @@ async function getCountsBySubcode() {
   return counts;
 }
 
+/**
+ * Lista UUIDs já classificados para um determinado tipo (MD/SF/DD).
+ * Útil em scripts de re-backfill que precisam reprocessar notas que saíram
+ * da janela ativa dos snapshots — pega da própria tabela de cache.
+ * @param {string} tipo  'MD' | 'SF' | 'DD'
+ * @returns {Promise<Array<{noteId, numero, tipo}>>}
+ */
+async function getNoteIdsByTipo(tipo) {
+  const sb = getClient();
+  const out = [];
+  let from = 0;
+  const PAGE = 1000;
+  while (true) {
+    const { data, error } = await sb
+      .from('note_subcategorias')
+      .select('note_id, numero, tipo')
+      .eq('tipo', tipo)
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    data.forEach(r => out.push({ noteId: r.note_id, numero: r.numero, tipo: r.tipo }));
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return out;
+}
+
 module.exports = {
   getClassifiedIds,
   upsertSubcategorias,
   getSubcategoriasByIds,
   getCountsBySubcode,
+  getNoteIdsByTipo,
 };

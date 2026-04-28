@@ -13,7 +13,7 @@ require('dotenv').config();
 
 const { getClient }           = require('../services/supabaseClient');
 const { classificarBatch }    = require('../services/classifierService');
-const { upsertSubcategorias } = require('../db/subcategoriasQueries');
+const { upsertSubcategorias, getNoteIdsByTipo } = require('../db/subcategoriasQueries');
 
 async function fetchAllDDJobs() {
   const sb = getClient();
@@ -69,12 +69,36 @@ async function main() {
 
   const t0 = Date.now();
 
-  console.log('\n[1/3] Coletando UUIDs DD dos snapshots...');
-  const jobs = await fetchAllDDJobs();
-  console.log(`      ${jobs.length} UUIDs DD únicos encontrados`);
+  console.log('\n[1/3] Coletando UUIDs DD (snapshots + cache existente)...');
+  const snapJobs = await fetchAllDDJobs();
+  console.log(`      ${snapJobs.length} UUIDs DD nos snapshots`);
+
+  // Também pega UUIDs já em note_subcategorias — necessário p/ reprocessar
+  // notas que saíram da janela ativa dos snapshots mas continuam no cache.
+  const cacheRows = await getNoteIdsByTipo('DD');
+  console.log(`      ${cacheRows.length} UUIDs DD na tabela note_subcategorias`);
+
+  // Funde as duas fontes deduplicando por noteId. Snapshots têm sectorId real;
+  // notas só-no-cache caem no default 'DESG' (sem prejuízo p/ regra de RAMAL,
+  // que só consulta /api/notes/dd — endpoint que ignora sectorId).
+  const byId = new Map();
+  snapJobs.forEach(j => byId.set(j.noteId, j));
+  cacheRows.forEach(r => {
+    if (!byId.has(r.noteId)) {
+      byId.set(r.noteId, {
+        noteId:   r.noteId,
+        tipo:     'DD',
+        sectorId: 'DESG',
+        numero:   r.numero || null,
+      });
+    }
+  });
+  const jobs = [...byId.values()];
+  const onlyInCache = jobs.length - snapJobs.length;
+  console.log(`      ${jobs.length} UUIDs únicos após merge (+${onlyInCache} só no cache)`);
 
   if (jobs.length === 0) {
-    console.log('\n✅ Nenhum DD encontrado nos snapshots.');
+    console.log('\n✅ Nenhum DD a reprocessar.');
     process.exit(0);
   }
 
