@@ -112,7 +112,9 @@ async function loginAttempt() {
  * Erros legítimos (401 credencial errada, etc) não fazem retry — propaga já.
  */
 async function login() {
-  const BACKOFF_MS = [2000, 5000]; // delays após tentativas 1 e 2
+  // Backoff calibrado p/ Azure cold-start do edp-wpa-po: o container costuma
+  // levar 10-25s pra subir. Total ~21s de espera distribuída em 3 retries.
+  const BACKOFF_MS = [3000, 6000, 12000]; // delays após tentativas 1, 2 e 3
   const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -161,17 +163,69 @@ function getTokenStatus() {
 
 // ── FETCH HELPER ──────────────────────────────────────────────────────────────
 
+/**
+ * Detecta se uma resposta é a página HTML de cold-start do Azure App Service
+ * (header content-type=text/html + body contendo "Web App - Unavailable").
+ * Consome o body via clone() para não quebrar o read posterior.
+ */
+async function _isAzureColdStartResponse(res) {
+  const ctype = res.headers.get('content-type') || '';
+  if (!ctype.includes('text/html') && res.status !== 503 && res.status !== 403) return false;
+  try {
+    const txt = await res.clone().text();
+    return /Web App\s*-\s*Unavailable/i.test(txt);
+  } catch { return false; }
+}
+
+/**
+ * Faz fetch contra a Web API do WPA com retry em caso de:
+ *   • Cold-start do Azure App Service (edp-wpa-web-api) — 403/503 com HTML "Unavailable"
+ *   • Erro de rede (timeout, conexão recusada)
+ * Backoff alinhado com login() — total ~21s de paciência.
+ *
+ * Importante: erros legítimos da API (401/404/500 com JSON) são propagados
+ * direto sem retry, pra não esconder problemas reais.
+ */
 async function wpaFetch(path, options = {}) {
-  const token = await getToken();
-  const res = await fetch(`${WPA_API}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-  return res;
+  // Backoff mais curto que o do login: a Web API costuma estar quente quando
+  // o auth está; só protege contra cold-start ocasional. Total ~9s.
+  const BACKOFF_MS = [3000, 6000];
+  const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const token = await getToken();
+    let res;
+    try {
+      res = await fetch(`${WPA_API}${path}`, {
+        ...options,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          ...(options.headers || {}),
+        },
+      });
+    } catch (err) {
+      if (attempt === MAX_ATTEMPTS) throw err;
+      const delay = BACKOFF_MS[attempt - 1];
+      console.warn(`[WPA] wpaFetch ${path} erro de rede (tentativa ${attempt}/${MAX_ATTEMPTS}): ${err.message} — retry em ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+
+    // Cold-start do App Service da Web API → retry
+    if (await _isAzureColdStartResponse(res)) {
+      if (attempt === MAX_ATTEMPTS) {
+        console.warn(`[WPA] wpaFetch ${path} cold-start persistente (${MAX_ATTEMPTS} tentativas) — desistindo`);
+        return res;
+      }
+      const delay = BACKOFF_MS[attempt - 1];
+      console.warn(`[WPA] wpaFetch ${path} Azure cold-start (tentativa ${attempt}/${MAX_ATTEMPTS}) — retry em ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+
+    return res;
+  }
 }
 
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
