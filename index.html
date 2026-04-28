@@ -2378,12 +2378,20 @@
     try {
       const r = await fetch(url);
       if (!r.ok) {
-        // Cold-start: tenta acordar e refazer
+        // 502/503/504 = WPA inacessível (IP block ou cold-start). O servidor
+        // Engelmig (com IP autorizado) já popula o cache `note_details` a cada
+        // ciclo do cron. Se essa OS ainda não está em cache, é porque foi
+        // concluída há pouco — em até 15 min estará disponível.
         if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt === 0) {
-          document.getElementById('nota-modal-body').innerHTML =
-            '<div class="nota-loading">⚡ WPA estava hibernado. Acordando o servidor da EDP... pode levar até 60s.<br><small style="color:#888;font-weight:400">(O Azure App Service da EDP fica em standby quando ocioso por 20min — voltará a responder em segundos depois)</small></div>';
-          try { await fetch(`${API}/admin/warm`, { method: 'POST' }); } catch {}
-          return fetchNotaComRecuperacao(url, 1);
+          document.getElementById('nota-modal-body').innerHTML = `
+            <div class="nota-error" style="color:var(--text);background:#fff7e6;border:1px solid #ffd591;padding:16px;border-radius:8px">
+              ⏳ <b>OS ainda não está em cache</b><br>
+              <small style="color:#666;font-weight:400">
+                Esta OS foi finalizada há pouco e ainda não foi sincronizada.
+                O servidor Engelmig sincroniza a cada 15 min — tente novamente em alguns minutos.
+              </small>
+            </div>`;
+          return; // não auto-retry: Vercel não consegue falar com WPA, retry seria inútil
         }
         // Demais erros: monta a mensagem detalhada (debug do backend)
         let info = '';

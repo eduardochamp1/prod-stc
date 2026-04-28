@@ -430,6 +430,61 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
     }));
 }
 
+// ── NOTE DETAILS CACHE (payload completo das OS, populado pelo cron) ──────────
+
+/**
+ * Lê do cache local. Retorna { payload, fetched_at } ou null.
+ * Pensado para ser leitura instantânea, com latência típica de 50-150ms.
+ */
+async function getNoteDetailCache(noteId) {
+  const sb = getClient();
+  const { data, error } = await sb
+    .from('note_details')
+    .select('payload, fetched_at')
+    .eq('note_id', noteId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+/**
+ * Insere/atualiza uma OS no cache. Sempre upsert por note_id (UUID).
+ * O payload deve ser o output do notaProcessor SEM fotos (incluirFotos=false).
+ */
+async function setNoteDetailCache(noteId, numero, tipo, sectorId, payload) {
+  const sb = getClient();
+  const { error } = await sb
+    .from('note_details')
+    .upsert(
+      {
+        note_id:    noteId,
+        numero:     numero || null,
+        tipo:       tipo   || null,
+        sector_id:  sectorId || null,
+        payload,
+        fetched_at: new Date().toISOString(),
+      },
+      { onConflict: 'note_id' },
+    );
+  if (error) throw error;
+}
+
+/**
+ * Filtra um lote de UUIDs e retorna apenas os que NÃO estão em cache.
+ * Mais eficiente que ler todos os IDs e diff em memória — usa um IN no Supabase.
+ */
+async function filtrarNotesNaoCacheadas(noteIds) {
+  if (!noteIds || noteIds.length === 0) return [];
+  const sb = getClient();
+  const { data, error } = await sb
+    .from('note_details')
+    .select('note_id')
+    .in('note_id', noteIds);
+  if (error) throw error;
+  const existentes = new Set((data || []).map(r => r.note_id));
+  return noteIds.filter(id => !existentes.has(id));
+}
+
 // ── APP SETTINGS (chave/valor compartilhado) ──────────────────────────────────
 
 async function getSetting(key) {
@@ -453,6 +508,7 @@ async function setSetting(key, value) {
 }
 
 module.exports = {
+  getNoteDetailCache, setNoteDetailCache, filtrarNotesNaoCacheadas,
   getSetting, setSetting,
   getMetas, setMetas, getMetasCalculadas,
   getTeamsFromSupabase, getTeamsByDateFromSnapshots,

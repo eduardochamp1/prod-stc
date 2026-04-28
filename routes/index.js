@@ -326,46 +326,8 @@ router.get('/wpa/token-status', (req, res) => {
  * Sub_codes canônicos (mesmos do classifier): TL11, OBSOLETO, L0, L1, C93,
  * BTZ013, ou null/code-original quando indeterminado.
  */
-function classificarSubCategoria(tipo, code, comments, activities) {
-  const act = activities || [];
-
-  if (tipo === 'SF') {
-    if (code === 'SRED') return { subCategoria: 'Corte Disjuntor', subcatCode: 'L0', quantidade: null };
-    if (code === 'SREB') return { subCategoria: 'Corte Borne',     subcatCode: 'L1', quantidade: null };
-    return { subCategoria: null, subcatCode: code || null, quantidade: null };
-  }
-
-  if (tipo === 'MD') {
-    if (code === 'SPEB') {
-      const isTL11 = (comments || '').toUpperCase().includes('TL11');
-      return {
-        subCategoria: isTL11 ? 'Subs TL11' : 'Subs Obsoleto',
-        subcatCode:   isTL11 ? 'TL11'      : 'OBSOLETO',
-        quantidade:   null,
-      };
-    }
-    return { subCategoria: null, subcatCode: code || null, quantidade: null };
-  }
-
-  if (tipo === 'DD') {
-    // Estrutura real (alinhada com classifierService.classificarDD):
-    // cada item é { Activity: { Code, ... }, Amount, IsPrimary, ... }.
-    // Prefere a atividade primária quando há duplicatas do mesmo Code.
-    const findByCode = (c) =>
-      act.find(a => a.Activity?.Code === c && a.IsPrimary) ||
-      act.find(a => a.Activity?.Code === c);
-
-    const ativC93    = findByCode('C93');
-    const ativBTZ013 = findByCode('BTZ013');
-
-    if (ativC93)    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: ativC93.Amount    ?? null };
-    if (ativBTZ013) return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: ativBTZ013.Amount ?? null };
-
-    return { subCategoria: null, subcatCode: code || null, quantidade: null };
-  }
-
-  return { subCategoria: null, subcatCode: code || null, quantidade: null };
-}
+// Heurística e processamento de payload da OS extraídos para services/notaProcessor.js
+const { processarNota, classificarSubCategoria } = require('../services/notaProcessor');
 
 // GET /api/wpa/nota/:noteId — detalhes completos de uma OS pelo UUID (Data.Id)
 // Endpoint WPA confirmado: GET /api/Notes/{noteId}/details/optimized?sectorId=DESG
@@ -409,9 +371,27 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   }
 
   try {
+    // ── 1) Cache-first ────────────────────────────────────────────────────
+    // O cron de snapshot popula `note_details` com OS concluídas/rejeitadas.
+    // Quando há cache, leitura é instantânea (~100ms) e funciona até quando o
+    // ambiente não consegue falar com a WPA (Vercel + IP block da EDP).
+    // Pula o cache se ?fotos=1 (cache não tem fotos em base64).
+    if (MODE !== 'mock' && !incluirFotos) {
+      try {
+        const sq = sbq();
+        if (sq) {
+          const cached = await sq.getNoteDetailCache(noteId);
+          if (cached?.payload) {
+            console.log(`[wpa/nota] cache hit noteId=${noteId} fetched=${cached.fetched_at}`);
+            return res.json({ ...cached.payload, _source: 'cache', _cachedAt: cached.fetched_at });
+          }
+        }
+      } catch (e) { console.warn('[wpa/nota] cache lookup falhou:', e.message); }
+    }
+
+    // ── 2) Cache miss → busca ao vivo na WPA ─────────────────────────────
     const nota = await getNoteDetail(noteId, sectorId);
     if (!nota) {
-      // WPA respondeu 200 mas com payload vazio (Data null/undefined) — raro mas possível
       console.warn(`[wpa/nota] WPA retornou payload vazio — noteId=${noteId} sectorId=${sectorId} resolvedFromCodigo=${resolvedFromCodigo}`);
       return res.status(404).json({
         error: `Nota não encontrada na API WPA (payload vazio)`,
@@ -419,135 +399,33 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
       });
     }
 
-    // Processa checkpoints: extrai metadados e (opcionalmente) fotos
-    const checkpoints = (nota.Checkpoints || [])
-      .sort((a, b) => new Date(a.RegisteredAt2 || a.TimeStamp) - new Date(b.RegisteredAt2 || b.TimeStamp))
-      .map(cp => {
-        const fotos = (cp.FileWrappers || []).map((fw, idx) => ({
-          index: idx,
-          // Inclui base64 só se ?fotos=1 — evita payloads de MBs na listagem
-          base64: incluirFotos ? fw.Base64 : undefined,
-          hasImage: Boolean(fw.Base64),
-        }));
-        return {
-          id:          cp.Id,
-          event:       cp.Event,
-          timestamp:   cp.RegisteredAt2 || cp.TimeStamp,
-          mileage:     cp.Mileage,
-          latitude:    cp.Latitude,
-          longitude:   cp.Longitude,
-          battery:     cp.BatteryLevel,
-          accuracy:    cp.Accuracy,
-          fotosCount:  fotos.length,
-          fotos:       incluirFotos ? fotos : undefined,
-        };
-      });
-
-    // Equipamentos (sem campos vazios para reduzir payload)
-    const equipamentos = (nota.Equipments || []).map(e => ({
-      id:          e.Id,
-      equipmentId: e.EquipmentId,
-      model:       e.Model,
-      serialNumber:e.SerialNumber,
-      prefix:      e.Prefix,
-      materialNumber: e.MaterialNumber,
-      installation: e.Installation,
-      constructionClass: e.ConstructionClass,
-      flagMainMeterRemoved: e.FlagMainMeterRemoved,
-      flagEquipmentSubstitution: e.FlagEquipmentSubstitution,
-    }));
-
-    // Lacres
-    const lacres = (nota.Seals || []).map(s => ({
-      id:         s.Id,
-      sealId:     s.SealId,
-      sealNumber: s.SealNumber,
-      sealType:   s.SealType,
-      sequenceNumber: s.SequenceNumber,
-      registryTypeId: s.RegistryTypeId,
-      installation: s.Installation,
-      flagRemoved: s.FlagRemoved,
-      flagNoCover: s.FlagNoCover,
-      flagNoDevice: s.FlagNoDevice,
-      flagDivergentSeal: s.FlagDivergentSeal,
-    }));
-
-    // Classificação de subcategoria — consulta cache do Supabase primeiro;
-    // se não estiver classificada, usa a heurística local (Code + Comments).
+    // ── 3) Resolve subcategoria (cache do classificador → fallback heurístico)
     let subcat = { subCategoria: null, subcatCode: null, quantidade: null };
     if (MODE !== 'mock') {
       try {
         const { getSubcategoriasByIds } = require('../db/subcategoriasQueries');
-        const cached = await getSubcategoriasByIds([nota.Id]);
-        const c = cached[nota.Id];
+        const cachedClass = await getSubcategoriasByIds([nota.Id]);
+        const c = cachedClass[nota.Id];
         if (c) subcat = { subCategoria: c.sub_categoria, subcatCode: c.sub_code, quantidade: c.quantidade };
       } catch {}
     }
     if (!subcat.subCategoria) {
-      const fallback = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
-      subcat = { subCategoria: fallback.subCategoria, subcatCode: fallback.subcatCode, quantidade: fallback.quantidade };
+      const fb = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
+      subcat = { subCategoria: fb.subCategoria, subcatCode: fb.subcatCode, quantidade: fb.quantidade };
     }
 
-    res.json({
-      id:                  nota.Id,
-      numero:              nota.Number,
-      codigo:              nota.Code,
-      tipo:                nota.Type,
-      subCategoria:        subcat.subCategoria,
-      subcatCode:          subcat.subcatCode,
-      quantidadeExec:      subcat.quantidade,
-      status:              nota.Status,
-      executionStatus:     nota.ExecutionStatus,
-      cliente: {
-        nome:    nota.CustomerName,
-        telefone: nota.CustomerPhone,
-        unidade: nota.ConsumerUnit,
-        medidor: nota.MeterSerialNumber,
-        tensao:  nota.Voltage,
-        tarifaCategoria: nota.RateCategory,
-      },
-      endereco: {
-        logradouro: nota.Address,
-        bairro:     nota.Neighborhood,
-        cidade:     nota.City,
-        cep:        nota.ZipCode,
-        latitude:   nota.Latitude,
-        longitude:  nota.Longitude,
-      },
-      datas: {
-        emissao:      nota.IssueDate2      || nota.IssueDate,
-        desejada:     nota.DesiredConclusionDate2 || nota.DesiredConclusionDate,
-        conclusao:    nota.ConclusionDate2 || nota.ConclusionDate,
-        statusConclusao: nota.ConclusionStatus,
-        importacao:   nota.ImportDate2     || nota.ImportDate,
-      },
-      operacional: {
-        workCenter:  nota.WorkCenter,
-        gpm:         nota.GPM,
-        teamId:      nota.TeamId,
-        sectorId:    nota.SectorId,
-        tentativa:   nota.Try,
-        isHighPriority: nota.isHighPriorityNote,
-      },
-      // Campos de codificação visíveis no portal EDP WPA (Detalhes Adicionais)
-      codificacao: {
-        grupoCodificacao:   nota.NoteMeasurementTypeProposed || null,  // ex: MDBT
-        codificacao:        nota.Code,                                  // ex: SPEB
-        codigoMedidas:      nota.NoteMeasurementType,                   // ex: MDNB
-        unidadeLeitura:     nota.ReadUnit,                              // ex: B43GP46A
-        instalacao:         nota.InstallationId,                        // ex: 0000498401
-        dataCriacao:        nota.CreationDate2 || nota.CreationDate,
-        statusSurvey:       nota.StatusSurvey  || null,
-      },
-      texto:       nota.Text,
-      comentarios: nota.Comments,
-      checkpoints,
-      equipamentos,
-      lacres,
-      materiais:   (nota.Materials   || []).length,
-      atividades:  (nota.Activities  || []).length,
-      checklists:  (nota.Checklists  || []).length,
-    });
+    // ── 4) Processa payload e responde ───────────────────────────────────
+    const processed = processarNota(nota, { incluirFotos, subcat });
+
+    // ── 5) Popula cache (somente versão sem fotos) ───────────────────────
+    if (MODE !== 'mock' && !incluirFotos) {
+      try {
+        const sq = sbq();
+        if (sq) await sq.setNoteDetailCache(nota.Id, nota.Number, nota.Type, sectorId, processed);
+      } catch (e) { console.warn('[wpa/nota] cache save falhou:', e.message); }
+    }
+
+    res.json({ ...processed, _source: 'live' });
   } catch (err) {
     // Se getNoteDetail lançou erro estruturado (status WPA real), propaga p/ UI
     // poder discriminar 401 (token race) de 404 real ou 5xx (timeout / upstream).

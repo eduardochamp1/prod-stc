@@ -57,11 +57,103 @@ async function runSnapshot() {
     runClassifyNewNotes(teams).catch(err =>
       console.error('[CRON] Erro classificando subcategorias:', err.message)
     );
+
+    // Faz cache do payload completo das OS finalizadas (não bloqueia o snapshot).
+    // Roda no servidor Engelmig (com IP autorizado pela WPA) e popula
+    // `note_details` no Supabase, que é lido instantaneamente pela rota
+    // /api/wpa/nota — inclusive na Vercel, que não consegue falar com a WPA.
+    runCacheNotaDetails(teams).catch(err =>
+      console.error('[CRON] Erro cacheando detalhes de OS:', err.message)
+    );
   } catch (err) {
     console.error('[CRON] Erro no snapshot:', err.message);
   } finally {
     isRunning = false;
   }
+}
+
+// ── CACHE DE DETALHES DE OS ───────────────────────────────────────────────────
+// Para cada OS concluída/rejeitada que ainda não está em `note_details`, busca
+// o payload completo via WPA (sem fotos) e salva no Supabase. Limita a N por
+// ciclo para não exceder o tempo do cron quando há muitas pendentes.
+
+const MAX_CACHE_POR_CICLO = 30;
+
+async function runCacheNotaDetails(teams) {
+  if (process.env.DATA_MODE === 'mock') return;
+
+  // 1) Coleta UUIDs únicos de OS finalizadas (concluída ou rejeitada)
+  const candidatos = [];
+  const visto = new Set();
+  (teams || []).forEach(t => {
+    const fim = [...(t.notasConcluidas || []), ...(t.notasRejeitadas || [])];
+    fim.forEach(n => {
+      if (!n.id || visto.has(n.id)) return;
+      visto.add(n.id);
+      candidatos.push({
+        id:       n.id,
+        numero:   n.codigo || null,
+        tipo:     n.tipoCode || null,
+        sectorId: t.sectorId || 'DESG',
+      });
+    });
+  });
+
+  if (candidatos.length === 0) return;
+
+  // 2) Filtra os que ainda não estão no cache
+  const sq = require('../db/supabaseQueries');
+  const idsFaltando = await sq.filtrarNotesNaoCacheadas(candidatos.map(c => c.id));
+  if (idsFaltando.length === 0) {
+    console.log(`[CRON] Cache OS: nada novo (${candidatos.length} UUIDs, todos cacheados)`);
+    return;
+  }
+
+  // 3) Pega N por ciclo p/ não bloquear
+  const idSet = new Set(idsFaltando);
+  const lote  = candidatos.filter(c => idSet.has(c.id)).slice(0, MAX_CACHE_POR_CICLO);
+  console.log(`[CRON] Cache OS: ${idsFaltando.length} pendentes — processando ${lote.length}`);
+
+  // 4) Busca + processa + grava (concorrência 4 — evita saturar /details/optimized)
+  const { getNoteDetail } = require('./wpaService');
+  const { processarNota, classificarSubCategoria } = require('./notaProcessor');
+  const { getSubcategoriasByIds } = require('../db/subcategoriasQueries');
+
+  const t0 = Date.now();
+  let ok = 0, falha = 0;
+
+  for (let i = 0; i < lote.length; i += 4) {
+    const chunk = lote.slice(i, i + 4);
+    const results = await Promise.all(chunk.map(async c => {
+      try {
+        const raw = await getNoteDetail(c.id, c.sectorId);
+        if (!raw) return { ok: false, id: c.id, reason: 'WPA payload vazio' };
+
+        // Resolve subcategoria
+        let subcat = { subCategoria: null, subcatCode: null, quantidade: null };
+        try {
+          const cls = await getSubcategoriasByIds([raw.Id]);
+          const ce = cls[raw.Id];
+          if (ce) subcat = { subCategoria: ce.sub_categoria, subcatCode: ce.sub_code, quantidade: ce.quantidade };
+        } catch {}
+        if (!subcat.subCategoria) {
+          const fb = classificarSubCategoria(raw.Type, raw.Code, raw.Comments, raw.Activities);
+          subcat = { subCategoria: fb.subCategoria, subcatCode: fb.subcatCode, quantidade: fb.quantidade };
+        }
+
+        const processed = processarNota(raw, { incluirFotos: false, subcat });
+        await sq.setNoteDetailCache(raw.Id, raw.Number, raw.Type, c.sectorId, processed);
+        return { ok: true, id: c.id };
+      } catch (err) {
+        return { ok: false, id: c.id, reason: err.message };
+      }
+    }));
+    ok    += results.filter(r => r.ok).length;
+    falha += results.filter(r => !r.ok).length;
+  }
+
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[CRON] Cache OS: gravadas ${ok}/${lote.length} (falhas ${falha}) em ${dt}s`);
 }
 
 // ── CLASSIFICAÇÃO DE SUBCATEGORIAS ────────────────────────────────────────────
@@ -175,4 +267,4 @@ function stopCron() {
   consolidaJob?.stop();
 }
 
-module.exports = { startCron, stopCron, runSnapshot, runConsolidate, runTokenRefresh, runClassifyNewNotes };
+module.exports = { startCron, stopCron, runSnapshot, runConsolidate, runTokenRefresh, runClassifyNewNotes, runCacheNotaDetails };
