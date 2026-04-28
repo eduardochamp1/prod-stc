@@ -36,7 +36,12 @@ async function saveSnapshot(teams, date) {
 
 /**
  * Upsert do estado atual das equipes em `teams_current`.
- * Chamado a cada 15 min — substitui o registro anterior de cada equipe.
+ * Chamado a cada 15 min — substitui o registro anterior de cada equipe E remove
+ * registros velhos de equipes que sumiram do sessions/current (sessão encerrada).
+ *
+ * Sem esse delete, equipes que deslogavam após meia-noite (EndTime preenchido em dia
+ * diferente do BeginTime) ficavam pra sempre em teams_current com o estado pré-logout
+ * (EndTime null), aparecendo no monitor como "Em campo · DIA ANT." indevidamente.
  */
 async function pushTeams(teams) {
   if (!teams || teams.length === 0) return;
@@ -50,11 +55,27 @@ async function pushTeams(teams) {
     updated_at: new Date().toISOString(),
   }));
 
-  const { error } = await sb
+  // 1) Upsert das equipes ativas no momento
+  const { error: upErr } = await sb
     .from('teams_current')
     .upsert(rows, { onConflict: 'team_name' });
+  if (upErr) throw upErr;
 
-  if (error) throw error;
+  // 2) Remove qualquer linha cuja team_name NÃO está mais no batch
+  // (equipes que encerraram sessão e sumiram do sessions/current)
+  const aliveNames = teams.map(t => t.teamName);
+  if (aliveNames.length > 0) {
+    const { error: delErr, count } = await sb
+      .from('teams_current')
+      .delete({ count: 'exact' })
+      .not('team_name', 'in', `(${aliveNames.map(n => `"${n.replace(/"/g, '""')}"`).join(',')})`);
+    if (delErr) {
+      console.warn('[SUPABASE] teams_current: falha ao limpar equipes ausentes:', delErr.message);
+    } else if (count > 0) {
+      console.log(`[SUPABASE] teams_current: ${count} equipe(s) removida(s) (sessão encerrada)`);
+    }
+  }
+
   console.log(`[SUPABASE] teams_current: ${teams.length} equipes atualizadas`);
 }
 
