@@ -117,6 +117,8 @@
     .alert-stale-team .stale-data { font-weight: 400; opacity: 0.85; margin-left: 4px; }
     .team-card-header { background: var(--preto); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid var(--amarelo); }
     .team-card-header.inativa { background: #555; }
+    .team-card-header.pendente { background: #6e4c00; border-bottom-color: #f39c12; }
+    .status-pendente { background: #f39c12; color: #fff; }
     .team-card-sigla { font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.06em; }
     .team-card-meta { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 2px; }
     .team-status-badge { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
@@ -2001,7 +2003,9 @@
     const emAberto   = teams.reduce((s,t) => s + (t.notasBaixadas   || []).length, 0);
     const rejeitadas = teams.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
     const relogins   = teams.reduce((s,t) => s + (t.relogins || 0), 0);
-    const ativas     = teams.filter(t => !t.sessionEnd).length;
+    // "Em campo" no KPI = sessão aberta + app online (alinhado com WPA Gestão Online).
+    // Phantoms (sessão aberta + app offline) são contados separadamente no banner do topo.
+    const ativas     = teams.filter(t => !t.sessionEnd && t.isOnline).length;
 
     // OS Executadas = tudo que foi feito no campo (status 2 + status 9/4)
     const realizadas = executadas + concluidas;
@@ -2060,7 +2064,9 @@
     renderProdutividade(teams);
     document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
 
-    // Banner de alerta — equipes que esqueceram de encerrar sessão (BeginTime de dia anterior + ainda em campo)
+    // Banner de alerta — equipes que esqueceram de encerrar sessão (BeginTime de dia anterior + sessão formal aberta + offline).
+    // Alinhado com WPA Gestão Online: sessão "pendente" = !sessionEnd && !isOnline (app não está mais respondendo).
+    // Inclui também as raras com isOnline=true e BeginTime do dia anterior — equipe genuinamente trabalhando há mais de um dia.
     const stale = teams.filter(t => sessaoAnterior(t.sessionBegin) && !t.sessionEnd);
     const alertEl = document.getElementById('alert-stale-sessions');
     if (alertEl) {
@@ -2068,11 +2074,12 @@
         const itens = stale.map(t => {
           const d = (t.sessionBegin || '').slice(0, 10);
           const dataBR = d ? d.split('-').reverse().slice(0,2).join('/') : '';
-          return `<span class="alert-stale-team" onclick="event.stopPropagation();openModal('${t.id}')" title="Início ${fmt(t.sessionBegin)}">${t.sigla || t.teamName}<span class="stale-data">${dataBR}</span></span>`;
+          const offline = !t.isOnline ? ' 🔴' : '';
+          return `<span class="alert-stale-team" onclick="event.stopPropagation();openModal('${t.id}')" title="Início ${fmt(t.sessionBegin)}${t.isOnline ? ' · app online' : ' · app offline (esqueceu de deslogar)'}">${t.sigla || t.teamName}<span class="stale-data">${dataBR}${offline}</span></span>`;
         }).join('');
         alertEl.innerHTML = `
           <div class="alert-stale">
-            <div class="alert-stale-title">⚠️ ${stale.length} equipe${stale.length !== 1 ? 's' : ''} com sessão de dia${stale.length !== 1 ? 's' : ''} anterior${stale.length !== 1 ? 'es' : ''} não encerrada${stale.length !== 1 ? 's' : ''} <span style="font-weight:400;color:#8a6309">(esqueceram de deslogar do WPA)</span></div>
+            <div class="alert-stale-title">⚠️ ${stale.length} equipe${stale.length !== 1 ? 's' : ''} com sessão de dia${stale.length !== 1 ? 's' : ''} anterior${stale.length !== 1 ? 'es' : ''} ainda aberta${stale.length !== 1 ? 's' : ''} <span style="font-weight:400;color:#8a6309">(🔴 = app offline, provavelmente esqueceram de deslogar)</span></div>
             <div class="alert-stale-list">${itens}</div>
           </div>`;
       } else {
@@ -2085,8 +2092,17 @@
       return;
     }
     document.getElementById('teams-grid').innerHTML = teams.map(t => {
-      const ativa = !t.sessionEnd;
-      const isStale = ativa && sessaoAnterior(t.sessionBegin);
+      // 3 estados (alinhado com WPA Gestão Online):
+      //   emCampo  = sessão aberta + app online       → "● Em campo"   (cabeçalho preto/amarelo)
+      //   pendente = sessão aberta + app offline      → "⚠ Sessão pendente" (cabeçalho laranja escuro)
+      //   encerrada = sessionEnd preenchido           → "○ Encerrada"  (cabeçalho cinza)
+      const sessaoAberta = !t.sessionEnd;
+      const emCampo  = sessaoAberta && t.isOnline;
+      const pendente = sessaoAberta && !t.isOnline;
+      const headerCls = pendente ? 'pendente' : (emCampo ? '' : 'inativa');
+      const badgeCls  = emCampo ? 'status-ativa' : (pendente ? 'status-pendente' : 'status-encerrada');
+      const badgeTxt  = emCampo ? '● Em campo' : (pendente ? '⚠ Sessão pendente' : '○ Encerrada');
+      const isStale = sessaoAberta && sessaoAnterior(t.sessionBegin);
       const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
       // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo
@@ -2105,14 +2121,12 @@
       ).join('');
       return `
         <div class="team-card${isStale ? ' stale' : ''}" onclick="openModal('${t.id}')">
-          <div class="team-card-header ${ativa ? '' : 'inativa'}">
+          <div class="team-card-header ${headerCls}">
             <div>
               <div class="team-card-sigla">${t.sigla || t.teamName}</div>
               <div class="team-card-meta">${regionalNome} · ${t.sectorId}</div>
             </div>
-            <span class="team-status-badge ${ativa ? 'status-ativa' : 'status-encerrada'}">
-              ${ativa ? '● Em campo' : '○ Encerrada'}
-            </span>
+            <span class="team-status-badge ${badgeCls}">${badgeTxt}</span>
           </div>
           <div class="team-card-body">
             <div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>
