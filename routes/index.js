@@ -923,6 +923,95 @@ router.get('/equipes/producao', async (req, res) => {
 
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
 
+// GET /api/admin/wpa-diag — diagnóstico ZERO-retry: descobre por que WPA falha em produção.
+// Usar quando o /admin/warm sempre falha — esse endpoint mostra o que tá realmente acontecendo.
+router.get('/admin/wpa-diag', async (_req, res) => {
+  const fetch = require('node-fetch');
+  const out = { env: {}, login: null, sessions: null, runtime: {} };
+
+  // 1) Quais envs estão setadas (sem expor valores)
+  out.env = {
+    WPA_URL:       process.env.WPA_URL       ? '✓ ' + process.env.WPA_URL : '✗ não configurado (usará default)',
+    WPA_API_URL:   process.env.WPA_API_URL   ? '✓ ' + process.env.WPA_API_URL : '✗ não configurado (usará default)',
+    WPA_USERNAME:  process.env.WPA_USERNAME  ? '✓ setado (' + process.env.WPA_USERNAME.length + ' chars)' : '✗ NÃO CONFIGURADO',
+    WPA_PASSWORD:  process.env.WPA_PASSWORD  ? '✓ setado (' + process.env.WPA_PASSWORD.length + ' chars)' : '✗ NÃO CONFIGURADO',
+    DATA_MODE:     process.env.DATA_MODE     || '(undefined → mock)',
+    VERCEL:        process.env.VERCEL        ? '✓ rodando no Vercel' : '✗ rodando local',
+    VERCEL_REGION: process.env.VERCEL_REGION || 'desconhecida',
+  };
+
+  out.runtime = {
+    nodeVersion: process.version,
+    platform:    process.platform,
+    now:         new Date().toISOString(),
+  };
+
+  // 2) Tenta UMA vez login (sem retry) — assim vemos o erro real e cru
+  const WPA_AUTH = process.env.WPA_URL || 'https://edp-wpa-po.azurewebsites.net';
+  const t0 = Date.now();
+  try {
+    const body = new URLSearchParams({
+      Username: process.env.WPA_USERNAME || '',
+      Password: process.env.WPA_PASSWORD || '',
+    });
+    const r = await fetch(`${WPA_AUTH}/identity/signin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: body.toString(),
+    });
+    const txt = await r.text();
+    out.login = {
+      url:           `${WPA_AUTH}/identity/signin`,
+      httpStatus:    r.status,
+      httpStatusText: r.statusText,
+      contentType:   r.headers.get('content-type') || '(sem)',
+      ms:            Date.now() - t0,
+      bodyPreview:   txt.slice(0, 500),
+      isHtml:        /^<!DOCTYPE|<html/i.test(txt.trim()),
+      hasToken:      /Token/i.test(txt),
+    };
+  } catch (err) {
+    out.login = {
+      url:    `${WPA_AUTH}/identity/signin`,
+      ms:     Date.now() - t0,
+      error:  err.message,
+      errorCode: err.code,
+      errorName: err.name,
+    };
+  }
+
+  // 3) Tenta UMA vez chamar a Web API (sessions/current) — só se login deu token
+  if (out.login?.hasToken) {
+    try {
+      const tokenMatch = out.login.bodyPreview.match(/"Token":"([^"]+)"/);
+      const token = tokenMatch?.[1];
+      if (token) {
+        const WPA_API = process.env.WPA_API_URL || 'https://edp-wpa-web-api.azurewebsites.net';
+        const t1 = Date.now();
+        const r2 = await fetch(`${WPA_API}/api/sessions/current?sectorId=DESG`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        });
+        const txt2 = await r2.text();
+        out.sessions = {
+          url:         `${WPA_API}/api/sessions/current?sectorId=DESG`,
+          httpStatus:  r2.status,
+          ms:          Date.now() - t1,
+          contentType: r2.headers.get('content-type') || '(sem)',
+          bodyPreview: txt2.slice(0, 300),
+          isHtml:      /^<!DOCTYPE|<html/i.test(txt2.trim()),
+        };
+      }
+    } catch (err) {
+      out.sessions = { error: err.message };
+    }
+  }
+
+  res.json(out);
+});
+
 // POST /api/admin/warm — acorda o WPA (force-refresh do token + ping leve na Web API)
 // Útil quando o Azure App Service hiberna e usuários começam a ver 502 cold-start.
 router.post('/admin/warm', async (_req, res) => {
