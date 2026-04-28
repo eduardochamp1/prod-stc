@@ -1921,26 +1921,37 @@
     }
   }
 
-  // ── PERSISTÊNCIA DE FILTROS ───────────────────────────────────────────
-  // Persistir regional + tipos no localStorage para sobreviver a logout/login.
-  // (filtro de busca não é persistido — é contextual.)
-  const FILTERS_KEY = 'monitor_filters_v1';
+  // ── PERSISTÊNCIA DE FILTROS (compartilhada entre todas as sessões) ────
+  // Salva regional + tipos no Supabase via /api/settings/monitor-filters.
+  // Última escrita vence; aplica imediato no próprio cliente e propaga p/ os
+  // demais na próxima vez que abrirem ou clicarem em "Atualizar".
+  // (filtro de busca não é persistido — contextual.)
+  const FILTERS_KEY = 'monitor-filters';
+  let _saveFiltersTimer = null;
 
   function saveFilters() {
-    try {
-      localStorage.setItem(FILTERS_KEY, JSON.stringify({
-        regional: currentRegional,
-        tipos:    [...selectedTipos],
-      }));
-    } catch {}
+    // Debounce 300ms p/ evitar uma escrita por checkbox marcado em sequência
+    clearTimeout(_saveFiltersTimer);
+    _saveFiltersTimer = setTimeout(() => {
+      const body = { regional: currentRegional, tipos: [...selectedTipos] };
+      fetch(`${API}/settings/${FILTERS_KEY}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(body),
+      }).catch(err => console.warn('[filtros] falha ao salvar:', err.message));
+    }, 300);
   }
 
-  function applySavedFilters() {
+  async function applySavedFilters() {
     let saved;
     try {
-      const raw = localStorage.getItem(FILTERS_KEY);
-      saved = raw ? JSON.parse(raw) : null;
-    } catch { saved = null; }
+      const r = await fetch(`${API}/settings/${FILTERS_KEY}`);
+      const j = await r.json();
+      saved = j?.data || null;
+    } catch (err) {
+      console.warn('[filtros] falha ao carregar:', err.message);
+      return;
+    }
     if (!saved) return;
 
     // Regional: só aplica se o select não foi travado por permissão
@@ -1948,14 +1959,13 @@
     if (saved.regional && regSel && !regSel.disabled) {
       currentRegional = saved.regional;
       regSel.value = saved.regional;
-      // Espelha nos selects das outras abas
       ['ranking-regional-select','hist-regional-select'].forEach(id => {
         const el = document.getElementById(id);
         if (el && !el.disabled) el.value = saved.regional;
       });
     }
 
-    // Tipos: valida contra o catálogo atual (codes podem ter mudado)
+    // Tipos: valida contra o catálogo atual
     if (Array.isArray(saved.tipos)) {
       const valid = saved.tipos.filter(c => TIPOS_SERVICO[c]);
       selectedTipos = new Set(valid);
@@ -2515,9 +2525,9 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); closeNotaDirect(); closeLightbox(); } });
 
   // ── INIT ──────────────────────────────────────────────────────────────
-  function init() {
+  async function init() {
     initTiposFilter();
-    applySavedFilters();   // restaura regional + tipos do localStorage
+    await applySavedFilters();   // restaura regional + tipos compartilhados do Supabase
 
     // Inicializa campos De/Até com hoje (sem permitir datas futuras)
     const _t = todayISO();

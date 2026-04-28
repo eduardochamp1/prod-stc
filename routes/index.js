@@ -158,6 +158,34 @@ router.post('/metas', async (req, res) => {
   }
 });
 
+// ── APP SETTINGS (preferências compartilhadas) ────────────────────────────────
+
+// GET /api/settings/:key  → retorna { data, updated_at } ou {} se não existe
+router.get('/settings/:key', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({});
+    const row = await sq.getSetting(req.params.key);
+    res.json(row || {});
+  } catch (err) {
+    console.error('[API] getSetting:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/settings/:key  body: { ... } qualquer JSON
+router.put('/settings/:key', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'supabase indisponível' });
+    await sq.setSetting(req.params.key, req.body || {});
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[API] setSetting:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── HISTÓRICO ─────────────────────────────────────────────────────────────────
 
 // GET /api/historico/mes?m=2026-04

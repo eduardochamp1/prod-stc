@@ -430,7 +430,30 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
     }));
 }
 
+// ── APP SETTINGS (chave/valor compartilhado) ──────────────────────────────────
+
+async function getSetting(key) {
+  const sb = getClient();
+  const { data, error } = await sb
+    .from('app_settings')
+    .select('data, updated_at')
+    .eq('key', key)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;          // { data, updated_at } ou null
+}
+
+async function setSetting(key, value) {
+  const sb = getClient();
+  const { error } = await sb
+    .from('app_settings')
+    .upsert({ key, data: value, updated_at: new Date().toISOString() },
+            { onConflict: 'key' });
+  if (error) throw error;
+}
+
 module.exports = {
+  getSetting, setSetting,
   getMetas, setMetas, getMetasCalculadas,
   getTeamsFromSupabase, getTeamsByDateFromSnapshots,
   getMonthTotals, getDailyHistory,

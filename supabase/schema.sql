@@ -98,3 +98,13 @@ CREATE TABLE IF NOT EXISTS note_subcategorias (
 
 CREATE INDEX IF NOT EXISTS idx_note_subcat_subcode ON note_subcategorias (sub_code);
 CREATE INDEX IF NOT EXISTS idx_note_subcat_tipo    ON note_subcategorias (tipo);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- app_settings — preferências compartilhadas (chave/valor jsonb)
+-- Usado p.ex. p/ persistir filtros do monitor entre sessões e usuários.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS app_settings (
+  key        TEXT        PRIMARY KEY,
+  data       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
