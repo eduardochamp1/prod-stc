@@ -9,22 +9,5 @@
   ],
   "routes": [
     { "src": "/(.*)", "dest": "/server.js" }
-  ],
-  "crons": [
-    {
-      "//": "Snapshot a cada 15min entre 09-23 UTC (= 06:00-20:00 BRT). Mantém WPA quente E grava em Supabase.",
-      "path": "/api/cron/snapshot",
-      "schedule": "*/15 9-23 * * *"
-    },
-    {
-      "//": "Warm a cada 10min fora do horário operacional. Custo baixo, evita cold-start em consultas pontuais (ex: madrugada).",
-      "path": "/api/cron/warm",
-      "schedule": "*/10 0-8,23 * * *"
-    },
-    {
-      "//": "Consolida daily_totals do dia às 23:30 UTC (= 20:30 BRT, depois do encerramento operacional).",
-      "path": "/api/cron/consolidate",
-      "schedule": "30 23 * * *"
-    }
   ]
 }
