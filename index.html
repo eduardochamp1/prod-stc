@@ -936,6 +936,16 @@
           <div id="snap-result" style="display:none;margin-top:12px;font-size:13px;font-weight:500"></div>
         </div>
 
+        <!-- Diagnóstico WPA -->
+        <div>
+          <div class="modal-section-title">Diagnóstico WPA</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Faz UMA tentativa de login + sessions/current sem retry. Mostra status real, body bruto e env vars — pra investigar problemas estruturais (firewall, env errada, IP block, etc).</div>
+          <button class="btn-refresh" onclick="runWpaDiag()" style="height:40px;padding:0 20px;font-size:13px">
+            🩺 Executar Diagnóstico
+          </button>
+          <pre id="diag-result" style="display:none;margin-top:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:11px;font-family:monospace;max-height:400px;overflow:auto;line-height:1.5;white-space:pre-wrap;word-break:break-all"></pre>
+        </div>
+
       </div>
     </div>
   </div>
@@ -2731,6 +2741,19 @@
       result.style.display = 'block';
       result.style.color   = 'var(--vermelho)';
       result.textContent   = `✗ Falha: ${err.message}`;
+    }
+  }
+
+  async function runWpaDiag() {
+    const out = document.getElementById('diag-result');
+    out.style.display = 'block';
+    out.textContent   = '⏳ Executando diagnóstico... pode demorar até 30s se a WPA estiver lenta.';
+    try {
+      const res  = await fetch(`${API}/admin/wpa-diag`);
+      const data = await res.json();
+      out.textContent = JSON.stringify(data, null, 2);
+    } catch (err) {
+      out.textContent = `✗ Falha ao executar: ${err.message}`;
     }
   }
 </script>
