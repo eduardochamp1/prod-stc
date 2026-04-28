@@ -1945,6 +1945,7 @@
           notes.push({ id: n.id, sectorId: t.sectorId || 'DESG' });
       });
     });
+    console.log('[subcat] notas para enriquecer:', notes.length);
     if (notes.length === 0) return;
     try {
       const r = await fetch(`${API}/wpa/notas/subcategorias`, {
@@ -1952,11 +1953,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes }),
       });
+      console.log('[subcat] resposta HTTP:', r.status);
       if (!r.ok) return;
       const data = await r.json();
+      const qtd = Object.keys(data.subcats || {}).length;
+      console.log('[subcat] subcats recebidas:', qtd, Object.entries(data.subcats||{}).slice(0,3));
       Object.assign(window._subcatMap, data.subcats || {});
       renderAll(); // re-renderiza cards com subcategorias
-    } catch {}
+    } catch (e) { console.error('[subcat] erro:', e); }
   }
 
   // ── RENDER CARDS ──────────────────────────────────────────────────────
