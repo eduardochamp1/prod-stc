@@ -105,6 +105,16 @@
     .teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
     .team-card { background: #fff; border: 1px solid var(--cinza2); border-radius: var(--radius); overflow: hidden; cursor: pointer; transition: box-shadow 0.15s, transform 0.1s; }
     .team-card:hover { box-shadow: 0 4px 16px rgba(8,103,56,0.1); transform: translateY(-1px); }
+    .team-card.stale { border-color: #f39c12; box-shadow: inset 4px 0 0 #f39c12; }
+    .team-card.stale:hover { box-shadow: inset 4px 0 0 #f39c12, 0 4px 16px rgba(243,156,18,0.18); }
+
+    /* ── ALERTA DE SESSÕES NÃO ENCERRADAS ── */
+    .alert-stale { background: #fff7e6; border: 1px solid #f39c12; border-left: 5px solid #f39c12; border-radius: var(--radius); padding: 12px 16px; margin-bottom: 14px; }
+    .alert-stale-title { font-weight: 700; color: #b67708; font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .alert-stale-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .alert-stale-team { background: #f39c12; color: #fff; border-radius: 12px; padding: 3px 10px; font-weight: 700; font-size: 11px; cursor: pointer; transition: background 0.15s; letter-spacing: .03em; }
+    .alert-stale-team:hover { background: #d8870a; }
+    .alert-stale-team .stale-data { font-weight: 400; opacity: 0.85; margin-left: 4px; }
     .team-card-header { background: var(--preto); padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid var(--amarelo); }
     .team-card-header.inativa { background: #555; }
     .team-card-sigla { font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.06em; }
@@ -739,6 +749,8 @@
       </div>
       <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..." oninput="filterCards(this.value)" />
     </div>
+
+    <div id="alert-stale-sessions"></div>
 
     <div class="teams-grid" id="teams-grid">
       <div class="empty-state"><div class="spinner"></div><br>Carregando equipes...</div>
@@ -2047,12 +2059,34 @@
     renderMetrics(teams);
     renderProdutividade(teams);
     document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
+
+    // Banner de alerta — equipes que esqueceram de encerrar sessão (BeginTime de dia anterior + ainda em campo)
+    const stale = teams.filter(t => sessaoAnterior(t.sessionBegin) && !t.sessionEnd);
+    const alertEl = document.getElementById('alert-stale-sessions');
+    if (alertEl) {
+      if (stale.length > 0) {
+        const itens = stale.map(t => {
+          const d = (t.sessionBegin || '').slice(0, 10);
+          const dataBR = d ? d.split('-').reverse().slice(0,2).join('/') : '';
+          return `<span class="alert-stale-team" onclick="event.stopPropagation();openModal('${t.id}')" title="Início ${fmt(t.sessionBegin)}">${t.sigla || t.teamName}<span class="stale-data">${dataBR}</span></span>`;
+        }).join('');
+        alertEl.innerHTML = `
+          <div class="alert-stale">
+            <div class="alert-stale-title">⚠️ ${stale.length} equipe${stale.length !== 1 ? 's' : ''} com sessão de dia${stale.length !== 1 ? 's' : ''} anterior${stale.length !== 1 ? 'es' : ''} não encerrada${stale.length !== 1 ? 's' : ''} <span style="font-weight:400;color:#8a6309">(esqueceram de deslogar do WPA)</span></div>
+            <div class="alert-stale-list">${itens}</div>
+          </div>`;
+      } else {
+        alertEl.innerHTML = '';
+      }
+    }
+
     if (teams.length === 0) {
       document.getElementById('teams-grid').innerHTML = `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
       return;
     }
     document.getElementById('teams-grid').innerHTML = teams.map(t => {
       const ativa = !t.sessionEnd;
+      const isStale = ativa && sessaoAnterior(t.sessionBegin);
       const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
       // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo
@@ -2070,7 +2104,7 @@
         `<span class="tipo-chip"><span class="tipo-chip-code">${label}</span><span class="tipo-chip-num">${count}${qtdTotal > 0 ? ` · ${qtdTotal}m` : ''}</span></span>`
       ).join('');
       return `
-        <div class="team-card" onclick="openModal('${t.id}')">
+        <div class="team-card${isStale ? ' stale' : ''}" onclick="openModal('${t.id}')">
           <div class="team-card-header ${ativa ? '' : 'inativa'}">
             <div>
               <div class="team-card-sigla">${t.sigla || t.teamName}</div>
