@@ -1150,6 +1150,34 @@
     RD: 'RD',
   };
 
+  // Linhas de produtividade — MD/SF/DD desdobrados em subcategorias.
+  // Cada linha vira um card. Ordem aqui = ordem de exibição.
+  //   tipo:    o TIPO ao qual a linha pertence (controla filtros)
+  //   subCode: identificador da subcategoria (note_subcategorias.sub_code)
+  //   qtd:     true quando mostra também total de quantidade (DD/C93, DD/BTZ013)
+  // Linhas sem subCode = tipos simples (contam direto por tipoCode).
+  // Linhas com subCode='OUTROS' = catch-all do tipo (notas não classificadas em sub_code conhecido).
+  const PROD_LINHAS = [
+    { key: 'LN',        nome: 'Ligação Nova',               tipo: 'LN' },
+    { key: 'LE',        nome: 'Ligação Existente',          tipo: 'LE' },
+    { key: 'DL',        nome: 'Desligamento',               tipo: 'DL' },
+    { key: 'OBSOLETO',  nome: 'Subs Obsoleto',              tipo: 'MD', subCode: 'OBSOLETO' },
+    { key: 'TL11',      nome: 'Subs TL11',                  tipo: 'MD', subCode: 'TL11' },
+    { key: 'MD_OUTROS', nome: 'MD Outros',                  tipo: 'MD', subCode: 'OUTROS' },
+    { key: 'L0',        nome: 'Corte Disjuntor',            tipo: 'SF', subCode: 'L0' },
+    { key: 'L1',        nome: 'Corte Borne',                tipo: 'SF', subCode: 'L1' },
+    { key: 'SF_OUTROS', nome: 'SF Outros',                  tipo: 'SF', subCode: 'OUTROS' },
+    { key: 'RL',        nome: 'Religa',                     tipo: 'RL' },
+    { key: 'UG',        nome: 'Uso Geral',                  tipo: 'UG' },
+    { key: 'C93',       nome: 'Subs Ramal',                 tipo: 'DD', subCode: 'C93',    qtd: true },
+    { key: 'BTZ013',    nome: 'Substituição CS',            tipo: 'DD', subCode: 'BTZ013', qtd: true },
+    { key: 'DD_OUTROS', nome: 'DD Outros',                  tipo: 'DD', subCode: 'OUTROS' },
+    { key: 'II',        nome: 'Inspeção de Irregularidade', tipo: 'II' },
+    { key: 'PO',        nome: 'Ordem Prioritária',          tipo: 'PO' },
+    { key: 'SO',        nome: 'SO',                         tipo: 'SO' },
+    { key: 'RD',        nome: 'RD',                         tipo: 'RD' },
+  ];
+
   // ── ESTADO ────────────────────────────────────────────────────────────────
   let allTeams        = [];
   let currentRegional = 'ALL';
@@ -1263,18 +1291,44 @@
   }
 
   // ── PRODUTIVIDADE (monitor) ────────────────────────────────────────────
+    // Conta notas executadas+concluídas por linha de produtividade (key) por regional.
+  // Para tipos MD/SF/DD: usa _subcatMap para classificar em sub_code; ausência → OUTROS.
+  // Retorna também `quantidades` por key (para DD/C93 e DD/BTZ013).
   function calcTotaisPorRegional(teams) {
-    const result = { GUA: {}, CAC: {}, ALL: {} };
+    const totais       = { GUA: {}, CAC: {}, ALL: {} };
+    const quantidades  = { GUA: {}, CAC: {}, ALL: {} };
+    const TIPOS_DESDOBRADOS = { MD: 1, SF: 1, DD: 1 };
+
+    function bump(reg, key, qtd) {
+      totais[reg][key]    = (totais[reg][key]    || 0) + 1;
+      totais.ALL[key]     = (totais.ALL[key]     || 0) + 1;
+      if (qtd != null) {
+        quantidades[reg][key] = (quantidades[reg][key] || 0) + qtd;
+        quantidades.ALL[key]  = (quantidades.ALL[key]  || 0) + qtd;
+      }
+    }
+
     teams.forEach(t => {
       const reg = t.regional;
-      if (!result[reg]) result[reg] = {};
+      if (!totais[reg])      totais[reg]      = {};
+      if (!quantidades[reg]) quantidades[reg] = {};
       const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+
       realizadas.forEach(n => {
-        result[reg][n.tipoCode]  = (result[reg][n.tipoCode]  || 0) + 1;
-        result.ALL[n.tipoCode]   = (result.ALL[n.tipoCode]   || 0) + 1;
+        const tipo = n.tipoCode;
+        if (TIPOS_DESDOBRADOS[tipo]) {
+          const sc       = window._subcatMap?.[n.id];
+          const subCode  = sc?.sub_code || 'OUTROS';
+          const key      = subCode === 'OUTROS' ? `${tipo}_OUTROS` : subCode;
+          const qtd      = sc?.quantidade ?? null;
+          bump(reg, key, qtd);
+        } else {
+          bump(reg, tipo, null);
+        }
       });
     });
-    return result;
+
+    return { totais, quantidades };
   }
 
   function metasAcumuladas(metas) {
@@ -1285,22 +1339,34 @@
     return acc;
   }
 
-  function renderBlockRegional(totais, metasReg) {
-    const tipos = Object.keys(TIPOS_SERVICO);
-    const tiposExibir = tipos.filter(c => (metasReg[c] || totais[c]) && (selectedTipos.size === 0 || selectedTipos.has(c)));
-    if (tiposExibir.length === 0)
+  // Renderiza o bloco de cards de produtividade segundo a ordem de PROD_LINHAS.
+  // Cada linha vira um card. Linhas sem meta E sem realizado são suprimidas
+  // (evita poluir a tela com "OBSOLETO 0/sem meta").
+  function renderBlockRegional(totaisReg, metasReg, qtdReg) {
+    const linhasExibir = PROD_LINHAS.filter(l => {
+      const realizado = totaisReg[l.key] || 0;
+      const meta      = parseInt(metasReg[l.key] || 0);
+      // Filtro "Tipos" opera no nível do TIPO, não do sub_code
+      const tipoSelecionado = selectedTipos.size === 0 || selectedTipos.has(l.tipo);
+      return tipoSelecionado && (realizado > 0 || meta > 0);
+    });
+
+    if (linhasExibir.length === 0)
       return '<span style="font-size:12px;color:var(--text2)">Nenhuma nota em andamento ou executada até o momento.</span>';
-    return `<div class="prod-grid">${tiposExibir.map(code => {
-      const realizado  = totais[code] || 0;
-      const meta       = parseInt(metasReg[code] || 0);
+
+    return `<div class="prod-grid">${linhasExibir.map(l => {
+      const realizado  = totaisReg[l.key] || 0;
+      const meta       = parseInt(metasReg[l.key] || 0);
       const pct        = meta > 0 ? Math.min(Math.round((realizado / meta) * 100), 100) : 0;
       const colorClass = pct >= 100 ? 'done' : pct >= 60 ? 'warn' : 'danger';
+      const qtdTotal   = l.qtd ? (qtdReg[l.key] || 0) : 0;
       return `<div class="prod-item">
         <div class="prod-item-top">
-          <span class="prod-tipo-badge">${code}</span>
+          <span class="prod-tipo-badge">${l.tipo}</span>
           ${meta > 0 ? `<span class="prod-nums"><strong>${realizado}</strong> / ${meta}</span>` : `<span class="prod-sem-meta">sem meta</span>`}
         </div>
-        <div style="font-size:10px;color:var(--text2);margin-bottom:5px">${TIPOS_SERVICO[code]}</div>
+        <div style="font-size:11px;color:var(--text);margin-bottom:5px;font-weight:600">${l.nome}</div>
+        ${l.qtd && qtdTotal > 0 ? `<div style="font-size:10px;color:var(--text2);margin-bottom:5px">Qtd total: <strong>${qtdTotal}</strong></div>` : ''}
         ${meta > 0 ? `<div class="prod-bar-track"><div class="prod-bar-fill ${colorClass}" style="width:${pct}%"></div></div>
           <div style="font-size:10px;color:var(--text2);margin-top:3px;text-align:right">${pct}%</div>` : ''}
       </div>`;
@@ -1308,16 +1374,17 @@
   }
 
   function renderProdutividade(teams) {
-    const metas  = getMetas();
-    const totais = calcTotaisPorRegional(teams);
-    const grid   = document.getElementById('prod-grid');
-    const title  = document.getElementById('prod-title');
+    const metas              = getMetas();
+    const { totais, quantidades } = calcTotaisPorRegional(teams);
+    const grid               = document.getElementById('prod-grid');
+    const title              = document.getElementById('prod-title');
     const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : (currentRegional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
     title.textContent = `Produtividade do Dia — ${labelRegional}`;
     const metasReg  = currentRegional === 'ALL' ? metasAcumuladas(metas) : (metas[currentRegional] || {});
-    const totaisReg = currentRegional === 'ALL' ? totais.ALL : (totais[currentRegional] || {});
+    const totaisReg = currentRegional === 'ALL' ? totais.ALL      : (totais[currentRegional]      || {});
+    const qtdReg    = currentRegional === 'ALL' ? quantidades.ALL : (quantidades[currentRegional] || {});
     const semMeta   = Object.keys(metasReg).length === 0;
-    grid.innerHTML  = renderBlockRegional(totaisReg, metasReg)
+    grid.innerHTML  = renderBlockRegional(totaisReg, metasReg, qtdReg)
       + (semMeta ? `<div style="margin-top:10px;font-size:11px;color:var(--text2)">Defina metas em <strong>⚙ Metas</strong> para ver barras de progresso.</div>` : '');
   }
 
@@ -1712,20 +1779,28 @@
   function closeAdminDirect() { document.getElementById('admin-overlay').classList.remove('open'); }
 
   // ── MODAL METAS ───────────────────────────────────────────────────────
+  // Inputs construídos a partir de PROD_LINHAS — uma linha por card de produtividade.
+  // Ex.: em vez de input "MD", há inputs separados para Subs Obsoleto, Subs TL11, MD Outros.
   function _abrirModalMetas() {
     const metas = getMetas();
     ['GUA', 'CAC'].forEach(reg => {
       const grid = document.getElementById('metas-grid-' + reg);
       if (!grid) return;
-      grid.innerHTML = Object.entries(TIPOS_SERVICO).map(([code, nome]) => `
+      const metasReg = metas[reg] || {};
+      grid.innerHTML = PROD_LINHAS.map(l => {
+        const val = metasReg[l.key] || '';
+        const dia = val ? (val / 22).toFixed(1) : '—';
+        const sem = val ? ((val / 22) * 5).toFixed(1) : '—';
+        return `
         <div class="meta-item">
-          <label><span class="meta-badge">${code}</span>${nome}</label>
+          <label><span class="meta-badge">${l.tipo}</span>${l.nome}</label>
           <input class="meta-input" type="number" min="0"
-                 id="meta-${reg}-${code}"
-                 value="${(metas[reg] || {})[code] || ''}"
+                 id="meta-${reg}-${l.key}"
+                 value="${val}"
                  placeholder="0 = sem meta" />
-          <span class="meta-hint">Diária: ${(metas[reg] || {})[code] ? (((metas[reg] || {})[code]) / 22).toFixed(1) : '—'} | Semanal: ${(metas[reg] || {})[code] ? ((((metas[reg] || {})[code]) / 22) * 5).toFixed(1) : '—'}</span>
-        </div>`).join('');
+          <span class="meta-hint">Diária: ${dia} | Semanal: ${sem}</span>
+        </div>`;
+      }).join('');
     });
     document.getElementById('metas-overlay').classList.add('open');
   }
@@ -1735,9 +1810,9 @@
     if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
     const obj = { GUA: {}, CAC: {} };
     ['GUA', 'CAC'].forEach(reg => {
-      Object.keys(TIPOS_SERVICO).forEach(code => {
-        const val = parseInt(document.getElementById(`meta-${reg}-${code}`)?.value || '0');
-        if (val > 0) obj[reg][code] = val;
+      PROD_LINHAS.forEach(l => {
+        const val = parseInt(document.getElementById(`meta-${reg}-${l.key}`)?.value || '0');
+        if (val > 0) obj[reg][l.key] = val;
       });
     });
     await saveMetas(obj);
@@ -1937,30 +2012,33 @@
   // Busca subcategorias para todas as concluídas de todas as equipes.
   // Chamada UMA vez após renderAll(). O backend serve do cache na maioria dos casos.
   // Quando os dados chegam, re-renderiza todos os cards.
+  // Busca subcategorias do cache persistente (Supabase) para todas as notas
+  // executadas/concluídas das equipes carregadas. Resposta é instantânea
+  // (lê de tabela já indexada). Notas ainda não classificadas vêm ausentes
+  // do mapa — caem em "OUTROS" no display.
   async function enrichSubcategorias(teams) {
-    const notes = [];
+    const ids = new Set();
     (teams || []).forEach(t => {
-      (t.notasConcluidas || []).forEach(n => {
-        if (n.id && !window._subcatMap[n.id])
-          notes.push({ id: n.id, sectorId: t.sectorId || 'DESG' });
+      const todas = [
+        ...(t.notasConcluidas || []),
+        ...(t.notasExecutadas || []),
+      ];
+      todas.forEach(n => {
+        if (n.id && !window._subcatMap[n.id]) ids.add(n.id);
       });
     });
-    console.log('[subcat] notas para enriquecer:', notes.length);
-    if (notes.length === 0) return;
+    if (ids.size === 0) return;
     try {
-      const r = await fetch(`${API}/wpa/notas/subcategorias`, {
+      const r = await fetch(`${API}/notas/subcategorias`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes }),
+        body: JSON.stringify({ ids: [...ids] }),
       });
-      console.log('[subcat] resposta HTTP:', r.status);
       if (!r.ok) return;
       const data = await r.json();
-      const qtd = Object.keys(data.subcats || {}).length;
-      console.log('[subcat] subcats recebidas:', qtd, Object.entries(data.subcats||{}).slice(0,3));
       Object.assign(window._subcatMap, data.subcats || {});
-      renderAll(); // re-renderiza cards com subcategorias
-    } catch (e) { console.error('[subcat] erro:', e); }
+      renderAll();
+    } catch {}
   }
 
   // ── RENDER CARDS ──────────────────────────────────────────────────────
@@ -1977,15 +2055,15 @@
       const ativa = !t.sessionEnd;
       const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
-      // Agrupa por subcategoria (quando disponível) ou por tipo
+      // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo
       const subcatCont = {};
       (t.notasConcluidas || []).forEach(n => {
         if (selectedTipos.size === 0 || selectedTipos.has(n.tipoCode)) {
           const sc    = window._subcatMap?.[n.id];
-          const label = sc?.subCategoria || n.tipoCode;
+          const label = sc?.sub_categoria || n.tipoCode;
           if (!subcatCont[label]) subcatCont[label] = { count: 0, qtdTotal: 0 };
           subcatCont[label].count++;
-          if (sc?.quantidadeExec != null) subcatCont[label].qtdTotal += sc.quantidadeExec;
+          if (sc?.quantidade != null) subcatCont[label].qtdTotal += sc.quantidade;
         }
       });
       const tiposHtml = Object.entries(subcatCont).map(([label, { count, qtdTotal }]) =>
@@ -2119,8 +2197,8 @@
       // o UUID não esteja disponível (notas históricas mais antigas sem id mapeado).
       const idParam = n.id || n.codigo;
       const sc = window._subcatMap?.[n.id];
-      const subcatLabel = sc?.subCategoria
-        ? `<span class="nota-subcat">${sc.subCategoria}${sc.quantidadeExec != null ? ' ×'+sc.quantidadeExec : ''}</span>`
+      const subcatLabel = sc?.sub_categoria
+        ? `<span class="nota-subcat">${sc.sub_categoria}${sc.quantidade != null ? ' ×'+sc.quantidade : ''}</span>`
         : '';
       return `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${idParam}','${sectorId}','${n.tipoCode||n.tipoNome||''}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span>${subcatLabel}</span>`;
     }).join('');

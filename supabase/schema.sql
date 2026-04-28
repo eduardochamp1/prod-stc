@@ -69,3 +69,32 @@ CREATE INDEX IF NOT EXISTS idx_team_daily_totals_regional ON team_daily_totals (
 -- Ativar se quiser controlar o tamanho da tabela:
 -- SELECT cron.schedule('cleanup-snapshots', '0 3 * * *',
 --   $$DELETE FROM snapshots WHERE captured_at < NOW() - INTERVAL '90 days'$$);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Subcategorias de notas (MD/SF/DD desdobrados em Subs Obsoleto, Subs TL11,
+-- Corte Disjuntor, Corte Borne, Subs Ramal, Substituição CS, etc.)
+-- Uma linha por UUID. A subcategoria de uma nota nunca muda depois de criada,
+-- então classifica uma vez e usa para sempre.
+--
+-- Origem dos dados (endpoints leves do WPA):
+--   MD → /api/notes/md?noteId={uuid}            (~2.6 KB) — Code, CodeText
+--      + /api/notepriorities/GetByNoteId/{uuid} (~1.6 KB) — SubProject (TL11/OBSOLETO)
+--   SF → /api/notes/sfdl?noteId={uuid}          (~2 KB)   — Code, CodeText
+--   DD → /api/notes/dd?noteId={uuid}            (~1.9 KB) — GroupCode, GroupDescription
+--      + details/optimized (só p/ DD/C93|BTZ013) — Activities[].Quantity
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS note_subcategorias (
+  note_id       UUID        PRIMARY KEY,
+  numero        TEXT,
+  tipo          TEXT        NOT NULL,            -- MD, SF, DD
+  sub_code      TEXT        NOT NULL,            -- OBSOLETO,TL11,L0,L1,C93,BTZ013,OUTROS
+  sub_categoria TEXT        NOT NULL,            -- nome bonito p/ UI ("Subs Obsoleto")
+  code          TEXT,                            -- Code original WPA (SPEB, CREB, SRED...)
+  code_text     TEXT,                            -- CodeText / GroupDescription bruto
+  quantidade    NUMERIC,                         -- só DD/C93 e DD/BTZ013 (metros / pontos)
+  classified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw           JSONB                            -- payloads brutos p/ debug e re-classificação futura
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_subcat_subcode ON note_subcategorias (sub_code);
+CREATE INDEX IF NOT EXISTS idx_note_subcat_tipo    ON note_subcategorias (tipo);

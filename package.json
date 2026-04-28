@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "backfill-subcat": "node scripts/backfill-subcategorias.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

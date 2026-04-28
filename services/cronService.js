@@ -52,10 +52,73 @@ async function runSnapshot() {
     await upsertTeamDailyTotals(teams);
 
     console.log(`[CRON] Snapshot salvo — ${teams.length} equipes às ${ts}`);
+
+    // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot)
+    runClassifyNewNotes(teams).catch(err =>
+      console.error('[CRON] Erro classificando subcategorias:', err.message)
+    );
   } catch (err) {
     console.error('[CRON] Erro no snapshot:', err.message);
   } finally {
     isRunning = false;
+  }
+}
+
+// ── CLASSIFICAÇÃO DE SUBCATEGORIAS ────────────────────────────────────────────
+// Após cada snapshot, identifica os UUIDs novos (que ainda não estão em
+// note_subcategorias) e classifica via endpoints leves do WPA. Resultado é
+// gravado no Supabase para servir o frontend instantaneamente.
+
+async function runClassifyNewNotes(teams) {
+  // Coleta todos os UUIDs presentes neste snapshot, com seu tipo e sectorId
+  const jobs = [];
+  const seen = new Set();
+  (teams || []).forEach(t => {
+    const todas = [
+      ...(t.notasConcluidas  || []),
+      ...(t.notasExecutadas  || []),
+      ...(t.notasBaixadas    || []),
+      ...(t.notasRejeitadas  || []),
+      ...(t.notasVistoriadas || []),
+    ];
+    todas.forEach(n => {
+      if (!n.id || seen.has(n.id)) return;
+      const tipo = (n.tipoCode || '').toUpperCase();
+      // Só classifica MD, SF e DD — outros tipos não têm subcategoria de interesse
+      if (!['MD','SF','DD'].includes(tipo)) return;
+      seen.add(n.id);
+      jobs.push({
+        noteId:   n.id,
+        tipo,
+        sectorId: t.sectorId || 'DESG',
+        numero:   n.codigo || null,
+      });
+    });
+  });
+
+  if (jobs.length === 0) return;
+
+  const { getClassifiedIds, upsertSubcategorias } = require('../db/subcategoriasQueries');
+  const { classificarBatch } = require('./classifierService');
+
+  // Filtra os que já estão classificados no Supabase
+  const known = await getClassifiedIds();
+  const todo  = jobs.filter(j => !known.has(j.noteId));
+  if (todo.length === 0) {
+    console.log(`[CRON] Subcategorias: nada novo (${jobs.length} UUIDs, todos cacheados)`);
+    return;
+  }
+
+  console.log(`[CRON] Classificando subcategorias: ${todo.length} novas (${jobs.length - todo.length} cacheadas)`);
+  const t0 = Date.now();
+  const classifs = await classificarBatch(todo, 10);
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+
+  if (classifs.length > 0) {
+    const saved = await upsertSubcategorias(classifs);
+    console.log(`[CRON] Subcategorias gravadas: ${saved} (em ${dt}s)`);
+  } else {
+    console.log(`[CRON] Subcategorias: classificador retornou vazio (em ${dt}s)`);
   }
 }
 
@@ -112,4 +175,4 @@ function stopCron() {
   consolidaJob?.stop();
 }
 
-module.exports = { startCron, stopCron, runSnapshot, runConsolidate, runTokenRefresh };
+module.exports = { startCron, stopCron, runSnapshot, runConsolidate, runTokenRefresh, runClassifyNewNotes };

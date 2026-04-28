@@ -389,8 +389,21 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
       flagDivergentSeal: s.FlagDivergentSeal,
     }));
 
-    // Classificação de subcategoria (Type + Code + Comments + Activities)
-    const subcat = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
+    // Classificação de subcategoria — consulta cache do Supabase primeiro;
+    // se não estiver classificada, usa a heurística local (Code + Comments).
+    let subcat = { subCategoria: null, subcatCode: null, quantidade: null };
+    if (MODE !== 'mock') {
+      try {
+        const { getSubcategoriasByIds } = require('../db/subcategoriasQueries');
+        const cached = await getSubcategoriasByIds([nota.Id]);
+        const c = cached[nota.Id];
+        if (c) subcat = { subCategoria: c.sub_categoria, subcatCode: c.sub_code, quantidade: c.quantidade };
+      } catch {}
+    }
+    if (!subcat.subCategoria) {
+      const fallback = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
+      subcat = { subCategoria: fallback.subCategoria, subcatCode: fallback.subcatCode, quantidade: fallback.quantidade };
+    }
 
     res.json({
       id:                  nota.Id,
@@ -458,59 +471,26 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   }
 });
 
-// ── Cache de subcategorias em memória (TTL 6h) ───────────────────────────────
-// Evita rebuscar a mesma nota repetidamente durante o dia.
-const _subcatCache     = new Map(); // uuid → { subCategoria, subcatCode, quantidadeExec, tipo }
-const _subcatCacheTime = new Map(); // uuid → timestamp
-const SUBCAT_TTL_MS    = 6 * 3600 * 1000;
+// POST /api/notas/subcategorias
+// Body: { ids: ["uuid1", "uuid2", ...] }
+// Retorna: { subcats: { [uuid]: { sub_code, sub_categoria, code, code_text, quantidade, tipo } } }
+// Lê APENAS do cache persistente (Supabase). Resposta instantânea.
+// Notas ainda não classificadas vêm como ausentes do mapa — caem em "OUTROS" no front.
+router.post('/notas/subcategorias', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || ids.length === 0) return res.json({ subcats: {} });
 
-function subcatFromCache(id) {
-  const ts = _subcatCacheTime.get(id);
-  if (!ts || Date.now() - ts > SUBCAT_TTL_MS) return null;
-  return _subcatCache.get(id) || null;
-}
-function subcatToCache(id, val) {
-  _subcatCache.set(id, val);
-  _subcatCacheTime.set(id, Date.now());
-}
+  // Em modo mock: nada de Supabase
+  if (MODE === 'mock') return res.json({ subcats: {} });
 
-// POST /api/wpa/notas/subcategorias
-// Body: { notes: [ { id: "uuid", sectorId: "DESG" }, ... ] }
-// Retorna: { subcats: { [uuid]: { subCategoria, subcatCode, quantidadeExec, tipo } } }
-// Serve do cache quando possível; busca detalhes WPA (10 simultâneos) para o restante.
-router.post('/wpa/notas/subcategorias', async (req, res) => {
-  const { notes } = req.body || {};
-  if (!Array.isArray(notes) || notes.length === 0) return res.json({ subcats: {} });
-
-  const subcats     = {};
-  const toFetch     = [];
-
-  // 1. Serve hits do cache imediatamente
-  notes.forEach(({ id, sectorId }) => {
-    if (!id) return;
-    const cached = subcatFromCache(id);
-    if (cached) subcats[id] = cached;
-    else toFetch.push({ id, sectorId: sectorId || 'DESG' });
-  });
-
-  // 2. Busca apenas os não-cacheados (10 simultâneos)
-  const CONCURRENCY = 10;
-  for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
-    const chunk = toFetch.slice(i, i + CONCURRENCY);
-    await Promise.all(chunk.map(async ({ id, sectorId }) => {
-      try {
-        const nota = await getNoteDetail(id, sectorId);
-        if (nota) {
-          const sc = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
-          const val = { ...sc, tipo: nota.Type };
-          subcats[id] = val;
-          subcatToCache(id, val);
-        }
-      } catch {}
-    }));
+  try {
+    const { getSubcategoriasByIds } = require('../db/subcategoriasQueries');
+    const subcats = await getSubcategoriasByIds(ids);
+    res.json({ subcats });
+  } catch (err) {
+    console.error('[SUBCAT] erro lendo cache:', err.message);
+    res.status(500).json({ error: err.message });
   }
-
-  res.json({ subcats });
 });
 
 router.get('/wpa/probe', async (req, res) => {
