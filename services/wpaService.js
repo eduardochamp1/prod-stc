@@ -39,24 +39,42 @@ let _loginPromise = null;   // serializa logins concorrentes
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 
-async function login() {
+/**
+ * Tenta uma única vez fazer login. Marca erros como `isAzureColdStart` (quando
+ * o App Service do WPA responde 403 com a página HTML "Web App - Unavailable"
+ * — típico de hibernação/cold-start no Azure) ou `isNetworkError` (fetch jogou
+ * exceção: timeout, DNS, conexão recusada). O `login()` externo usa essas flags
+ * para decidir retry — erros legítimos (ex: 401 credencial inválida) não retry.
+ */
+async function loginAttempt() {
   const body = new URLSearchParams({
     Username: process.env.WPA_USERNAME || '',
     Password: process.env.WPA_PASSWORD || '',
   });
 
-  const res = await fetch(`${WPA_AUTH}/identity/signin`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'X-Requested-With': 'XMLHttpRequest',
-    },
-    body: body.toString(),
-  });
+  let res;
+  try {
+    res = await fetch(`${WPA_AUTH}/identity/signin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      body: body.toString(),
+    });
+  } catch (err) {
+    err.isNetworkError = true;
+    throw err;
+  }
 
   if (!res.ok) {
     const txt = await res.text();
-    throw new Error(`WPA login falhou (${res.status}): ${txt.slice(0, 200)}`);
+    const isAzureColdStart = /Web App\s*-\s*Unavailable/i.test(txt);
+    const tag = isAzureColdStart ? ' [Azure cold-start]' : '';
+    const error = new Error(`WPA login falhou (${res.status})${tag}: ${txt.slice(0, 200)}`);
+    error.isAzureColdStart = isAzureColdStart;
+    error.httpStatus       = res.status;
+    throw error;
   }
 
   const data = await res.json();
@@ -79,6 +97,38 @@ async function login() {
   const userId = data.UserIdId || data.UserId || null;
   console.log(`[WPA] Login OK — userId=${userId}  exp=${new Date(_expireAt).toISOString()}`);
   return { token: _token, userId };
+}
+
+/**
+ * Login com retry exponencial p/ erros transientes do Azure App Service.
+ *
+ * Cenário comum: cold-start do edp-wpa-po (App Service do WPA Auth) —
+ * primeira request retorna 403 com HTML "Web App - Unavailable" enquanto
+ * o container está iniciando. Geralmente sobe em 5-15s.
+ *
+ * Estratégia: até 3 tentativas com backoff [2s, 5s]. Total ~7s de espera
+ * antes de propagar o erro pra UI (que já mostra wpaStatus real).
+ *
+ * Erros legítimos (401 credencial errada, etc) não fazem retry — propaga já.
+ */
+async function login() {
+  const BACKOFF_MS = [2000, 5000]; // delays após tentativas 1 e 2
+  const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const result = await loginAttempt();
+      if (attempt > 1) console.log(`[WPA] Login OK na tentativa ${attempt}/${MAX_ATTEMPTS}`);
+      return result;
+    } catch (err) {
+      const transient = err.isAzureColdStart || err.isNetworkError;
+      if (!transient || attempt === MAX_ATTEMPTS) throw err;
+      const delay = BACKOFF_MS[attempt - 1];
+      const reason = err.isAzureColdStart ? 'Azure cold-start' : 'erro de rede';
+      console.warn(`[WPA] Login tentativa ${attempt}/${MAX_ATTEMPTS} falhou (${reason}: ${err.message.slice(0, 80)}) — retry em ${delay}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 }
 
 async function getToken() {
