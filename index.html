@@ -1921,6 +1921,52 @@
     }
   }
 
+  // ── PERSISTÊNCIA DE FILTROS ───────────────────────────────────────────
+  // Persistir regional + tipos no localStorage para sobreviver a logout/login.
+  // (filtro de busca não é persistido — é contextual.)
+  const FILTERS_KEY = 'monitor_filters_v1';
+
+  function saveFilters() {
+    try {
+      localStorage.setItem(FILTERS_KEY, JSON.stringify({
+        regional: currentRegional,
+        tipos:    [...selectedTipos],
+      }));
+    } catch {}
+  }
+
+  function applySavedFilters() {
+    let saved;
+    try {
+      const raw = localStorage.getItem(FILTERS_KEY);
+      saved = raw ? JSON.parse(raw) : null;
+    } catch { saved = null; }
+    if (!saved) return;
+
+    // Regional: só aplica se o select não foi travado por permissão
+    const regSel = document.getElementById('regional-select');
+    if (saved.regional && regSel && !regSel.disabled) {
+      currentRegional = saved.regional;
+      regSel.value = saved.regional;
+      // Espelha nos selects das outras abas
+      ['ranking-regional-select','hist-regional-select'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el.disabled) el.value = saved.regional;
+      });
+    }
+
+    // Tipos: valida contra o catálogo atual (codes podem ter mudado)
+    if (Array.isArray(saved.tipos)) {
+      const valid = saved.tipos.filter(c => TIPOS_SERVICO[c]);
+      selectedTipos = new Set(valid);
+      Object.keys(TIPOS_SERVICO).forEach(code => {
+        const chk = document.getElementById(`chk-tipo-${code}`);
+        if (chk) chk.checked = selectedTipos.has(code);
+      });
+      updateTiposBadge();
+    }
+  }
+
   // ── FILTRO DE TIPOS ───────────────────────────────────────────────────
   function initTiposFilter() {
     const container = document.getElementById('tipos-checkboxes');
@@ -1938,6 +1984,7 @@
     if (checked) selectedTipos.add(code);
     else selectedTipos.delete(code);
     updateTiposBadge();
+    saveFilters();
     renderAll();
   }
 
@@ -1950,6 +1997,7 @@
       if (chk) chk.checked = selectAll;
     });
     updateTiposBadge();
+    saveFilters();
     renderAll();
   }
 
@@ -1980,6 +2028,7 @@
     currentRegional = regional;
     const sel = document.getElementById('regional-select');
     if (sel && sel.value !== regional) sel.value = regional;
+    saveFilters();
     renderAll();
   }
 
@@ -2468,6 +2517,7 @@
   // ── INIT ──────────────────────────────────────────────────────────────
   function init() {
     initTiposFilter();
+    applySavedFilters();   // restaura regional + tipos do localStorage
 
     // Inicializa campos De/Até com hoje (sem permitir datas futuras)
     const _t = todayISO();
