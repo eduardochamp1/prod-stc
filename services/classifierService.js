@@ -132,25 +132,34 @@ async function classificarDD(noteId, sectorId) {
   const groupDesc = dd?.Data?.GroupDescription || '';
 
   const activities = det?.Data?.Activities || [];
-  const ativC93    = activities.find(a => a.Code === 'C93');
-  const ativBTZ013 = activities.find(a => a.Code === 'BTZ013');
+  // Estrutura real: cada item é { Activity: { Code, Description, ... }, Amount, IsPrimary, ... }
+  // Prioriza atividade primária (IsPrimary=true) — uma nota pode ter várias secundárias.
+  const findByCode = (code) =>
+    activities.find(a => a.Activity?.Code === code && a.IsPrimary) ||
+    activities.find(a => a.Activity?.Code === code);
+  const ativC93    = findByCode('C93');
+  const ativBTZ013 = findByCode('BTZ013');
 
   let sub_code, sub_categoria, quantidade = null;
   if (ativC93) {
     sub_code = 'C93';
     sub_categoria = 'Subs Ramal';
-    quantidade = ativC93.Quantity ?? null;
+    quantidade = ativC93.Amount ?? null;
   } else if (ativBTZ013) {
     sub_code = 'BTZ013';
     sub_categoria = 'Substituição CS';
-    quantidade = ativBTZ013.Quantity ?? null;
+    quantidade = ativBTZ013.Amount ?? null;
   } else {
     sub_code = 'OUTROS';
     sub_categoria = nomeFallback('DD');
   }
 
   // Guarda apenas campos relevantes no raw — descarta photos/checkpoints (1.6 MB)
-  const activitiesLight = activities.map(a => ({ Code: a.Code, Quantity: a.Quantity }));
+  const activitiesLight = activities.map(a => ({
+    Code:      a.Activity?.Code      ?? null,
+    Amount:    a.Amount              ?? null,
+    IsPrimary: a.IsPrimary           ?? null,
+  }));
 
   return {
     sub_code, sub_categoria,

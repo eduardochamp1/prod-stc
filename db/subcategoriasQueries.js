@@ -81,12 +81,21 @@ async function getSubcategoriasByIds(noteIds) {
  */
 async function getCountsBySubcode() {
   const sb = getClient();
-  const { data, error } = await sb
-    .from('note_subcategorias')
-    .select('sub_code');
-  if (error) throw error;
   const counts = {};
-  (data || []).forEach(r => { counts[r.sub_code] = (counts[r.sub_code] || 0) + 1; });
+  let from = 0;
+  const PAGE = 1000;
+  // Paginação manual — Supabase limita a 1000 por requisição (igual getClassifiedIds)
+  while (true) {
+    const { data, error } = await sb
+      .from('note_subcategorias')
+      .select('sub_code')
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    data.forEach(r => { counts[r.sub_code] = (counts[r.sub_code] || 0) + 1; });
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
   return counts;
 }
 

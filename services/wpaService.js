@@ -33,8 +33,9 @@ const fetch = require('node-fetch');
 const WPA_AUTH = process.env.WPA_URL      || 'https://edp-wpa-po.azurewebsites.net';
 const WPA_API  = process.env.WPA_API_URL  || 'https://edp-wpa-web-api.azurewebsites.net';
 
-let _token    = null;
-let _expireAt = 0;
+let _token        = null;
+let _expireAt     = 0;
+let _loginPromise = null;   // serializa logins concorrentes
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,14 @@ async function login() {
 
 async function getToken() {
   if (!_token || Date.now() >= _expireAt - 60_000) {
-    await login();
+    // Serializa logins concorrentes: se já há um login em curso, aguarda o mesmo.
+    // Sem isso, Promise.all() no classificarDD dispara dois logins simultâneos e o
+    // WPA invalida o primeiro token ao receber o segundo — a chamada details/optimized
+    // recebe 401 e retorna null silenciosamente.
+    if (!_loginPromise) {
+      _loginPromise = login().finally(() => { _loginPromise = null; });
+    }
+    await _loginPromise;
   }
   return _token;
 }
