@@ -2360,7 +2360,21 @@
           let info = '';
           try {
             const j = await r.json();
-            if (j?.debug) info = `<br><small style="color:#888">noteId=${j.debug.noteIdOriginal} (${j.debug.resolvedFromCodigo ? 'resolvido p/ '+j.debug.noteIdUsed : 'não resolvido'}) · sector=${j.debug.sectorId}</small>`;
+            if (j?.debug) {
+              const d = j.debug;
+              // Identifica como o noteId chegou (já-UUID, resolvido por código, ou não resolvido)
+              const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(d.noteIdOriginal || '');
+              const idInfo = isUuid
+                ? 'UUID válido'
+                : (d.resolvedFromCodigo ? 'resolvido p/ '+d.noteIdUsed : 'não resolvido');
+              // Se temos wpaStatus, mostra o status real do WPA (401/404/0/etc)
+              const wpaInfo = d.wpaStatus !== undefined
+                ? `<br>WPA retornou: <b>${d.wpaStatus === 0 ? 'erro de rede/timeout' : 'HTTP '+d.wpaStatus}</b>`
+                  + (d.wpaElapsed ? ` (${d.wpaElapsed}ms)` : '')
+                  + (d.wpaBody ? `<br><code style="font-size:11px;color:#aaa">${(d.wpaBody||'').slice(0,200).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</code>` : '')
+                : '';
+              info = `<br><small style="color:#888">noteId=${d.noteIdOriginal} (${idInfo}) · sector=${d.sectorId}${wpaInfo}</small>`;
+            }
           } catch {}
           throw new Error(`HTTP ${r.status}${info}`);
         }

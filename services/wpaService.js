@@ -300,15 +300,31 @@ async function getNoteDetail(noteId, sectorId) {
     const res = await wpaFetch(path);
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      console.warn(`[wpa] getNoteDetail !ok status=${res.status} path=${path} body=${body.slice(0,200)}`);
-      return null;
+      const elapsed = Date.now() - t0;
+      console.warn(`[wpa] getNoteDetail !ok status=${res.status} path=${path} body=${body.slice(0,200)} ${elapsed}ms`);
+      // Lança erro estruturado pro caller poder propagar status/body real do WPA
+      // pra UI (em vez de só "HTTP 404"). Útil pra discriminar 401 (token race
+      // em cold-start Vercel) de 404 real ou 5xx (timeout / erro upstream).
+      const err = new Error(`WPA ${res.status} em ${path}`);
+      err.wpaStatus  = res.status;
+      err.wpaBody    = body.slice(0, 300);
+      err.wpaPath    = path;
+      err.wpaElapsed = elapsed;
+      throw err;
     }
     const data = await res.json();
     console.log(`[wpa] getNoteDetail OK noteId=${noteId} sector=${sectorId} ${Date.now()-t0}ms`);
     return data.Data || data || null;
   } catch (err) {
-    console.warn(`[wpa] getNoteDetail erro noteId=${noteId} sector=${sectorId} ${Date.now()-t0}ms — ${err.message}`);
-    return null;
+    if (err.wpaStatus) throw err; // re-lança erro já estruturado
+    const elapsed = Date.now() - t0;
+    console.warn(`[wpa] getNoteDetail erro noteId=${noteId} sector=${sectorId} ${elapsed}ms — ${err.message}`);
+    const wrapped = new Error(`WPA fetch falhou: ${err.message}`);
+    wrapped.wpaStatus  = 0; // 0 = erro de rede / timeout / aborted
+    wrapped.wpaBody    = err.message;
+    wrapped.wpaPath    = path;
+    wrapped.wpaElapsed = elapsed;
+    throw wrapped;
   }
 }
 

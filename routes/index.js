@@ -411,10 +411,11 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   try {
     const nota = await getNoteDetail(noteId, sectorId);
     if (!nota) {
-      console.warn(`[wpa/nota] WPA retornou null — noteId=${noteId} sectorId=${sectorId} resolvedFromCodigo=${resolvedFromCodigo}`);
+      // WPA respondeu 200 mas com payload vazio (Data null/undefined) — raro mas possível
+      console.warn(`[wpa/nota] WPA retornou payload vazio — noteId=${noteId} sectorId=${sectorId} resolvedFromCodigo=${resolvedFromCodigo}`);
       return res.status(404).json({
-        error: `Nota não encontrada na API WPA`,
-        debug: { noteIdOriginal, noteIdUsed: noteId, sectorId, resolvedFromCodigo },
+        error: `Nota não encontrada na API WPA (payload vazio)`,
+        debug: { noteIdOriginal, noteIdUsed: noteId, sectorId, resolvedFromCodigo, wpaStatus: 200, wpaBody: '(empty Data)' },
       });
     }
 
@@ -548,8 +549,29 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
       checklists:  (nota.Checklists  || []).length,
     });
   } catch (err) {
+    // Se getNoteDetail lançou erro estruturado (status WPA real), propaga p/ UI
+    // poder discriminar 401 (token race) de 404 real ou 5xx (timeout / upstream).
+    if (err.wpaStatus !== undefined) {
+      console.warn(`[wpa/nota] WPA falhou — noteId=${noteId} sectorId=${sectorId} wpaStatus=${err.wpaStatus} elapsed=${err.wpaElapsed}ms body=${(err.wpaBody||'').slice(0,200)}`);
+      // Mapeia status WPA → status HTTP da nossa rota (mantém 404 p/ compat com UI atual)
+      const httpStatus = err.wpaStatus === 401 ? 401
+                       : err.wpaStatus === 0   ? 502  // erro de rede/timeout
+                       : err.wpaStatus >= 500  ? 502
+                       : 404;                          // 404, 403, etc → bucket de "não disponível"
+      return res.status(httpStatus).json({
+        error: `WPA retornou ${err.wpaStatus || 'erro de rede'}`,
+        debug: {
+          noteIdOriginal, noteIdUsed: noteId, sectorId, resolvedFromCodigo,
+          wpaStatus:  err.wpaStatus,
+          wpaBody:    err.wpaBody,
+          wpaElapsed: err.wpaElapsed,
+          wpaPath:    err.wpaPath,
+        },
+      });
+    }
+    // Erro inesperado no nosso processamento (não vindo do WPA)
     console.error(`[NOTA-DETAIL] ${noteId}:`, err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, stack: err.stack?.split('\n').slice(0,3).join(' | ') });
   }
 });
 
