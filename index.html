@@ -2084,25 +2084,26 @@
     return true;
   }
 
-  async function renderMetrics(teams) {
+  async function renderMetrics(teamsAll, teamsVisible) {
+    // Compat: se chamado com 1 argumento, usa o mesmo array para ambos
+    teamsVisible = teamsVisible || teamsAll;
     const hojeISO    = todayISO();
-    const emCarteira = teams.reduce((s,t) => s + (t.carteiraCount   || 0), 0);
 
-    // Em andamento (executada agora) — só faz sentido pra equipes ativas
-    const executadas = teams.reduce((s,t) =>
+    // Carteira é estado AGORA — só equipes ativas têm `carteiraCount`
+    const emCarteira = teamsVisible.reduce((s,t) => s + (t.carteiraCount || 0), 0);
+
+    // Executadas (em andamento) e concluídas: incluem fantasmas (equipes que
+    // deslogaram no dia) — assim os contadores não caem com logoff.
+    const executadas = teamsAll.reduce((s,t) =>
       s + (t.notasExecutadas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
-
-    // Concluídas via teams_current — filtradas por dia (descarta sessões antigas).
-    // Será sobrescrito pelo total persistente do Supabase abaixo (que cobre
-    // equipes que já deslogaram no dia).
-    const concluidasLive = teams.reduce((s,t) =>
+    const concluidasLive = teamsAll.reduce((s,t) =>
       s + (t.notasConcluidas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
 
-    const rejeitadas = teams.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
-    const relogins   = teams.reduce((s,t) => s + (t.relogins || 0), 0);
-    const ativas     = teams.filter(t => !t.sessionEnd && t.isOnline).length;
+    const rejeitadas = teamsAll.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
+    const relogins   = teamsVisible.reduce((s,t) => s + (t.relogins || 0), 0);
+    const ativas     = teamsVisible.filter(t => !t.sessionEnd && t.isOnline).length;
 
-    document.getElementById('m-total').textContent      = teams.length;
+    document.getElementById('m-total').textContent      = teamsVisible.length;
     document.getElementById('m-ativas').textContent     = `${ativas} em campo`;
     document.getElementById('m-executadas').textContent = executadas;
     document.getElementById('m-rejeitadas').textContent = rejeitadas;
@@ -2172,9 +2173,14 @@
 
   // ── RENDER CARDS ──────────────────────────────────────────────────────
   function renderAll() {
-    const teams = getVisible();
-    renderMetrics(teams);
-    renderProdutividade(teams);
+    const teamsAll     = getVisible();
+    // Equipes-fantasma (_ghostFromAcc) representam equipes que deslogaram mas
+    // cujas notas devem continuar contando nos indicadores e cards de tipo.
+    // Não devem aparecer como cards no grid nem no banner de alertas.
+    const teamsVisible = teamsAll.filter(t => !t._ghostFromAcc);
+    const teams        = teamsVisible;  // alias compat para o restante da função
+    renderMetrics(teamsAll, teamsVisible);
+    renderProdutividade(teamsAll);
     document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
 
     // Banner de alerta — equipes com sessão anômala:

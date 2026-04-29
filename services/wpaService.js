@@ -571,12 +571,142 @@ async function getTeamsByDate(sectorId, isoDate) {
   });
 }
 
-// NOTA: O acumulador diário em memória (_acc) foi removido.
-// A persistência de KPIs agora é feita via Supabase (daily_totals / team_daily_totals),
-// que sobrevivem a logoffs de equipe e reinícios do servidor.
-// O frontend usa Math.max(contagem_ao_vivo, total_persistente) para garantir
-// que o KPI nunca caia. Ver: db/supabaseQueries.js → getRealizadasDoDia,
-// routes/index.js → GET /api/totais/dia.
+// ── ACUMULADOR DIÁRIO ─────────────────────────────────────────────────────────
+// Preserva notas concluídas/executadas vistas durante o dia, garantindo que
+// quando uma equipe encerra a sessão (sai do `teams_current`) as notas dela
+// continuem aparecendo nos cards de produtividade e nos indicadores do monitor.
+//
+// Sem este acumulador, ao deslogar uma equipe, suas notas somem do array
+// retornado por /api/teams e — como o frontend calcula MD/SF/DD por sub_code,
+// EM ANDAMENTO, REJEITADAS e EM CARTEIRA a partir dessa lista — os contadores
+// caem indevidamente. O daily_totals do Supabase é cumulativo mas só serve o
+// KPI agregado por regional, não o detalhamento por tipo/sub_code.
+//
+// Reset usa data BRT (UTC-3) — usar UTC fazia o acumulador zerar às 21h BRT.
+// Limitação conhecida: estado em memória (single-process). Em PM2 cluster
+// múltiplas instâncias teriam acumuladores divergentes — não é o caso atual.
+const _acc = {
+  date:  '',
+  notes: new Map(),    // chave (id||codigo) → { id, codigo, tipoCode, tipoNome, teamName, regional, status, conclusionDate }
+};
+
+function _accReset() {
+  // Data BRT — UTC daria a virada do dia errada (21h BRT = 00h UTC do dia seguinte)
+  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  if (_acc.date !== today) {
+    _acc.date = today;
+    _acc.notes.clear();
+    console.log('[WPA] Acumulador diário resetado para', today, '(BRT)');
+  }
+}
+
+function _accRecord(teams) {
+  _accReset();
+  teams.forEach(t => {
+    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+    realizadas.forEach(n => {
+      const chave = n.id || n.codigo;
+      if (chave && !_acc.notes.has(chave)) {
+        _acc.notes.set(chave, {
+          id:       n.id || null,
+          codigo:   n.codigo,
+          tipoCode: n.tipoCode,
+          tipoNome: n.tipoNome || n.tipoCode,
+          teamName: t.teamName,
+          regional: t.regional,
+          status:   n.status,
+          conclusionDate: n.conclusionDate || null,
+        });
+      }
+    });
+  });
+}
+
+function _accApply(teams) {
+  _accReset();
+  if (_acc.notes.size === 0) return teams;
+
+  // Agrupa as notas acumuladas por equipe e por status
+  const extrasExec = {};
+  const extrasConc = {};
+  _acc.notes.forEach(info => {
+    const nota = {
+      id:       info.id,
+      codigo:   info.codigo,
+      tipoCode: info.tipoCode,
+      tipoNome: info.tipoNome,
+      status:   info.status,
+      conclusionDate: info.conclusionDate,
+    };
+    if (info.status === 'executada') {
+      if (!extrasExec[info.teamName]) extrasExec[info.teamName] = [];
+      extrasExec[info.teamName].push(nota);
+    } else {
+      if (!extrasConc[info.teamName]) extrasConc[info.teamName] = [];
+      extrasConc[info.teamName].push(nota);
+    }
+  });
+
+  // Aplica nas equipes ainda presentes (sem duplicar) e adiciona equipes-fantasma
+  // sintéticas para as que sumiram do teams_current mas têm notas acumuladas
+  const teamsByName = new Map(teams.map(t => [t.teamName, t]));
+  const result = teams.map(t => {
+    const existentes = new Set([
+      ...(t.notasExecutadas || []).map(n => n.id || n.codigo),
+      ...(t.notasConcluidas || []).map(n => n.id || n.codigo),
+    ]);
+    const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
+    const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
+    if (novasExec.length === 0 && novasConc.length === 0) return t;
+    return {
+      ...t,
+      notasExecutadas: [...(t.notasExecutadas || []), ...novasExec],
+      notasConcluidas: [...(t.notasConcluidas || []), ...novasConc],
+    };
+  });
+
+  // Equipes que estavam presentes mais cedo no dia mas deslogaram: cria card
+  // sintético invisível (sessionEnd preenchido) só com as notas acumuladas,
+  // garantindo que entrem nos somatórios mesmo sem aparecer como ativas.
+  const nomesAtivos = new Set(teams.map(t => t.teamName));
+  const fantasmas = new Set([...Object.keys(extrasExec), ...Object.keys(extrasConc)]);
+  fantasmas.forEach(nome => {
+    if (nomesAtivos.has(nome)) return;
+    const ref = _acc.notes.values().next().value; // não temos sectorId/regional do nome → pega regional do primeiro registro com esse teamName
+    let regional = 'GUA';
+    for (const v of _acc.notes.values()) {
+      if (v.teamName === nome) { regional = v.regional || 'GUA'; break; }
+    }
+    result.push({
+      id:           `_acc:${nome}`,
+      sigla:        nome,
+      teamName:     nome,
+      sectorId:     null,
+      regional,
+      date:         _acc.date,
+      sessionBegin: null,
+      sessionEnd:   `${_acc.date}T23:59:59Z`,  // marca como sessão encerrada
+      vehiclePlate: '—',
+      collaborators: [],
+      relogins:    0,
+      sessions:    [],
+      teamStatus:  null,
+      isOnline:    false,
+      isInLunchTime: false,
+      lastUpdate:  null,
+      location:    null,
+      carteiraCount:    0,
+      servicosPerfil:   [],
+      notasBaixadas:    [],
+      notasExecutadas:  extrasExec[nome] || [],
+      notasConcluidas:  extrasConc[nome] || [],
+      notasRejeitadas:  [],
+      _ghostFromAcc:    true,   // sinaliza ao front: equipe acumulada do dia
+    });
+  });
+
+  return result;
+}
 
 // ── NORMALIZAÇÃO ──────────────────────────────────────────────────────────────
 
@@ -776,7 +906,13 @@ async function getTeamsBySector(sectorId) {
     };
   }));
 
-  return result;
+  _accRecord(result);
+  const augmented = _accApply(result);
+  const fantasmas = augmented.length - result.length;
+  if (fantasmas > 0) {
+    console.log(`[WPA] _acc: ${fantasmas} equipe(s) fantasma com notas acumuladas (deslogadas no dia)`);
+  }
+  return augmented;
 }
 
 module.exports = {
