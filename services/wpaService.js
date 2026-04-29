@@ -37,6 +37,22 @@ let _token        = null;
 let _expireAt     = 0;
 let _loginPromise = null;   // serializa logins concorrentes
 
+// Cache compartilhado em Supabase — opcional (lazy require pra evitar circular
+// dep e permitir rodar sem Supabase em dev/test). Carregado na primeira
+// chamada de loadCachedToken/saveCachedToken.
+let _tokenStore = null;
+function getTokenStore() {
+  if (_tokenStore) return _tokenStore;
+  if (!process.env.SUPABASE_SERVICE_KEY) return null; // sem Supabase configurado
+  try {
+    _tokenStore = require('../db/wpaTokenStore');
+  } catch (err) {
+    console.warn(`[WPA] wpaTokenStore indisponível: ${err.message}`);
+    _tokenStore = null;
+  }
+  return _tokenStore;
+}
+
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -96,6 +112,13 @@ async function loginAttempt() {
 
   const userId = data.UserIdId || data.UserId || null;
   console.log(`[WPA] Login OK — userId=${userId}  exp=${new Date(_expireAt).toISOString()}`);
+
+  // Grava no cache compartilhado (Supabase) — outros containers/processos
+  // (ex: Lambdas Vercel) leem daqui antes de tentar login próprio.
+  // saveToken não throws; falhas são logadas mas não quebram o login.
+  const store = getTokenStore();
+  if (store) store.saveToken(_token, _expireAt, userId).catch(() => {});
+
   return { token: _token, userId };
 }
 
@@ -137,16 +160,32 @@ async function login(opts = {}) {
 }
 
 async function getToken() {
-  if (!_token || Date.now() >= _expireAt - 60_000) {
-    // Serializa logins concorrentes: se já há um login em curso, aguarda o mesmo.
-    // Sem isso, Promise.all() no classificarDD dispara dois logins simultâneos e o
-    // WPA invalida o primeiro token ao receber o segundo — a chamada details/optimized
-    // recebe 401 e retorna null silenciosamente.
-    if (!_loginPromise) {
-      _loginPromise = login().finally(() => { _loginPromise = null; });
-    }
-    await _loginPromise;
+  // 1. Cache em memória válido → usa direto (caso normal, 0 latência adicional)
+  if (_token && Date.now() < _expireAt - 60_000) return _token;
+
+  // 2. Cache compartilhado (Supabase) — evita login redundante entre containers.
+  //    Em Lambdas Vercel cold-start, o token gravado pelo cron rpa1 (que mantém
+  //    WPA quente) é lido aqui em ~50ms, sem bater no /signin do WPA.
+  const store = getTokenStore();
+  if (store) {
+    try {
+      const cached = await store.loadToken();
+      if (cached?.token && Date.now() < cached.expiresAt - 60_000) {
+        _token    = cached.token;
+        _expireAt = cached.expiresAt;
+        console.log(`[WPA] Token carregado do cache Supabase — exp=${new Date(_expireAt).toISOString()}`);
+        return _token;
+      }
+    } catch { /* fallthrough p/ login */ }
   }
+
+  // 3. Login fresco — serializa logins concorrentes dentro do mesmo processo
+  //    via _loginPromise (evita race onde WPA invalida o token do primeiro
+  //    login ao receber o segundo). Login bem-sucedido grava no Supabase.
+  if (!_loginPromise) {
+    _loginPromise = login().finally(() => { _loginPromise = null; });
+  }
+  await _loginPromise;
   return _token;
 }
 
