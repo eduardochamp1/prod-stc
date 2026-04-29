@@ -48,9 +48,21 @@ async function runSnapshot() {
   isRunning   = true;
   isRunningAt = Date.now();
   try {
-    const teams = await getTeams();
+    const allTeams = await getTeams();
+
+    // Separa equipes reais (vindas do WPA) das equipes-fantasma (_ghostFromAcc).
+    // Ghosts existem apenas para manter KPIs no frontend quando uma equipe desloga.
+    // NUNCA devem ir para o Supabase: se fossem, entrariam no aliveNames do
+    // pushTeams e impediriam a deleção das equipes que realmente saíram do WPA,
+    // fazendo-as aparecer indefinidamente como "sessão anômala" no monitor.
+    const teams     = allTeams.filter(t => !t._ghostFromAcc);
+    const ghostCount = allTeams.length - teams.length;
+    if (ghostCount > 0) {
+      console.log(`[CRON] _acc: ${ghostCount} equipe(s) fantasma excluída(s) das operações Supabase`);
+    }
+
     if (teams.length === 0) {
-      console.log('[CRON] Snapshot: nenhuma equipe ativa.');
+      console.log('[CRON] Snapshot: nenhuma equipe ativa no WPA.');
       return; // finally abaixo libera isRunning corretamente
     }
 
@@ -62,7 +74,7 @@ async function runSnapshot() {
     await upsertDailyTotals(teams);
     await upsertTeamDailyTotals(teams);
 
-    console.log(`[CRON] Snapshot salvo — ${teams.length} equipes às ${ts}`);
+    console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais às ${ts}`);
 
     // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot)
     runClassifyNewNotes(teams).catch(err =>
