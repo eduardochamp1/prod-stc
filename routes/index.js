@@ -264,6 +264,56 @@ router.get('/historico/diario', async (req, res) => {
   }
 });
 
+// GET /api/historico/subcats/mes?m=2026-04&regional=GUA
+// Totais do mês agregados por sub_code (TL11, OBSOLETO, L0, L1, C93, BTZ013, OUTROS).
+// Resposta: { mes, totais: { GUA: { 'MD/TL11': {count, quantidade}, ... }, CAC: {...} } }
+router.get('/historico/subcats/mes', async (req, res) => {
+  try {
+    const sq = sbq();
+    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const regional = req.query.regional || null;
+    if (!sq) return res.json({ mes: ym, totais: { GUA: {}, CAC: {} } });
+    const totais = await sq.getSubcatMonthTotals(ym, regional);
+    res.json({ mes: ym, regional, totais });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/historico/subcats/diario?m=2026-04&regional=GUA
+// Histórico diário por sub_code (matriz dia × subcategoria por regional).
+// Resposta: { mes, regional, dias: [{ date, GUA: { 'MD/TL11': {...}, ... }, CAC: {...} }] }
+router.get('/historico/subcats/diario', async (req, res) => {
+  try {
+    const sq = sbq();
+    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const regional = req.query.regional || null;
+    if (!sq) return res.json({ mes: ym, dias: [] });
+    const dias = await sq.getSubcatDailyHistory(ym, regional);
+    res.json({ mes: ym, regional, dias });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/historico/subcats/ranking?m=2026-04&regional=GUA&tipo=DD&subCode=C93
+// Ranking de equipes por (tipo + sub_code) no mês. Filtros opcionais.
+// Resposta: { mes, ranking: [{ team_name, regional, count, quantidade, ... }] }
+router.get('/historico/subcats/ranking', async (req, res) => {
+  try {
+    const sq = sbq();
+    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const regional = req.query.regional || null;
+    const tipo     = req.query.tipo     || null;
+    const subCode  = req.query.subCode  || null;
+    if (!sq) return res.json({ mes: ym, ranking: [] });
+    const ranking = await sq.getSubcatTeamRanking(ym, regional, tipo, subCode);
+    res.json({ mes: ym, regional, tipo, subCode, ranking });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── METAS CALCULADAS ──────────────────────────────────────────────────────────
 
 // GET /api/metas/calculadas?m=2026-04

@@ -67,7 +67,7 @@ async function runSnapshot() {
     }
 
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals } = require('./supabasePush');
+    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals } = require('./supabasePush');
 
     await saveSnapshot(teams);
     await pushTeams(teams);
@@ -76,10 +76,15 @@ async function runSnapshot() {
 
     console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais às ${ts}`);
 
-    // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot)
-    runClassifyNewNotes(teams).catch(err =>
-      console.error('[CRON] Erro classificando subcategorias:', err.message)
-    );
+    // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot).
+    // Quando concluir, dispara upsertSubcatTotals pra atualizar daily_subcat_totals
+    // intraday (com base nos sub_codes recém-classificados).
+    runClassifyNewNotes(teams)
+      .then(() => upsertSubcatTotals(teams).catch(err =>
+        console.warn('[CRON] upsertSubcatTotals intraday falhou:', err.message)))
+      .catch(err =>
+        console.error('[CRON] Erro classificando subcategorias:', err.message)
+      );
 
     // Faz cache do payload completo das OS finalizadas (não bloqueia o snapshot).
     // Roda no servidor Engelmig (com IP autorizado pela WPA) e popula

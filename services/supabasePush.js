@@ -216,6 +216,122 @@ async function upsertTeamDailyTotals(teams, date) {
 }
 
 /**
+ * Atualiza daily_subcat_totals + team_daily_subcat_totals a partir das equipes
+ * em memória. Joina com note_subcategorias (cache de classificação) pra
+ * agregar por sub_code (TL11/OBSOLETO/L0/L1/C93/BTZ013/OUTROS).
+ *
+ * Quantidade (NUMERIC):
+ *   DD/C93    → soma de Amount (metros de ramal substituídos)
+ *   DD/BTZ013 → soma de Amount (pontos de CS substituídos)
+ *
+ * Idempotente — usa upsert por (date, regional/team, tipo, sub_code).
+ *
+ * @param {Array} teams       Array de equipes (com notasExecutadas/notasConcluidas)
+ * @param {string} date       'YYYY-MM-DD' BRT
+ */
+async function upsertSubcatTotals(teams, date) {
+  const sb = getClient();
+  date = date || _hojeBRT();
+
+  // 1. Coleta UUIDs únicos de MD/SF/DD em executadas + concluidas
+  const TIPOS = new Set(['MD', 'SF', 'DD']);
+  const events = [];
+  const noteIds = new Set();
+
+  teams.forEach(t => {
+    const teamName = t.teamName || t.sigla;
+    if (!teamName || !t.regional || !t.sectorId) return;
+    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+    realizadas.forEach(n => {
+      if (!_belongsToDate(n, date)) return;
+      if (!n.id) return;
+      const tipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
+      if (!TIPOS.has(tipo)) return;
+      events.push({
+        team:     teamName,
+        regional: t.regional,
+        sector:   t.sectorId,
+        tipo,
+        noteId:   n.id,
+      });
+      noteIds.add(n.id);
+    });
+  });
+
+  if (events.length === 0) return;
+
+  // 2. Busca classificações em note_subcategorias (chunked p/ evitar IN gigante)
+  const subcatMap = {};
+  const ids = [...noteIds];
+  const CHUNK_IN = 500;
+  for (let i = 0; i < ids.length; i += CHUNK_IN) {
+    const chunk = ids.slice(i, i + CHUNK_IN);
+    const { data, error } = await sb
+      .from('note_subcategorias')
+      .select('note_id, sub_code, quantidade')
+      .in('note_id', chunk);
+    if (error) throw error;
+    (data || []).forEach(r => { subcatMap[r.note_id] = r; });
+  }
+
+  // 3. Dedupe por (team, tipo, noteId) e agrega
+  const seen = new Set();
+  const byRegional = new Map();
+  const byTeam     = new Map();
+
+  events.forEach(e => {
+    const dedupeKey = `${e.team}|${e.tipo}|${e.noteId}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+
+    const sc = subcatMap[e.noteId];
+    const sub_code   = sc?.sub_code || 'OUTROS';
+    const quantidade = sc?.quantidade != null ? Number(sc.quantidade) : null;
+
+    const rk = `${e.regional}|${e.tipo}|${sub_code}`;
+    if (!byRegional.has(rk)) {
+      byRegional.set(rk, {
+        date, regional: e.regional, tipo: e.tipo, sub_code,
+        count: 0, quantidade: null,
+      });
+    }
+    const r = byRegional.get(rk);
+    r.count += 1;
+    if (quantidade != null) r.quantidade = (r.quantidade ?? 0) + quantidade;
+
+    const tk = `${e.team}|${e.tipo}|${sub_code}`;
+    if (!byTeam.has(tk)) {
+      byTeam.set(tk, {
+        date, team_name: e.team, regional: e.regional, sector_id: e.sector,
+        tipo: e.tipo, sub_code, count: 0, quantidade: null,
+      });
+    }
+    const t = byTeam.get(tk);
+    t.count += 1;
+    if (quantidade != null) t.quantidade = (t.quantidade ?? 0) + quantidade;
+  });
+
+  const now = new Date().toISOString();
+  const regionalRows = [...byRegional.values()].map(r => ({ ...r, updated_at: now }));
+  const teamRows     = [...byTeam.values()].map(r => ({ ...r, updated_at: now }));
+
+  if (regionalRows.length > 0) {
+    const { error } = await sb
+      .from('daily_subcat_totals')
+      .upsert(regionalRows, { onConflict: 'date,regional,tipo,sub_code' });
+    if (error) throw error;
+    console.log(`[SUPABASE] daily_subcat_totals: ${regionalRows.length} linhas p/ ${date}`);
+  }
+  if (teamRows.length > 0) {
+    const { error } = await sb
+      .from('team_daily_subcat_totals')
+      .upsert(teamRows, { onConflict: 'date,team_name,tipo,sub_code' });
+    if (error) throw error;
+    console.log(`[SUPABASE] team_daily_subcat_totals: ${teamRows.length} linhas p/ ${date}`);
+  }
+}
+
+/**
  * Consolida os snapshots do dia em `daily_totals` e `team_daily_totals` (chamado às 20:30).
  * Usa o snapshot mais recente de cada equipe como resultado final do dia.
  */
@@ -303,6 +419,23 @@ async function consolidateDay(date) {
     if (e3) throw e3;
     console.log(`[SUPABASE] team_daily_totals consolidados: ${teamRows.length} registros para ${date}`);
   }
+
+  // ── daily_subcat_totals + team_daily_subcat_totals (por sub_code) ────────────
+  // Reusa snapshots mais recentes (latest) reformatados como "teams" pra reusar
+  // a mesma lógica de upsertSubcatTotals (que aceita t.notasExecutadas etc).
+  const teamsForSubcat = Object.values(latest).map(s => ({
+    teamName: s.team_name,
+    regional: s.regional,
+    sectorId: s.sector_id,
+    notasExecutadas: s.data?.notasExecutadas || [],
+    notasConcluidas: s.data?.notasConcluidas || [],
+  }));
+  try {
+    await upsertSubcatTotals(teamsForSubcat, date);
+  } catch (errSubcat) {
+    // Não bloqueia consolidação principal — log warn e segue
+    console.warn(`[SUPABASE] consolidateDay: upsertSubcatTotals falhou: ${errSubcat.message}`);
+  }
 }
 
 /**
@@ -331,4 +464,4 @@ async function cleanOldSnapshots() {
   }
 }
 
-module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, consolidateDay, cleanOldSnapshots };
+module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals, consolidateDay, cleanOldSnapshots };

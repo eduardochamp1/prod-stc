@@ -244,6 +244,97 @@ async function getDailyHistory(yearMonth) {
   return Object.values(byDate);
 }
 
+// ── HISTÓRICO POR SUBCATEGORIA ─────────────────────────────────────────────────
+
+/**
+ * Totais do mês por sub_code (regional × tipo × sub_code → count + quantidade).
+ * Estrutura:
+ *   { GUA: { 'MD/TL11': { count, quantidade }, 'DD/C93': { count, quantidade }, ... }, CAC: {...} }
+ */
+async function getSubcatMonthTotals(yearMonth, regional) {
+  const sb = getClient();
+  let q = filterByMonth(
+    sb.from('daily_subcat_totals').select('regional, tipo, sub_code, count, quantidade'),
+    yearMonth
+  );
+  if (regional) q = q.eq('regional', regional);
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const totais = { GUA: {}, CAC: {} };
+  (data || []).forEach(row => {
+    if (!totais[row.regional]) totais[row.regional] = {};
+    const key = `${row.tipo}/${row.sub_code}`;
+    if (!totais[row.regional][key]) totais[row.regional][key] = { count: 0, quantidade: 0 };
+    totais[row.regional][key].count      += row.count;
+    totais[row.regional][key].quantidade += Number(row.quantidade || 0);
+  });
+  return totais;
+}
+
+/**
+ * Histórico diário por sub_code — uma linha por (date, regional) com map por sub_code.
+ * Estrutura:
+ *   [ { date, GUA: { 'MD/TL11': {count, quantidade}, ... }, CAC: {...} }, ... ]
+ */
+async function getSubcatDailyHistory(yearMonth, regional) {
+  const sb = getClient();
+  let q = filterByMonth(
+    sb.from('daily_subcat_totals').select('date, regional, tipo, sub_code, count, quantidade'),
+    yearMonth
+  ).order('date');
+  if (regional) q = q.eq('regional', regional);
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const byDate = {};
+  (data || []).forEach(row => {
+    const d = row.date;
+    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {} };
+    if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
+    const key = `${row.tipo}/${row.sub_code}`;
+    byDate[d][row.regional][key] = {
+      count: row.count,
+      quantidade: row.quantidade != null ? Number(row.quantidade) : null,
+    };
+  });
+  return Object.values(byDate);
+}
+
+/**
+ * Ranking de equipes no mês por sub_code (X notas de C93 por equipe Y).
+ * Retorna lista ordenada por count decrescente.
+ *   [ { team_name, regional, sector_id, tipo, sub_code, count, quantidade } ]
+ */
+async function getSubcatTeamRanking(yearMonth, regional, tipo, subCode) {
+  const sb = getClient();
+  let q = filterByMonth(
+    sb.from('team_daily_subcat_totals').select('team_name, regional, sector_id, tipo, sub_code, count, quantidade'),
+    yearMonth
+  );
+  if (regional) q = q.eq('regional', regional);
+  if (tipo)     q = q.eq('tipo', tipo);
+  if (subCode)  q = q.eq('sub_code', subCode);
+  const { data, error } = await q;
+  if (error) throw error;
+
+  // Agrega por equipe (somando todos os dias do mês)
+  const byTeam = {};
+  (data || []).forEach(row => {
+    const k = `${row.team_name}|${row.tipo}|${row.sub_code}`;
+    if (!byTeam[k]) {
+      byTeam[k] = {
+        team_name: row.team_name, regional: row.regional, sector_id: row.sector_id,
+        tipo: row.tipo, sub_code: row.sub_code,
+        count: 0, quantidade: 0,
+      };
+    }
+    byTeam[k].count      += row.count;
+    byTeam[k].quantidade += Number(row.quantidade || 0);
+  });
+  return Object.values(byTeam).sort((a, b) => b.count - a.count);
+}
+
 // ── HISTÓRICO POR EQUIPE ───────────────────────────────────────────────────────
 
 /**
@@ -542,6 +633,7 @@ module.exports = {
   getMetas, setMetas, getMetasCalculadas,
   getTeamsFromSupabase, getTeamsByDateFromSnapshots,
   getMonthTotals, getDailyHistory,
+  getSubcatMonthTotals, getSubcatDailyHistory, getSubcatTeamRanking,
   getTeamRanking, getTeamDailyHistory,
   getTeamProducao,
   getTeamSessionHistory,
