@@ -17,12 +17,21 @@
 const express = require('express');
 const router  = express.Router();
 
-const SECRET = process.env.CRON_SECRET || '';
+const SECRET = (process.env.CRON_SECRET || '').trim();
+
+// Bloqueia boot em produção se CRON_SECRET não estiver definido (string vazia = inseguro)
+if (!SECRET && process.env.DATA_MODE === 'wpa') {
+  console.error('[CRON] FATAL: CRON_SECRET não configurado! Defina CRON_SECRET no .env antes de iniciar em produção.');
+  process.exit(1);
+} else if (!SECRET) {
+  console.warn('[CRON] AVISO: CRON_SECRET vazio — endpoints /api/cron desprotegidos!');
+}
 
 function checkSecret(req, res, next) {
   if (!SECRET) {
-    console.warn('[CRON] CRON_SECRET não configurado — endpoint inseguro');
-    return res.status(503).json({ error: 'CRON_SECRET não configurado no ambiente' });
+    // Chegou aqui apenas em modo não-wpa (mock/dev) sem secret
+    console.warn('[CRON] CRON_SECRET não configurado — acesso liberado somente em modo não-wpa');
+    return next();
   }
   const auth   = req.headers.authorization || '';
   const token  = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -88,7 +97,8 @@ router.get('/consolidate', async (req, res) => {
   try {
     const cronSrv = require('../services/cronService');
     const t0 = Date.now();
-    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    // Sem ?date usa BRT (UTC-3) — evita consolidar "amanhã" depois das 21h UTC
+    const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     await cronSrv.runConsolidate(date);
     res.json({ ok: true, ms: Date.now() - t0, date });
   } catch (err) {

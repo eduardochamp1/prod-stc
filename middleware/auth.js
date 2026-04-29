@@ -6,8 +6,18 @@
 
 const crypto = require('crypto');
 
-const JWT_SECRET    = process.env.JWT_SECRET || 'wpa-monitor-mude-esta-chave';
-const SESSION_SECS  = 8 * 3600; // 8 horas
+const _DEFAULT_SECRET = 'wpa-monitor-mude-esta-chave';
+const JWT_SECRET      = process.env.JWT_SECRET || _DEFAULT_SECRET;
+const SESSION_SECS    = 8 * 3600; // 8 horas
+
+// Bloqueia boot se o secret padrão for usado em produção.
+// DATA_MODE=wpa é o indicador de "estamos no servidor real com WPA".
+if (JWT_SECRET === _DEFAULT_SECRET && process.env.DATA_MODE === 'wpa') {
+  console.error('[AUTH] FATAL: JWT_SECRET não configurado! Defina JWT_SECRET no .env antes de iniciar em produção.');
+  process.exit(1);
+} else if (JWT_SECRET === _DEFAULT_SECRET) {
+  console.warn('[AUTH] AVISO: JWT_SECRET usando valor padrão inseguro. Configure JWT_SECRET no .env!');
+}
 
 // ── Helpers JWT ──────────────────────────────────────────────────────────────
 

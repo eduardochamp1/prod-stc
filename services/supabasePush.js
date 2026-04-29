@@ -11,6 +11,11 @@ function _hojeBRT() {
   return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
+// Lock simples para serializar execuções concorrentes de pushTeams.
+// Evita race condition onde upsert do ciclo A e delete do ciclo B se sobrepõem,
+// resultando na remoção de equipes recém-escritas.
+let _pushTeamsLock = false;
+
 /**
  * Salva snapshot histórico das equipes na tabela `snapshots`.
  * Chamado a cada 15 min pelo cronService.
@@ -51,38 +56,53 @@ async function saveSnapshot(teams, date) {
  */
 async function pushTeams(teams) {
   if (!teams || teams.length === 0) return;
-  const sb = getClient();
 
-  const rows = teams.map(t => ({
-    team_name:  t.teamName,
-    regional:   t.regional,
-    sector_id:  t.sectorId,
-    data:       t,
-    updated_at: new Date().toISOString(),
-  }));
-
-  // 1) Upsert das equipes ativas no momento
-  const { error: upErr } = await sb
-    .from('teams_current')
-    .upsert(rows, { onConflict: 'team_name' });
-  if (upErr) throw upErr;
-
-  // 2) Remove qualquer linha cuja team_name NÃO está mais no batch
-  // (equipes que encerraram sessão e sumiram do sessions/current)
-  const aliveNames = teams.map(t => t.teamName);
-  if (aliveNames.length > 0) {
-    const { error: delErr, count } = await sb
-      .from('teams_current')
-      .delete({ count: 'exact' })
-      .not('team_name', 'in', `(${aliveNames.map(n => `"${n.replace(/"/g, '""')}"`).join(',')})`);
-    if (delErr) {
-      console.warn('[SUPABASE] teams_current: falha ao limpar equipes ausentes:', delErr.message);
-    } else if (count > 0) {
-      console.log(`[SUPABASE] teams_current: ${count} equipe(s) removida(s) (sessão encerrada)`);
-    }
+  // Se já há uma execução em andamento, aguarda até 10s antes de prosseguir
+  const deadline = Date.now() + 10_000;
+  while (_pushTeamsLock && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 100));
   }
+  if (_pushTeamsLock) {
+    console.warn('[SUPABASE] pushTeams: lock expirou — prosseguindo mesmo assim para não travar o cron');
+  }
+  _pushTeamsLock = true;
 
-  console.log(`[SUPABASE] teams_current: ${teams.length} equipes atualizadas`);
+  try {
+    const sb = getClient();
+
+    const rows = teams.map(t => ({
+      team_name:  t.teamName,
+      regional:   t.regional,
+      sector_id:  t.sectorId,
+      data:       t,
+      updated_at: new Date().toISOString(),
+    }));
+
+    // 1) Upsert das equipes ativas no momento
+    const { error: upErr } = await sb
+      .from('teams_current')
+      .upsert(rows, { onConflict: 'team_name' });
+    if (upErr) throw upErr;
+
+    // 2) Remove qualquer linha cuja team_name NÃO está mais no batch
+    // (equipes que encerraram sessão e sumiram do sessions/current)
+    const aliveNames = teams.map(t => t.teamName);
+    if (aliveNames.length > 0) {
+      const { error: delErr, count } = await sb
+        .from('teams_current')
+        .delete({ count: 'exact' })
+        .not('team_name', 'in', `(${aliveNames.map(n => `"${n.replace(/"/g, '""')}"`).join(',')})`);
+      if (delErr) {
+        console.warn('[SUPABASE] teams_current: falha ao limpar equipes ausentes:', delErr.message);
+      } else if (count > 0) {
+        console.log(`[SUPABASE] teams_current: ${count} equipe(s) removida(s) (sessão encerrada)`);
+      }
+    }
+
+    console.log(`[SUPABASE] teams_current: ${teams.length} equipes atualizadas`);
+  } finally {
+    _pushTeamsLock = false;
+  }
 }
 
 /**
@@ -101,7 +121,9 @@ function _belongsToDate(nota, date) {
   // Formato BR fallback DD/MM/YYYY
   const m = nota.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}` === date;
-  return true;                                     // formato desconhecido → não filtra
+  // Formato desconhecido → rejeita (não deixa nota fantasma entrar no contador)
+  console.warn(`[SUPABASE] _belongsToDate: formato de data desconhecido ignorado: "${nota.conclusionDate}"`);
+  return false;
 }
 
 /**
@@ -262,4 +284,30 @@ async function consolidateDay(date) {
   }
 }
 
-module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, consolidateDay };
+/**
+ * Remove snapshots com mais de 30 dias da tabela `snapshots`.
+ * Chamado uma vez por dia (após a consolidação). Evita crescimento indefinido
+ * da tabela que não tem uso operacional para dados tão antigos.
+ */
+async function cleanOldSnapshots() {
+  const sb = getClient();
+  // Data-limite: hoje BRT menos 30 dias
+  const cutoff = new Date(Date.now() - 3 * 3600 * 1000 - 30 * 24 * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+  const { error, count } = await sb
+    .from('snapshots')
+    .delete({ count: 'exact' })
+    .lt('date', cutoff);
+
+  if (error) {
+    console.warn('[SUPABASE] cleanOldSnapshots: erro ao limpar:', error.message);
+    return;
+  }
+  if (count > 0) {
+    console.log(`[SUPABASE] cleanOldSnapshots: ${count} snapshots anteriores a ${cutoff} removidos`);
+  }
+}
+
+module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, consolidateDay, cleanOldSnapshots };

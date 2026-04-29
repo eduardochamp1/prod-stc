@@ -571,73 +571,12 @@ async function getTeamsByDate(sectorId, isoDate) {
   });
 }
 
-// ── ACUMULADOR DIÁRIO ─────────────────────────────────────────────────────────
-// Preserva notas concluídas/executadas vistas durante o dia.
-// Garante que o contador não caia caso uma equipe encerre e reabra sessão.
-const _acc = {
-  date:  '',
-  notes: new Map(),    // noteId → { tipoCode, teamName, regional, status }
-};
-
-function _accReset() {
-  const today = new Date().toISOString().slice(0, 10);
-  if (_acc.date !== today) {
-    _acc.date = today;
-    _acc.notes.clear();
-    console.log('[WPA] Acumulador diário resetado para', today);
-  }
-}
-
-function _accRecord(teams) {
-  _accReset();
-  teams.forEach(t => {
-    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
-    realizadas.forEach(n => {
-      if (n.codigo && !_acc.notes.has(n.codigo)) {
-        _acc.notes.set(n.codigo, {
-          tipoCode: n.tipoCode,
-          teamName: t.teamName,
-          regional: t.regional,
-          status:   n.status,
-        });
-        console.log(`[WPA] ★ Nota acumulada: equipe=${t.teamName} tipo=${n.tipoCode} nota=${n.codigo} status=${n.status}`);
-      }
-    });
-  });
-}
-
-function _accApply(teams) {
-  _accReset();
-  if (_acc.notes.size === 0) return teams;
-
-  const extrasExec = {};
-  const extrasConc = {};
-  _acc.notes.forEach((info, noteId) => {
-    const nota = { codigo: noteId, tipoCode: info.tipoCode, tipoNome: info.tipoCode, status: info.status };
-    if (info.status === 'executada') {
-      if (!extrasExec[info.teamName]) extrasExec[info.teamName] = [];
-      extrasExec[info.teamName].push(nota);
-    } else {
-      if (!extrasConc[info.teamName]) extrasConc[info.teamName] = [];
-      extrasConc[info.teamName].push(nota);
-    }
-  });
-
-  return teams.map(t => {
-    const existentes = new Set([
-      ...(t.notasExecutadas || []).map(n => n.codigo),
-      ...(t.notasConcluidas || []).map(n => n.codigo),
-    ]);
-    const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.codigo));
-    const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.codigo));
-    if (novasExec.length === 0 && novasConc.length === 0) return t;
-    return {
-      ...t,
-      notasExecutadas: [...(t.notasExecutadas || []), ...novasExec],
-      notasConcluidas: [...(t.notasConcluidas || []), ...novasConc],
-    };
-  });
-}
+// NOTA: O acumulador diário em memória (_acc) foi removido.
+// A persistência de KPIs agora é feita via Supabase (daily_totals / team_daily_totals),
+// que sobrevivem a logoffs de equipe e reinícios do servidor.
+// O frontend usa Math.max(contagem_ao_vivo, total_persistente) para garantir
+// que o KPI nunca caia. Ver: db/supabaseQueries.js → getRealizadasDoDia,
+// routes/index.js → GET /api/totais/dia.
 
 // ── NORMALIZAÇÃO ──────────────────────────────────────────────────────────────
 
@@ -837,8 +776,7 @@ async function getTeamsBySector(sectorId) {
     };
   }));
 
-  _accRecord(result);
-  return _accApply(result);
+  return result;
 }
 
 module.exports = {

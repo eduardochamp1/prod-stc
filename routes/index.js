@@ -165,7 +165,8 @@ router.post('/metas', async (req, res) => {
 router.get('/totais/dia', async (req, res) => {
   try {
     const sq = sbq();
-    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    // Usa BRT (UTC-3) para evitar pegar "amanhã" depois das 21h UTC
+    const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     if (!sq) return res.json({ date, totais: { ALL: 0, GUA: 0, CAC: 0 } });
     const totais = await sq.getRealizadasDoDia(date);
     res.json({ date, totais });
@@ -1053,7 +1054,7 @@ router.post('/admin/backfill/range', async (req, res) => {
 router.post('/admin/consolidar', async (req, res) => {
   try {
     const c    = cron();
-    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     if (c) await c.runConsolidate(date);
     res.json({ ok: true, date });
   } catch (err) {

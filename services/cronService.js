@@ -12,10 +12,12 @@ const cron                    = require('node-cron');
 const { getTeams }            = require('./dataService');
 const { forceRefresh }        = require('./wpaService');
 
-let tokenJob     = null;
-let snapshotJob  = null;
-let consolidaJob = null;
-let isRunning    = false;
+let tokenJob        = null;
+let snapshotJob     = null;
+let consolidaJob    = null;
+let isRunning       = false;
+let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
+const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se travar
 
 // ── RENOVAÇÃO DE TOKEN ────────────────────────────────────────────────────────
 
@@ -34,8 +36,17 @@ async function runTokenRefresh() {
 // ── SNAPSHOT ──────────────────────────────────────────────────────────────────
 
 async function runSnapshot() {
-  if (isRunning) return;
-  isRunning = true;
+  // Verifica se uma execução anterior travou (não liberou isRunning em 5 min)
+  if (isRunning) {
+    const elapsed = Date.now() - isRunningAt;
+    if (elapsed < MAX_RUN_MS) {
+      console.log(`[CRON] Snapshot ignorado — já está em execução há ${Math.round(elapsed / 1000)}s`);
+      return;
+    }
+    console.warn(`[CRON] Snapshot: isRunning travado por ${Math.round(elapsed / 1000)}s — forçando desbloqueio`);
+  }
+  isRunning   = true;
+  isRunningAt = Date.now();
   try {
     const teams = await getTeams();
     if (teams.length === 0) {
@@ -217,10 +228,13 @@ async function runClassifyNewNotes(teams) {
 // ── CONSOLIDAÇÃO ──────────────────────────────────────────────────────────────
 
 async function runConsolidate(date) {
-  date = date || new Date().toISOString().slice(0, 10);
+  // Sem data explícita usa BRT (UTC-3) — evita consolidar "amanhã" depois das 21h UTC
+  date = date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
   try {
-    const { consolidateDay } = require('./supabasePush');
+    const { consolidateDay, cleanOldSnapshots } = require('./supabasePush');
     await consolidateDay(date);
+    // Limpa snapshots velhos logo após a consolidação (uma vez por dia)
+    await cleanOldSnapshots();
   } catch (err) {
     console.error('[CRON] Erro na consolidação:', err.message);
   }
