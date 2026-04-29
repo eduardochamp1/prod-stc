@@ -2844,23 +2844,35 @@
       box-shadow: var(--shadow-hover);
     }
 
-    .metric-card.accent-verde {
-      border-top: 4px solid;
-      border-image: var(--verde-grad) 1;
-    }
-
-    .metric-card.accent-amarelo {
-      border-top: 4px solid;
-      border-image: var(--amarelo-grad) 1;
-    }
-
-    .metric-card.accent-vermelho {
-      border-top: 4px solid var(--vermelho);
-    }
-
+    /* Acentos coloridos no topo do card via ::after — preserva o border-radius
+       (border-top colorido / border-image quadrava os cantos superiores). */
+    .metric-card.accent-verde,
+    .metric-card.accent-amarelo,
+    .metric-card.accent-vermelho,
     .metric-card.accent-preto {
-      border-top: 4px solid var(--preto);
+      border-top: 1px solid #ececea; /* mesma cor das outras bordas — neutra */
+      border-image: none;
     }
+
+    .metric-card.accent-verde::after,
+    .metric-card.accent-amarelo::after,
+    .metric-card.accent-vermelho::after,
+    .metric-card.accent-preto::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      border-radius: 14px 14px 0 0; /* casa com o border-radius do .metric-card */
+      pointer-events: none;
+      z-index: 1; /* acima do ::before do gradient radial */
+    }
+
+    .metric-card.accent-verde::after    { background: var(--verde-grad,    var(--verde)); }
+    .metric-card.accent-amarelo::after  { background: var(--amarelo-grad,  var(--amarelo)); }
+    .metric-card.accent-vermelho::after { background: var(--vermelho); }
+    .metric-card.accent-preto::after    { background: var(--preto); }
 
     .metric-value {
       font-size: 32px;
