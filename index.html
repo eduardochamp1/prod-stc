@@ -4183,11 +4183,28 @@
         }
       }
 
+      const hojeStr = todayISO();
       teams.forEach(t => {
         const reg = t.regional;
         if (!totais[reg]) totais[reg] = {};
         if (!quantidades[reg]) quantidades[reg] = {};
-        const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+
+        // Executadas: só conta se sessão começou hoje ou equipe-fantasma
+        // (sessões de dia anterior têm executadas sem conclusionDate → inflariam hoje)
+        const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
+        const executadasValidas = sessaoHoje ? (t.notasExecutadas || []) : [];
+
+        // Concluídas: filtradas por conclusionDate (funciona para qualquer sessão)
+        const concluidasValidas = (t.notasConcluidas || []).filter(n => {
+          if (!n.conclusionDate) return sessaoHoje; // sem data → só conta sessão de hoje
+          const cd = String(n.conclusionDate).slice(0, 10);
+          if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd === hojeStr;
+          const m = n.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+          if (m) return `${m[3]}-${m[2]}-${m[1]}` === hojeStr;
+          return false;
+        });
+
+        const realizadas = [...executadasValidas, ...concluidasValidas];
 
         realizadas.forEach(n => {
           const tipo = n.tipoCode;
@@ -4944,10 +4961,16 @@
       // Carteira é estado AGORA — só equipes ativas têm `carteiraCount`
       const emCarteira = teamsVisible.reduce((s, t) => s + (t.carteiraCount || 0), 0);
 
-      // Executadas (em andamento) e concluídas: incluem fantasmas (equipes que
-      // deslogaram no dia) — assim os contadores não caem com logoff.
-      const executadas = teamsAll.reduce((s, t) =>
-        s + (t.notasExecutadas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
+      // Executadas (em andamento): só conta equipes cuja sessão começou HOJE ou
+      // equipes-fantasma (_ghostFromAcc). Sessões de dia anterior têm notasExecutadas
+      // sem conclusionDate que passariam o filtro de data mas são de ontem.
+      const executadas = teamsAll.reduce((s, t) => {
+        const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
+        if (!sessaoHoje) return s;
+        return s + (t.notasExecutadas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length;
+      }, 0);
+
+      // Concluídas: filtradas por conclusionDate (funciona para qualquer sessão)
       const concluidasLive = teamsAll.reduce((s, t) =>
         s + (t.notasConcluidas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
 
