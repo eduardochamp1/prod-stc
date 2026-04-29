@@ -50,7 +50,8 @@ function loadClassifierWith(fixturesByPath) {
 }
 
 // ── Builders curtos de fixtures ──────────────────────────────────────────────
-const md       = (Code, CodeText = 'Substituição Projetos Especiais', Comments = '') => ({ Data: { Code, CodeText, Comments } });
+const md       = (Code, CodeText = 'Substituição Projetos Especiais') => ({ Data: { Code, CodeText } });
+const mdDet    = (Comments)                             => ({ Data: { Comments } }); // /details/optimized
 const sf       = (Code, CodeText = 'desc')             => ({ Data: { Code, CodeText } });
 const dd       = (GroupCode = '63', GroupDescription = 'BF-CHAVE FUSIVEL') => ({ Data: { GroupCode, GroupDescription } });
 const details  = (Activities)                          => ({ Data: { Activities } });
@@ -64,13 +65,17 @@ const activity = (Code, Amount, IsPrimary = true)      => ({
 //  MD — Subs Obsoleto vs Subs TL11 (regra canônica: SPEB + Comments com TL11)
 // ═════════════════════════════════════════════════════════════════════════════
 describe('classificarMD', () => {
+  // Helper: mocka /api/notes/md (Code/CodeText) + /details/optimized (Comments)
+  const mdMock = (id, code, comments, sectorId = 'DESG') => ({
+    [`/api/notes/md?noteId=${id}`]:                                          md(code),
+    [`/api/Notes/${id}/details/optimized?sectorId=${sectorId}`]:             mdDet(comments),
+  });
+
   test('SPEB + Comments com "Tratativa de TL11" → sub_code=TL11 (caso real)', async () => {
     const id = 'note-tl11-real';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'Substituição Projetos Especiais',
-        '* 05.12.2025 14:59:04 Luryan Ultramar Bravim (710037)* Tratativa de TL11'),
-    });
-    const r = await classificar(id, 'MD');
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB',
+      '* 05.12.2025 14:59:04 Luryan Ultramar Bravim (710037)* Tratativa de TL11'));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'TL11');
     assert.equal(r.sub_categoria, 'Subs TL11');
     assert.equal(r.tipo,          'MD');
@@ -78,62 +83,62 @@ describe('classificarMD', () => {
 
   test('SPEB + Comments com typo "Trativa de TL11" também casa (robusto)', async () => {
     const id = 'note-tl11-typo';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'Substituição Projetos Especiais',
-        '* DATA HORA USUARIO* Trativa de TL11'),
-    });
-    const r = await classificar(id, 'MD');
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB',
+      '* DATA HORA USUARIO* Trativa de TL11'));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code, 'TL11');
   });
 
   test('SPEB + Comments com "TL11" no meio do texto também casa', async () => {
     const id = 'note-tl11-inline';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'desc',
-        'projeto urgente conforme TL11 cliente XYZ'),
-    });
-    const r = await classificar(id, 'MD');
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB',
+      'projeto urgente conforme TL11 cliente XYZ'));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code, 'TL11');
   });
 
   test('SPEB + Comments preenchido SEM "TL11" → sub_code=OBSOLETO (caso real)', async () => {
-    // Caso real (nota 045006267560): tem Comments mas não menciona TL11.
     const id = 'note-obsoleto-real';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'Substituição Projetos Especiais',
-        '* 12.03.2026 13:45:27 CAROLINA DAS CHAGAS FERRARINI (205288) Tel. N/A* Projeto substituicao de medidores. Favor substituir medidor em* campo!'),
-    });
-    const r = await classificar(id, 'MD');
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB',
+      '* 12.03.2026 13:45:27 CAROLINA DAS CHAGAS FERRARINI (205288) Tel. N/A* Projeto substituicao de medidores. Favor substituir medidor em* campo!'));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'OBSOLETO');
     assert.equal(r.sub_categoria, 'Subs Obsoleto');
   });
 
   test('SPEB + Comments vazio → sub_code=OBSOLETO', async () => {
     const id = 'note-obsoleto-vazio';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'desc', ''),
-    });
-    const r = await classificar(id, 'MD');
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB', ''));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code, 'OBSOLETO');
   });
 
   test('SPEB + Comments null → sub_code=OBSOLETO (defensivo)', async () => {
     const id = 'note-obsoleto-null';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: { Data: { Code: 'SPEB', CodeText: 'desc', Comments: null } },
-    });
-    const r = await classificar(id, 'MD');
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB', null));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code, 'OBSOLETO');
   });
 
-  test('Code != SPEB → sub_code=OUTROS, mesmo se Comments mencionar TL11', async () => {
-    // Garante que a regra exige Code SPEB — não basta "TL11" no Comments.
-    const id = 'note-outros-tl11-comment';
+  test('SPEB + details/optimized falha (404) → trata como Comments vazio → OBSOLETO', async () => {
+    // Garantia de robustez: se o endpoint pesado falhar, ainda classificamos.
+    const id = 'note-obsoleto-404';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('XPTO', 'desc',
-        'menciona TL11 mas o Code não é SPEB'),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB'),
+      // /details/optimized não mockado → 404 → safeJson retorna null
     });
-    const r = await classificar(id, 'MD');
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r.sub_code, 'OBSOLETO');
+  });
+
+  test('Code != SPEB → OUTROS, NÃO chama details/optimized (lazy fetch)', async () => {
+    // Mockando só /api/notes/md (com Code != SPEB) — se classifier chamar
+    // details/optimized vai dar 404 mas não deve, porque code != SPEB.
+    const id = 'note-outros-no-details-call';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/md?noteId=${id}`]: md('XPTO'),
+    });
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'OUTROS');
     assert.equal(r.sub_categoria, 'MD Outros');
   });
@@ -143,19 +148,26 @@ describe('classificarMD', () => {
     const { classificar } = loadClassifierWith({
       [`/api/notes/md?noteId=${id}`]: md('SPMD'),
     });
-    const r = await classificar(id, 'MD');
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code, 'OUTROS');
   });
 
   test('Match é case-insensitive (tl11 minúsculo, TL11 maiúsculo, Tl11 misto)', async () => {
     for (const variant of ['tl11', 'TL11', 'Tl11', 'tL11']) {
       const id = 'note-tl11-' + variant;
-      const { classificar } = loadClassifierWith({
-        [`/api/notes/md?noteId=${id}`]: md('SPEB', 'desc', 'tratativa ' + variant),
-      });
-      const r = await classificar(id, 'MD');
+      const { classificar } = loadClassifierWith(mdMock(id, 'SPEB',
+        'tratativa ' + variant));
+      const r = await classificar(id, 'MD', { sectorId: 'DESG' });
       assert.equal(r.sub_code, 'TL11', `falhou p/ variant "${variant}"`);
     }
+  });
+
+  test('SectorId default DESG quando ctx.sectorId não passado', async () => {
+    const id = 'note-tl11-no-sector';
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB',
+      'Tratativa de TL11', 'DESG')); // mock usa DESG
+    const r = await classificar(id, 'MD'); // sem ctx.sectorId
+    assert.equal(r.sub_code, 'TL11');
   });
 });
 

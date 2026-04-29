@@ -63,8 +63,15 @@ function nomeFallback(tipo) {
  *   - 045006163408 (TL11): Comments = "* DATA HORA USUARIO* Tratativa de TL11"
  *   - 045006267560 (OBSOLETO): Comments = "* DATA HORA USUARIO* Projeto substituicao de medidores..."
  *
+ * Endpoints (lazy fetch — só busca o pesado quando necessário):
+ *   1. /api/notes/md?noteId={id}  (~2 KB) — Code, CodeText
+ *      • Se Code != "SPEB" → OUTROS, retorna direto (sem 2ª chamada)
+ *   2. /api/Notes/{id}/details/optimized?sectorId={X}  (~50-150 KB) — Comments
+ *      • Só para SPEB. Comments NÃO existe no /api/notes/md (campos: Code,
+ *        CodeText, MeasureCode, etc — sem campo de texto livre).
+ *
  * Detalhes:
- *   - O Comments tem cabeçalho automático "* DATA HORA USUARIO (ID)*" antes do
+ *   - Comments tem cabeçalho automático "* DATA HORA USUARIO (ID)*" antes do
  *     texto livre. O regex /TL11/i é case-insensitive e cobre variações como
  *     "Tratativa de TL11", "Trativa de TL11" (typo da planilha), ou só "TL11".
  *   - CodeText "Substituição Projetos Especiais" é doublecheck — toda MD/SPEB
@@ -72,30 +79,34 @@ function nomeFallback(tipo) {
  *   - Versão anterior usava /api/notepriorities → SubProject. Removido pq
  *     a área de negócio padronizou Comments como fonte única e estável.
  */
-async function classificarMD(noteId) {
+async function classificarMD(noteId, sectorId) {
   const md = await safeJson(`/api/notes/md?noteId=${noteId}`);
 
   const code     = md?.Data?.Code     || null;
   const codeText = md?.Data?.CodeText || null;
-  const comments = md?.Data?.Comments || '';
 
-  let sub_code, sub_categoria;
-  if (code === 'SPEB') {
-    if (/TL11/i.test(comments)) {
-      sub_code = 'TL11';
-      sub_categoria = 'Subs TL11';
-    } else {
-      sub_code = 'OBSOLETO';
-      sub_categoria = 'Subs Obsoleto';
-    }
-  } else {
-    sub_code = 'OUTROS';
-    sub_categoria = nomeFallback('MD');
+  // Code != SPEB cai direto em OUTROS — evita chamada pesada ao details/optimized
+  if (code !== 'SPEB') {
+    return {
+      sub_code:      'OUTROS',
+      sub_categoria: nomeFallback('MD'),
+      code, code_text: codeText, quantidade: null,
+      raw: { md: md?.Data ?? null },
+    };
   }
 
+  // SPEB → precisa de Comments p/ discriminar TL11 vs OBSOLETO.
+  // Comments NÃO está em /api/notes/md (verificado via diagnostic),
+  // está só em /details/optimized.
+  const det = await safeJson(`/api/Notes/${noteId}/details/optimized?sectorId=${sectorId || 'DESG'}`);
+  const comments = det?.Data?.Comments || '';
+
+  const isTL11 = /TL11/i.test(comments);
   return {
-    sub_code, sub_categoria, code, code_text: codeText, quantidade: null,
-    raw: { md: md?.Data ?? null },
+    sub_code:      isTL11 ? 'TL11'      : 'OBSOLETO',
+    sub_categoria: isTL11 ? 'Subs TL11' : 'Subs Obsoleto',
+    code, code_text: codeText, quantidade: null,
+    raw: { md: md?.Data ?? null, comments: comments.slice(0, 300) },
   };
 }
 
@@ -216,7 +227,7 @@ async function classificar(noteId, tipo, ctx = {}) {
   if (!noteId || !tipo) return null;
   const t = String(tipo).toUpperCase();
   let result;
-  if (t === 'MD')      result = await classificarMD(noteId);
+  if (t === 'MD')      result = await classificarMD(noteId, ctx.sectorId);
   else if (t === 'SF') result = await classificarSF(noteId);
   else if (t === 'DD') result = await classificarDD(noteId, ctx.sectorId);
   else return null;
