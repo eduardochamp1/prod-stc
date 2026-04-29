@@ -4245,14 +4245,18 @@
 
     // Renderiza o bloco de cards de produtividade segundo a ordem de PROD_LINHAS.
     // Cada linha vira um card. Linhas sem meta E sem realizado são suprimidas
-    // (evita poluir a tela com "OBSOLETO 0/sem meta").
+    // (evita poluir a tela com "OBSOLETO 0/sem meta") — exceto OUTROS, que
+    // sempre aparecem para dar visibilidade da catch-all category de cada tipo.
     function renderBlockRegional(totaisReg, metasReg, qtdReg) {
       const linhasExibir = PROD_LINHAS.filter(l => {
         const realizado = totaisReg[l.key] || 0;
         const meta = parseInt(metasReg[l.key] || 0);
         // Filtro "Tipos" opera no nível do TIPO, não do sub_code
         const tipoSelecionado = selectedTipos.size === 0 || selectedTipos.has(l.tipo);
-        return tipoSelecionado && (realizado > 0 || meta > 0);
+        // OUTROS sempre visíveis (mesmo com 0/0) — usuário vê a categoria
+        // catch-all e sabe que zero significa "nenhuma fora da spec hoje"
+        const isOutros = l.subCode === 'OUTROS';
+        return tipoSelecionado && (realizado > 0 || meta > 0 || isOutros);
       });
 
       if (linhasExibir.length === 0)
