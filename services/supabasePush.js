@@ -69,13 +69,14 @@ async function pushTeams(teams) {
 
   try {
     const sb = getClient();
+    const now = new Date().toISOString();
 
     const rows = teams.map(t => ({
       team_name:  t.teamName,
       regional:   t.regional,
       sector_id:  t.sectorId,
       data:       t,
-      updated_at: new Date().toISOString(),
+      updated_at: now,
     }));
 
     // 1) Upsert das equipes ativas no momento
@@ -84,19 +85,35 @@ async function pushTeams(teams) {
       .upsert(rows, { onConflict: 'team_name' });
     if (upErr) throw upErr;
 
-    // 2) Remove qualquer linha cuja team_name NÃO está mais no batch
-    // (equipes que encerraram sessão e sumiram do sessions/current)
+    // 2) TTL: remove linhas não atualizadas nos últimos 35 min (2x o ciclo de 15 min + buffer).
+    //    Solução geral que cobre qualquer origem de linha órfã: ghost do _acc, stale data,
+    //    falha do delete por nome, reinício do servidor, etc.
+    //    Qualquer equipe não vista pelo cron em 35 min definitivamente não está mais no WPA.
+    const ttlThreshold = new Date(Date.now() - 35 * 60 * 1000).toISOString();
+    const { error: ttlErr, count: ttlCount } = await sb
+      .from('teams_current')
+      .delete({ count: 'exact' })
+      .lt('updated_at', ttlThreshold);
+    if (ttlErr) {
+      console.warn('[SUPABASE] teams_current TTL: falha ao limpar linhas expiradas:', ttlErr.message);
+    } else if (ttlCount > 0) {
+      console.log(`[SUPABASE] teams_current TTL: ${ttlCount} linha(s) expirada(s) removida(s)`);
+    }
+
+    // 3) Delete por nome — segunda camada de segurança para equipes que
+    //    possam ter sido upsertadas no mesmo ciclo com updated_at atualizado
+    //    mas que já não estão mais no batch (ex: equipe sumiu entre upsert e delete).
     const aliveNames = teams.map(t => t.teamName);
     if (aliveNames.length > 0) {
       const { error: delErr, count } = await sb
         .from('teams_current')
         .delete({ count: 'exact' })
-        // PostgREST espera lista sem delimitadores extras para strings simples
-        .not('team_name', 'in', `(${aliveNames.join(',')})`);
+        .not('team_name', 'in', `(${aliveNames.join(',')})`)
+        .gte('updated_at', ttlThreshold); // só linhas recentes (as expiradas já foram limpas acima)
       if (delErr) {
         console.warn('[SUPABASE] teams_current: falha ao limpar equipes ausentes:', delErr.message);
       } else if (count > 0) {
-        console.log(`[SUPABASE] teams_current: ${count} equipe(s) removida(s) (sessão encerrada)`);
+        console.log(`[SUPABASE] teams_current: ${count} equipe(s) removida(s) (não está no WPA)`);
       }
     }
 
