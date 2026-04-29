@@ -260,10 +260,12 @@ async function upsertSubcatTotals(teams, date) {
 
   if (events.length === 0) return;
 
-  // 2. Busca classificações em note_subcategorias (chunked p/ evitar IN gigante)
+  // 2. Busca classificações em note_subcategorias.
+  //    Estratégia robusta: chunks pequenos (100) p/ não estourar URL/timeout.
+  //    Tipicamente em runSnapshot temos algumas centenas de UUIDs, raramente milhares.
   const subcatMap = {};
   const ids = [...noteIds];
-  const CHUNK_IN = 500;
+  const CHUNK_IN = 100;
   for (let i = 0; i < ids.length; i += CHUNK_IN) {
     const chunk = ids.slice(i, i + CHUNK_IN);
     const { data, error } = await sb

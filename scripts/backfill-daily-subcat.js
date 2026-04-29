@@ -66,17 +66,26 @@ async function fetchSnapshotsRange(de, ate) {
 async function fetchSubcatMap(noteIds) {
   if (noteIds.length === 0) return {};
   const sb = getClient();
+  const wanted = new Set(noteIds);
   const out = {};
-  const CHUNK = 500;
-  // Pagina/chunka pra evitar IN gigante
-  for (let i = 0; i < noteIds.length; i += CHUNK) {
-    const chunk = noteIds.slice(i, i + CHUNK);
+
+  // Pagina toda a tabela e filtra em memória — evita .in() com URL gigante
+  // (que pode dar "TypeError: fetch failed" em chunks grandes / redes flutuantes).
+  // Com 2752 rows e PAGE=1000, são ~3 requests rápidos.
+  let from = 0;
+  const PAGE = 1000;
+  while (true) {
     const { data, error } = await sb
       .from('note_subcategorias')
       .select('note_id, tipo, sub_code, quantidade')
-      .in('note_id', chunk);
+      .range(from, from + PAGE - 1);
     if (error) throw error;
-    (data || []).forEach(r => { out[r.note_id] = r; });
+    if (!data || data.length === 0) break;
+    data.forEach(r => {
+      if (wanted.has(r.note_id)) out[r.note_id] = r;
+    });
+    if (data.length < PAGE) break;
+    from += PAGE;
   }
   return out;
 }
