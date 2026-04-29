@@ -50,8 +50,7 @@ function loadClassifierWith(fixturesByPath) {
 }
 
 // ── Builders curtos de fixtures ──────────────────────────────────────────────
-const md       = (Code, CodeText = 'desc')             => ({ Data: { Code, CodeText } });
-const prio     = (SubProject)                          => ({ Data: { SubProject } });
+const md       = (Code, CodeText = 'Substituição Projetos Especiais', Comments = '') => ({ Data: { Code, CodeText, Comments } });
 const sf       = (Code, CodeText = 'desc')             => ({ Data: { Code, CodeText } });
 const dd       = (GroupCode = '63', GroupDescription = 'BF-CHAVE FUSIVEL') => ({ Data: { GroupCode, GroupDescription } });
 const details  = (Activities)                          => ({ Data: { Activities } });
@@ -62,14 +61,14 @@ const activity = (Code, Amount, IsPrimary = true)      => ({
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  MD — Subs Obsoleto vs Subs TL11
+//  MD — Subs Obsoleto vs Subs TL11 (regra canônica: SPEB + Comments com TL11)
 // ═════════════════════════════════════════════════════════════════════════════
 describe('classificarMD', () => {
-  test('SubProject "TL11 Conv" → sub_code=TL11', async () => {
-    const id = 'note-tl11-conv';
+  test('SPEB + Comments com "Tratativa de TL11" → sub_code=TL11 (caso real)', async () => {
+    const id = 'note-tl11-real';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:                    md('SPMD', 'Subs MD'),
-      [`/api/notepriorities/GetByNoteId/${id}`]:         prio('TL11 Conv'),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'Substituição Projetos Especiais',
+        '* 05.12.2025 14:59:04 Luryan Ultramar Bravim (710037)* Tratativa de TL11'),
     });
     const r = await classificar(id, 'MD');
     assert.equal(r.sub_code,      'TL11');
@@ -77,57 +76,86 @@ describe('classificarMD', () => {
     assert.equal(r.tipo,          'MD');
   });
 
-  test('SubProject "TL11 Tele" também casa o prefixo TL11*', async () => {
-    const id = 'note-tl11-tele';
+  test('SPEB + Comments com typo "Trativa de TL11" também casa (robusto)', async () => {
+    const id = 'note-tl11-typo';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:                    md('SPMD'),
-      [`/api/notepriorities/GetByNoteId/${id}`]:         prio('TL11 Tele'),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'Substituição Projetos Especiais',
+        '* DATA HORA USUARIO* Trativa de TL11'),
     });
     const r = await classificar(id, 'MD');
     assert.equal(r.sub_code, 'TL11');
   });
 
-  test('SubProject "OBSOLETO" → sub_code=OBSOLETO', async () => {
-    const id = 'note-obsoleto';
+  test('SPEB + Comments com "TL11" no meio do texto também casa', async () => {
+    const id = 'note-tl11-inline';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:                    md('SPMD'),
-      [`/api/notepriorities/GetByNoteId/${id}`]:         prio('OBSOLETO'),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'desc',
+        'projeto urgente conforme TL11 cliente XYZ'),
+    });
+    const r = await classificar(id, 'MD');
+    assert.equal(r.sub_code, 'TL11');
+  });
+
+  test('SPEB + Comments preenchido SEM "TL11" → sub_code=OBSOLETO (caso real)', async () => {
+    // Caso real (nota 045006267560): tem Comments mas não menciona TL11.
+    const id = 'note-obsoleto-real';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'Substituição Projetos Especiais',
+        '* 12.03.2026 13:45:27 CAROLINA DAS CHAGAS FERRARINI (205288) Tel. N/A* Projeto substituicao de medidores. Favor substituir medidor em* campo!'),
     });
     const r = await classificar(id, 'MD');
     assert.equal(r.sub_code,      'OBSOLETO');
     assert.equal(r.sub_categoria, 'Subs Obsoleto');
   });
 
-  test('SubProject NULL + Code "SPEB" → sub_code=OBSOLETO (regra de negócio)', async () => {
-    const id = 'note-speb-null';
+  test('SPEB + Comments vazio → sub_code=OBSOLETO', async () => {
+    const id = 'note-obsoleto-vazio';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:                    md('SPEB'),
-      [`/api/notepriorities/GetByNoteId/${id}`]:         prio(null),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB', 'desc', ''),
     });
     const r = await classificar(id, 'MD');
-    assert.equal(r.sub_code,      'OBSOLETO');
-    assert.equal(r.sub_categoria, 'Subs Obsoleto');
+    assert.equal(r.sub_code, 'OBSOLETO');
   });
 
-  test('SubProject NULL + Code aleatório → sub_code=OUTROS', async () => {
-    const id = 'note-outros';
+  test('SPEB + Comments null → sub_code=OBSOLETO (defensivo)', async () => {
+    const id = 'note-obsoleto-null';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:                    md('XPTO'),
-      [`/api/notepriorities/GetByNoteId/${id}`]:         prio(null),
+      [`/api/notes/md?noteId=${id}`]: { Data: { Code: 'SPEB', CodeText: 'desc', Comments: null } },
+    });
+    const r = await classificar(id, 'MD');
+    assert.equal(r.sub_code, 'OBSOLETO');
+  });
+
+  test('Code != SPEB → sub_code=OUTROS, mesmo se Comments mencionar TL11', async () => {
+    // Garante que a regra exige Code SPEB — não basta "TL11" no Comments.
+    const id = 'note-outros-tl11-comment';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/md?noteId=${id}`]: md('XPTO', 'desc',
+        'menciona TL11 mas o Code não é SPEB'),
     });
     const r = await classificar(id, 'MD');
     assert.equal(r.sub_code,      'OUTROS');
     assert.equal(r.sub_categoria, 'MD Outros');
   });
 
-  test('SubProject "TL11" exato (sem sufixo) também casa', async () => {
-    const id = 'note-tl11-bare';
+  test('Code = SPMD (não SPEB) → sub_code=OUTROS', async () => {
+    const id = 'note-outros-spmd';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:                    md('SPMD'),
-      [`/api/notepriorities/GetByNoteId/${id}`]:         prio('TL11'),
+      [`/api/notes/md?noteId=${id}`]: md('SPMD'),
     });
     const r = await classificar(id, 'MD');
-    assert.equal(r.sub_code, 'TL11');
+    assert.equal(r.sub_code, 'OUTROS');
+  });
+
+  test('Match é case-insensitive (tl11 minúsculo, TL11 maiúsculo, Tl11 misto)', async () => {
+    for (const variant of ['tl11', 'TL11', 'Tl11', 'tL11']) {
+      const id = 'note-tl11-' + variant;
+      const { classificar } = loadClassifierWith({
+        [`/api/notes/md?noteId=${id}`]: md('SPEB', 'desc', 'tratativa ' + variant),
+      });
+      const r = await classificar(id, 'MD');
+      assert.equal(r.sub_code, 'TL11', `falhou p/ variant "${variant}"`);
+    }
   });
 });
 
@@ -377,19 +405,17 @@ describe('classificar (dispatch)', () => {
   test('tipo lower-case é normalizado p/ uppercase', async () => {
     const id = 'lc-md';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:            md('SPEB'),
-      [`/api/notepriorities/GetByNoteId/${id}`]: prio(null),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB'),
     });
     const r = await classificar(id, 'md'); // lowercase
     assert.equal(r.tipo,     'MD');
-    assert.equal(r.sub_code, 'OBSOLETO');
+    assert.equal(r.sub_code, 'OBSOLETO'); // SPEB sem TL11 no Comments
   });
 
   test('ctx.numero é repassado no resultado', async () => {
     const id = 'with-numero';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]:            md('SPEB'),
-      [`/api/notepriorities/GetByNoteId/${id}`]: prio(null),
+      [`/api/notes/md?noteId=${id}`]: md('SPEB'),
     });
     const r = await classificar(id, 'MD', { numero: '000017123456' });
     assert.equal(r.numero, '000017123456');

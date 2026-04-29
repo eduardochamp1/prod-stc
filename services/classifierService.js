@@ -53,30 +53,49 @@ function nomeFallback(tipo) {
 
 /**
  * Classifica MD: Subs Obsoleto vs Subs TL11.
- * Discriminador: notepriorities.SubProject — variantes começando com "TL11"
- * (ex: "TL11 Conv", "TL11 Tele") caem em Subs TL11. SubProject NULL em
- * notas SPEB cai em Subs Obsoleto (regra de negócio acordada).
+ *
+ * Regra canônica (planilha de subcategorias da área de negócio, abr/2026):
+ *   MD + Code "SPEB" + Comments contém "TL11" → Subs TL11
+ *   MD + Code "SPEB" + Comments sem "TL11"   → Subs Obsoleto
+ *   MD com outro Code                         → MD Outros
+ *
+ * Validação manual com 2 notas de exemplo:
+ *   - 045006163408 (TL11): Comments = "* DATA HORA USUARIO* Tratativa de TL11"
+ *   - 045006267560 (OBSOLETO): Comments = "* DATA HORA USUARIO* Projeto substituicao de medidores..."
+ *
+ * Detalhes:
+ *   - O Comments tem cabeçalho automático "* DATA HORA USUARIO (ID)*" antes do
+ *     texto livre. O regex /TL11/i é case-insensitive e cobre variações como
+ *     "Tratativa de TL11", "Trativa de TL11" (typo da planilha), ou só "TL11".
+ *   - CodeText "Substituição Projetos Especiais" é doublecheck — toda MD/SPEB
+ *     deveria ter esse texto. Não usado como discriminador.
+ *   - Versão anterior usava /api/notepriorities → SubProject. Removido pq
+ *     a área de negócio padronizou Comments como fonte única e estável.
  */
 async function classificarMD(noteId) {
-  const [md, prio] = await Promise.all([
-    safeJson(`/api/notes/md?noteId=${noteId}`),
-    safeJson(`/api/notepriorities/GetByNoteId/${noteId}`),
-  ]);
+  const md = await safeJson(`/api/notes/md?noteId=${noteId}`);
 
-  const code      = md?.Data?.Code      || null;
-  const codeText  = md?.Data?.CodeText  || null;
-  const subProj   = prio?.Data?.SubProject || null;
+  const code     = md?.Data?.Code     || null;
+  const codeText = md?.Data?.CodeText || null;
+  const comments = md?.Data?.Comments || '';
 
   let sub_code, sub_categoria;
-  if (subProj && /^TL11/i.test(subProj))     { sub_code = 'TL11';     sub_categoria = 'Subs TL11'; }
-  else if (subProj === 'OBSOLETO')           { sub_code = 'OBSOLETO'; sub_categoria = 'Subs Obsoleto'; }
-  // SPEB sem SubProject definido → assume Obsoleto (regra do negócio)
-  else if (code === 'SPEB')                  { sub_code = 'OBSOLETO'; sub_categoria = 'Subs Obsoleto'; }
-  else                                       { sub_code = 'OUTROS';   sub_categoria = nomeFallback('MD'); }
+  if (code === 'SPEB') {
+    if (/TL11/i.test(comments)) {
+      sub_code = 'TL11';
+      sub_categoria = 'Subs TL11';
+    } else {
+      sub_code = 'OBSOLETO';
+      sub_categoria = 'Subs Obsoleto';
+    }
+  } else {
+    sub_code = 'OUTROS';
+    sub_categoria = nomeFallback('MD');
+  }
 
   return {
     sub_code, sub_categoria, code, code_text: codeText, quantidade: null,
-    raw: { md: md?.Data ?? null, prio: prio?.Data ?? null },
+    raw: { md: md?.Data ?? null },
   };
 }
 
