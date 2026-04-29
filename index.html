@@ -2176,6 +2176,149 @@
       font-weight: 700;
     }
 
+    /* ── Sub-tabs Histórico ──────────────────────────────────────────────────── */
+    .hist-subtabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 18px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--cinza2);
+    }
+    .hist-subtab-btn {
+      padding: 8px 14px;
+      border: none;
+      background: transparent;
+      color: var(--text2);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      border-radius: 6px 6px 0 0;
+      transition: all 0.18s;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -9px; /* alinha com border-bottom do .hist-subtabs */
+    }
+    .hist-subtab-btn:hover {
+      background: rgba(254, 196, 14, 0.08);
+      color: var(--preto);
+    }
+    .hist-subtab-btn.active {
+      color: var(--preto);
+      border-bottom-color: var(--amarelo);
+      background: rgba(254, 196, 14, 0.06);
+    }
+
+    /* ── Cards de subcategoria (resumo do mês) ───────────────────────────────── */
+    .subcat-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+    .subcat-card {
+      background: #fff;
+      border: 1px solid #ececea;
+      border-radius: 12px;
+      padding: 14px 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .subcat-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 3px;
+      border-radius: 12px 12px 0 0;
+    }
+    .subcat-card.tipo-MD::before { background: var(--amarelo-grad, var(--amarelo)); }
+    .subcat-card.tipo-SF::before { background: var(--verde-grad, var(--verde)); }
+    .subcat-card.tipo-DD::before { background: var(--preto); }
+    .subcat-card .subcat-tipo-badge {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+      color: var(--text2); margin-bottom: 4px;
+    }
+    .subcat-card .subcat-nome {
+      font-size: 13px; font-weight: 600; color: var(--preto);
+      margin-bottom: 6px;
+    }
+    .subcat-card .subcat-count {
+      font-size: 24px; font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .subcat-card .subcat-qtd {
+      font-size: 11px; color: var(--text2);
+      margin-top: 2px;
+    }
+    .subcat-card .subcat-qtd strong { color: var(--preto); font-weight: 600; }
+
+    /* ── Matriz dia × subcategoria ─────────────────────────────────────────── */
+    .subcat-matrix-wrap {
+      background: #fff;
+      border: 1px solid #ececea;
+      border-radius: 12px;
+      overflow: auto;
+      max-height: 70vh;
+    }
+    .subcat-matrix {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+    }
+    .subcat-matrix thead th {
+      position: sticky; top: 0;
+      background: #f9f9f7;
+      border-bottom: 1px solid #e6e6e3;
+      padding: 10px 8px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+      text-align: center; white-space: nowrap;
+      color: var(--text2);
+      z-index: 2;
+    }
+    .subcat-matrix thead th:first-child {
+      text-align: left; padding-left: 14px;
+      position: sticky; left: 0; z-index: 3;
+    }
+    .subcat-matrix thead th.col-total {
+      background: #f0efeb;
+      color: var(--preto);
+      font-weight: 700;
+    }
+    .subcat-matrix tbody td {
+      padding: 8px;
+      text-align: center;
+      border-bottom: 1px solid #f3f3f1;
+    }
+    .subcat-matrix tbody td:first-child {
+      text-align: left; padding-left: 14px;
+      font-weight: 600; color: var(--preto);
+      position: sticky; left: 0; background: #fff; z-index: 1;
+      border-right: 1px solid #ececea;
+      white-space: nowrap;
+    }
+    .subcat-matrix tbody td.cell-zero { color: #d4d4d2; }
+    .subcat-matrix tbody td.col-total {
+      font-weight: 700; background: #fafaf8;
+      color: var(--preto);
+    }
+    .subcat-matrix tbody tr:hover td { background: rgba(254, 196, 14, 0.04); }
+    .subcat-matrix tbody tr:hover td:first-child { background: #fffbed; }
+
+    .subcat-matrix .subcat-tipo-tag {
+      display: inline-block;
+      font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+      padding: 1px 5px; border-radius: 3px;
+      margin-right: 6px;
+      background: var(--cinza2); color: var(--text2);
+    }
+    .subcat-matrix .subcat-tipo-tag.tipo-MD { background: rgba(254, 196, 14, 0.15); color: #7a5b00; }
+    .subcat-matrix .subcat-tipo-tag.tipo-SF { background: rgba(8, 103, 56, 0.12); color: var(--verde); }
+    .subcat-matrix .subcat-tipo-tag.tipo-DD { background: rgba(35, 31, 32, 0.08); color: var(--preto); }
+
+    .subcat-qtd-tag {
+      display: inline-block; font-size: 10px;
+      color: var(--text2); margin-left: 4px;
+    }
+
     /* Histórico: total em Tahoma */
     .hist-total {
       font-weight: 700;
@@ -3696,7 +3839,17 @@
         </div>
       </div>
 
+      <!-- Sub-tabs do Histórico -->
+      <div class="hist-subtabs">
+        <button class="hist-subtab-btn active" id="hist-subtab-sessoes" onclick="switchHistSubtab('sessoes')">📋 Sessões por equipe</button>
+        <button class="hist-subtab-btn" id="hist-subtab-subcats" onclick="switchHistSubtab('subcats')">📊 Subcategorias</button>
+      </div>
+
       <div id="hist-content">
+        <div class="empty-state">Selecione o período e clique em Atualizar.</div>
+      </div>
+
+      <div id="hist-subcats-content" style="display:none">
         <div class="empty-state">Selecione o período e clique em Atualizar.</div>
       </div>
 
@@ -4467,7 +4620,198 @@
     }
 
     // ── HISTÓRICO ─────────────────────────────────────────────────────────
-    let _histDias = [];   // cache dos dados carregados
+    let _histDias = [];           // cache dos dados de sessões
+    let _histSubcatActive = 'sessoes';   // sub-aba ativa: 'sessoes' | 'subcats'
+
+    /**
+     * Alterna entre sub-abas do Histórico:
+     *   'sessoes'  → tabela dia × equipe (visão original — sessões + colaboradores)
+     *   'subcats'  → matriz dia × subcategoria (visão nova — TL11/OBSOLETO/L0/L1/C93/BTZ013/OUTROS)
+     */
+    function switchHistSubtab(name) {
+      _histSubcatActive = name;
+      document.querySelectorAll('.hist-subtab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('hist-subtab-' + name)?.classList.add('active');
+
+      const sessoesPanel = document.getElementById('hist-content');
+      const subcatsPanel = document.getElementById('hist-subcats-content');
+      if (name === 'subcats') {
+        sessoesPanel.style.display = 'none';
+        subcatsPanel.style.display = '';
+        loadHistoricoSubcats();
+      } else {
+        subcatsPanel.style.display = 'none';
+        sessoesPanel.style.display = '';
+      }
+    }
+
+    /**
+     * Carrega histórico por subcategoria do mês corrente do filtro de data.
+     * Chama /api/historico/subcats/diario que retorna matriz dia × regional × sub_code.
+     */
+    async function loadHistoricoSubcats() {
+      const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      const firstOfMonth = today.slice(0, 7) + '-01';
+      const de  = document.getElementById('hist-de-input')?.value  || firstOfMonth;
+      const ate = document.getElementById('hist-ate-input')?.value || today;
+      const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
+
+      // Mês "principal" = mês do início do range (endpoint subcats agrega por mês inteiro)
+      const ym = de.slice(0, 7);
+
+      const cont = document.getElementById('hist-subcats-content');
+      cont.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando subcategorias...</div>';
+
+      try {
+        const params = new URLSearchParams({ m: ym });
+        if (regional !== 'ALL') params.set('regional', regional);
+        const [diarioRes, mesRes] = await Promise.all([
+          fetch(`${API}/historico/subcats/diario?${params}`).then(r => r.json()),
+          fetch(`${API}/historico/subcats/mes?${params}`).then(r => r.json()),
+        ]);
+        renderHistoricoSubcats(diarioRes.dias || [], mesRes.totais || {}, regional, de, ate);
+      } catch (err) {
+        cont.innerHTML = `<div class="empty-state">Erro: ${err.message}</div>`;
+      }
+    }
+
+    // Ordem visual e nome bonito por sub_code (espelha PROD_LINHAS)
+    const SUBCAT_DISPLAY = [
+      { tipo: 'MD', sub_code: 'OBSOLETO', nome: 'Subs Obsoleto' },
+      { tipo: 'MD', sub_code: 'TL11',     nome: 'Subs TL11' },
+      { tipo: 'MD', sub_code: 'OUTROS',   nome: 'MD Outros' },
+      { tipo: 'SF', sub_code: 'L0',       nome: 'Corte Disjuntor' },
+      { tipo: 'SF', sub_code: 'L1',       nome: 'Corte Borne' },
+      { tipo: 'SF', sub_code: 'OUTROS',   nome: 'SF Outros' },
+      { tipo: 'DD', sub_code: 'C93',      nome: 'Subs Ramal',      qtd: 'm' },
+      { tipo: 'DD', sub_code: 'BTZ013',   nome: 'Substituição CS', qtd: 'pt' },
+      { tipo: 'DD', sub_code: 'OUTROS',   nome: 'DD Outros' },
+    ];
+
+    function renderHistoricoSubcats(dias, mesTotais, regional, de, ate) {
+      const cont = document.getElementById('hist-subcats-content');
+
+      // Filtra dias dentro do range visível (endpoint retorna mês inteiro mas
+      // filtros podem cortar)
+      const dentroDoRange = dias.filter(d => d.date >= de && d.date <= ate);
+
+      if (dentroDoRange.length === 0) {
+        cont.innerHTML = '<div class="empty-state">Nenhum dado encontrado para o período. Rode o backfill para carregar histórico.</div>';
+        return;
+      }
+
+      // ── 1. Cards de resumo (totais do mês) ──────────────────────────────────
+      // mesTotais é { GUA: { 'MD/TL11': {count, quantidade}, ... }, CAC: {...} }
+      // Se regional filtrada, mostra só ela; senão soma GUA+CAC
+      const consolidaTotais = (regional && regional !== 'ALL')
+        ? (mesTotais[regional] || {})
+        : Object.values(mesTotais).reduce((acc, regMap) => {
+            Object.entries(regMap || {}).forEach(([k, v]) => {
+              if (!acc[k]) acc[k] = { count: 0, quantidade: 0 };
+              acc[k].count += v.count;
+              acc[k].quantidade += Number(v.quantidade || 0);
+            });
+            return acc;
+          }, {});
+
+      const cardsHtml = SUBCAT_DISPLAY.map(s => {
+        const key = `${s.tipo}/${s.sub_code}`;
+        const v = consolidaTotais[key] || { count: 0, quantidade: 0 };
+        const qtdLabel = s.qtd && v.quantidade > 0
+          ? `<div class="subcat-qtd"><strong>${Math.round(v.quantidade)}</strong> ${s.qtd} acumulados</div>`
+          : '';
+        return `
+          <div class="subcat-card tipo-${s.tipo}">
+            <div class="subcat-tipo-badge">${s.tipo}</div>
+            <div class="subcat-nome">${s.nome}</div>
+            <div class="subcat-count">${v.count}</div>
+            ${qtdLabel}
+          </div>`;
+      }).join('');
+
+      // ── 2. Matriz dia × subcategoria ────────────────────────────────────────
+      const headerCols = dentroDoRange.map(d => {
+        const dia = d.date.slice(8, 10);
+        return `<th title="${fmtData(d.date)}">${dia}</th>`;
+      }).join('');
+
+      // Linhas: para cada subcategoria, célula por dia
+      const linhas = SUBCAT_DISPLAY.map(s => {
+        const key = `${s.tipo}/${s.sub_code}`;
+        let totalRow = 0;
+        let qtdRow = 0;
+
+        const cells = dentroDoRange.map(d => {
+          // Soma todas regionais visíveis dentro do dia pra essa subcat
+          let count = 0;
+          let qtd = 0;
+          if (regional && regional !== 'ALL') {
+            const v = d[regional]?.[key];
+            if (v) { count = v.count || 0; qtd = Number(v.quantidade || 0); }
+          } else {
+            ['GUA', 'CAC'].forEach(r => {
+              const v = d[r]?.[key];
+              if (v) { count += v.count || 0; qtd += Number(v.quantidade || 0); }
+            });
+          }
+          totalRow += count;
+          qtdRow   += qtd;
+          const cls = count === 0 ? 'cell-zero' : '';
+          const qtdTag = (s.qtd && qtd > 0) ? `<span class="subcat-qtd-tag">(${Math.round(qtd)}${s.qtd})</span>` : '';
+          return `<td class="${cls}">${count > 0 ? count : '·'}${qtdTag}</td>`;
+        }).join('');
+
+        const totalLabel = (s.qtd && qtdRow > 0)
+          ? `${totalRow}<span class="subcat-qtd-tag">(${Math.round(qtdRow)}${s.qtd})</span>`
+          : totalRow;
+
+        return `
+          <tr>
+            <td>
+              <span class="subcat-tipo-tag tipo-${s.tipo}">${s.tipo}</span>${s.nome}
+            </td>
+            ${cells}
+            <td class="col-total">${totalLabel}</td>
+          </tr>`;
+      }).join('');
+
+      const totalGeral = dentroDoRange.reduce((sum, d) => {
+        let s = 0;
+        ['GUA','CAC'].forEach(r => {
+          if (regional !== 'ALL' && r !== regional) return;
+          Object.values(d[r] || {}).forEach(v => { s += v.count || 0; });
+        });
+        return sum + s;
+      }, 0);
+
+      const labelRegional = regional === 'ALL' ? 'Todas regionais' : (regional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
+      const labelPeriodo  = `${fmtData(de)} a ${fmtData(ate)}`;
+
+      cont.innerHTML = `
+        <div style="margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <div style="font-size:13px;color:var(--text2)">
+            <strong style="color:var(--preto);font-size:14px">${labelRegional}</strong>
+            · ${labelPeriodo}
+            · Total executadas: <strong style="color:var(--preto)">${totalGeral}</strong>
+          </div>
+        </div>
+
+        <div class="subcat-summary">${cardsHtml}</div>
+
+        <div class="subcat-matrix-wrap">
+          <table class="subcat-matrix">
+            <thead>
+              <tr>
+                <th>Subcategoria</th>
+                ${headerCols}
+                <th class="col-total">Total</th>
+              </tr>
+            </thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>
+      `;
+    }
 
     async function loadHistorico() {
       // BRT (UTC-3) — UTC puro daria "amanhã" após 21h, quebrando o range padrão
@@ -4482,6 +4826,12 @@
       const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
 
       document.getElementById('hist-periodo-label').textContent = `${fmtData(de)} a ${fmtData(ate)}`;
+
+      // Roteia pra sub-aba ativa (sessoes ou subcats)
+      if (_histSubcatActive === 'subcats') {
+        return loadHistoricoSubcats();
+      }
+
       document.getElementById('hist-content').innerHTML =
         '<div class="empty-state"><div class="spinner"></div><br>Carregando histórico...</div>';
 
