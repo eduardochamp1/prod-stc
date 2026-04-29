@@ -51,7 +51,7 @@ async function runSnapshot() {
     const teams = await getTeams();
     if (teams.length === 0) {
       console.log('[CRON] Snapshot: nenhuma equipe ativa.');
-      return;
+      return; // finally abaixo libera isRunning corretamente
     }
 
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -268,9 +268,9 @@ function startCron() {
   // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
   setTimeout(runTokenRefresh, 2000);
 
-  // Snapshot imediato ao iniciar (se dentro do horário)
-  const hora = new Date().getHours();
-  if (hora >= 6 && hora <= 20) {
+  // Snapshot imediato ao iniciar (se dentro do horário — usa hora BRT, não UTC)
+  const horaBRT = new Date(Date.now() - 3 * 3600 * 1000).getUTCHours();
+  if (horaBRT >= 6 && horaBRT <= 20) {
     setTimeout(runSnapshot, 5000);
   }
 }

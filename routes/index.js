@@ -52,9 +52,13 @@ function sbq() {
 // Fallback em memória para metas (apenas no modo mock)
 let _metasMemory = { GUA: {}, CAC: {} };
 
-// Cron: carregamento lazy
+// Cron: carregamento lazy — em modo supabase (Vercel) node-cron não está disponível
 function cron() {
-  try { return require('../services/cronService'); } catch { return null; }
+  try { return require('../services/cronService'); }
+  catch (err) {
+    console.warn('[CRON] cronService indisponível (esperado em Vercel/supabase):', err.message);
+    return null;
+  }
 }
 
 // ── DADOS DO MONITOR ──────────────────────────────────────────────────────────
@@ -910,9 +914,9 @@ router.get('/admin/wpa-diag', async (_req, res) => {
 // POST /api/admin/warm — acorda o WPA (force-refresh do token + ping leve na Web API)
 // Útil quando o Azure App Service hiberna e usuários começam a ver 502 cold-start.
 router.post('/admin/warm', async (_req, res) => {
+  const t0 = Date.now(); // captura antes do try para que catch também tenha acesso
   try {
     const { forceRefresh, getSessions } = require('../services/wpaService');
-    const t0 = Date.now();
     // aggressive=true → backoff de até ~48s no login; tempo de espera aceitável
     // já que usuário/auto-recovery sabem que estão acordando o WPA.
     await forceRefresh({ aggressive: true });
@@ -920,14 +924,15 @@ router.post('/admin/warm', async (_req, res) => {
     res.json({ ok: true, ms: Date.now() - t0 });
   } catch (err) {
     console.error('[ADMIN warm]', err.message);
-    res.status(500).json({ ok: false, error: err.message, ms: Date.now() - Date.now() });
+    res.status(500).json({ ok: false, error: err.message, ms: Date.now() - t0 });
   }
 });
 
 router.post('/admin/snapshot', async (req, res) => {
   try {
     const c = cron();
-    if (c) await c.runSnapshot();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    await c.runSnapshot();
     res.json({ ok: true, ts: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1054,8 +1059,9 @@ router.post('/admin/backfill/range', async (req, res) => {
 router.post('/admin/consolidar', async (req, res) => {
   try {
     const c    = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
     const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
-    if (c) await c.runConsolidate(date);
+    await c.runConsolidate(date);
     res.json({ ok: true, date });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -4060,7 +4060,8 @@
     let selectedTipos = new Set(Object.keys(TIPOS_SERVICO)); // todos selecionados por padrão
 
     function mesAtualInput() {
-      return new Date().toISOString().slice(0, 7);
+      // BRT (UTC-3) — UTC puro vira o mês errado após 21h nos 3 primeiros dias do mês
+      return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 7);
     }
 
     // ── TABS ──────────────────────────────────────────────────────────────────
@@ -4436,7 +4437,8 @@
     let _histDias = [];   // cache dos dados carregados
 
     async function loadHistorico() {
-      const today = new Date().toISOString().slice(0, 10);
+      // BRT (UTC-3) — UTC puro daria "amanhã" após 21h, quebrando o range padrão
+      const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
       const firstOfMonth = today.slice(0, 7) + '-01';
       const deInput = document.getElementById('hist-de-input');
       const ateInput = document.getElementById('hist-ate-input');
@@ -4925,12 +4927,13 @@
      * Notas em "executada" agora não têm conclusionDate → contam como hoje.
      */
     function notaPertenceAoDia(n, date) {
-      if (!n.conclusionDate) return true;
+      if (!n.conclusionDate) return true;  // executada em andamento → conta hoje
       const cd = String(n.conclusionDate).slice(0, 10);
       if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd === date;
       const m = n.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
       if (m) return `${m[3]}-${m[2]}-${m[1]}` === date;
-      return true;
+      // Formato desconhecido → rejeita (alinhado com backend supabasePush._belongsToDate)
+      return false;
     }
 
     async function renderMetrics(teamsAll, teamsVisible) {
@@ -5541,9 +5544,9 @@
     // ── ADMIN ─────────────────────────────────────────────────────────────
 
     function initAdmin() {
-      const hoje = new Date().toISOString().slice(0, 10);
-      // Padrão: ontem até hoje
-      const ontem = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      // BRT (UTC-3) — UTC puro avança um dia após 21h
+      const hoje  = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      const ontem = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
       const bfDe = document.getElementById('bf-de');
       const bfAte = document.getElementById('bf-ate');
       if (!bfDe.value) bfDe.value = ontem;

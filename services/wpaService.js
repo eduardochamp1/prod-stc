@@ -672,7 +672,7 @@ function _accApply(teams) {
   const fantasmas = new Set([...Object.keys(extrasExec), ...Object.keys(extrasConc)]);
   fantasmas.forEach(nome => {
     if (nomesAtivos.has(nome)) return;
-    const ref = _acc.notes.values().next().value; // não temos sectorId/regional do nome → pega regional do primeiro registro com esse teamName
+    // Resolve regional procurando qualquer nota acumulada desta equipe
     let regional = 'GUA';
     for (const v of _acc.notes.values()) {
       if (v.teamName === nome) { regional = v.regional || 'GUA'; break; }

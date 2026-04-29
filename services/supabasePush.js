@@ -91,7 +91,8 @@ async function pushTeams(teams) {
       const { error: delErr, count } = await sb
         .from('teams_current')
         .delete({ count: 'exact' })
-        .not('team_name', 'in', `(${aliveNames.map(n => `"${n.replace(/"/g, '""')}"`).join(',')})`);
+        // PostgREST espera lista sem delimitadores extras para strings simples
+        .not('team_name', 'in', `(${aliveNames.join(',')})`);
       if (delErr) {
         console.warn('[SUPABASE] teams_current: falha ao limpar equipes ausentes:', delErr.message);
       } else if (count > 0) {
@@ -222,7 +223,9 @@ async function consolidateDay(date) {
   snaps.forEach(s => { if (!latest[s.team_name]) latest[s.team_name] = s; });
 
   // ── daily_totals (por regional/tipo) ─────────────────────────────────────────
-  // FIX: inclui executadas (status 2) + concluídas (status 9/4) — igual ao intraday
+  // Inclui executadas + concluídas, mas só as que pertencem ao dia-alvo.
+  // Sem _belongsToDate, equipes que ficaram com sessão aberta da virada do dia
+  // trazem notas antigas que inflam os totais históricos.
   const regionalAcc = {};
   Object.values(latest).forEach(s => {
     const notas = [
@@ -230,6 +233,7 @@ async function consolidateDay(date) {
       ...(s.data?.notasConcluidas || []),
     ];
     notas.forEach(n => {
+      if (!_belongsToDate(n, date)) return;           // rejeita notas de outros dias
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
       const key = `${s.regional}|${code}`;
@@ -251,7 +255,6 @@ async function consolidateDay(date) {
   }
 
   // ── team_daily_totals (por equipe/tipo) ───────────────────────────────────────
-  // FIX: inclui executadas + concluídas
   const teamRows = [];
   Object.values(latest).forEach(s => {
     const notas = [
@@ -260,6 +263,7 @@ async function consolidateDay(date) {
     ];
     const acc = {};
     notas.forEach(n => {
+      if (!_belongsToDate(n, date)) return;           // rejeita notas de outros dias
       const code = n.tipoCode || n.tipo_code;
       if (code) acc[code] = (acc[code] || 0) + 1;
     });
