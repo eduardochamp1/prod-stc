@@ -2731,37 +2731,53 @@
       log.scrollTop  = log.scrollHeight;
     };
 
-    logLine(`▶ Iniciando backfill: ${de} → ${ate}…`);
-
-    try {
-      const res  = await fetch(`${API}/admin/backfill/range?de=${de}&ate=${ate}`, { method: 'POST' });
-      const data = await res.json();
-
-      if (!res.ok) {
-        logLine(`✗ Erro: ${data.error}`, false);
-      } else {
-        (data.resultados || []).forEach((r, i) => {
-          const pct = Math.round(((i + 1) / data.dias) * 100);
-          progBar.style.width = pct + '%';
-          progPct.textContent = pct + '%';
-          progLbl.textContent = `Processando ${r.date}…`;
-
-          if (r.ok) {
-            logLine(`✔ ${r.date} — ${r.teams} equipes | ${r.concluidas} concluídas`, true);
-          } else {
-            logLine(`✗ ${r.date} — ${r.msg || r.error}`, false);
-          }
-        });
-
-        progBar.style.width = '100%';
-        progPct.textContent = '100%';
-        progLbl.textContent = 'Concluído';
-        logLine(`─────────────────────────────────────`);
-        logLine(`✔ ${data.diasOk}/${data.dias} dias processados | ${data.totalConcluidas} notas concluídas no total`, true);
-      }
-    } catch (err) {
-      logLine(`✗ Falha de rede: ${err.message}`, false);
+    // Gera lista de datas no intervalo (frontend-side para evitar timeout em bloco)
+    const datas = [];
+    const cur = new Date(de + 'T12:00:00Z');
+    const end = new Date(ate + 'T12:00:00Z');
+    while (cur <= end) {
+      datas.push(cur.toISOString().slice(0, 10));
+      cur.setUTCDate(cur.getUTCDate() + 1);
     }
+
+    if (datas.length === 0) { btn.disabled = false; btn.textContent = '▶ Iniciar Backfill'; return; }
+
+    logLine(`▶ Iniciando backfill: ${de} → ${ate} (${datas.length} dias, um por vez)…`);
+
+    let diasOk = 0, totalConcluidas = 0;
+
+    for (let i = 0; i < datas.length; i++) {
+      const date = datas[i];
+      const pct  = Math.round(((i) / datas.length) * 100);
+      progBar.style.width = pct + '%';
+      progPct.textContent = pct + '%';
+      progLbl.textContent = `Processando ${date}…`;
+
+      try {
+        const res  = await fetch(`${API}/admin/backfill?date=${date}`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); }
+        catch { logLine(`✗ ${date} — resposta não-JSON (timeout ou erro de rede)`, false); continue; }
+
+        if (!res.ok) {
+          logLine(`✗ ${date} — ${data.error || res.statusText}`, false);
+        } else if (!data.ok) {
+          logLine(`✗ ${date} — ${data.msg || 'nenhuma equipe'}`, false);
+        } else {
+          diasOk++;
+          totalConcluidas += data.concluidas || 0;
+          logLine(`✔ ${date} — ${data.teams} equipes | ${data.concluidas} concluídas`, true);
+        }
+      } catch (err) {
+        logLine(`✗ ${date} — Falha de rede: ${err.message}`, false);
+      }
+    }
+
+    progBar.style.width = '100%';
+    progPct.textContent = '100%';
+    progLbl.textContent = 'Concluído';
+    logLine(`─────────────────────────────────────`);
+    logLine(`✔ ${diasOk}/${datas.length} dias processados | ${totalConcluidas} notas concluídas no total`, diasOk > 0);
 
     btn.disabled    = false;
     btn.textContent = '▶ Iniciar Backfill';
