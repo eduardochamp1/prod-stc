@@ -468,11 +468,12 @@ async function getSessionDetail(sessionId) {
 async function getTeamsByDate(sectorId, isoDate) {
   function normalizarNotaHist(n, status) {
     return {
-      id:       n.Id   || null,                    // UUID — necessário para /details/optimized
-      codigo:   String(n.Number || n.Id || ''),
-      tipoCode: n.Type || '??',
-      tipoNome: n.Type || '??',
+      id:             n.Id   || null,                    // UUID — necessário para /details/optimized
+      codigo:         String(n.Number || n.Id || ''),
+      tipoCode:       n.Type || '??',
+      tipoNome:       n.Type || '??',
       status,
+      conclusionDate: n.ConclusionDate2 || n.ConclusionDate || null,
     };
   }
 
@@ -668,11 +669,16 @@ function normalizarNotaV2(n, statusForcado) {
     9: 'concluida',   // mobile pendente sync
   };
   return {
-    id:       n.Id   || null,                    // UUID — necessário para /details/optimized
-    codigo:   String(n.Number || n.Id || ''),
-    tipoCode: n.Type || '??',
-    tipoNome: n.Type || '??',
-    status:   statusForcado || STATUS_V2[n.ExecutionStatus] || 'baixada',
+    id:             n.Id   || null,                    // UUID — necessário para /details/optimized
+    codigo:         String(n.Number || n.Id || ''),
+    tipoCode:       n.Type || '??',
+    tipoNome:       n.Type || '??',
+    status:         statusForcado || STATUS_V2[n.ExecutionStatus] || 'baixada',
+    // ConclusionDate2 (DD/MM/YYYY HH:MM:SS BR) preferido por já vir no fuso BRT;
+    // ConclusionDate (ISO UTC) fallback. Necessário para filtrar contadores
+    // diários — equipes com sessão de dia anterior ainda aberta carregam notas
+    // velhas no payload, e não podem inflar o contador de hoje.
+    conclusionDate: n.ConclusionDate2 || n.ConclusionDate || null,
   };
 }
 

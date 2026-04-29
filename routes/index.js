@@ -158,6 +158,22 @@ router.post('/metas', async (req, res) => {
   }
 });
 
+// ── KPIs do dia (acumulador persistente, sobrevive a logoff) ──────────────────
+
+// GET /api/totais/dia?date=YYYY-MM-DD  (default: hoje)
+// Resposta: { date, totais: { ALL, GUA, CAC } }
+router.get('/totais/dia', async (req, res) => {
+  try {
+    const sq = sbq();
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    if (!sq) return res.json({ date, totais: { ALL: 0, GUA: 0, CAC: 0 } });
+    const totais = await sq.getRealizadasDoDia(date);
+    res.json({ date, totais });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── APP SETTINGS (preferências compartilhadas) ────────────────────────────────
 
 // GET /api/settings/:key  → retorna { data, updated_at } ou {} se não existe

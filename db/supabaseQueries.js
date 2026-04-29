@@ -430,6 +430,34 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
     }));
 }
 
+// ── KPIs DO DIA (acumulador persistente — sobrevive a logoff de equipes) ──────
+
+/**
+ * Soma OS realizadas (executadas + concluídas) do dia, agrupado por regional.
+ * Lê de daily_totals (já filtrado por conclusionDate no cron) — preserva o
+ * contador mesmo quando equipes encerram sessão e somem de teams_current.
+ *
+ * Retorna { ALL, GUA, CAC } com a contagem total.
+ */
+async function getRealizadasDoDia(date) {
+  const sb = getClient();
+  // Default = data BRT atual (UTC-3). toISOString() puro daria a data UTC,
+  // que após 21:00 BRT já virou pra "amanhã" e retornaria zero indevidamente.
+  date = date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const { data, error } = await sb
+    .from('daily_totals')
+    .select('regional, count')
+    .eq('date', date);
+  if (error) throw error;
+
+  const acc = { ALL: 0, GUA: 0, CAC: 0 };
+  (data || []).forEach(r => {
+    if (acc[r.regional] !== undefined) acc[r.regional] += r.count;
+    acc.ALL += r.count;
+  });
+  return acc;
+}
+
 // ── NOTE DETAILS CACHE (payload completo das OS, populado pelo cron) ──────────
 
 /**
@@ -508,6 +536,7 @@ async function setSetting(key, value) {
 }
 
 module.exports = {
+  getRealizadasDoDia,
   getNoteDetailCache, setNoteDetailCache, filtrarNotesNaoCacheadas,
   getSetting, setSetting,
   getMetas, setMetas, getMetasCalculadas,

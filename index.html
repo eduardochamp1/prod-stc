@@ -1852,7 +1852,9 @@
 
   // ── CARREGA DADOS ─────────────────────────────────────────────────────
   function todayISO() {
-    return new Date().toISOString().slice(0, 10);
+    // Data BRT (UTC-3). toISOString() puro daria UTC, que após 21:00 BRT já
+    // virou pra "amanhã" e quebraria filtros e KPIs ligados ao dia operacional.
+    return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
   }
 
   function isRangeToday(de, ate) {
@@ -2066,29 +2068,70 @@
   }
 
   // ── RENDER MÉTRICAS ───────────────────────────────────────────────────
-  function renderMetrics(teams) {
+
+  /**
+   * Verifica se uma nota foi concluída no dia-alvo. Equipes com sessão antiga
+   * (do dia anterior, ainda aberta) carregam notas velhas em notasConcluidas —
+   * sem este filtro elas inflariam o contador de hoje.
+   * Notas em "executada" agora não têm conclusionDate → contam como hoje.
+   */
+  function notaPertenceAoDia(n, date) {
+    if (!n.conclusionDate) return true;
+    const cd = String(n.conclusionDate).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd === date;
+    const m = n.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}` === date;
+    return true;
+  }
+
+  async function renderMetrics(teams) {
+    const hojeISO    = todayISO();
     const emCarteira = teams.reduce((s,t) => s + (t.carteiraCount   || 0), 0);
-    const executadas = teams.reduce((s,t) => s + (t.notasExecutadas || []).length, 0);
-    const concluidas = teams.reduce((s,t) => s + (t.notasConcluidas || []).length, 0);
-    const emAberto   = teams.reduce((s,t) => s + (t.notasBaixadas   || []).length, 0);
+
+    // Em andamento (executada agora) — só faz sentido pra equipes ativas
+    const executadas = teams.reduce((s,t) =>
+      s + (t.notasExecutadas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
+
+    // Concluídas via teams_current — filtradas por dia (descarta sessões antigas).
+    // Será sobrescrito pelo total persistente do Supabase abaixo (que cobre
+    // equipes que já deslogaram no dia).
+    const concluidasLive = teams.reduce((s,t) =>
+      s + (t.notasConcluidas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
+
     const rejeitadas = teams.reduce((s,t) => s + (t.notasRejeitadas || []).length, 0);
     const relogins   = teams.reduce((s,t) => s + (t.relogins || 0), 0);
-    // "Em campo" no KPI = sessão aberta + app online (alinhado com WPA Gestão Online).
-    // Phantoms (sessão aberta + app offline) são contados separadamente no banner do topo.
     const ativas     = teams.filter(t => !t.sessionEnd && t.isOnline).length;
 
-    // OS Executadas = tudo que foi feito no campo (status 2 + status 9/4)
-    const realizadas = executadas + concluidas;
-    const pct        = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;
+    document.getElementById('m-total').textContent      = teams.length;
+    document.getElementById('m-ativas').textContent     = `${ativas} em campo`;
+    document.getElementById('m-executadas').textContent = executadas;
+    document.getElementById('m-rejeitadas').textContent = rejeitadas;
+    document.getElementById('m-baixadas').textContent   = emCarteira;
+    document.getElementById('m-relogins').textContent   = relogins;
 
-    document.getElementById('m-total').textContent          = teams.length;
-    document.getElementById('m-ativas').textContent         = `${ativas} em campo`;
-    document.getElementById('m-concluidas').textContent     = realizadas;   // OS Executadas = realizadas total
-    document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
-    document.getElementById('m-executadas').textContent     = executadas;   // Em Andamento = feito no campo, pendente fechamento no app
-    document.getElementById('m-rejeitadas').textContent     = rejeitadas;
-    document.getElementById('m-baixadas').textContent       = emCarteira;
-    document.getElementById('m-relogins').textContent       = relogins;
+    // Render imediato do KPI realizadas com dado local (rápido, mas pode estar
+    // baixo se equipes deslogaram). Em paralelo busca o acumulador persistente
+    // do Supabase (daily_totals) e atualiza — esse não cai com logoff.
+    const realizadasLive = executadas + concluidasLive;
+    const pctLive        = emCarteira > 0 ? Math.round((realizadasLive / emCarteira) * 100) : 0;
+    document.getElementById('m-concluidas').textContent     = realizadasLive;
+    document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
+
+    try {
+      const r  = await fetch(`${API}/totais/dia?date=${hojeISO}`);
+      const j  = await r.json();
+      const reg = currentRegional || 'ALL';
+      const realizadasPersist = (j?.totais?.[reg]) ?? (j?.totais?.ALL) ?? realizadasLive;
+      // Usa o maior dos dois — daily_totals é cumulativo do dia, mas o cron
+      // pode estar atrasado e ter contagem menor que a leitura ao vivo.
+      const realizadas = Math.max(realizadasPersist, realizadasLive);
+      const pct = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;
+      document.getElementById('m-concluidas').textContent     = realizadas;
+      document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
+    } catch (err) {
+      console.warn('[KPI] falha ao buscar daily_totals:', err.message);
+      // mantém o valor live já renderizado
+    }
   }
 
   // ── SUBCATEGORIAS (enriquecimento lazy) ──────────────────────────────

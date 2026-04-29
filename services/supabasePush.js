@@ -5,6 +5,12 @@
 
 const { getClient } = require('./supabaseClient');
 
+// Data operacional BRT (UTC-3). Usar UTC daria a data errada após 21:00 BRT
+// (quando UTC já virou pro dia seguinte) e desalinharia tudo com o front.
+function _hojeBRT() {
+  return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 /**
  * Salva snapshot histórico das equipes na tabela `snapshots`.
  * Chamado a cada 15 min pelo cronService.
@@ -12,7 +18,7 @@ const { getClient } = require('./supabaseClient');
 async function saveSnapshot(teams, date) {
   if (!teams || teams.length === 0) return;
   const sb = getClient();
-  date = date || new Date().toISOString().slice(0, 10);
+  date = date || _hojeBRT();
 
   const rows = teams.map(t => ({
     date,
@@ -80,17 +86,37 @@ async function pushTeams(teams) {
 }
 
 /**
+ * Verifica se uma nota foi concluída no dia-alvo. Equipes com sessão antiga
+ * (dia anterior ainda aberta) carregam notas velhas em notasConcluidas — sem
+ * esse filtro, elas entrariam no contador do dia de hoje indevidamente.
+ *
+ * Notas em "executada" (status 3/6/7 — em andamento agora) ficam sem
+ * conclusionDate e são consideradas do dia atual (estão sendo feitas agora).
+ */
+function _belongsToDate(nota, date) {
+  if (!nota.conclusionDate) return true;          // executada em andamento → conta hoje
+  const cd = String(nota.conclusionDate).slice(0, 10);
+  // ConclusionDate2 vem como ISO; ConclusionDate (UTC) também. slice(0,10) pega YYYY-MM-DD.
+  if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd === date;
+  // Formato BR fallback DD/MM/YYYY
+  const m = nota.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}` === date;
+  return true;                                     // formato desconhecido → não filtra
+}
+
+/**
  * Atualiza `daily_totals` por regional/tipo (intraday — visão da regional).
  */
 async function upsertDailyTotals(teams, date) {
   const sb = getClient();
-  date = date || new Date().toISOString().slice(0, 10);
+  date = date || _hojeBRT();
 
   // Acumula por (regional, tipo_code) — evita duplicatas mesmo com múltiplas sessões por equipe
   const acc = {};
   teams.forEach(t => {
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
+      if (!_belongsToDate(n, date)) return;        // ignora notas de outros dias
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
       const key = `${t.regional}|${code}`;
@@ -118,7 +144,7 @@ async function upsertDailyTotals(teams, date) {
  */
 async function upsertTeamDailyTotals(teams, date) {
   const sb = getClient();
-  date = date || new Date().toISOString().slice(0, 10);
+  date = date || _hojeBRT();
 
   // Acumula por (team_name, tipo_code) para evitar duplicatas quando
   // a mesma equipe aparece mais de uma vez no array (ex: múltiplas sessões no dia)
@@ -127,6 +153,7 @@ async function upsertTeamDailyTotals(teams, date) {
     const teamName = t.teamName || t.sigla;
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
+      if (!_belongsToDate(n, date)) return;        // ignora notas de outros dias
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
       const key = `${teamName}|${code}`;
@@ -154,7 +181,7 @@ async function upsertTeamDailyTotals(teams, date) {
  */
 async function consolidateDay(date) {
   const sb = getClient();
-  date = date || new Date().toISOString().slice(0, 10);
+  date = date || _hojeBRT();
 
   const { data: snaps, error: e1 } = await sb
     .from('snapshots')
