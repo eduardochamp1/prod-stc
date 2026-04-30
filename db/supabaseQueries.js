@@ -524,21 +524,28 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
 // ── KPIs DO DIA (acumulador persistente — sobrevive a logoff de equipes) ──────
 
 /**
- * Soma OS realizadas (executadas + concluídas) do dia, agrupado por regional.
+ * Soma OS realizadas (executadas + concluídas) num range, agrupado por regional.
  * Lê de daily_totals (já filtrado por conclusionDate no cron) — preserva o
  * contador mesmo quando equipes encerram sessão e somem de teams_current.
  *
- * Retorna { ALL, GUA, CAC } com a contagem total.
+ * Aceita um único `date` (compat retrô) OU um par `(de, ate)`. Se `ate` for
+ * omitido, vira igual a `de` (intervalo de um dia).
+ *
+ * Retorna { ALL, GUA, CAC } com a contagem total no período.
  */
-async function getRealizadasDoDia(date) {
+async function getRealizadasDoDia(de, ate) {
   const sb = getClient();
   // Default = data BRT atual (UTC-3). toISOString() puro daria a data UTC,
   // que após 21:00 BRT já virou pra "amanhã" e retornaria zero indevidamente.
-  date = date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  de  = de  || today;
+  ate = ate || de;
+
   const { data, error } = await sb
     .from('daily_totals')
     .select('regional, count')
-    .eq('date', date);
+    .gte('date', de)
+    .lte('date', ate);
   if (error) throw error;
 
   const acc = { ALL: 0, GUA: 0, CAC: 0 };
@@ -554,14 +561,17 @@ async function getRealizadasDoDia(date) {
  * { GUA: { L0: n, L1: n, ... }, CAC: { ... }, ALL: { ... } }
  * com quantidades separadas para DD (metros/pontos).
  */
-async function getDailySubcatTotals(date, regional) {
+async function getDailySubcatTotals(de, ate, regional) {
   const sb = getClient();
-  date = date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  de  = de  || today;
+  ate = ate || de;
 
   let query = sb
     .from('daily_subcat_totals')
     .select('regional, tipo, sub_code, count, quantidade')
-    .eq('date', date);
+    .gte('date', de)
+    .lte('date', ate);
   if (regional && regional !== 'ALL') {
     query = query.eq('regional', regional);
   }

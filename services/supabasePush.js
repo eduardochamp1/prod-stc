@@ -248,8 +248,11 @@ async function upsertSubcatTotals(teams, date) {
   const sb = getClient();
   date = date || _hojeBRT();
 
-  // 1. Coleta UUIDs únicos de MD/SF/DD em executadas + concluidas
-  const TIPOS = new Set(['MD', 'SF', 'DD']);
+  // 1. Coleta UUIDs únicos em executadas + concluidas (TODOS os tipos)
+  // Tipos com sub-classificação real (consultam note_subcategorias para sub_code/quantidade).
+  // Demais tipos (LN, LE, DL, RL, UG, II, PO, SO, RD…) gravam com sub_code = tipo —
+  // assim o frontend casa a chave do card direto pelo tipo (sem desdobramento).
+  const SUBCATEGORIZED = new Set(['MD', 'SF', 'DD']);
   const events = [];
   const noteIds = new Set();
 
@@ -262,23 +265,25 @@ async function upsertSubcatTotals(teams, date) {
       if (!_belongsToDate(n, date)) return;
       if (!n.id) return;
       const tipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
-      if (!TIPOS.has(tipo)) return;
+      if (!tipo) return;
+      const isSubcat = SUBCATEGORIZED.has(tipo);
       events.push({
         team:     teamName,
         regional: t.regional,
         sector:   t.sectorId,
         tipo,
         noteId:   n.id,
+        isSubcat,
       });
-      noteIds.add(n.id);
+      // Só busca classificação para os tipos que têm sub_code real
+      if (isSubcat) noteIds.add(n.id);
     });
   });
 
   if (events.length === 0) return;
 
-  // 2. Busca classificações em note_subcategorias.
+  // 2. Busca classificações em note_subcategorias (apenas MD/SF/DD).
   //    Estratégia robusta: chunks pequenos (100) p/ não estourar URL/timeout.
-  //    Tipicamente em runSnapshot temos algumas centenas de UUIDs, raramente milhares.
   const subcatMap = {};
   const ids = [...noteIds];
   const CHUNK_IN = 100;
@@ -302,9 +307,16 @@ async function upsertSubcatTotals(teams, date) {
     if (seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
 
-    const sc = subcatMap[e.noteId];
-    const sub_code   = sc?.sub_code || 'OUTROS';
-    const quantidade = sc?.quantidade != null ? Number(sc.quantidade) : null;
+    let sub_code, quantidade;
+    if (e.isSubcat) {
+      const sc = subcatMap[e.noteId];
+      sub_code   = sc?.sub_code || 'OUTROS';
+      quantidade = sc?.quantidade != null ? Number(sc.quantidade) : null;
+    } else {
+      // Tipos sem desdobramento: sub_code = próprio tipo (frontend casa por chave única)
+      sub_code   = e.tipo;
+      quantidade = null;
+    }
 
     const rk = `${e.regional}|${e.tipo}|${sub_code}`;
     if (!byRegional.has(rk)) {

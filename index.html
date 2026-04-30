@@ -4334,10 +4334,16 @@
     // Conta notas executadas+concluídas por linha de produtividade (key) por regional.
     // Para tipos MD/SF/DD: usa _subcatMap para classificar em sub_code; ausência → OUTROS.
     // Retorna também `quantidades` por key (para DD/C93 e DD/BTZ013).
-    function calcTotaisPorRegional(teams) {
+    function calcTotaisPorRegional(teams, de, ate) {
       const totais = { GUA: {}, CAC: {}, ALL: {} };
       const quantidades = { GUA: {}, CAC: {}, ALL: {} };
       const TIPOS_DESDOBRADOS = { MD: 1, SF: 1, DD: 1 };
+
+      // Default: hoje/hoje (compat retrô quando chamado sem range)
+      const hoje = todayISO();
+      de  = de  || hoje;
+      ate = ate || de;
+      const isLiveToday = de === ate && de === hoje;
 
       function bump(reg, key, qtd) {
         totais[reg][key] = (totais[reg][key] || 0) + 1;
@@ -4348,26 +4354,25 @@
         }
       }
 
-      const hojeStr = todayISO();
       teams.forEach(t => {
         const reg = t.regional;
         if (!totais[reg]) totais[reg] = {};
         if (!quantidades[reg]) quantidades[reg] = {};
 
-        // Executadas: só conta se sessão começou hoje ou equipe-fantasma
-        // (sessões de dia anterior têm executadas sem conclusionDate → inflariam hoje)
-        const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
-        const executadasValidas = sessaoHoje ? (t.notasExecutadas || []) : [];
+        // Executadas: em modo "hoje" ao vivo, aplica o filtro sessaoHoje p/ não
+        // contar executadas antigas de sessões abertas desde ontem. Em modo
+        // histórico, os dados já vêm escopados pelos snapshots da rota /historico.
+        let executadasArr;
+        if (isLiveToday) {
+          const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
+          executadasArr = sessaoHoje ? (t.notasExecutadas || []) : [];
+        } else {
+          executadasArr = t.notasExecutadas || [];
+        }
+        const executadasValidas = executadasArr.filter(n => notaPertenceAoRange(n, de, ate));
 
-        // Concluídas: filtradas por conclusionDate (funciona para qualquer sessão)
-        const concluidasValidas = (t.notasConcluidas || []).filter(n => {
-          if (!n.conclusionDate) return sessaoHoje; // sem data → só conta sessão de hoje
-          const cd = String(n.conclusionDate).slice(0, 10);
-          if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd === hojeStr;
-          const m = n.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-          if (m) return `${m[3]}-${m[2]}-${m[1]}` === hojeStr;
-          return false;
-        });
+        // Concluídas: filtra sempre por conclusionDate dentro do range
+        const concluidasValidas = (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate));
 
         const realizadas = [...executadasValidas, ...concluidasValidas];
 
@@ -4436,13 +4441,14 @@
 
     async function renderProdutividade(teams) {
       const metas = getMetas();
-      // Totais do snapshot ao vivo (times atualmente logados)
-      const { totais: totaisLive, quantidades: qtdLive } = calcTotaisPorRegional(teams);
+      const { de, ate } = currentMonitorRange();
+      // Totais do snapshot ao vivo (times atualmente logados, ou histórico do range)
+      const { totais: totaisLive, quantidades: qtdLive } = calcTotaisPorRegional(teams, de, ate);
 
-      // Totais acumulados do Supabase (inclui equipes que deslogaram no dia).
+      // Totais acumulados do Supabase (inclui equipes que deslogaram no período).
       // Usa Math.max para nunca cair abaixo do valor ao vivo.
       try {
-        const r = await fetch(`${API}/totais/subcat?date=${todayISO()}`);
+        const r = await fetch(`${API}/totais/subcat?de=${de}&ate=${ate}`);
         if (r.ok) {
           const { totais: totaisSB, quantidades: qtdSB } = await r.json();
           ['ALL','GUA','CAC'].forEach(reg => {
@@ -5344,26 +5350,60 @@
       return false;
     }
 
+    /**
+     * Versão range do filtro: aceita um par (de, ate). Para notas em "executada"
+     * (sem conclusionDate) só conta se HOJE estiver dentro do intervalo — caso
+     * contrário (range puramente histórico) executadas sem data não fazem sentido.
+     */
+    function notaPertenceAoRange(n, de, ate) {
+      if (!n.conclusionDate) {
+        const hoje = todayISO();
+        return de <= hoje && hoje <= ate;
+      }
+      const cd = String(n.conclusionDate).slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd >= de && cd <= ate;
+      const m = n.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      if (m) {
+        const iso = `${m[3]}-${m[2]}-${m[1]}`;
+        return iso >= de && iso <= ate;
+      }
+      return false;
+    }
+
+    /** Lê o range DE/ATÉ atual do monitor (default: hoje/hoje). */
+    function currentMonitorRange() {
+      const hoje = todayISO();
+      const de  = document.getElementById('monitor-date-de')?.value  || hoje;
+      const ate = document.getElementById('monitor-date-ate')?.value || hoje;
+      return { de, ate, isLiveToday: de === ate && de === hoje };
+    }
+
     async function renderMetrics(teamsAll, teamsVisible) {
       // Compat: se chamado com 1 argumento, usa o mesmo array para ambos
       teamsVisible = teamsVisible || teamsAll;
-      const hojeISO = todayISO();
+      const { de, ate, isLiveToday } = currentMonitorRange();
 
       // Carteira é estado AGORA — só equipes ativas têm `carteiraCount`
       const emCarteira = teamsVisible.reduce((s, t) => s + (t.carteiraCount || 0), 0);
 
-      // Executadas (em andamento): só conta equipes cuja sessão começou HOJE ou
-      // equipes-fantasma (_ghostFromAcc). Sessões de dia anterior têm notasExecutadas
-      // sem conclusionDate que passariam o filtro de data mas são de ontem.
+      // Executadas (em andamento): em modo "hoje" ao vivo, aplica filtro sessaoHoje
+      // pra evitar contar executadas de sessões abertas desde ontem. Em histórico,
+      // os dados já vêm escopados pelos snapshots da rota /historico.
       const executadas = teamsAll.reduce((s, t) => {
-        const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
-        if (!sessaoHoje) return s;
-        return s + (t.notasExecutadas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length;
+        let arr;
+        if (isLiveToday) {
+          const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
+          if (!sessaoHoje) return s;
+          arr = t.notasExecutadas || [];
+        } else {
+          arr = t.notasExecutadas || [];
+        }
+        return s + arr.filter(n => notaPertenceAoRange(n, de, ate)).length;
       }, 0);
 
-      // Concluídas: filtradas por conclusionDate (funciona para qualquer sessão)
+      // Concluídas: filtradas por conclusionDate dentro do range
       const concluidasLive = teamsAll.reduce((s, t) =>
-        s + (t.notasConcluidas || []).filter(n => notaPertenceAoDia(n, hojeISO)).length, 0);
+        s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
 
       const rejeitadas = teamsAll.reduce((s, t) => s + (t.notasRejeitadas || []).length, 0);
       const relogins = teamsVisible.reduce((s, t) => s + (t.relogins || 0), 0);
@@ -5378,18 +5418,18 @@
 
       // Render imediato do KPI realizadas com dado local (rápido, mas pode estar
       // baixo se equipes deslogaram). Em paralelo busca o acumulador persistente
-      // do Supabase (daily_totals) e atualiza — esse não cai com logoff.
+      // do Supabase (daily_totals somado no range) e atualiza — esse não cai com logoff.
       const realizadasLive = executadas + concluidasLive;
       const pctLive = emCarteira > 0 ? Math.round((realizadasLive / emCarteira) * 100) : 0;
       document.getElementById('m-concluidas').textContent = realizadasLive;
       document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
 
       try {
-        const r = await fetch(`${API}/totais/dia?date=${hojeISO}`);
+        const r = await fetch(`${API}/totais/dia?de=${de}&ate=${ate}`);
         const j = await r.json();
         const reg = currentRegional || 'ALL';
         const realizadasPersist = (j?.totais?.[reg]) ?? (j?.totais?.ALL) ?? realizadasLive;
-        // Usa o maior dos dois — daily_totals é cumulativo do dia, mas o cron
+        // Usa o maior dos dois — daily_totals é cumulativo do range, mas o cron
         // pode estar atrasado e ter contagem menor que a leitura ao vivo.
         const realizadas = Math.max(realizadasPersist, realizadasLive);
         const pct = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;

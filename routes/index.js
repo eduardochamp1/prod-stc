@@ -164,32 +164,37 @@ router.post('/metas', async (req, res) => {
 
 // ── KPIs do dia (acumulador persistente, sobrevive a logoff) ──────────────────
 
-// GET /api/totais/subcat?date=YYYY-MM-DD&regional=GUA  (default: hoje, ALL)
-// Resposta: { date, totais: { GUA:{L0,L1,...}, CAC:{...}, ALL:{...} }, quantidades:{...} }
+// GET /api/totais/subcat?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=GUA
+// Compat retrô: aceita ?date= (single-day) caso ?de/?ate não venham.
+// Resposta: { de, ate, totais: { GUA:{...}, CAC:{...}, ALL:{...} }, quantidades:{...} }
 // Usado pelo frontend p/ produtividade acumulada — inclui equipes que deslogaram no dia.
 router.get('/totais/subcat', async (req, res) => {
   try {
     const sq = sbq();
-    const date     = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const de  = req.query.de  || req.query.date || today;
+    const ate = req.query.ate || req.query.date || de;
     const regional = req.query.regional || 'ALL';
-    if (!sq) return res.json({ date, totais: { ALL: {}, GUA: {}, CAC: {} }, quantidades: { ALL: {}, GUA: {}, CAC: {} } });
-    const result = await sq.getDailySubcatTotals(date, regional);
-    res.json({ date, ...result });
+    if (!sq) return res.json({ de, ate, totais: { ALL: {}, GUA: {}, CAC: {} }, quantidades: { ALL: {}, GUA: {}, CAC: {} } });
+    const result = await sq.getDailySubcatTotals(de, ate, regional);
+    res.json({ de, ate, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/totais/dia?date=YYYY-MM-DD  (default: hoje)
-// Resposta: { date, totais: { ALL, GUA, CAC } }
+// GET /api/totais/dia?de=YYYY-MM-DD&ate=YYYY-MM-DD
+// Compat retrô: aceita ?date= (single-day) caso ?de/?ate não venham.
+// Resposta: { de, ate, totais: { ALL, GUA, CAC } }
 router.get('/totais/dia', async (req, res) => {
   try {
     const sq = sbq();
-    // Usa BRT (UTC-3) para evitar pegar "amanhã" depois das 21h UTC
-    const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
-    if (!sq) return res.json({ date, totais: { ALL: 0, GUA: 0, CAC: 0 } });
-    const totais = await sq.getRealizadasDoDia(date);
-    res.json({ date, totais });
+    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const de  = req.query.de  || req.query.date || today;
+    const ate = req.query.ate || req.query.date || de;
+    if (!sq) return res.json({ de, ate, totais: { ALL: 0, GUA: 0, CAC: 0 } });
+    const totais = await sq.getRealizadasDoDia(de, ate);
+    res.json({ de, ate, totais });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
