@@ -446,8 +446,30 @@ async function consolidateDay(date) {
 
   console.log(`[SUPABASE] consolidateDay(${date}): ${teams.length} equipes (snapshot final por sessão)`);
 
-  // Reagrega via upsertDailyTotals/upsertTeamDailyTotals/upsertSubcatTotals,
-  // que agora respeitam _sessionDate de cada equipe e são idempotentes.
+  // ── RESET ─────────────────────────────────────────────────────────────
+  // Consolidação é a FONTE DA VERDADE para o dia: limpa todas as linhas
+  // agregadas existentes desse `date` antes de reagregar. Sem isso, a
+  // estratégia MAX em upsertDailyTotals/upsertSubcatTotals preserva valores
+  // inflados de runs anteriores (pré-_sessionDate ou de bugs posteriores)
+  // — e o contador nunca cai pro valor correto.
+  const wipeOps = [
+    sb.from('daily_totals').delete().eq('date', date),
+    sb.from('daily_subcat_totals').delete().eq('date', date),
+    sb.from('team_daily_totals').delete().eq('date', date),
+    sb.from('team_daily_subcat_totals').delete().eq('date', date),
+  ];
+  for (const op of wipeOps) {
+    const { error } = await op;
+    // Tabela team_daily_subcat_totals pode não existir em ambientes mais antigos —
+    // ignora "relation does not exist" (PGRST204 / 42P01) sem abortar.
+    if (error && !/does not exist|PGRST204|42P01/i.test(error.message || '')) {
+      console.warn(`[SUPABASE] consolidateDay: erro no reset de ${date}: ${error.message}`);
+    }
+  }
+  console.log(`[SUPABASE] consolidateDay(${date}): linhas agregadas anteriores limpas`);
+
+  // Reagrega via upsertDailyTotals/upsertTeamDailyTotals/upsertSubcatTotals.
+  // Após o wipe, a comparação MAX nessas funções acha 0 e grava a contagem real.
   await upsertDailyTotals(teams);
   await upsertTeamDailyTotals(teams);
   try {
