@@ -164,12 +164,27 @@ async function upsertDailyTotals(teams, date) {
     });
   });
 
-  const rows = Object.entries(acc).map(([key, count]) => {
+  const newRows = Object.entries(acc).map(([key, count]) => {
     const [regional, tipo_code] = key.split('|');
     return { date, regional, tipo_code, count };
   });
 
-  if (rows.length === 0) return;
+  if (newRows.length === 0) return;
+
+  // Estratégia MAX: busca valores existentes e nunca deixa o contador diminuir.
+  // Garante que reinícios do servidor (que apagam _acc) não percam contagens.
+  const keys = newRows.map(r => `${r.regional}|${r.tipo_code}`);
+  const { data: existing } = await sb
+    .from('daily_totals')
+    .select('regional, tipo_code, count')
+    .eq('date', date);
+  const prev = {};
+  (existing || []).forEach(r => { prev[`${r.regional}|${r.tipo_code}`] = r.count; });
+
+  const rows = newRows.map(r => ({
+    ...r,
+    count: Math.max(r.count, prev[`${r.regional}|${r.tipo_code}`] || 0),
+  }));
 
   const { error } = await sb
     .from('daily_totals')
@@ -315,10 +330,29 @@ async function upsertSubcatTotals(teams, date) {
   });
 
   const now = new Date().toISOString();
-  const regionalRows = [...byRegional.values()].map(r => ({ ...r, updated_at: now }));
-  const teamRows     = [...byTeam.values()].map(r => ({ ...r, updated_at: now }));
+  const regionalRowsNew = [...byRegional.values()].map(r => ({ ...r, updated_at: now }));
+  const teamRows        = [...byTeam.values()].map(r => ({ ...r, updated_at: now }));
 
-  if (regionalRows.length > 0) {
+  if (regionalRowsNew.length > 0) {
+    // Estratégia MAX — nunca reduz contadores já gravados
+    const { data: exReg } = await sb
+      .from('daily_subcat_totals')
+      .select('regional, tipo, sub_code, count, quantidade')
+      .eq('date', date);
+    const prevReg = {};
+    (exReg || []).forEach(r => { prevReg[`${r.regional}|${r.tipo}|${r.sub_code}`] = r; });
+
+    const regionalRows = regionalRowsNew.map(r => {
+      const p = prevReg[`${r.regional}|${r.tipo}|${r.sub_code}`];
+      return {
+        ...r,
+        count:      Math.max(r.count,      p?.count      || 0),
+        quantidade: (r.quantidade != null || p?.quantidade != null)
+          ? Math.max(r.quantidade ?? 0, p?.quantidade ?? 0)
+          : null,
+      };
+    });
+
     const { error } = await sb
       .from('daily_subcat_totals')
       .upsert(regionalRows, { onConflict: 'date,regional,tipo,sub_code' });
