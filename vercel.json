@@ -2,12 +2,17 @@
   "version": 2,
   "builds": [
     {
+      "src": "logo.png",
+      "use": "@vercel/static"
+    },
+    {
       "src": "server.js",
       "use": "@vercel/node",
       "config": { "maxDuration": 60 }
     }
   ],
   "routes": [
+    { "src": "/logo\\.png", "dest": "/logo.png" },
     { "src": "/(.*)", "dest": "/server.js" }
   ]
 }
