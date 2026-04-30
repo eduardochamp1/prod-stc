@@ -4336,19 +4336,22 @@
     }
 
     // ── PRODUTIVIDADE (monitor) ────────────────────────────────────────────
-    // Conta notas executadas+concluídas por linha de produtividade (key) por regional.
-    // Para tipos MD/SF/DD: usa _subcatMap para classificar em sub_code; ausência → OUTROS.
-    // Retorna também `quantidades` por key (para DD/C93 e DD/BTZ013).
+    // REGRA DE NEGÓCIO: a produção de uma equipe pertence ao DIA DA sessionBegin
+    // (não conclusionDate). Equipe que loga em D e encerra em D+1 madrugada →
+    // tudo conta em D. Sem essa regra, o início do dia D+1 já vinha com 200+
+    // notas das equipes da virada.
+    //
+    // Conta notas executadas+concluídas por linha de produtividade (key) por
+    // regional. Para tipos MD/SF/DD: usa _subcatMap para classificar em sub_code;
+    // ausência → OUTROS. Retorna também `quantidades` por key (DD/C93, DD/BTZ013).
     function calcTotaisPorRegional(teams, de, ate) {
       const totais = { GUA: {}, CAC: {}, ALL: {} };
       const quantidades = { GUA: {}, CAC: {}, ALL: {} };
       const TIPOS_DESDOBRADOS = { MD: 1, SF: 1, DD: 1 };
 
-      // Default: hoje/hoje (compat retrô quando chamado sem range)
       const hoje = todayISO();
       de  = de  || hoje;
       ate = ate || de;
-      const isLiveToday = de === ate && de === hoje;
 
       function bump(reg, key, qtd) {
         totais[reg][key] = (totais[reg][key] || 0) + 1;
@@ -4359,27 +4362,33 @@
         }
       }
 
+      // Data efetiva de produção da equipe = sessionBegin BRT slice(0,10)
+      function sessionDateOfTeam(t) {
+        const sb = t.sessionBegin;
+        if (typeof sb === 'string' && /^\d{4}-\d{2}-\d{2}/.test(sb)) return sb.slice(0, 10);
+        return null;
+      }
+
       teams.forEach(t => {
         const reg = t.regional;
         if (!totais[reg]) totais[reg] = {};
         if (!quantidades[reg]) quantidades[reg] = {};
 
-        // Executadas: em modo "hoje" ao vivo, aplica o filtro sessaoHoje p/ não
-        // contar executadas antigas de sessões abertas desde ontem. Em modo
-        // histórico, os dados já vêm escopados pelos snapshots da rota /historico.
-        let executadasArr;
-        if (isLiveToday) {
-          const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
-          executadasArr = sessaoHoje ? (t.notasExecutadas || []) : [];
+        // Filtra equipe pelo seu sessionBegin: só conta se a sessão começou
+        // dentro do range [de, ate]. Ghosts (_ghostFromAcc) não têm sessionBegin
+        // próprio e dependem do `de === hoje` pra serem contados.
+        const sessDate = sessionDateOfTeam(t);
+        if (!sessDate) {
+          // Equipe sem sessionBegin (ex: ghost). Aceita só se range inclui hoje.
+          if (!t._ghostFromAcc) return;
+          if (de > hoje || ate < hoje) return;
         } else {
-          executadasArr = t.notasExecutadas || [];
+          if (sessDate < de || sessDate > ate) return;
         }
-        const executadasValidas = executadasArr.filter(n => notaPertenceAoRange(n, de, ate));
 
-        // Concluídas: filtra sempre por conclusionDate dentro do range
-        const concluidasValidas = (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate));
-
-        const realizadas = [...executadasValidas, ...concluidasValidas];
+        // Todas as notas da equipe contam pra sessDate (sem filtrar por
+        // conclusionDate da nota — a regra é por sessão).
+        const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
 
         realizadas.forEach(n => {
           const tipo = n.tipoCode;

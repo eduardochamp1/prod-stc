@@ -124,66 +124,72 @@ async function pushTeams(teams) {
 }
 
 /**
- * Verifica se uma nota foi concluída no dia-alvo. Equipes com sessão antiga
- * (dia anterior ainda aberta) carregam notas velhas em notasConcluidas — sem
- * esse filtro, elas entrariam no contador do dia de hoje indevidamente.
+ * Data de produção da equipe = data BRT do sessionBegin (truncada YYYY-MM-DD).
  *
- * Notas em "executada" (status 3/6/7 — em andamento agora) ficam sem
- * conclusionDate e são consideradas do dia atual (estão sendo feitas agora).
+ * REGRA DE NEGÓCIO (abr/2026):
+ *   Toda nota executada/concluída por uma equipe pertence ao DIA EM QUE A SESSÃO
+ *   DA EQUIPE COMEÇOU. Se a equipe logou em 29/04 07h e encerrou em 30/04 02h,
+ *   todas as notas dela contam pra 29/04 (não importa o conclusionDate de cada
+ *   nota individualmente).
+ *
+ *   Sem essa regra, equipes que viram a meia-noite trabalhando inflavam o
+ *   contador do dia seguinte (ex: ~270 notas no início de 30/04 que eram
+ *   na verdade execuções de 29/04).
+ *
+ * Formato esperado de sessionBegin (validado em prod):
+ *   '2026-04-26T10:59:03.96' (BRT local, sem timezone)
+ *
+ * Retorna null se sessionBegin estiver ausente — equipe sem sessão é descartada.
  */
-function _belongsToDate(nota, date) {
-  if (!nota.conclusionDate) return true;          // executada em andamento → conta hoje
-  const cd = String(nota.conclusionDate).slice(0, 10);
-  // ConclusionDate2 vem como ISO; ConclusionDate (UTC) também. slice(0,10) pega YYYY-MM-DD.
-  if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd === date;
-  // Formato BR fallback DD/MM/YYYY
-  const m = nota.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}` === date;
-  // Formato desconhecido → rejeita (não deixa nota fantasma entrar no contador)
-  console.warn(`[SUPABASE] _belongsToDate: formato de data desconhecido ignorado: "${nota.conclusionDate}"`);
-  return false;
+function _sessionDate(team) {
+  if (!team || !team.sessionBegin) return null;
+  const sb = String(team.sessionBegin);
+  if (/^\d{4}-\d{2}-\d{2}/.test(sb)) return sb.slice(0, 10);
+  return null;
 }
 
 /**
  * Atualiza `daily_totals` por regional/tipo (intraday — visão da regional).
  */
-async function upsertDailyTotals(teams, date) {
+async function upsertDailyTotals(teams, _date) {
   const sb = getClient();
-  date = date || _hojeBRT();
 
-  // Acumula por (regional, tipo_code) — evita duplicatas mesmo com múltiplas sessões por equipe
+  // Cada equipe é atribuída ao seu _sessionDate (data BRT do sessionBegin).
+  // Equipes sem sessão são descartadas. Múltiplas datas podem coexistir no
+  // mesmo batch (ex: equipe da virada com sessionDate = D-1 num cron de D).
   const acc = {};
   teams.forEach(t => {
+    const sessDate = _sessionDate(t);
+    if (!sessDate) return;
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
-      if (!_belongsToDate(n, date)) return;        // ignora notas de outros dias
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
-      const key = `${t.regional}|${code}`;
+      const key = `${sessDate}|${t.regional}|${code}`;
       acc[key] = (acc[key] || 0) + 1;
     });
   });
 
   const newRows = Object.entries(acc).map(([key, count]) => {
-    const [regional, tipo_code] = key.split('|');
+    const [date, regional, tipo_code] = key.split('|');
     return { date, regional, tipo_code, count };
   });
 
   if (newRows.length === 0) return;
 
-  // Estratégia MAX: busca valores existentes e nunca deixa o contador diminuir.
-  // Garante que reinícios do servidor (que apagam _acc) não percam contagens.
-  const keys = newRows.map(r => `${r.regional}|${r.tipo_code}`);
+  // Estratégia MAX (preservada): nunca deixa o contador diminuir entre snapshots
+  // do mesmo dia. Agora chave inclui date — busca existentes nas datas envolvidas.
+  const dates = [...new Set(newRows.map(r => r.date))];
   const { data: existing } = await sb
     .from('daily_totals')
-    .select('regional, tipo_code, count')
-    .eq('date', date);
+    .select('date, regional, tipo_code, count')
+    .in('date', dates);
   const prev = {};
-  (existing || []).forEach(r => { prev[`${r.regional}|${r.tipo_code}`] = r.count; });
+  (existing || []).forEach(r => { prev[`${r.date}|${r.regional}|${r.tipo_code}`] = r.count; });
 
   const rows = newRows.map(r => ({
     ...r,
-    count: Math.max(r.count, prev[`${r.regional}|${r.tipo_code}`] || 0),
+    count: Math.max(r.count, prev[`${r.date}|${r.regional}|${r.tipo_code}`] || 0),
   }));
 
   const { error } = await sb
@@ -191,29 +197,31 @@ async function upsertDailyTotals(teams, date) {
     .upsert(rows, { onConflict: 'date,regional,tipo_code' });
 
   if (error) throw error;
-  console.log(`[SUPABASE] daily_totals: ${rows.length} tipos atualizados para ${date}`);
+  console.log(`[SUPABASE] daily_totals: ${rows.length} linhas em ${dates.length} dia(s) (${dates.join(', ')})`);
 }
 
 /**
  * Atualiza `team_daily_totals` por equipe/tipo (intraday — visão individual).
  */
-async function upsertTeamDailyTotals(teams, date) {
+async function upsertTeamDailyTotals(teams, _date) {
   const sb = getClient();
-  date = date || _hojeBRT();
 
-  // Acumula por (team_name, tipo_code) para evitar duplicatas quando
-  // a mesma equipe aparece mais de uma vez no array (ex: múltiplas sessões no dia)
+  // Chave: (sessDate, team_name, tipo_code). sessDate vem do sessionBegin da equipe.
   const acc = {};
   teams.forEach(t => {
+    const sessDate = _sessionDate(t);
+    if (!sessDate) return;
     const teamName = t.teamName || t.sigla;
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
-      if (!_belongsToDate(n, date)) return;        // ignora notas de outros dias
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
-      const key = `${teamName}|${code}`;
+      const key = `${sessDate}|${teamName}|${code}`;
       if (!acc[key]) {
-        acc[key] = { date, team_name: teamName, regional: t.regional, sector_id: t.sectorId, tipo_code: code, count: 0 };
+        acc[key] = {
+          date: sessDate, team_name: teamName, regional: t.regional, sector_id: t.sectorId,
+          tipo_code: code, count: 0,
+        };
       }
       acc[key].count += 1;
     });
@@ -227,7 +235,8 @@ async function upsertTeamDailyTotals(teams, date) {
     .upsert(rows, { onConflict: 'date,team_name,tipo_code' });
 
   if (error) throw error;
-  console.log(`[SUPABASE] team_daily_totals: ${rows.length} registros para ${date}`);
+  const dates = [...new Set(rows.map(r => r.date))].sort();
+  console.log(`[SUPABASE] team_daily_totals: ${rows.length} linhas em ${dates.length} dia(s) (${dates.join(', ')})`);
 }
 
 /**
@@ -244,30 +253,29 @@ async function upsertTeamDailyTotals(teams, date) {
  * @param {Array} teams       Array de equipes (com notasExecutadas/notasConcluidas)
  * @param {string} date       'YYYY-MM-DD' BRT
  */
-async function upsertSubcatTotals(teams, date) {
+async function upsertSubcatTotals(teams, _date) {
   const sb = getClient();
-  date = date || _hojeBRT();
 
-  // 1. Coleta UUIDs únicos em executadas + concluidas (TODOS os tipos)
-  // Tipos com sub-classificação real (consultam note_subcategorias para sub_code/quantidade).
-  // Demais tipos (LN, LE, DL, RL, UG, II, PO, SO, RD…) gravam com sub_code = tipo —
-  // assim o frontend casa a chave do card direto pelo tipo (sem desdobramento).
+  // 1. Coleta eventos por equipe, atribuindo cada um ao _sessionDate da equipe
+  // Tipos MD/SF/DD têm sub-classificação real (consultam note_subcategorias).
+  // Demais tipos (LN, LE, DL, RL, UG, II, PO, SO, RD…) gravam com sub_code = tipo.
   const SUBCATEGORIZED = new Set(['MD', 'SF', 'DD']);
   const events = [];
   const noteIds = new Set();
 
   teams.forEach(t => {
     const teamName = t.teamName || t.sigla;
-    // sectorId pode ser null em equipes-fantasma (_ghostFromAcc) — não é motivo de exclusão
     if (!teamName || !t.regional) return;
+    const sessDate = _sessionDate(t);
+    if (!sessDate) return;                          // sem sessão → descarta
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
-      if (!_belongsToDate(n, date)) return;
       if (!n.id) return;
       const tipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
       if (!tipo) return;
       const isSubcat = SUBCATEGORIZED.has(tipo);
       events.push({
+        date:     sessDate,
         team:     teamName,
         regional: t.regional,
         sector:   t.sectorId,
@@ -275,7 +283,6 @@ async function upsertSubcatTotals(teams, date) {
         noteId:   n.id,
         isSubcat,
       });
-      // Só busca classificação para os tipos que têm sub_code real
       if (isSubcat) noteIds.add(n.id);
     });
   });
@@ -297,13 +304,15 @@ async function upsertSubcatTotals(teams, date) {
     (data || []).forEach(r => { subcatMap[r.note_id] = r; });
   }
 
-  // 3. Dedupe por (team, tipo, noteId) e agrega
+  // 3. Dedupe por (date, team, tipo, noteId) e agrega — chave inclui date pra
+  // suportar múltiplas datas no mesmo batch (cron de D pegando equipes com
+  // sessionDate D e raras com sessionDate D-1)
   const seen = new Set();
   const byRegional = new Map();
   const byTeam     = new Map();
 
   events.forEach(e => {
-    const dedupeKey = `${e.team}|${e.tipo}|${e.noteId}`;
+    const dedupeKey = `${e.date}|${e.team}|${e.tipo}|${e.noteId}`;
     if (seen.has(dedupeKey)) return;
     seen.add(dedupeKey);
 
@@ -313,15 +322,14 @@ async function upsertSubcatTotals(teams, date) {
       sub_code   = sc?.sub_code || 'OUTROS';
       quantidade = sc?.quantidade != null ? Number(sc.quantidade) : null;
     } else {
-      // Tipos sem desdobramento: sub_code = próprio tipo (frontend casa por chave única)
       sub_code   = e.tipo;
       quantidade = null;
     }
 
-    const rk = `${e.regional}|${e.tipo}|${sub_code}`;
+    const rk = `${e.date}|${e.regional}|${e.tipo}|${sub_code}`;
     if (!byRegional.has(rk)) {
       byRegional.set(rk, {
-        date, regional: e.regional, tipo: e.tipo, sub_code,
+        date: e.date, regional: e.regional, tipo: e.tipo, sub_code,
         count: 0, quantidade: null,
       });
     }
@@ -329,10 +337,10 @@ async function upsertSubcatTotals(teams, date) {
     r.count += 1;
     if (quantidade != null) r.quantidade = (r.quantidade ?? 0) + quantidade;
 
-    const tk = `${e.team}|${e.tipo}|${sub_code}`;
+    const tk = `${e.date}|${e.team}|${e.tipo}|${sub_code}`;
     if (!byTeam.has(tk)) {
       byTeam.set(tk, {
-        date, team_name: e.team, regional: e.regional, sector_id: e.sector,
+        date: e.date, team_name: e.team, regional: e.regional, sector_id: e.sector,
         tipo: e.tipo, sub_code, count: 0, quantidade: null,
       });
     }
@@ -347,15 +355,16 @@ async function upsertSubcatTotals(teams, date) {
 
   if (regionalRowsNew.length > 0) {
     // Estratégia MAX — nunca reduz contadores já gravados
+    const dates = [...new Set(regionalRowsNew.map(r => r.date))];
     const { data: exReg } = await sb
       .from('daily_subcat_totals')
-      .select('regional, tipo, sub_code, count, quantidade')
-      .eq('date', date);
+      .select('date, regional, tipo, sub_code, count, quantidade')
+      .in('date', dates);
     const prevReg = {};
-    (exReg || []).forEach(r => { prevReg[`${r.regional}|${r.tipo}|${r.sub_code}`] = r; });
+    (exReg || []).forEach(r => { prevReg[`${r.date}|${r.regional}|${r.tipo}|${r.sub_code}`] = r; });
 
     const regionalRows = regionalRowsNew.map(r => {
-      const p = prevReg[`${r.regional}|${r.tipo}|${r.sub_code}`];
+      const p = prevReg[`${r.date}|${r.regional}|${r.tipo}|${r.sub_code}`];
       return {
         ...r,
         count:      Math.max(r.count,      p?.count      || 0),
@@ -369,14 +378,15 @@ async function upsertSubcatTotals(teams, date) {
       .from('daily_subcat_totals')
       .upsert(regionalRows, { onConflict: 'date,regional,tipo,sub_code' });
     if (error) throw error;
-    console.log(`[SUPABASE] daily_subcat_totals: ${regionalRows.length} linhas p/ ${date}`);
+    console.log(`[SUPABASE] daily_subcat_totals: ${regionalRows.length} linhas em ${dates.length} dia(s)`);
   }
   if (teamRows.length > 0) {
     const { error } = await sb
       .from('team_daily_subcat_totals')
       .upsert(teamRows, { onConflict: 'date,team_name,tipo,sub_code' });
     if (error) throw error;
-    console.log(`[SUPABASE] team_daily_subcat_totals: ${teamRows.length} linhas p/ ${date}`);
+    const datesT = [...new Set(teamRows.map(r => r.date))];
+    console.log(`[SUPABASE] team_daily_subcat_totals: ${teamRows.length} linhas em ${datesT.length} dia(s)`);
   }
 }
 
@@ -388,10 +398,17 @@ async function consolidateDay(date) {
   const sb = getClient();
   date = date || _hojeBRT();
 
+  // Busca snapshots de date E date+1 (madrugada do dia seguinte) — equipes que
+  // ainda estavam ativas após meia-noite seguem com sessionBegin = date e suas
+  // notas pertencem a date pela regra de negócio.
+  const dPlus1 = new Date(date + 'T12:00:00Z');
+  dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
+  const dayPlus1 = dPlus1.toISOString().slice(0, 10);
+
   const { data: snaps, error: e1 } = await sb
     .from('snapshots')
     .select('team_name, regional, sector_id, captured_at, data')
-    .eq('date', date)
+    .in('date', [date, dayPlus1])
     .order('captured_at', { ascending: false });
 
   if (e1) throw e1;
@@ -400,89 +417,42 @@ async function consolidateDay(date) {
     return;
   }
 
-  // Mantém apenas o snapshot mais recente por equipe
+  // Filtra só equipes cujo sessionBegin === date (regra de produção por sessão).
+  // Mantém apenas o snapshot MAIS RECENTE de cada (team_name, sessionBegin) — ordem
+  // captured_at desc garante que o primeiro a setar é o mais recente.
   const latest = {};
-  snaps.forEach(s => { if (!latest[s.team_name]) latest[s.team_name] = s; });
-
-  // ── daily_totals (por regional/tipo) ─────────────────────────────────────────
-  // Inclui executadas + concluídas, mas só as que pertencem ao dia-alvo.
-  // Sem _belongsToDate, equipes que ficaram com sessão aberta da virada do dia
-  // trazem notas antigas que inflam os totais históricos.
-  const regionalAcc = {};
-  Object.values(latest).forEach(s => {
-    const notas = [
-      ...(s.data?.notasExecutadas || []),
-      ...(s.data?.notasConcluidas || []),
-    ];
-    notas.forEach(n => {
-      if (!_belongsToDate(n, date)) return;           // rejeita notas de outros dias
-      const code = n.tipoCode || n.tipo_code;
-      if (!code) return;
-      const key = `${s.regional}|${code}`;
-      regionalAcc[key] = (regionalAcc[key] || 0) + 1;
-    });
+  snaps.forEach(s => {
+    const t = s.data;
+    if (!t) return;
+    if (_sessionDate(t) !== date) return;
+    const key = `${s.team_name}|${t.sessionBegin}`;
+    if (!latest[key]) {
+      latest[key] = {
+        teamName: s.team_name,
+        regional: s.regional,
+        sectorId: s.sector_id,
+        notasExecutadas: t.notasExecutadas || [],
+        notasConcluidas: t.notasConcluidas || [],
+        sessionBegin: t.sessionBegin,
+      };
+    }
   });
 
-  const regionalRows = Object.entries(regionalAcc).map(([key, count]) => {
-    const [regional, tipo_code] = key.split('|');
-    return { date, regional, tipo_code, count };
-  });
-
-  if (regionalRows.length > 0) {
-    const { error: e2 } = await sb
-      .from('daily_totals')
-      .upsert(regionalRows, { onConflict: 'date,regional,tipo_code' });
-    if (e2) throw e2;
-    console.log(`[SUPABASE] daily_totals consolidados: ${regionalRows.length} tipos para ${date}`);
+  const teams = Object.values(latest);
+  if (teams.length === 0) {
+    console.log(`[SUPABASE] consolidateDay: nenhuma equipe com sessionDate=${date}`);
+    return;
   }
 
-  // ── team_daily_totals (por equipe/tipo) ───────────────────────────────────────
-  const teamRows = [];
-  Object.values(latest).forEach(s => {
-    const notas = [
-      ...(s.data?.notasExecutadas || []),
-      ...(s.data?.notasConcluidas || []),
-    ];
-    const acc = {};
-    notas.forEach(n => {
-      if (!_belongsToDate(n, date)) return;           // rejeita notas de outros dias
-      const code = n.tipoCode || n.tipo_code;
-      if (code) acc[code] = (acc[code] || 0) + 1;
-    });
-    Object.entries(acc).forEach(([tipo_code, count]) => {
-      teamRows.push({
-        date,
-        team_name: s.team_name,
-        regional:  s.regional,
-        sector_id: s.sector_id,
-        tipo_code,
-        count,
-      });
-    });
-  });
+  console.log(`[SUPABASE] consolidateDay(${date}): ${teams.length} equipes (snapshot final por sessão)`);
 
-  if (teamRows.length > 0) {
-    const { error: e3 } = await sb
-      .from('team_daily_totals')
-      .upsert(teamRows, { onConflict: 'date,team_name,tipo_code' });
-    if (e3) throw e3;
-    console.log(`[SUPABASE] team_daily_totals consolidados: ${teamRows.length} registros para ${date}`);
-  }
-
-  // ── daily_subcat_totals + team_daily_subcat_totals (por sub_code) ────────────
-  // Reusa snapshots mais recentes (latest) reformatados como "teams" pra reusar
-  // a mesma lógica de upsertSubcatTotals (que aceita t.notasExecutadas etc).
-  const teamsForSubcat = Object.values(latest).map(s => ({
-    teamName: s.team_name,
-    regional: s.regional,
-    sectorId: s.sector_id,
-    notasExecutadas: s.data?.notasExecutadas || [],
-    notasConcluidas: s.data?.notasConcluidas || [],
-  }));
+  // Reagrega via upsertDailyTotals/upsertTeamDailyTotals/upsertSubcatTotals,
+  // que agora respeitam _sessionDate de cada equipe e são idempotentes.
+  await upsertDailyTotals(teams);
+  await upsertTeamDailyTotals(teams);
   try {
-    await upsertSubcatTotals(teamsForSubcat, date);
+    await upsertSubcatTotals(teams);
   } catch (errSubcat) {
-    // Não bloqueia consolidação principal — log warn e segue
     console.warn(`[SUPABASE] consolidateDay: upsertSubcatTotals falhou: ${errSubcat.message}`);
   }
 }

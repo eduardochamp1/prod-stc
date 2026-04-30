@@ -34,13 +34,13 @@ const argAte = process.argv[3] || null;
 
 const TIPOS_DESDOBRADOS = new Set(['MD', 'SF', 'DD']);
 
-// Normaliza conclusionDate → 'YYYY-MM-DD'
-function normalizeDate(s) {
-  if (!s) return null;
-  const str = String(s);
-  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
-  const m = str.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+// Data de sessão (BRT) da equipe — regra de negócio: produção da equipe
+// pertence ao dia em que a sessão começou (sessionBegin), independente do
+// conclusionDate de cada nota.
+function _sessionDate(team) {
+  if (!team || !team.sessionBegin) return null;
+  const sb = String(team.sessionBegin);
+  if (/^\d{4}-\d{2}-\d{2}/.test(sb)) return sb.slice(0, 10);
   return null;
 }
 
@@ -99,41 +99,44 @@ async function fetchSubcatMap(noteIds) {
  */
 function indexSnapshots(snapshots) {
   const noteIds = new Set();
-
-  // Primeiro passo: agrupa eventos (date, team, tipo, note_id) deduplicado
-  // estrutura: byDayTeam[`${date}|${team}|${tipo}`] = Set<noteId>
-  // mas precisamos também separar a date pela conclusionDate em concluidas
   const events = []; // { date, team, regional, sector, tipo, noteId }
 
+  // REGRA DE NEGÓCIO: a "data efetiva" de uma nota é o sessionBegin da equipe
+  // que a executou, não o conclusionDate da nota. Equipe que loga em D e
+  // encerra em D+1 madrugada → tudo conta em D.
+  // Pra cada (team, sessionBegin), pegamos o snapshot MAIS RECENTE (último estado
+  // da sessão) — assim não duplicamos contagem por aparecer em múltiplos snapshots.
+  const latestBySession = new Map(); // key: `${team}|${sessionBegin}` → snapshot
+
   snapshots.forEach(snap => {
-    const t       = snap.data;
+    const t = snap.data;
     if (!t) return;
-    const team    = snap.team_name || t.teamName;
-    const reg     = snap.regional  || t.regional;
-    const sector  = snap.sector_id || t.sectorId;
-    const snapDate = String(snap.date).slice(0, 10);
-
+    const team   = snap.team_name || t.teamName;
+    const reg    = snap.regional  || t.regional;
+    const sector = snap.sector_id || t.sectorId;
     if (!team || !reg || !sector) return;
+    const sessDate = _sessionDate(t);
+    if (!sessDate) return;
 
-    // notasConcluidas: usa conclusionDate (executou nesse dia)
-    (t.notasConcluidas || []).forEach(n => {
+    const key = `${team}|${t.sessionBegin}`;
+    const prev = latestBySession.get(key);
+    // Mantém só o snapshot mais recente (captured_at maior) por sessão
+    if (!prev || (snap.captured_at > prev.snap.captured_at)) {
+      latestBySession.set(key, { snap, team, reg, sector, sessDate });
+    }
+  });
+
+  // Agora constrói events a partir do snapshot final de cada sessão.
+  // Notas executadas + concluídas — TODAS contam pra sessDate (sem filtro por
+  // conclusionDate, pois a regra é por sessão).
+  latestBySession.forEach(({ snap, team, reg, sector, sessDate }) => {
+    const t = snap.data;
+    [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])].forEach(n => {
       if (!n.id) return;
       const tipo = (n.tipoCode || '').toUpperCase();
       if (!TIPOS_DESDOBRADOS.has(tipo)) return;
-      const date = normalizeDate(n.conclusionDate) || snapDate;
-      events.push({ date, team, regional: reg, sector, tipo, noteId: n.id });
+      events.push({ date: sessDate, team, regional: reg, sector, tipo, noteId: n.id });
       noteIds.add(n.id);
-    });
-
-    // notasExecutadas/Baixadas/Rejeitadas/Vistoriadas: usa date do snapshot
-    [['notasExecutadas'], ['notasBaixadas'], ['notasRejeitadas'], ['notasVistoriadas']].forEach(([k]) => {
-      (t[k] || []).forEach(n => {
-        if (!n.id) return;
-        const tipo = (n.tipoCode || '').toUpperCase();
-        if (!TIPOS_DESDOBRADOS.has(tipo)) return;
-        events.push({ date: snapDate, team, regional: reg, sector, tipo, noteId: n.id });
-        noteIds.add(n.id);
-      });
     });
   });
 
