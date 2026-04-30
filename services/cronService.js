@@ -81,10 +81,10 @@ async function runSnapshot() {
     console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais, ${ghostCount} acumuladas nos totais às ${ts}`);
 
     // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot).
-    // Quando concluir, dispara upsertSubcatTotals pra atualizar daily_subcat_totals
-    // intraday (com base nos sub_codes recém-classificados).
-    runClassifyNewNotes(teams)
-      .then(() => upsertSubcatTotals(teams).catch(err =>
+    // Quando concluir, dispara upsertSubcatTotals pra atualizar daily_subcat_totals.
+    // Usa allTeams (real + ghost) para incluir notas de equipes deslogadas.
+    runClassifyNewNotes(allTeams)
+      .then(() => upsertSubcatTotals(allTeams).catch(err =>
         console.warn('[CRON] upsertSubcatTotals intraday falhou:', err.message)))
       .catch(err =>
         console.error('[CRON] Erro classificando subcategorias:', err.message)

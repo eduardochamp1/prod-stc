@@ -164,6 +164,22 @@ router.post('/metas', async (req, res) => {
 
 // ── KPIs do dia (acumulador persistente, sobrevive a logoff) ──────────────────
 
+// GET /api/totais/subcat?date=YYYY-MM-DD&regional=GUA  (default: hoje, ALL)
+// Resposta: { date, totais: { GUA:{L0,L1,...}, CAC:{...}, ALL:{...} }, quantidades:{...} }
+// Usado pelo frontend p/ produtividade acumulada — inclui equipes que deslogaram no dia.
+router.get('/totais/subcat', async (req, res) => {
+  try {
+    const sq = sbq();
+    const date     = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const regional = req.query.regional || 'ALL';
+    if (!sq) return res.json({ date, totais: { ALL: {}, GUA: {}, CAC: {} }, quantidades: { ALL: {}, GUA: {}, CAC: {} } });
+    const result = await sq.getDailySubcatTotals(date, regional);
+    res.json({ date, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/totais/dia?date=YYYY-MM-DD  (default: hoje)
 // Resposta: { date, totais: { ALL, GUA, CAC } }
 router.get('/totais/dia', async (req, res) => {

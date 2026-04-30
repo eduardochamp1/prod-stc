@@ -4434,16 +4434,41 @@
       }).join('')}</div>`;
     }
 
-    function renderProdutividade(teams) {
+    async function renderProdutividade(teams) {
       const metas = getMetas();
-      const { totais, quantidades } = calcTotaisPorRegional(teams);
+      // Totais do snapshot ao vivo (times atualmente logados)
+      const { totais: totaisLive, quantidades: qtdLive } = calcTotaisPorRegional(teams);
+
+      // Totais acumulados do Supabase (inclui equipes que deslogaram no dia).
+      // Usa Math.max para nunca cair abaixo do valor ao vivo.
+      try {
+        const r = await fetch(`${API}/totais/subcat?date=${todayISO()}`);
+        if (r.ok) {
+          const { totais: totaisSB, quantidades: qtdSB } = await r.json();
+          ['ALL','GUA','CAC'].forEach(reg => {
+            const live = totaisLive[reg] || {};
+            const sb   = (totaisSB || {})[reg] || {};
+            const merged = { ...sb };
+            // Live sempre ganha se maior (dado mais fresco para times ainda ativos)
+            Object.keys(live).forEach(k => { merged[k] = Math.max(merged[k] || 0, live[k] || 0); });
+            totaisLive[reg] = merged;
+            // Quantidades: usa o máximo também
+            const qlive = (qtdLive[reg] || {});
+            const qsb   = (qtdSB || {})[reg] || {};
+            const qmerged = { ...qsb };
+            Object.keys(qlive).forEach(k => { if (qlive[k] > (qmerged[k] || 0)) qmerged[k] = qlive[k]; });
+            qtdLive[reg] = qmerged;
+          });
+        }
+      } catch (_) { /* falha silenciosa — usa só o live */ }
+
       const grid = document.getElementById('prod-grid');
       const title = document.getElementById('prod-title');
       const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : (currentRegional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
       title.textContent = `Produtividade do Dia — ${labelRegional}`;
-      const metasReg = currentRegional === 'ALL' ? metasAcumuladas(metas) : (metas[currentRegional] || {});
-      const totaisReg = currentRegional === 'ALL' ? totais.ALL : (totais[currentRegional] || {});
-      const qtdReg = currentRegional === 'ALL' ? quantidades.ALL : (quantidades[currentRegional] || {});
+      const metasReg  = currentRegional === 'ALL' ? metasAcumuladas(metas) : (metas[currentRegional] || {});
+      const totaisReg = currentRegional === 'ALL' ? totaisLive.ALL : (totaisLive[currentRegional] || {});
+      const qtdReg    = currentRegional === 'ALL' ? qtdLive.ALL    : (qtdLive[currentRegional]    || {});
       const semMeta = Object.keys(metasReg).length === 0;
       grid.innerHTML = renderBlockRegional(totaisReg, metasReg, qtdReg)
         + (semMeta ? `<div style="margin-top:10px;font-size:11px;color:var(--text2)">Defina metas em <strong>⚙ Metas</strong> para ver barras de progresso.</div>` : '');

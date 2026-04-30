@@ -549,6 +549,42 @@ async function getRealizadasDoDia(date) {
   return acc;
 }
 
+/**
+ * Retorna daily_subcat_totals para uma data e regional, agregado em
+ * { GUA: { L0: n, L1: n, ... }, CAC: { ... }, ALL: { ... } }
+ * com quantidades separadas para DD (metros/pontos).
+ */
+async function getDailySubcatTotals(date, regional) {
+  const sb = getClient();
+  date = date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+
+  let query = sb
+    .from('daily_subcat_totals')
+    .select('regional, tipo, sub_code, count, quantidade')
+    .eq('date', date);
+  if (regional && regional !== 'ALL') {
+    query = query.eq('regional', regional);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const totais = { ALL: {}, GUA: {}, CAC: {} };
+  const quantidades = { ALL: {}, GUA: {}, CAC: {} };
+  (data || []).forEach(r => {
+    const key = r.sub_code === 'OUTROS' ? `${r.tipo}_OUTROS` : r.sub_code;
+    const reg = r.regional;
+    if (!totais[reg]) totais[reg] = {};
+    if (!quantidades[reg]) quantidades[reg] = {};
+    totais[reg][key]   = (totais[reg][key]   || 0) + r.count;
+    totais.ALL[key]    = (totais.ALL[key]    || 0) + r.count;
+    if (r.quantidade != null) {
+      quantidades[reg][key] = (quantidades[reg][key] || 0) + Number(r.quantidade);
+      quantidades.ALL[key]  = (quantidades.ALL[key]  || 0) + Number(r.quantidade);
+    }
+  });
+  return { totais, quantidades };
+}
+
 // ── NOTE DETAILS CACHE (payload completo das OS, populado pelo cron) ──────────
 
 /**
@@ -637,4 +673,5 @@ module.exports = {
   getTeamRanking, getTeamDailyHistory,
   getTeamProducao,
   getTeamSessionHistory,
+  getDailySubcatTotals,
 };

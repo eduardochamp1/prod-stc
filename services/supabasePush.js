@@ -240,7 +240,8 @@ async function upsertSubcatTotals(teams, date) {
 
   teams.forEach(t => {
     const teamName = t.teamName || t.sigla;
-    if (!teamName || !t.regional || !t.sectorId) return;
+    // sectorId pode ser null em equipes-fantasma (_ghostFromAcc) — não é motivo de exclusão
+    if (!teamName || !t.regional) return;
     const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
     realizadas.forEach(n => {
       if (!_belongsToDate(n, date)) return;
