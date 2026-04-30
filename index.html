@@ -3893,6 +3893,11 @@
                 style="height:40px;padding:0 20px;font-size:13px">
                 ▶ Iniciar Backfill
               </button>
+              <button class="btn-refresh" id="bf-btn-7d" onclick="runBackfillUltimos7Dias()"
+                style="height:40px;padding:0 16px;font-size:13px;background:var(--amarelo);color:var(--preto)"
+                title="Preenche DE/ATÉ automaticamente e roda o backfill dos últimos 7 dias (inclui hoje)">
+                ↻ Recalcular últimos 7 dias
+              </button>
             </div>
 
             <!-- Barra de progresso -->
@@ -6014,6 +6019,26 @@
       const consDt = document.getElementById('cons-date');
       if (!consDt.value) consDt.value = ontem;
       consDt.max = hoje;
+    }
+
+    /**
+     * Atalho: preenche DE = hoje-6 dias, ATÉ = hoje, e dispara o backfill.
+     * Útil quando uma correção do código de agregação (ex: novos tipos em
+     * daily_subcat_totals) precisa ser aplicada retroativamente nos últimos dias.
+     */
+    async function runBackfillUltimos7Dias() {
+      // BRT (UTC-3) — evita rolar pra "amanhã" depois das 21h UTC
+      const hoje  = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      const seteDiasAtras = new Date(Date.now() - 3 * 3600 * 1000 - 6 * 86400000)
+        .toISOString().slice(0, 10);
+
+      if (!confirm(`Recalcular os últimos 7 dias?\n\nDE: ${seteDiasAtras}\nATÉ: ${hoje}\n\nIsso busca dados no WPA e regrava snapshots/totais — pode levar ~1-2 minutos.`)) {
+        return;
+      }
+
+      document.getElementById('bf-de').value  = seteDiasAtras;
+      document.getElementById('bf-ate').value = hoje;
+      await runBackfill();
     }
 
     async function runBackfill() {
