@@ -51,14 +51,13 @@ async function runSnapshot() {
     const allTeams = await getTeams();
 
     // Separa equipes reais (vindas do WPA) das equipes-fantasma (_ghostFromAcc).
-    // Ghosts existem apenas para manter KPIs no frontend quando uma equipe desloga.
-    // NUNCA devem ir para o Supabase: se fossem, entrariam no aliveNames do
-    // pushTeams e impediriam a deleção das equipes que realmente saíram do WPA,
-    // fazendo-as aparecer indefinidamente como "sessão anômala" no monitor.
+    // Ghosts existem para manter KPIs no frontend e nos totais quando uma equipe
+    // desloga — mas NÃO devem ir para snapshots/teams_current: entrariam no
+    // aliveNames do pushTeams e impediriam a deleção de sessões encerradas.
     const teams     = allTeams.filter(t => !t._ghostFromAcc);
     const ghostCount = allTeams.length - teams.length;
     if (ghostCount > 0) {
-      console.log(`[CRON] _acc: ${ghostCount} equipe(s) fantasma excluída(s) das operações Supabase`);
+      console.log(`[CRON] _acc: ${ghostCount} equipe(s) fantasma — excluída(s) de snapshots/teams_current, incluídas nos totais diários`);
     }
 
     if (teams.length === 0) {
@@ -69,12 +68,17 @@ async function runSnapshot() {
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals } = require('./supabasePush');
 
+    // snapshots e teams_current: apenas equipes reais (sem ghosts)
     await saveSnapshot(teams);
     await pushTeams(teams);
-    await upsertDailyTotals(teams);
-    await upsertTeamDailyTotals(teams);
 
-    console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais às ${ts}`);
+    // Totais diários: todas as equipes (real + ghost do _acc) — preserva notas
+    // acumuladas de equipes que deslogaram durante o dia. Ghost teams têm regional
+    // e notas corretas; _belongsToDate filtra qualquer nota de dia anterior.
+    await upsertDailyTotals(allTeams);
+    await upsertTeamDailyTotals(allTeams);
+
+    console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais, ${ghostCount} acumuladas nos totais às ${ts}`);
 
     // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot).
     // Quando concluir, dispara upsertSubcatTotals pra atualizar daily_subcat_totals
