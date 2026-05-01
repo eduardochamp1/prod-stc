@@ -4733,6 +4733,11 @@
       { tipo: 'DD', sub_code: 'OUTROS',   nome: 'DD Outros' },
     ];
 
+    // Histórico por subcategoria começou a ser preenchido em 27/04/2026.
+    // Antes disso, snapshots não capturavam UUID das notas — impossível cruzar
+    // com note_subcategorias e classificar retroativamente.
+    const SUBCAT_HIST_INICIO = '2026-04-27';
+
     function renderHistoricoSubcats(dias, mesTotais, regional, de, ate) {
       const cont = document.getElementById('hist-subcats-content');
 
@@ -4740,8 +4745,20 @@
       // filtros podem cortar)
       const dentroDoRange = dias.filter(d => d.date >= de && d.date <= ate);
 
+      // Aviso quando range inclui datas pré-cobertura
+      const rangeIncluiPreUuid = de < SUBCAT_HIST_INICIO;
+      const avisoBanner = rangeIncluiPreUuid ? `
+        <div style="background:#fff8e1;border-left:4px solid #fec40e;padding:11px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#5d4708;line-height:1.5">
+          <strong>ℹ️ Histórico parcial</strong>: dados por subcategoria disponíveis a partir de
+          <strong>${fmtData(SUBCAT_HIST_INICIO)}</strong>. Notas anteriores foram capturadas pelo
+          sistema sem UUID e não puderam ser classificadas retroativamente.
+          O histórico tradicional (por tipo MD/SF/DD, na sub-aba "Sessões por equipe") cobre o mês inteiro normalmente.
+        </div>
+      ` : '';
+
       if (dentroDoRange.length === 0) {
-        cont.innerHTML = '<div class="empty-state">Nenhum dado encontrado para o período. Rode o backfill para carregar histórico.</div>';
+        cont.innerHTML = avisoBanner +
+          '<div class="empty-state">Nenhum dado encontrado para o período selecionado.</div>';
         return;
       }
 
@@ -4833,6 +4850,7 @@
       const labelPeriodo  = `${fmtData(de)} a ${fmtData(ate)}`;
 
       cont.innerHTML = `
+        ${avisoBanner}
         <div style="margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
           <div style="font-size:13px;color:var(--text2)">
             <strong style="color:var(--preto);font-size:14px">${labelRegional}</strong>

@@ -15,6 +15,7 @@ const { forceRefresh }        = require('./wpaService');
 let tokenJob        = null;
 let snapshotJob     = null;
 let consolidaJob    = null;
+let uuidHealthJob   = null;
 let isRunning       = false;
 let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
 const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se travar
@@ -246,6 +247,67 @@ async function runClassifyNewNotes(teams) {
   }
 }
 
+// ── HEALTH-CHECK DE UUID ───────────────────────────────────────────────────────
+// Verifica % de notas (em notasConcluidas + notasExecutadas) com `id` (UUID)
+// nos snapshots da última hora. Loga warn se < 95%.
+//
+// Histórico: snapshots de 01-26/04/2026 não tinham UUID (scraper antigo).
+// Desde 27/04/2026 a cobertura é >98%. Este check detecta regressão precoce —
+// se o WPA mudar formato ou nosso scraper falhar, descobrimos em ≤1h em vez
+// de só ao montar histórico semanas depois.
+//
+// Saída no log do PM2:
+//   ✓ uuid-health: 1234/1234 (100.0%) MD/SF/DD com UUID — última hora
+//   ⚠️  uuid-health: 850/1234 (68.9%) — abaixo de 95%, classificação por
+//       subcategoria pode estar comprometida!
+
+async function runUuidHealthCheck() {
+  const { getClient } = require('./supabaseClient');
+  const sb = getClient();
+  const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
+
+  const { data: snaps, error } = await sb
+    .from('snapshots')
+    .select('data')
+    .gte('captured_at', oneHourAgo);
+
+  if (error) {
+    console.warn('[CRON] uuid-health: falha ao buscar snapshots:', error.message);
+    return;
+  }
+  if (!snaps || snaps.length === 0) {
+    // Fora do horário do cron de snapshot (06-20h) é normal
+    return;
+  }
+
+  let totalNotas    = 0;
+  let notasComUuid  = 0;
+  const SUBCAT_TIPOS = new Set(['MD', 'SF', 'DD']);
+
+  snaps.forEach(s => {
+    const t = s.data;
+    if (!t) return;
+    const realizadas = [...(t.notasConcluidas || []), ...(t.notasExecutadas || [])];
+    realizadas.forEach(n => {
+      const tipo = (n.tipoCode || '').toUpperCase();
+      if (!SUBCAT_TIPOS.has(tipo)) return;
+      totalNotas += 1;
+      if (n.id) notasComUuid += 1;
+    });
+  });
+
+  if (totalNotas === 0) return;
+
+  const pct = (notasComUuid / totalNotas) * 100;
+  const base = `uuid-health: ${notasComUuid}/${totalNotas} (${pct.toFixed(1)}%) MD/SF/DD com UUID — última hora (${snaps.length} snapshots)`;
+
+  if (pct < 95) {
+    console.warn(`[CRON] ⚠️  ${base} — abaixo de 95%, classificação por subcategoria pode estar comprometida!`);
+  } else {
+    console.log(`[CRON] ✓ ${base}`);
+  }
+}
+
 // ── CONSOLIDAÇÃO ──────────────────────────────────────────────────────────────
 
 async function runConsolidate(date) {
@@ -284,7 +346,13 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
-  console.log('[CRON] Jobs iniciados — token a cada 45 min (24/7), snapshot a cada 15 min (06–20h), consolidação às 20:30');
+  // Health-check de UUID 1x por hora durante o expediente (06-20h)
+  // Detecção precoce de regressão no scraper que possa invalidar a classificação
+  uuidHealthJob = cron.schedule('5 6-20 * * *', runUuidHealthCheck, {
+    timezone: 'America/Sao_Paulo',
+  });
+
+  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health 1x/h (06–20h), consolidação 20:30');
 
   // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
   setTimeout(runTokenRefresh, 2000);
@@ -300,6 +368,7 @@ function stopCron() {
   tokenJob?.stop();
   snapshotJob?.stop();
   consolidaJob?.stop();
+  uuidHealthJob?.stop();
 }
 
 module.exports = { startCron, stopCron, runSnapshot, runConsolidate, runTokenRefresh, runClassifyNewNotes, runCacheNotaDetails };
