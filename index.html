@@ -2319,6 +2319,64 @@
       color: var(--text2); margin-left: 4px;
     }
 
+    /* ── Gráfico de tendência (SVG inline, sem deps) ───────────────────── */
+    .subcat-trend-wrap {
+      background: #fff;
+      border: 1px solid #ececea;
+      border-radius: 12px;
+      padding: 14px 16px 10px;
+      margin-bottom: 18px;
+    }
+    .subcat-trend-header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .subcat-trend-title {
+      font-size: 13px; font-weight: 600; color: var(--preto);
+    }
+    .subcat-trend-hint {
+      font-size: 11px; color: var(--text2);
+    }
+    .subcat-trend-svg {
+      width: 100%; height: 280px;
+      display: block;
+    }
+    .subcat-trend-svg .axis-line { stroke: #d8d8d4; stroke-width: 1; }
+    .subcat-trend-svg .grid-line { stroke: #f3f3f1; stroke-width: 1; stroke-dasharray: 2 3; }
+    .subcat-trend-svg .axis-label {
+      font-size: 10px; fill: var(--text2);
+      font-family: Roboto, sans-serif;
+    }
+    .subcat-trend-svg .data-line {
+      fill: none;
+      stroke-width: 2;
+      transition: stroke-width 0.15s, opacity 0.15s;
+    }
+    .subcat-trend-svg .data-line.dimmed { opacity: 0.15; }
+    .subcat-trend-svg .data-line.highlight { stroke-width: 3.5; }
+    .subcat-trend-svg .data-point { fill: #fff; stroke-width: 1.5; r: 3; }
+    .subcat-trend-svg .data-point.dimmed { opacity: 0.15; }
+    .subcat-trend-svg .data-point.highlight { r: 4.5; stroke-width: 2; }
+
+    .subcat-trend-legend {
+      display: flex; flex-wrap: wrap; gap: 10px 14px;
+      margin-top: 8px; padding-top: 8px;
+      border-top: 1px solid #f3f3f1;
+    }
+    .subcat-trend-legend-item {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--text);
+      cursor: pointer; user-select: none;
+      padding: 3px 8px; border-radius: 5px;
+      transition: background 0.15s;
+    }
+    .subcat-trend-legend-item:hover { background: rgba(254, 196, 14, 0.08); }
+    .subcat-trend-legend-item.is-hidden { opacity: 0.35; }
+    .subcat-trend-legend-swatch {
+      width: 12px; height: 3px; border-radius: 2px;
+    }
+
     /* ── Card clicável (ativa ranking) ───────────────────────────────────── */
     .subcat-card { cursor: pointer; transition: all 0.18s; }
     .subcat-card:hover {
@@ -4526,31 +4584,32 @@
     async function renderProdutividade(teams) {
       const metas = getMetas();
       const { de, ate } = currentMonitorRange();
-      // Totais do snapshot ao vivo (times atualmente logados, ou histórico do range)
-      const { totais: totaisLive, quantidades: qtdLive } = calcTotaisPorRegional(teams, de, ate);
 
-      // Totais acumulados do Supabase (inclui equipes que deslogaram no período).
-      // Usa Math.max para nunca cair abaixo do valor ao vivo.
+      // Fonte da verdade: daily_subcat_totals (mesmo cron que alimenta daily_totals,
+      // base do card OS Executadas). Garante que SOMA(cards produtividade) ===
+      // OS Executadas — sem isso, o Math.max por chave entre live e sb pode
+      // somar mais que qualquer fonte isolada (chaves diferentes "ganham" de
+      // fontes diferentes). Live só entra como fallback se o cron não tickou
+      // ainda hoje (sb vazio no início do dia).
+      let totaisLive, qtdLive;
       try {
         const r = await fetch(`${API}/totais/subcat?de=${de}&ate=${ate}`);
         if (r.ok) {
-          const { totais: totaisSB, quantidades: qtdSB } = await r.json();
-          ['ALL','GUA','CAC'].forEach(reg => {
-            const live = totaisLive[reg] || {};
-            const sb   = (totaisSB || {})[reg] || {};
-            const merged = { ...sb };
-            // Live sempre ganha se maior (dado mais fresco para times ainda ativos)
-            Object.keys(live).forEach(k => { merged[k] = Math.max(merged[k] || 0, live[k] || 0); });
-            totaisLive[reg] = merged;
-            // Quantidades: usa o máximo também
-            const qlive = (qtdLive[reg] || {});
-            const qsb   = (qtdSB || {})[reg] || {};
-            const qmerged = { ...qsb };
-            Object.keys(qlive).forEach(k => { if (qlive[k] > (qmerged[k] || 0)) qmerged[k] = qlive[k]; });
-            qtdLive[reg] = qmerged;
-          });
+          const j = await r.json();
+          const sbTotal = Object.values(j.totais?.ALL || {}).reduce((s, v) => s + (v || 0), 0);
+          if (sbTotal > 0) {
+            totaisLive = j.totais;
+            qtdLive    = j.quantidades;
+          }
         }
-      } catch (_) { /* falha silenciosa — usa só o live */ }
+      } catch (_) { /* fallback abaixo */ }
+
+      // Fallback: cron ainda não rodou (start-of-day) ou indisponível → usa cálculo live
+      if (!totaisLive) {
+        const live = calcTotaisPorRegional(teams, de, ate);
+        totaisLive = live.totais;
+        qtdLive    = live.quantidades;
+      }
 
       const grid = document.getElementById('prod-grid');
       const title = document.getElementById('prod-title');
