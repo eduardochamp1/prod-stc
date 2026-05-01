@@ -2319,6 +2319,76 @@
       color: var(--text2); margin-left: 4px;
     }
 
+    /* ── Card clicável (ativa ranking) ───────────────────────────────────── */
+    .subcat-card { cursor: pointer; transition: all 0.18s; }
+    .subcat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(35, 31, 32, 0.08);
+    }
+    .subcat-card.is-selected {
+      border-color: var(--amarelo);
+      box-shadow: 0 0 0 2px rgba(254, 196, 14, 0.3);
+    }
+    .subcat-card.is-selected .subcat-count { color: var(--preto); }
+
+    /* ── Ranking de equipes por subcategoria ──────────────────────────── */
+    .subcat-ranking-wrap {
+      background: #fff;
+      border: 1px solid #ececea;
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-top: 18px;
+    }
+    .subcat-ranking-header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .subcat-ranking-title {
+      font-size: 13px; font-weight: 600; color: var(--preto);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .subcat-ranking-hint {
+      font-size: 11px; color: var(--text2);
+    }
+    .subcat-ranking-clear {
+      background: none; border: 1px solid #d8d8d4;
+      color: var(--text2); cursor: pointer;
+      padding: 4px 10px; border-radius: 5px; font-size: 11px;
+      transition: all 0.15s;
+    }
+    .subcat-ranking-clear:hover {
+      background: var(--cinza2); color: var(--preto);
+    }
+    .subcat-ranking-table {
+      width: 100%; border-collapse: separate; border-spacing: 0;
+      font-size: 12px;
+    }
+    .subcat-ranking-table thead th {
+      text-align: left; font-size: 11px; font-weight: 600;
+      letter-spacing: 0.04em; color: var(--text2);
+      padding: 8px 10px;
+      border-bottom: 1px solid #e6e6e3;
+    }
+    .subcat-ranking-table thead th.num { text-align: right; }
+    .subcat-ranking-table tbody td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #f3f3f1;
+    }
+    .subcat-ranking-table tbody td.num { text-align: right; font-weight: 600; }
+    .subcat-ranking-table tbody tr:hover td { background: rgba(254, 196, 14, 0.04); }
+    .subcat-ranking-rank {
+      display: inline-block; min-width: 22px; font-weight: 700;
+      color: var(--text2); font-size: 11px;
+    }
+    .subcat-ranking-rank.top { color: var(--amarelo); }
+    .subcat-ranking-table .reg-badge {
+      display: inline-block; font-size: 9px; font-weight: 700;
+      padding: 1px 6px; border-radius: 3px;
+      background: var(--cinza2); color: var(--text2);
+      margin-right: 6px;
+    }
+
     /* Histórico: total em Tahoma */
     .hist-total {
       font-weight: 700;
@@ -4665,8 +4735,10 @@
     }
 
     // ── HISTÓRICO ─────────────────────────────────────────────────────────
-    let _histDias = [];           // cache dos dados de sessões
-    let _histSubcatActive = 'sessoes';   // sub-aba ativa: 'sessoes' | 'subcats'
+    let _histDias = [];                   // cache dos dados de sessões
+    let _histSubcatActive = 'sessoes';    // sub-aba ativa: 'sessoes' | 'subcats'
+    let _subcatSelectedKey = null;        // 'MD/TL11', 'DD/C93', etc — filtro do ranking
+    let _subcatLastContext = null;        // { regional, ym, de, ate } — pra re-renderizar ranking
 
     /**
      * Alterna entre sub-abas do Histórico:
@@ -4782,8 +4854,14 @@
         const qtdLabel = s.qtd && v.quantidade > 0
           ? `<div class="subcat-qtd"><strong>${Math.round(v.quantidade)}</strong> ${s.qtd} acumulados</div>`
           : '';
+        const isSelected = _subcatSelectedKey === key ? 'is-selected' : '';
+        // Card OUTROS sem cliques úteis (ranking de OUTROS é menos informativo) —
+        // mas mantemos clicável pra consistência. Apenas desativa se count=0.
+        const onclickAttr = v.count > 0
+          ? `onclick="selectSubcatForRanking('${key}', '${s.tipo}', '${s.sub_code}', this)"`
+          : 'style="cursor:default;opacity:0.5"';
         return `
-          <div class="subcat-card tipo-${s.tipo}">
+          <div class="subcat-card tipo-${s.tipo} ${isSelected}" ${onclickAttr}>
             <div class="subcat-tipo-badge">${s.tipo}</div>
             <div class="subcat-nome">${s.nome}</div>
             <div class="subcat-count">${v.count}</div>
@@ -4849,6 +4927,10 @@
       const labelRegional = regional === 'ALL' ? 'Todas regionais' : (regional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
       const labelPeriodo  = `${fmtData(de)} a ${fmtData(ate)}`;
 
+      // Salva contexto pra re-renderização do ranking quando user clica num card
+      const ym = de.slice(0, 7);
+      _subcatLastContext = { regional, ym, de, ate };
+
       cont.innerHTML = `
         ${avisoBanner}
         <div style="margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
@@ -4856,6 +4938,9 @@
             <strong style="color:var(--preto);font-size:14px">${labelRegional}</strong>
             · ${labelPeriodo}
             · Total executadas: <strong style="color:var(--preto)">${totalGeral}</strong>
+          </div>
+          <div style="font-size:11px;color:var(--text2);margin-left:auto">
+            💡 <em>Clique num card pra ver o ranking de equipes</em>
           </div>
         </div>
 
@@ -4873,7 +4958,149 @@
             <tbody>${linhas}</tbody>
           </table>
         </div>
+
+        <div id="subcat-ranking-container"></div>
       `;
+
+      // Se um card já estava selecionado (re-render), mantém ranking carregado
+      if (_subcatSelectedKey) {
+        const [tipo, subCode] = _subcatSelectedKey.split('/');
+        loadSubcatRanking(tipo, subCode);
+      }
+    }
+
+    /**
+     * Seleciona uma subcategoria pra ver ranking de equipes.
+     * Chamada onclick dos cards .subcat-card.
+     */
+    function selectSubcatForRanking(key, tipo, subCode, cardEl) {
+      // Toggle: clicar no mesmo card desativa
+      if (_subcatSelectedKey === key) {
+        _subcatSelectedKey = null;
+        document.querySelectorAll('.subcat-card.is-selected').forEach(c => c.classList.remove('is-selected'));
+        const cont = document.getElementById('subcat-ranking-container');
+        if (cont) cont.innerHTML = '';
+        return;
+      }
+
+      _subcatSelectedKey = key;
+      document.querySelectorAll('.subcat-card.is-selected').forEach(c => c.classList.remove('is-selected'));
+      cardEl.classList.add('is-selected');
+      loadSubcatRanking(tipo, subCode);
+    }
+
+    /**
+     * Busca ranking de equipes pra (tipo, subCode) e renderiza no container.
+     * Usa /api/historico/subcats/ranking que agrega team_daily_subcat_totals
+     * pelo mês inteiro do ctx atual.
+     */
+    async function loadSubcatRanking(tipo, subCode) {
+      const cont = document.getElementById('subcat-ranking-container');
+      if (!cont || !_subcatLastContext) return;
+
+      const { regional, ym } = _subcatLastContext;
+      const subDisplay = SUBCAT_DISPLAY.find(s => s.tipo === tipo && s.sub_code === subCode);
+      const nome = subDisplay?.nome || subCode;
+      const qtdUnit = subDisplay?.qtd; // 'm' ou 'pt' se aplicável
+
+      cont.innerHTML = `
+        <div class="subcat-ranking-wrap">
+          <div class="subcat-ranking-title">
+            🏆 Ranking de equipes — <span class="subcat-tipo-tag tipo-${tipo}">${tipo}</span> ${nome}
+          </div>
+          <div style="margin-top:14px;color:var(--text2);font-size:12px"><div class="spinner" style="display:inline-block"></div> Carregando ranking...</div>
+        </div>
+      `;
+
+      try {
+        const params = new URLSearchParams({ m: ym, tipo, subCode });
+        if (regional && regional !== 'ALL') params.set('regional', regional);
+        const data = await fetch(`${API}/historico/subcats/ranking?${params}`).then(r => r.json());
+        renderSubcatRanking(data.ranking || [], tipo, subCode, nome, qtdUnit);
+      } catch (err) {
+        cont.innerHTML = `<div class="subcat-ranking-wrap"><div style="color:var(--vermelho);font-size:12px">Erro: ${err.message}</div></div>`;
+      }
+    }
+
+    function renderSubcatRanking(ranking, tipo, subCode, nome, qtdUnit) {
+      const cont = document.getElementById('subcat-ranking-container');
+      if (!cont) return;
+
+      const { regional, de, ate } = _subcatLastContext || {};
+      const labelRegional = !regional || regional === 'ALL' ? 'Todas regionais' : regional;
+      const labelPeriodo  = `${fmtData(de)} a ${fmtData(ate)}`;
+
+      if (ranking.length === 0) {
+        cont.innerHTML = `
+          <div class="subcat-ranking-wrap">
+            <div class="subcat-ranking-header">
+              <div class="subcat-ranking-title">
+                🏆 Ranking de equipes — <span class="subcat-tipo-tag tipo-${tipo}">${tipo}</span> ${nome}
+              </div>
+              <button class="subcat-ranking-clear" onclick="clearSubcatRanking()">✕ Limpar seleção</button>
+            </div>
+            <div style="color:var(--text2);font-size:12px;padding:10px 0">Nenhuma equipe executou ${nome} no período (${labelRegional} · ${labelPeriodo}).</div>
+          </div>
+        `;
+        return;
+      }
+
+      const totalGeral = ranking.reduce((s, r) => s + r.count, 0);
+      const totalQtd   = ranking.reduce((s, r) => s + Number(r.quantidade || 0), 0);
+
+      const linhas = ranking.map((r, idx) => {
+        const rank = idx + 1;
+        const rankCls = rank <= 3 ? 'top' : '';
+        const qtdLabel = qtdUnit && r.quantidade > 0
+          ? `<span class="subcat-qtd-tag">(${Math.round(r.quantidade)}${qtdUnit})</span>`
+          : '';
+        const pct = totalGeral > 0 ? ((r.count / totalGeral) * 100).toFixed(1) : '0';
+        return `
+          <tr>
+            <td><span class="subcat-ranking-rank ${rankCls}">${rank}º</span></td>
+            <td><span class="reg-badge">${r.regional || ''}</span><strong>${r.team_name}</strong></td>
+            <td class="num">${r.count}${qtdLabel}</td>
+            <td class="num" style="color:var(--text2);font-weight:400">${pct}%</td>
+          </tr>
+        `;
+      }).join('');
+
+      const totalQtdLabel = qtdUnit && totalQtd > 0
+        ? ` (<strong>${Math.round(totalQtd)}</strong> ${qtdUnit} total)`
+        : '';
+
+      cont.innerHTML = `
+        <div class="subcat-ranking-wrap">
+          <div class="subcat-ranking-header">
+            <div class="subcat-ranking-title">
+              🏆 Ranking de equipes — <span class="subcat-tipo-tag tipo-${tipo}">${tipo}</span> ${nome}
+            </div>
+            <div class="subcat-ranking-hint">
+              ${ranking.length} equipe(s) · ${totalGeral} execuções${totalQtdLabel} · ${labelRegional} · ${labelPeriodo}
+            </div>
+            <button class="subcat-ranking-clear" onclick="clearSubcatRanking()">✕ Limpar seleção</button>
+          </div>
+          <table class="subcat-ranking-table">
+            <thead>
+              <tr>
+                <th style="width:40px"></th>
+                <th>Equipe</th>
+                <th class="num">Execuções</th>
+                <th class="num">% do total</th>
+              </tr>
+            </thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    /** Limpa a seleção de subcategoria — esconde o ranking. */
+    function clearSubcatRanking() {
+      _subcatSelectedKey = null;
+      document.querySelectorAll('.subcat-card.is-selected').forEach(c => c.classList.remove('is-selected'));
+      const cont = document.getElementById('subcat-ranking-container');
+      if (cont) cont.innerHTML = '';
     }
 
     async function loadHistorico() {
