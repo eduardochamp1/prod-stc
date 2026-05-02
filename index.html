@@ -3743,22 +3743,22 @@
       background: var(--branco);
       border-radius: var(--radius-lg);
       box-shadow: var(--shadow-sm);
-      padding: 14px 10px 12px;
+      padding: 12px 10px 14px;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
+      gap: 2px;
     }
-    .gauge-svg { width: 100%; max-width: 160px; }
+    .gauge-svg { width: 100%; max-width: 148px; }
     .gauge-val-text {
-      font-size: 22px;
+      font-size: 24px;
       font-weight: 700;
       fill: var(--text);
       font-family: 'Roboto', sans-serif;
     }
     .gauge-pct-text {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 12px;
+      font-weight: 700;
       font-family: 'Roboto', sans-serif;
     }
     .gauge-label {
@@ -3766,6 +3766,7 @@
       font-weight: 700;
       color: var(--text);
       text-align: center;
+      margin-top: 2px;
     }
     .gauge-meta-label {
       font-size: 11px;
@@ -4681,28 +4682,48 @@
     }
 
     /**
-     * Desenha um gauge SVG semicircular.
-     * pct: 0–1 (real = realizado/meta). Permite > 1 (exibido em verde escuro, valor real).
+     * Gauge SVG no estilo velocímetro (arco de 240°).
+     * O arco parte do canto inferior-esquerdo, sobe, passa pelo topo e termina
+     * no canto inferior-direito. O valor e % aparecem na "boca" do gauge.
      */
     function buildGaugeSVG(realizado, meta, cor) {
-      const R = 80;
-      const CX = 100, CY = 100;
-      const circum = Math.PI * R;  // ≈ 251.33 (semicircle)
-      const pct = meta > 0 ? realizado / meta : 0;
-      const pctCap = Math.min(pct, 1);
-      const filled = pctCap * circum;
-      const pctTxt = meta > 0 ? Math.round(pct * 100) + '%' : '—';
+      const R = 70, CX = 100, CY = 88;
+      const toR = d => d * Math.PI / 180;
 
-      // background arc: full semicircle (upper half), sweep-flag=0 (counterclockwise in SVG = goes up)
-      const bgPath = `M ${CX - R} ${CY} A ${R} ${R} 0 0 0 ${CX + R} ${CY}`;
+      // Ponto no arco a partir de um ângulo matemático (graus)
+      function pt(deg) {
+        return [(CX + R * Math.cos(toR(deg))).toFixed(1),
+                (CY - R * Math.sin(toR(deg))).toFixed(1)];
+      }
 
-      return `<svg viewBox="0 0 200 120" class="gauge-svg" style="overflow:visible">
-  <path d="${bgPath}" fill="none" stroke="#e8e8e5" stroke-width="13" stroke-linecap="round"/>
-  <path d="${bgPath}" fill="none" stroke="${cor}" stroke-width="13" stroke-linecap="round"
-        stroke-dasharray="${filled.toFixed(2)} ${circum.toFixed(2)}"
-        stroke-dashoffset="0"/>
-  <text x="${CX}" y="${CY - 5}" text-anchor="middle" class="gauge-val-text">${realizado}</text>
-  <text x="${CX}" y="${CY + 14}" text-anchor="middle" class="gauge-pct-text" fill="${cor}">${pctTxt}</text>
+      // Arco de 240°: início = 210° (inferior-esq), fim = 330° (inferior-dir)
+      // Atravessa o topo (90°) — sentido anti-horário na tela (sweep-flag=0)
+      const [sx, sy] = pt(210);   // ≈ (39.6, 123)
+      const [ex, ey] = pt(330);   // ≈ (160.4, 123)
+
+      const totalLen = (240 / 360) * 2 * Math.PI * R;  // ≈ 293.2
+      const pct      = meta > 0 ? realizado / meta : 0;
+      const pctCap   = Math.min(pct, 1);
+      const filled   = pctCap * totalLen;
+      const pctTxt   = meta > 0 ? Math.round(pct * 100) + '%' : '—';
+
+      // Caminho base: arco 240° large-arc (flag=1) anti-horário (flag=0)
+      const arcPath = `M ${sx} ${sy} A ${R} ${R} 0 1 0 ${ex} ${ey}`;
+
+      // Linha de fundo abaixo do arco (fecha visualmente a boca do gauge)
+      const gap = `M ${sx} ${sy} L ${ex} ${ey}`;
+
+      // Arco preenchido: só renderiza se > 0.5% para evitar dot fantasma
+      const fillArc = filled > 1.5
+        ? `<path d="${arcPath}" fill="none" stroke="${cor}" stroke-width="14" stroke-linecap="round"
+             stroke-dasharray="${filled.toFixed(2)} ${totalLen.toFixed(2)}" stroke-dashoffset="0"/>`
+        : '';
+
+      return `<svg viewBox="0 0 200 148" class="gauge-svg">
+  <path d="${arcPath}" fill="none" stroke="#e8e8e5" stroke-width="14" stroke-linecap="round"/>
+  ${fillArc}
+  <text x="${CX}" y="116" text-anchor="middle" class="gauge-val-text">${realizado}</text>
+  <text x="${CX}" y="133" text-anchor="middle" class="gauge-pct-text" fill="${cor}">${pctTxt}</text>
 </svg>`;
     }
 
