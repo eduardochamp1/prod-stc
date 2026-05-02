@@ -223,11 +223,13 @@ async function runClassifyNewNotes(teams) {
 
   if (jobs.length === 0) return;
 
-  const { getClassifiedIds, upsertSubcategorias } = require('../db/subcategoriasQueries');
+  // getClassifiedIdsComplete exclui notas DD com C93/BTZ013 e quantidade=null,
+  // permitindo que sejam re-tentadas para obter o Amount (metros/unid.) do WPA.
+  const { getClassifiedIdsComplete, upsertSubcategorias } = require('../db/subcategoriasQueries');
   const { classificarBatch } = require('./classifierService');
 
-  // Filtra os que já estão classificados no Supabase
-  const known = await getClassifiedIds();
+  // Filtra os que já estão COMPLETAMENTE classificados no Supabase
+  const known = await getClassifiedIdsComplete();
   const todo  = jobs.filter(j => !known.has(j.noteId));
   if (todo.length === 0) {
     console.log(`[CRON] Subcategorias: nada novo (${jobs.length} UUIDs, todos cacheados)`);

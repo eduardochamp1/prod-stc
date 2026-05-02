@@ -1084,6 +1084,15 @@ router.post('/admin/backfill', async (req, res) => {
     await upsertDailyTotals(teams, date);
     await upsertTeamDailyTotals(teams, date);
 
+    // Classifica subcategorias (incluindo Amount de C93/BTZ013) ANTES de consolidar,
+    // para que upsertSubcatTotals dentro de runConsolidate encontre os dados corretos.
+    const { runClassifyNewNotes } = require('../services/cronService');
+    const allNotasBackfill = [...teams];
+    console.log(`[BACKFILL] Classificando subcategorias para ${date}...`);
+    await runClassifyNewNotes(allNotasBackfill).catch(err =>
+      console.warn(`[BACKFILL] runClassifyNewNotes falhou (não crítico): ${err.message}`)
+    );
+
     // Consolida ao final para garantir apenas concluídas nos totais históricos
     const c = cron();
     if (c) await c.runConsolidate(date);
@@ -1152,6 +1161,12 @@ router.post('/admin/backfill/range', async (req, res) => {
       await saveSnapshot(teams, date);
       await upsertDailyTotals(teams, date);
       await upsertTeamDailyTotals(teams, date);
+
+      // Classifica subcategorias (Amount de C93/BTZ013) antes de consolidar
+      const { runClassifyNewNotes } = require('../services/cronService');
+      await runClassifyNewNotes(teams).catch(err =>
+        console.warn(`[BACKFILL-RANGE] ${date}: runClassifyNewNotes falhou: ${err.message}`)
+      );
 
       const c = cron();
       if (c) await c.runConsolidate(date);

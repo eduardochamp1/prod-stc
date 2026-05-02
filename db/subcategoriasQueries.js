@@ -126,8 +126,45 @@ async function getNoteIdsByTipo(tipo) {
   return out;
 }
 
+/**
+ * Retorna o conjunto de UUIDs "completamente" classificados.
+ *
+ * Diferença de getClassifiedIds():
+ *   Notas DD com sub_code C93 ou BTZ013 e quantidade IS NULL são consideradas
+ *   INCOMPLETAS e ficam fora do Set — assim runClassifyNewNotes vai re-tentar
+ *   buscá-las no WPA para obter o Amount (metros de ramal / unid. CS).
+ *
+ *   Todos os outros casos (MD, SF, DD com sub_code ≠ C93/BTZ013, etc.) são
+ *   considerados completos e não são re-tentados.
+ */
+async function getClassifiedIdsComplete() {
+  const sb = getClient();
+  const ids = new Set();
+  let from = 0;
+  const PAGE = 1000;
+  while (true) {
+    const { data, error } = await sb
+      .from('note_subcategorias')
+      .select('note_id, tipo, sub_code, quantidade')
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    data.forEach(r => {
+      // DD com sub_code de quantidade (C93/BTZ013) mas quantidade null → incompleto
+      const isDD      = (r.tipo      || '').toUpperCase() === 'DD';
+      const needsQty  = ['C93', 'BTZ013'].includes((r.sub_code || '').toUpperCase());
+      if (isDD && needsQty && r.quantidade == null) return; // deixa fora para re-tentar
+      ids.add(r.note_id);
+    });
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return ids;
+}
+
 module.exports = {
   getClassifiedIds,
+  getClassifiedIdsComplete,
   upsertSubcategorias,
   getSubcategoriasByIds,
   getCountsBySubcode,
