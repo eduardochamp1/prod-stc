@@ -3735,40 +3735,28 @@
     /* Gauges */
     .gauge-grid {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 12px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
     }
-    @media (max-width: 1200px) { .gauge-grid { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 640px)  { .gauge-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 640px) { .gauge-grid { grid-template-columns: repeat(2, 1fr); } }
 
     .gauge-card {
       background: var(--branco);
       border-radius: var(--radius-lg);
       box-shadow: var(--shadow-sm);
-      padding: 12px 10px 14px;
+      padding: 14px 14px 10px;
       display: flex;
       flex-direction: column;
-      align-items: center;
-      gap: 2px;
+      align-items: stretch;
     }
     .gauge-svg { width: 100%; height: auto; display: block; }
     .gauge-label {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
-      color: var(--text);
-      text-align: center;
-      margin-top: 2px;
-    }
-    .gauge-meta-label {
-      font-size: 11px;
       color: var(--text2);
-      text-align: center;
-    }
-    .gauge-no-meta {
-      font-size: 11px;
-      color: var(--cinza3);
-      text-align: center;
-      margin-top: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
     }
 
     /* Summary KPI cards for perf */
@@ -4690,40 +4678,43 @@
      * no canto inferior-direito. O valor e % aparecem na "boca" do gauge.
      */
     function buildGaugeSVG(realizado, meta, cor) {
-      // Velocímetro 240° — viewBox 200×152
-      // Centro (100, 98), raio 80: arco de 210° (inf-esq) a 330° (inf-dir) passando pelo topo
-      const CX = 100, CY = 98, R = 80;
-      const toR = d => d * Math.PI / 180;
-      const pt  = d => [
-        (CX + R * Math.cos(toR(d))).toFixed(2),
-        (CY - R * Math.sin(toR(d))).toFixed(2),
-      ];
+      // Semicírculo 180° — igual ao modelo Power BI
+      // viewBox 200×125, centro (100,100), raio 80, stroke 22
+      // Arco vai da extremidade esquerda (20,100) à direita (180,100) passando pelo topo
+      const CX = 100, CY = 100, R = 80, SW = 22;
 
-      const [sx, sy] = pt(210);   // ≈ (30.7, 138) — inferior-esquerdo
-      const [ex, ey] = pt(330);   // ≈ (169.3, 138) — inferior-direito
+      // M (esquerda) A R R 0 0 0 (direita) : sweep=0 (CCW no SVG) → vai pelo TOPO ✓
+      const sx = CX - R;  // 20
+      const ex = CX + R;  // 180
+      const arcPath = `M ${sx} ${CY} A ${R} ${R} 0 0 0 ${ex} ${CY}`;
 
-      // Arco 240°: large-arc=1, sweep=0 (CCW no SVG = vai pelo topo)
-      const arcPath = `M ${sx} ${sy} A ${R} ${R} 0 1 0 ${ex} ${ey}`;
-
-      const totalLen = (240 / 360) * 2 * Math.PI * R;  // ≈ 335
+      // comprimento do semicírculo = π × R ≈ 251
+      const totalLen = Math.PI * R;
       const pct      = meta > 0 ? realizado / meta : 0;
-      const pctCap   = Math.min(pct, 1);
-      const filled   = pctCap * totalLen;
-      const pctTxt   = meta > 0 ? Math.round(pct * 100) + '%' : '—';
+      const filled   = Math.min(pct, 1) * totalLen;
 
-      // Arco preenchido: só renderiza se filled > 2px (evita dot fantasma a 0%)
-      const fillArc = filled > 2
-        ? `<path d="${arcPath}" fill="none" stroke="${cor}" stroke-width="18" stroke-linecap="round"
+      // Arco de preenchimento: stroke-dasharray preenche da esquerda para a direita via topo
+      // filled > 3 evita o ponto fantasma quando valor = 0
+      const fillArc = filled > 3
+        ? `<path d="${arcPath}" fill="none" stroke="${cor}" stroke-width="${SW}" stroke-linecap="round"
              stroke-dasharray="${filled.toFixed(2)} ${totalLen.toFixed(2)}" stroke-dashoffset="0"/>`
         : '';
 
-      return `<svg viewBox="0 0 200 152" xmlns="http://www.w3.org/2000/svg" class="gauge-svg">
-  <path d="${arcPath}" fill="none" stroke="#e0e0da" stroke-width="18" stroke-linecap="round"/>
+      const metaLbl = meta > 0 ? meta : '';
+
+      return `<svg viewBox="0 0 200 125" xmlns="http://www.w3.org/2000/svg" class="gauge-svg">
+  <!-- Trilha cinza de fundo -->
+  <path d="${arcPath}" fill="none" stroke="#e0e0da" stroke-width="${SW}" stroke-linecap="round"/>
+  <!-- Arco colorido de progresso -->
   ${fillArc}
-  <text x="${CX}" y="107" text-anchor="middle" font-size="30" font-weight="700"
+  <!-- Valor principal centralizado dentro do arco -->
+  <text x="${CX}" y="92" text-anchor="middle" font-size="34" font-weight="700"
         fill="#2c2c28" font-family="Roboto,sans-serif">${realizado}</text>
-  <text x="${CX}" y="128" text-anchor="middle" font-size="14" font-weight="700"
-        fill="${cor}" font-family="Roboto,sans-serif">${pctTxt}</text>
+  <!-- Escala: 0 à esquerda, meta à direita -->
+  <text x="${sx + 4}" y="119" text-anchor="start" font-size="11" fill="#aaa"
+        font-family="Roboto,sans-serif">0</text>
+  <text x="${ex - 4}" y="119" text-anchor="end" font-size="11" fill="#aaa"
+        font-family="Roboto,sans-serif">${metaLbl}</text>
 </svg>`;
     }
 
@@ -4774,11 +4765,9 @@
                    : pct >= 0.7 ? '#FEC40E'
                    : '#ED1C24';
         const svg  = buildGaugeSVG(val, meta, cor);
-        const metaLabel = meta > 0 ? `Meta: ${meta} (${diasPeriodo}du)` : 'Sem meta';
         return `<div class="gauge-card">
-  ${svg}
   <div class="gauge-label">${g.label}</div>
-  <div class="gauge-meta-label">${metaLabel}</div>
+  ${svg}
 </div>`;
       }).join('');
 
