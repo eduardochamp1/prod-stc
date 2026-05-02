@@ -673,6 +673,55 @@ async function setSetting(key, value) {
 }
 
 /**
+ * Busca todas as linhas de uma tabela num intervalo, paginando para evitar o
+ * limite de 1000 linhas do Supabase. Retorna array com todos os registros.
+ */
+async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
+  const PAGE = 1000;
+  let allRows = [], page = 0;
+  while (true) {
+    let q = sb
+      .from(tableName)
+      .select(selectFields)
+      .gte('date', de)
+      .lte('date', ate)
+      .order('date')
+      .range(page * PAGE, (page + 1) * PAGE - 1);
+    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    const { data, error } = await q;
+    if (error) throw new Error(`[export] ${tableName}: ${error.message}`);
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < PAGE) break;
+    page++;
+  }
+  return allRows;
+}
+
+/**
+ * Exporta dados brutos de todas as tabelas de histórico para um intervalo.
+ * Retorna:
+ *   daily_subcat:  daily_subcat_totals  (regional × tipo × sub_code + quantidade)
+ *   team_subcat:   team_daily_subcat_totals (equipe × tipo × sub_code + quantidade)
+ *   team_totais:   team_daily_totals    (equipe × tipo_code)
+ *   daily_totais:  daily_totals         (regional × tipo_code)
+ */
+async function getExportData(de, ate, regional) {
+  const sb = getClient();
+  const [daily_subcat, team_subcat, team_totais, daily_totais] = await Promise.all([
+    _paginateTable(sb, 'daily_subcat_totals',
+      'date, regional, tipo, sub_code, count, quantidade', de, ate, regional),
+    _paginateTable(sb, 'team_daily_subcat_totals',
+      'date, team_name, regional, sector_id, tipo, sub_code, count, quantidade', de, ate, regional),
+    _paginateTable(sb, 'team_daily_totals',
+      'date, team_name, regional, sector_id, tipo_code, count', de, ate, regional),
+    _paginateTable(sb, 'daily_totals',
+      'date, regional, tipo_code, count', de, ate, regional),
+  ]);
+  return { daily_subcat, team_subcat, team_totais, daily_totais };
+}
+
+/**
  * Performance de equipes num período: total OS, dias trabalhados, média OS/dia.
  * tipo: 'COMERCIAL' (team_name starts with EC), 'PLANTAO' (starts with EP), 'TODAS'
  */
@@ -743,4 +792,5 @@ module.exports = {
   getTeamSessionHistory,
   getDailySubcatTotals,
   getPerformanceEquipes,
+  getExportData,
 };

@@ -200,6 +200,32 @@ router.get('/totais/dia', async (req, res) => {
   }
 });
 
+// GET /api/export/historico?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=ALL
+// Retorna dados brutos de todas as tabelas de histórico para exportação XLSX.
+// Máximo de 93 dias por requisição.
+router.get('/export/historico', async (req, res) => {
+  try {
+    const sq = sbq();
+    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const firstOfMonth = today.slice(0, 8) + '01';
+    const de       = req.query.de       || firstOfMonth;
+    const ate      = req.query.ate      || today;
+    const regional = req.query.regional || 'ALL';
+
+    const MAX_DAYS = 93;
+    const diffMs = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
+    if (diffMs > MAX_DAYS * 86400 * 1000) {
+      return res.status(400).json({ error: `Período máximo para exportação: ${MAX_DAYS} dias.` });
+    }
+    if (!sq) return res.json({ daily_subcat: [], team_subcat: [], team_totais: [], daily_totais: [], de, ate });
+    const data = await sq.getExportData(de, ate, regional);
+    res.json({ ...data, de, ate, regional });
+  } catch (err) {
+    console.error('[export/historico]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/performance/equipes?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=ALL&tipo=TODAS
 // tipo: TODAS | COMERCIAL (EC*) | PLANTAO (EP*)
 router.get('/performance/equipes', async (req, res) => {

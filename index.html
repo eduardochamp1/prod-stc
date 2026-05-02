@@ -7,6 +7,8 @@
   <title>WPA Monitor — Engelmig Energia</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <!-- SheetJS (XLSX) — geração de planilhas no cliente -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <style>
     :root {
       --verde: #086738;
@@ -4173,6 +4175,12 @@
               oninput="applyHistoricoFilters()" />
           </div>
           <button class="btn-refresh" onclick="loadHistorico()">↻ Atualizar</button>
+          <button class="btn-refresh" id="btn-export-xlsx"
+            onclick="downloadHistoricoXLSX()"
+            style="background:var(--verde);color:#fff;gap:6px"
+            title="Baixar histórico completo em Excel (XLSX)">
+            ⬇ Baixar XLSX
+          </button>
         </div>
       </div>
 
@@ -4227,6 +4235,12 @@
             </select>
           </div>
           <button class="btn-refresh" onclick="loadGraficos()">↻ Atualizar</button>
+          <button class="btn-refresh" id="btn-export-graf-xlsx"
+            onclick="downloadGraficosXLSX()"
+            style="background:var(--verde);color:#fff"
+            title="Baixar histórico do período em Excel (XLSX)">
+            ⬇ Baixar XLSX
+          </button>
         </div>
       </div>
 
@@ -7006,6 +7020,152 @@ ${equipes.length > 0 ? `<div class="perf-section">
       } catch (err) {
         out.textContent = `✗ Falha ao executar: ${err.message}`;
       }
+    }
+
+    // ── EXPORTAÇÃO XLSX ───────────────────────────────────────────────────────
+
+    /**
+     * Nomes amigáveis para tipos e subcategorias no XLSX
+     */
+    const TIPO_NOME = {
+      LN:'Ligação Nova', LE:'Ligação Existente', DL:'Desligamento',
+      MD:'Modificação', SF:'Suspensão Fornecimento', RL:'Religa',
+      UG:'Uso Geral', DD:'Distrib. (DD)', II:'Inspeção Irregular.',
+      PO:'Ordem Prioritária', SO:'SO', RD:'RD',
+    };
+    const SUBCAT_NOME = {
+      TL11:'Subs TL11', OBSOLETO:'Subs Obsoleto', L0:'Corte Disjuntor',
+      L1:'Corte Borne', C93:'Subs Ramal', BTZ013:'Substituição CS',
+      OUTROS:'Outros',
+    };
+
+    /**
+     * Baixa o histórico completo (DE/ATÉ da aba Histórico) como arquivo XLSX.
+     */
+    async function downloadHistoricoXLSX() {
+      const de  = document.getElementById('hist-de-input')?.value;
+      const ate = document.getElementById('hist-ate-input')?.value;
+      const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
+      if (!de || !ate) { alert('Selecione o período DE e ATÉ antes de exportar.'); return; }
+      const btn = document.getElementById('btn-export-xlsx');
+      await _doExportXLSX(de, ate, regional, btn);
+    }
+
+    /**
+     * Núcleo do export XLSX: busca dados, monta workbook e dispara download.
+     * Exporta quatro abas:
+     *   1. Resumo Diário      — daily_subcat_totals (regional × subcat + quantidade)
+     *   2. Por Equipe Subcat  — team_daily_subcat_totals (equipe × subcat + quantidade)
+     *   3. Por Equipe Total   — team_daily_totals (equipe × tipo)
+     *   4. Totais Regionais   — daily_totals (regional × tipo)
+     */
+    async function _doExportXLSX(de, ate, regional, btn) {
+      if (!window.XLSX) {
+        alert('Biblioteca XLSX não carregada. Verifique sua conexão e recarregue a página.');
+        return;
+      }
+
+      const origHTML = btn?.innerHTML;
+      if (btn) { btn.innerHTML = '⏳ Baixando...'; btn.disabled = true; }
+
+      try {
+        const url = `${API}/export/historico?de=${de}&ate=${ate}&regional=${regional}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error || `HTTP ${res.status}`);
+        }
+        const d = await res.json();
+
+        const wb = XLSX.utils.book_new();
+
+        // ── Aba 1: Resumo Diário (regional × subcat) ────────────────────────
+        {
+          const hdr = ['Data', 'Regional', 'Tipo', 'Subcategoria', 'Nome Subcat', 'Qtd OS', 'Quantidade'];
+          const rows = (d.daily_subcat || []).map(r => [
+            r.date, r.regional,
+            TIPO_NOME[r.tipo] || r.tipo,
+            r.sub_code, SUBCAT_NOME[r.sub_code] || r.sub_code,
+            r.count,
+            r.quantidade != null ? Number(r.quantidade) : '',
+          ]);
+          const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
+          _autoWidth(ws, [hdr, ...rows]);
+          XLSX.utils.book_append_sheet(wb, ws, 'Resumo Diário');
+        }
+
+        // ── Aba 2: Por Equipe — Subcategoria + Quantidade ───────────────────
+        {
+          const hdr = ['Data', 'Equipe', 'Regional', 'Setor', 'Tipo', 'Subcategoria', 'Nome Subcat', 'Qtd OS', 'Quantidade'];
+          const rows = (d.team_subcat || []).map(r => [
+            r.date, r.team_name, r.regional, r.sector_id,
+            TIPO_NOME[r.tipo] || r.tipo,
+            r.sub_code, SUBCAT_NOME[r.sub_code] || r.sub_code,
+            r.count,
+            r.quantidade != null ? Number(r.quantidade) : '',
+          ]);
+          const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
+          _autoWidth(ws, [hdr, ...rows]);
+          XLSX.utils.book_append_sheet(wb, ws, 'Por Equipe - Subcat');
+        }
+
+        // ── Aba 3: Por Equipe — Total por Tipo ──────────────────────────────
+        {
+          const hdr = ['Data', 'Equipe', 'Regional', 'Setor', 'Tipo', 'Nome Tipo', 'Qtd OS'];
+          const rows = (d.team_totais || []).map(r => [
+            r.date, r.team_name, r.regional, r.sector_id,
+            r.tipo_code, TIPO_NOME[r.tipo_code] || r.tipo_code,
+            r.count,
+          ]);
+          const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
+          _autoWidth(ws, [hdr, ...rows]);
+          XLSX.utils.book_append_sheet(wb, ws, 'Por Equipe - Total');
+        }
+
+        // ── Aba 4: Totais Regionais ──────────────────────────────────────────
+        {
+          const hdr = ['Data', 'Regional', 'Tipo', 'Nome Tipo', 'Qtd OS'];
+          const rows = (d.daily_totais || []).map(r => [
+            r.date, r.regional,
+            r.tipo_code, TIPO_NOME[r.tipo_code] || r.tipo_code,
+            r.count,
+          ]);
+          const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
+          _autoWidth(ws, [hdr, ...rows]);
+          XLSX.utils.book_append_sheet(wb, ws, 'Totais Regionais');
+        }
+
+        // ── Dispara download ─────────────────────────────────────────────────
+        const regLabel = regional === 'ALL' ? 'todas' : regional.toLowerCase();
+        XLSX.writeFile(wb, `historico_${de}_${ate}_${regLabel}.xlsx`);
+
+      } catch (err) {
+        alert(`Erro ao exportar: ${err.message}`);
+      } finally {
+        if (btn) { btn.innerHTML = origHTML; btn.disabled = false; }
+      }
+    }
+
+    /** Download XLSX a partir dos filtros da aba Gráficos */
+    async function downloadGraficosXLSX() {
+      const { de, ate } = grafRange();
+      const regional = document.getElementById('graf-regional-select')?.value || 'ALL';
+      const btn = document.getElementById('btn-export-graf-xlsx');
+      await _doExportXLSX(de, ate, regional, btn);
+    }
+
+    /** Ajusta largura das colunas automaticamente com base no conteúdo */
+    function _autoWidth(ws, data) {
+      if (!data || data.length === 0) return;
+      const cols = data[0].length;
+      const widths = Array(cols).fill(8);
+      data.forEach(row => {
+        row.forEach((cell, i) => {
+          const len = cell != null ? String(cell).length : 0;
+          if (len > widths[i]) widths[i] = len;
+        });
+      });
+      ws['!cols'] = widths.map(w => ({ wch: Math.min(w + 2, 50) }));
     }
   </script>
 </body>
