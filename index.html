@@ -3751,18 +3751,7 @@
       align-items: center;
       gap: 2px;
     }
-    .gauge-svg { width: 100%; max-width: 148px; }
-    .gauge-val-text {
-      font-size: 24px;
-      font-weight: 700;
-      fill: var(--text);
-      font-family: 'Roboto', sans-serif;
-    }
-    .gauge-pct-text {
-      font-size: 12px;
-      font-weight: 700;
-      font-family: 'Roboto', sans-serif;
-    }
+    .gauge-svg { width: 100%; height: auto; display: block; }
     .gauge-label {
       font-size: 12px;
       font-weight: 700;
@@ -4701,43 +4690,40 @@
      * no canto inferior-direito. O valor e % aparecem na "boca" do gauge.
      */
     function buildGaugeSVG(realizado, meta, cor) {
-      const R = 70, CX = 100, CY = 88;
+      // Velocímetro 240° — viewBox 200×152
+      // Centro (100, 98), raio 80: arco de 210° (inf-esq) a 330° (inf-dir) passando pelo topo
+      const CX = 100, CY = 98, R = 80;
       const toR = d => d * Math.PI / 180;
+      const pt  = d => [
+        (CX + R * Math.cos(toR(d))).toFixed(2),
+        (CY - R * Math.sin(toR(d))).toFixed(2),
+      ];
 
-      // Ponto no arco a partir de um ângulo matemático (graus)
-      function pt(deg) {
-        return [(CX + R * Math.cos(toR(deg))).toFixed(1),
-                (CY - R * Math.sin(toR(deg))).toFixed(1)];
-      }
+      const [sx, sy] = pt(210);   // ≈ (30.7, 138) — inferior-esquerdo
+      const [ex, ey] = pt(330);   // ≈ (169.3, 138) — inferior-direito
 
-      // Arco de 240°: início = 210° (inferior-esq), fim = 330° (inferior-dir)
-      // Atravessa o topo (90°) — sentido anti-horário na tela (sweep-flag=0)
-      const [sx, sy] = pt(210);   // ≈ (39.6, 123)
-      const [ex, ey] = pt(330);   // ≈ (160.4, 123)
+      // Arco 240°: large-arc=1, sweep=0 (CCW no SVG = vai pelo topo)
+      const arcPath = `M ${sx} ${sy} A ${R} ${R} 0 1 0 ${ex} ${ey}`;
 
-      const totalLen = (240 / 360) * 2 * Math.PI * R;  // ≈ 293.2
+      const totalLen = (240 / 360) * 2 * Math.PI * R;  // ≈ 335
       const pct      = meta > 0 ? realizado / meta : 0;
       const pctCap   = Math.min(pct, 1);
       const filled   = pctCap * totalLen;
       const pctTxt   = meta > 0 ? Math.round(pct * 100) + '%' : '—';
 
-      // Caminho base: arco 240° large-arc (flag=1) anti-horário (flag=0)
-      const arcPath = `M ${sx} ${sy} A ${R} ${R} 0 1 0 ${ex} ${ey}`;
-
-      // Linha de fundo abaixo do arco (fecha visualmente a boca do gauge)
-      const gap = `M ${sx} ${sy} L ${ex} ${ey}`;
-
-      // Arco preenchido: só renderiza se > 0.5% para evitar dot fantasma
-      const fillArc = filled > 1.5
-        ? `<path d="${arcPath}" fill="none" stroke="${cor}" stroke-width="14" stroke-linecap="round"
+      // Arco preenchido: só renderiza se filled > 2px (evita dot fantasma a 0%)
+      const fillArc = filled > 2
+        ? `<path d="${arcPath}" fill="none" stroke="${cor}" stroke-width="18" stroke-linecap="round"
              stroke-dasharray="${filled.toFixed(2)} ${totalLen.toFixed(2)}" stroke-dashoffset="0"/>`
         : '';
 
-      return `<svg viewBox="0 0 200 148" class="gauge-svg">
-  <path d="${arcPath}" fill="none" stroke="#e8e8e5" stroke-width="14" stroke-linecap="round"/>
+      return `<svg viewBox="0 0 200 152" xmlns="http://www.w3.org/2000/svg" class="gauge-svg">
+  <path d="${arcPath}" fill="none" stroke="#e0e0da" stroke-width="18" stroke-linecap="round"/>
   ${fillArc}
-  <text x="${CX}" y="116" text-anchor="middle" class="gauge-val-text">${realizado}</text>
-  <text x="${CX}" y="133" text-anchor="middle" class="gauge-pct-text" fill="${cor}">${pctTxt}</text>
+  <text x="${CX}" y="107" text-anchor="middle" font-size="30" font-weight="700"
+        fill="#2c2c28" font-family="Roboto,sans-serif">${realizado}</text>
+  <text x="${CX}" y="128" text-anchor="middle" font-size="14" font-weight="700"
+        fill="${cor}" font-family="Roboto,sans-serif">${pctTxt}</text>
 </svg>`;
     }
 
