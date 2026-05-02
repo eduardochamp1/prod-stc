@@ -3714,6 +3714,213 @@
         padding: 32px 26px 26px;
       }
     }
+
+    /* ── GRÁFICOS DE PRODUTIVIDADE ── */
+    .perf-section {
+      margin-bottom: 28px;
+    }
+    .perf-section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--text2);
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--cinza2);
+    }
+
+    /* Gauges */
+    .gauge-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 12px;
+    }
+    @media (max-width: 1200px) { .gauge-grid { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 640px)  { .gauge-grid { grid-template-columns: repeat(2, 1fr); } }
+
+    .gauge-card {
+      background: var(--branco);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      padding: 14px 10px 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .gauge-svg { width: 100%; max-width: 160px; }
+    .gauge-val-text {
+      font-size: 22px;
+      font-weight: 700;
+      fill: var(--text);
+      font-family: 'Roboto', sans-serif;
+    }
+    .gauge-pct-text {
+      font-size: 11px;
+      font-weight: 600;
+      font-family: 'Roboto', sans-serif;
+    }
+    .gauge-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      text-align: center;
+    }
+    .gauge-meta-label {
+      font-size: 11px;
+      color: var(--text2);
+      text-align: center;
+    }
+    .gauge-no-meta {
+      font-size: 11px;
+      color: var(--cinza3);
+      text-align: center;
+      margin-top: 4px;
+    }
+
+    /* Summary KPI cards for perf */
+    .perf-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .perf-kpi-card {
+      background: var(--branco);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      padding: 16px 18px;
+    }
+    .perf-kpi-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--text2);
+      margin-bottom: 4px;
+    }
+    .perf-kpi-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--verde);
+    }
+    .perf-kpi-sub {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 2px;
+    }
+
+    /* Bar chart */
+    .perf-bar-wrap {
+      background: var(--branco);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      padding: 18px 18px 10px;
+      overflow-x: auto;
+    }
+    .perf-bar-row {
+      display: grid;
+      grid-template-columns: 150px 1fr 60px;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+    .perf-bar-name {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .perf-bar-track {
+      background: var(--cinza2);
+      border-radius: 4px;
+      height: 20px;
+      overflow: hidden;
+      position: relative;
+    }
+    .perf-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width .4s ease;
+    }
+    .perf-bar-val {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text2);
+      text-align: right;
+      white-space: nowrap;
+    }
+    .perf-bar-fill.tipo-comercial { background: var(--amarelo); }
+    .perf-bar-fill.tipo-plantao   { background: #4a9fe0; }
+    .perf-bar-fill.tipo-operacional { background: var(--verde); }
+    .perf-bar-fill.tipo-todas     { background: var(--verde); }
+    .perf-legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--cinza2);
+    }
+    .perf-legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text2);
+    }
+    .perf-legend-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* Tipo de nota table */
+    .perf-tipo-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .perf-tipo-table th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--text2);
+      padding: 6px 10px;
+      border-bottom: 2px solid var(--cinza2);
+    }
+    .perf-tipo-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--cinza2);
+      color: var(--text);
+    }
+    .perf-tipo-table tr:last-child td { border-bottom: none; }
+    .perf-tipo-table tr:hover td { background: var(--cinza1); }
+    .perf-tipo-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 10px;
+      margin-right: 4px;
+    }
+    .perf-tipo-badge.EC { background: #fff3cd; color: #856404; }
+    .perf-tipo-badge.EP { background: #cce5ff; color: #004085; }
+    .perf-tipo-badge.OP { background: #d4edda; color: #155724; }
+    .perf-tipo-tag {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--cinza2);
+      color: var(--text2);
+      margin: 1px;
+    }
   </style>
 </head>
 
@@ -3761,8 +3968,9 @@
     <div class="tab-nav">
       <button class="tab-btn active" id="tab-btn-monitor" onclick="switchTab('monitor')">📊 Monitor</button>
       <button class="tab-btn" id="tab-btn-metas" onclick="switchTab('metas')">🎯 Metas</button>
+      <button class="tab-btn" id="tab-btn-graficos" onclick="switchTab('graficos')">📈 Gráficos</button>
       <button class="tab-btn" id="tab-btn-ranking" onclick="switchTab('ranking')">🏆 Ranking</button>
-      <button class="tab-btn" id="tab-btn-historico" onclick="switchTab('historico')">📈 Histórico</button>
+      <button class="tab-btn" id="tab-btn-historico" onclick="switchTab('historico')">📋 Histórico</button>
     </div>
 
     <!-- ── TAB: MONITOR ─────────────────────────────────────────────────── -->
@@ -3984,6 +4192,48 @@
     </div>
 
 
+
+    <!-- ── TAB: GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────── -->
+    <div class="tab-panel" id="tab-graficos">
+
+      <div class="filter-bar">
+        <div class="date-label">Gráficos de Produtividade — <strong id="graf-periodo-label"></strong></div>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <span class="filter-label">De</span>
+            <input type="date" class="filter-select" id="graf-de-input" style="min-width:140px"
+              onchange="onGrafDateChange()" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Até</span>
+            <input type="date" class="filter-select" id="graf-ate-input" style="min-width:140px"
+              onchange="onGrafDateChange()" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Regional</span>
+            <select class="filter-select" id="graf-regional-select" onchange="loadGraficos()">
+              <option value="ALL">Todas as Regionais</option>
+              <option value="GUA">Guarapari</option>
+              <option value="CAC">Cachoeiro</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Equipes</span>
+            <select class="filter-select" id="graf-tipo-select" onchange="loadGraficos()">
+              <option value="TODAS">Todas</option>
+              <option value="COMERCIAL">Comercial (EC)</option>
+              <option value="PLANTAO">Plantão (EP)</option>
+            </select>
+          </div>
+          <button class="btn-refresh" onclick="loadGraficos()">↻ Atualizar</button>
+        </div>
+      </div>
+
+      <div id="graf-content">
+        <div class="empty-state">Clique em Atualizar para carregar os gráficos.</div>
+      </div>
+
+    </div>
 
     <!-- ── TAB: ADMIN ─────────────────────────────────────────────────────── -->
 
@@ -4285,7 +4535,7 @@
       document.getElementById('user-chip').classList.add('show');
       // Restringe regional no seletor para usuários não-admin
       if (sess.regional && sess.regional !== 'ALL') {
-        ['regional-select', 'ranking-regional-select', 'hist-regional-select'].forEach(id => {
+        ['regional-select', 'ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
           const el = document.getElementById(id);
           if (!el) return;
           el.value = sess.regional;
@@ -4370,9 +4620,268 @@
       document.getElementById('tab-' + tab).classList.add('active');
       document.getElementById('tab-btn-' + tab).classList.add('active');
 
-      if (tab === 'metas') loadMetasCalculadas();
-      if (tab === 'ranking') loadRanking();
+      if (tab === 'metas')    loadMetasCalculadas();
+      if (tab === 'ranking')  loadRanking();
       if (tab === 'historico') loadHistorico();
+      if (tab === 'graficos') loadGraficos();
+    }
+
+    // ── GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────────────────────
+
+    /** Inicializa filtros da aba Gráficos com datas do mês corrente */
+    function initGraficos() {
+      const hoje = todayISO ? todayISO() : new Date(Date.now() - 3*3600000).toISOString().slice(0,10);
+      // Primeiro dia do mês corrente
+      const primeiroDia = hoje.slice(0,8) + '01';
+      const deEl  = document.getElementById('graf-de-input');
+      const ateEl = document.getElementById('graf-ate-input');
+      if (deEl  && !deEl.value)  deEl.value  = primeiroDia;
+      if (ateEl && !ateEl.value) ateEl.value = hoje;
+    }
+
+    function grafRange() {
+      const hoje = new Date(Date.now() - 3*3600000).toISOString().slice(0,10);
+      const de  = document.getElementById('graf-de-input')?.value  || hoje.slice(0,8) + '01';
+      const ate = document.getElementById('graf-ate-input')?.value || hoje;
+      return { de, ate };
+    }
+
+    function onGrafDateChange() {
+      const { de, ate } = grafRange();
+      const lbl = document.getElementById('graf-periodo-label');
+      if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
+      loadGraficos();
+    }
+
+    async function loadGraficos() {
+      initGraficos();
+      const { de, ate } = grafRange();
+      const regional = document.getElementById('graf-regional-select')?.value || 'ALL';
+      const tipo     = document.getElementById('graf-tipo-select')?.value    || 'TODAS';
+
+      const lbl = document.getElementById('graf-periodo-label');
+      if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
+
+      const cont = document.getElementById('graf-content');
+      cont.innerHTML = `<div class="empty-state"><div class="spinner"></div><br>Carregando gráficos…</div>`;
+
+      try {
+        const [subcatRes, equipeRes] = await Promise.all([
+          fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regional=${regional}`),
+          fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}`),
+        ]);
+        const subcatData  = subcatRes.ok  ? await subcatRes.json()  : { totais: { ALL:{},GUA:{},CAC:{} }, quantidades:{} };
+        const equipeData  = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
+
+        const metas = getMetas();
+        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas);
+      } catch (err) {
+        cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
+      }
+    }
+
+    /**
+     * Desenha um gauge SVG semicircular.
+     * pct: 0–1 (real = realizado/meta). Permite > 1 (exibido em verde escuro, valor real).
+     */
+    function buildGaugeSVG(realizado, meta, cor) {
+      const R = 80;
+      const CX = 100, CY = 100;
+      const circum = Math.PI * R;  // ≈ 251.33 (semicircle)
+      const pct = meta > 0 ? realizado / meta : 0;
+      const pctCap = Math.min(pct, 1);
+      const filled = pctCap * circum;
+      const pctTxt = meta > 0 ? Math.round(pct * 100) + '%' : '—';
+
+      // background arc: full semicircle (upper half), sweep-flag=0 (counterclockwise in SVG = goes up)
+      const bgPath = `M ${CX - R} ${CY} A ${R} ${R} 0 0 0 ${CX + R} ${CY}`;
+
+      return `<svg viewBox="0 0 200 120" class="gauge-svg" style="overflow:visible">
+  <path d="${bgPath}" fill="none" stroke="#e8e8e5" stroke-width="13" stroke-linecap="round"/>
+  <path d="${bgPath}" fill="none" stroke="${cor}" stroke-width="13" stroke-linecap="round"
+        stroke-dasharray="${filled.toFixed(2)} ${circum.toFixed(2)}"
+        stroke-dashoffset="0"/>
+  <text x="${CX}" y="${CY - 5}" text-anchor="middle" class="gauge-val-text">${realizado}</text>
+  <text x="${CX}" y="${CY + 14}" text-anchor="middle" class="gauge-pct-text" fill="${cor}">${pctTxt}</text>
+</svg>`;
+    }
+
+    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas) {
+      const reg  = (regional === 'ALL') ? 'ALL' : regional;
+      const totais = subcatData.totais?.[reg] || subcatData.totais?.ALL || {};
+      const { de, ate } = grafRange();
+
+      // Escala a meta mensal (22 dias úteis) proporcionalmente ao período selecionado
+      // Conta dias úteis (seg-sex) no range de forma simples
+      function diasUteisRange(deStr, ateStr) {
+        let count = 0;
+        const d0 = new Date(deStr + 'T12:00:00');
+        const d1 = new Date(ateStr + 'T12:00:00');
+        for (let d = new Date(d0); d <= d1; d.setDate(d.getDate() + 1)) {
+          const dow = d.getDay();
+          if (dow !== 0 && dow !== 6) count++;
+        }
+        return count || 1;
+      }
+      const diasPeriodo  = diasUteisRange(de, ate);
+      const escalaFator  = diasPeriodo / 22; // 22 = dias úteis mensais usados para definir metas
+
+      // ── Determina cor de fundo da meta para cada gauge ──────────────────
+      const GAUGE_DEF = [
+        { key: 'L0',      label: 'Corte L0',   metaKey: 'L0'     },
+        { key: 'L1',      label: 'Corte L1',   metaKey: 'L1'     },
+        { key: 'C93',     label: 'Ramal',       metaKey: 'C93'    },
+        { key: 'OBSOLETO',label: 'Obsoleto',    metaKey: 'OBSOLETO'},
+        { key: 'TL11',    label: 'TL11',        metaKey: 'TL11'   },
+        { key: 'BTZ013',  label: 'Sub CS',      metaKey: 'BTZ013' },
+      ];
+
+      // Meta: se regional=ALL, somamos GUA+CAC; caso contrário usamos só a regional. Escala pro período.
+      function getMeta(metaKey) {
+        const base = regional === 'ALL'
+          ? (metas.GUA?.[metaKey] || 0) + (metas.CAC?.[metaKey] || 0)
+          : (metas[regional]?.[metaKey] || 0);
+        return base > 0 ? Math.round(base * escalaFator) : 0;
+      }
+
+      const gaugesHTML = GAUGE_DEF.map(g => {
+        const val  = totais[g.key] || 0;
+        const meta = getMeta(g.metaKey);
+        const pct  = meta > 0 ? val / meta : null;
+        const cor  = pct === null ? '#b0b0aa'
+                   : pct >= 1   ? '#086738'
+                   : pct >= 0.7 ? '#FEC40E'
+                   : '#ED1C24';
+        const svg  = buildGaugeSVG(val, meta, cor);
+        const metaLabel = meta > 0 ? `Meta: ${meta} (${diasPeriodo}du)` : 'Sem meta';
+        return `<div class="gauge-card">
+  ${svg}
+  <div class="gauge-label">${g.label}</div>
+  <div class="gauge-meta-label">${metaLabel}</div>
+</div>`;
+      }).join('');
+
+      // ── KPIs resumo ─────────────────────────────────────────────────────
+      const equipes = equipeData.equipes || [];
+      const totalEquipes = equipes.length;
+      const totalOS      = equipes.reduce((s, e) => s + e.total, 0);
+      const mediaGeral   = totalEquipes > 0
+        ? (equipes.reduce((s, e) => s + e.media, 0) / totalEquipes).toFixed(1)
+        : '0.0';
+      const diasMedio    = totalEquipes > 0
+        ? Math.round(equipes.reduce((s, e) => s + e.dias_trabalhados, 0) / totalEquipes)
+        : 0;
+
+      const kpisHTML = `<div class="perf-kpi-grid">
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Equipes</div>
+    <div class="perf-kpi-value">${totalEquipes}</div>
+    <div class="perf-kpi-sub">com produção no período</div>
+  </div>
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Total OS</div>
+    <div class="perf-kpi-value">${totalOS}</div>
+    <div class="perf-kpi-sub">ordens executadas</div>
+  </div>
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Média/Equipe/Dia</div>
+    <div class="perf-kpi-value">${mediaGeral}</div>
+    <div class="perf-kpi-sub">OS por dia trabalhado</div>
+  </div>
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Dias Trabalhados</div>
+    <div class="perf-kpi-value">${diasMedio}</div>
+    <div class="perf-kpi-sub">média por equipe</div>
+  </div>
+</div>`;
+
+      // ── Bar chart: média por equipe ──────────────────────────────────────
+      const maxMedia = equipes.length > 0 ? Math.max(...equipes.map(e => e.media)) : 1;
+      const barRows  = equipes.slice(0, 50).map(e => {
+        const pct   = maxMedia > 0 ? (e.media / maxMedia) * 100 : 0;
+        const tipoCls = e.tipo_equipe === 'COMERCIAL' ? 'tipo-comercial'
+                     : e.tipo_equipe === 'PLANTAO'    ? 'tipo-plantao'
+                     : 'tipo-operacional';
+        const badge   = e.tipo_equipe === 'COMERCIAL' ? 'EC'
+                     : e.tipo_equipe === 'PLANTAO'    ? 'EP' : 'OP';
+        return `<div class="perf-bar-row">
+  <div class="perf-bar-name" title="${e.team_name}">
+    <span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}
+  </div>
+  <div class="perf-bar-track">
+    <div class="perf-bar-fill ${tipoCls}" style="width:${pct.toFixed(1)}%"></div>
+  </div>
+  <div class="perf-bar-val">${e.media.toFixed(1)} <span style="font-weight:400;color:var(--cinza3)">(${e.total}/${e.dias_trabalhados}d)</span></div>
+</div>`;
+      }).join('');
+
+      const legendHTML = `<div class="perf-legend">
+  <div class="perf-legend-item"><div class="perf-legend-dot" style="background:var(--amarelo)"></div> Comercial (EC)</div>
+  <div class="perf-legend-item"><div class="perf-legend-dot" style="background:#4a9fe0"></div> Plantão (EP)</div>
+  <div class="perf-legend-item"><div class="perf-legend-dot" style="background:var(--verde)"></div> Operacional</div>
+  <div class="perf-legend-item" style="margin-left:auto;color:var(--cinza3);font-size:10px">formato: média (total/dias)</div>
+</div>`;
+
+      const barHTML = equipes.length === 0
+        ? `<div class="empty-state" style="padding:24px">Nenhuma equipe com produção no período.</div>`
+        : `<div class="perf-bar-wrap">${barRows}${legendHTML}</div>`;
+
+      // ── Tabela: tipo de nota por equipe (top 30) ────────────────────────
+      // Coletar todos os tipos presentes
+      const tiposSet = new Set();
+      equipes.forEach(e => Object.keys(e.por_tipo || {}).forEach(t => tiposSet.add(t)));
+      const tiposCols = [...tiposSet].sort();
+
+      const tableHeaderCols = tiposCols.map(t => `<th>${TIPOS_SERVICO[t] ? `${t}` : t}</th>`).join('');
+      const tableRows = equipes.slice(0, 30).map(e => {
+        const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC'
+                    : e.tipo_equipe === 'PLANTAO'   ? 'EP' : 'OP';
+        const tipoCells = tiposCols.map(t => `<td style="text-align:center">${e.por_tipo[t] || '—'}</td>`).join('');
+        return `<tr>
+  <td><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
+  <td style="text-align:center">${e.total}</td>
+  <td style="text-align:center">${e.dias_trabalhados}</td>
+  <td style="text-align:center;font-weight:700">${e.media.toFixed(1)}</td>
+  ${tipoCells}
+</tr>`;
+      }).join('');
+
+      const tipoTableHTML = equipes.length === 0 ? '' : `
+<div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:480px">
+  <table class="perf-tipo-table">
+    <thead>
+      <tr>
+        <th>Equipe</th>
+        <th>Total OS</th>
+        <th>Dias</th>
+        <th>Média</th>
+        ${tableHeaderCols}
+      </tr>
+    </thead>
+    <tbody>${tableRows}</tbody>
+  </table>
+</div>`;
+
+      return `
+<div class="perf-section">
+  ${kpisHTML}
+</div>
+
+<div class="perf-section">
+  <div class="perf-section-title">Gauges de Subcategoria (${regional === 'ALL' ? 'Todas Regionais' : regional})</div>
+  <div class="gauge-grid">${gaugesHTML}</div>
+</div>
+
+<div class="perf-section">
+  <div class="perf-section-title">Média de OS por Equipe (OS/dia trabalhado)</div>
+  ${barHTML}
+</div>
+
+${equipes.length > 0 ? `<div class="perf-section">
+  <div class="perf-section-title">Detalhamento por Equipe e Tipo de Nota</div>
+  ${tipoTableHTML}
+</div>` : ''}
+`;
     }
 
     // ── METAS (banco de dados via API) ─────────────────────────────────────
@@ -5555,7 +6064,7 @@
       if (saved.regional && regSel && !regSel.disabled) {
         currentRegional = saved.regional;
         regSel.value = saved.regional;
-        ['ranking-regional-select', 'hist-regional-select'].forEach(id => {
+        ['ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
           const el = document.getElementById(id);
           if (el && !el.disabled) el.value = saved.regional;
         });

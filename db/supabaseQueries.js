@@ -672,6 +672,64 @@ async function setSetting(key, value) {
   if (error) throw error;
 }
 
+/**
+ * Performance de equipes num período: total OS, dias trabalhados, média OS/dia.
+ * tipo: 'COMERCIAL' (team_name starts with EC), 'PLANTAO' (starts with EP), 'TODAS'
+ */
+async function getPerformanceEquipes(de, ate, regional, tipo) {
+  const sb = getClient();
+  let query = sb
+    .from('team_daily_totals')
+    .select('team_name, regional, sector_id, tipo_code, count, date');
+  if (de)                                     query = query.gte('date', de);
+  if (ate)                                    query = query.lte('date', ate);
+  if (regional && regional !== 'ALL')         query = query.eq('regional', regional);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const teams = {};
+  (data || []).forEach(row => {
+    const name  = row.team_name;
+    const upper = name.toUpperCase();
+    if (tipo === 'COMERCIAL' && !upper.startsWith('EC')) return;
+    if (tipo === 'PLANTAO'   && !upper.startsWith('EP')) return;
+    if (!teams[name]) {
+      teams[name] = {
+        team_name:  name,
+        regional:   row.regional,
+        sector_id:  row.sector_id,
+        total:      0,
+        por_tipo:   {},
+        dates:      new Set(),
+        tipo_equipe: upper.startsWith('EC') ? 'COMERCIAL'
+                   : upper.startsWith('EP') ? 'PLANTAO'
+                   : 'OPERACIONAL',
+      };
+    }
+    teams[name].total += row.count;
+    teams[name].dates.add(row.date);
+    teams[name].por_tipo[row.tipo_code] =
+      (teams[name].por_tipo[row.tipo_code] || 0) + row.count;
+  });
+
+  const lista = Object.values(teams).map(t => {
+    const dias = t.dates.size;
+    return {
+      team_name:        t.team_name,
+      regional:         t.regional,
+      sector_id:        t.sector_id,
+      total:            t.total,
+      dias_trabalhados: dias,
+      media:            dias > 0 ? +(t.total / dias).toFixed(2) : 0,
+      por_tipo:         t.por_tipo,
+      tipo_equipe:      t.tipo_equipe,
+    };
+  }).sort((a, b) => b.media - a.media);
+
+  return { equipes: lista, de, ate };
+}
+
 module.exports = {
   getRealizadasDoDia,
   getNoteDetailCache, setNoteDetailCache, filtrarNotesNaoCacheadas,
@@ -684,4 +742,5 @@ module.exports = {
   getTeamProducao,
   getTeamSessionHistory,
   getDailySubcatTotals,
+  getPerformanceEquipes,
 };

@@ -200,6 +200,24 @@ router.get('/totais/dia', async (req, res) => {
   }
 });
 
+// GET /api/performance/equipes?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=ALL&tipo=TODAS
+// tipo: TODAS | COMERCIAL (EC*) | PLANTAO (EP*)
+router.get('/performance/equipes', async (req, res) => {
+  try {
+    const sq = sbq();
+    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const de       = req.query.de       || today;
+    const ate      = req.query.ate      || de;
+    const regional = req.query.regional || 'ALL';
+    const tipo     = req.query.tipo     || 'TODAS';
+    if (!sq) return res.json({ equipes: [], de, ate });
+    const result = await sq.getPerformanceEquipes(de, ate, regional, tipo);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── APP SETTINGS (preferências compartilhadas) ────────────────────────────────
 
 // GET /api/settings/:key  → retorna { data, updated_at } ou {} se não existe
