@@ -4,6 +4,16 @@
  */
 
 const { getClient } = require('../services/supabaseClient');
+const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
+
+/**
+ * Filtra um array de linhas mantendo só registros de equipes oficiais.
+ * `key` é o nome do campo com a sigla (default: 'team_name').
+ */
+function _onlyOficiais(rows, key = 'team_name') {
+  if (!Array.isArray(rows)) return rows;
+  return rows.filter(r => r && isOficial(r[key]));
+}
 
 // ── UTILITÁRIOS ────────────────────────────────────────────────────────────────
 
@@ -125,7 +135,10 @@ async function getTeamsFromSupabase(filters = {}) {
 
   const { data, error } = await query.order('team_name');
   if (error) throw error;
-  return (data || []).map(row => row.data);
+  // Filtra pela whitelist de equipes oficiais (sigla extraída de data.sigla ou data.teamName)
+  return (data || [])
+    .map(row => row.data)
+    .filter(t => t && isOficial(t.sigla || t.teamName));
 }
 
 /**
@@ -148,8 +161,10 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
     query = query.eq('regional', regional);
   }
 
-  const { data: rows, error } = await query;
+  const { data: rows0, error } = await query;
   if (error) throw error;
+  // Aplica whitelist: só equipes oficiais entram no histórico
+  const rows = _onlyOficiais(rows0, 'team_name');
 
   if (!rows || rows.length === 0) return [];
 
@@ -211,14 +226,15 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
 
 async function getMonthTotals(yearMonth) {
   const sb = getClient();
+  // Lê do nível por-equipe e filtra pela whitelist antes de agregar
   const { data, error } = await filterByMonth(
-    sb.from('daily_totals').select('regional, tipo_code, count'),
+    sb.from('team_daily_totals').select('team_name, regional, tipo_code, count'),
     yearMonth
   );
   if (error) throw error;
 
   const totais = { GUA: {}, CAC: {} };
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     if (!totais[row.regional]) totais[row.regional] = {};
     totais[row.regional][row.tipo_code] =
       (totais[row.regional][row.tipo_code] || 0) + row.count;
@@ -229,17 +245,18 @@ async function getMonthTotals(yearMonth) {
 async function getDailyHistory(yearMonth) {
   const sb = getClient();
   const { data, error } = await filterByMonth(
-    sb.from('daily_totals').select('date, regional, tipo_code, count'),
+    sb.from('team_daily_totals').select('date, team_name, regional, tipo_code, count'),
     yearMonth
   ).order('date');
   if (error) throw error;
 
   const byDate = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     const d = row.date;
     if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {} };
     if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
-    byDate[d][row.regional][row.tipo_code] = row.count;
+    byDate[d][row.regional][row.tipo_code] =
+      (byDate[d][row.regional][row.tipo_code] || 0) + row.count;
   });
   return Object.values(byDate);
 }
@@ -253,8 +270,9 @@ async function getDailyHistory(yearMonth) {
  */
 async function getSubcatMonthTotals(yearMonth, regional) {
   const sb = getClient();
+  // Lê por equipe e filtra pela whitelist antes de agregar
   let q = filterByMonth(
-    sb.from('daily_subcat_totals').select('regional, tipo, sub_code, count, quantidade'),
+    sb.from('team_daily_subcat_totals').select('team_name, regional, tipo, sub_code, count, quantidade'),
     yearMonth
   );
   if (regional) q = q.eq('regional', regional);
@@ -262,7 +280,7 @@ async function getSubcatMonthTotals(yearMonth, regional) {
   if (error) throw error;
 
   const totais = { GUA: {}, CAC: {} };
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     if (!totais[row.regional]) totais[row.regional] = {};
     const key = `${row.tipo}/${row.sub_code}`;
     if (!totais[row.regional][key]) totais[row.regional][key] = { count: 0, quantidade: 0 };
@@ -280,7 +298,7 @@ async function getSubcatMonthTotals(yearMonth, regional) {
 async function getSubcatDailyHistory(yearMonth, regional) {
   const sb = getClient();
   let q = filterByMonth(
-    sb.from('daily_subcat_totals').select('date, regional, tipo, sub_code, count, quantidade'),
+    sb.from('team_daily_subcat_totals').select('date, team_name, regional, tipo, sub_code, count, quantidade'),
     yearMonth
   ).order('date');
   if (regional) q = q.eq('regional', regional);
@@ -288,15 +306,16 @@ async function getSubcatDailyHistory(yearMonth, regional) {
   if (error) throw error;
 
   const byDate = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     const d = row.date;
     if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {} };
     if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
     const key = `${row.tipo}/${row.sub_code}`;
-    byDate[d][row.regional][key] = {
-      count: row.count,
-      quantidade: row.quantidade != null ? Number(row.quantidade) : null,
-    };
+    if (!byDate[d][row.regional][key]) {
+      byDate[d][row.regional][key] = { count: 0, quantidade: 0 };
+    }
+    byDate[d][row.regional][key].count      += row.count;
+    byDate[d][row.regional][key].quantidade += Number(row.quantidade || 0);
   });
   return Object.values(byDate);
 }
@@ -318,9 +337,9 @@ async function getSubcatTeamRanking(yearMonth, regional, tipo, subCode) {
   const { data, error } = await q;
   if (error) throw error;
 
-  // Agrega por equipe (somando todos os dias do mês)
+  // Agrega por equipe (somando todos os dias do mês) — apenas equipes oficiais
   const byTeam = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     const k = `${row.team_name}|${row.tipo}|${row.sub_code}`;
     if (!byTeam[k]) {
       byTeam[k] = {
@@ -354,7 +373,7 @@ async function getTeamRanking(yearMonth, regional) {
   if (error) throw error;
 
   const teams = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     if (!teams[row.team_name]) {
       teams[row.team_name] = {
         team_name: row.team_name,
@@ -387,9 +406,9 @@ async function getTeamDailyHistory(yearMonth, teamName) {
   const { data, error } = await query;
   if (error) throw error;
 
-  // Agrupa por date → team_name → tipo_code
+  // Agrupa por date → team_name → tipo_code (somente equipes oficiais)
   const byDate = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     if (!byDate[row.date]) byDate[row.date] = { date: row.date, equipes: {} };
     const eq = byDate[row.date].equipes;
     if (!eq[row.team_name]) eq[row.team_name] = { team_name: row.team_name, regional: row.regional, total: 0, por_tipo: {} };
@@ -420,7 +439,7 @@ async function getTeamProducao(filters = {}) {
   if (error) throw error;
 
   const teams = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     if (!teams[row.team_name]) {
       teams[row.team_name] = {
         team_name: row.team_name,
@@ -436,7 +455,7 @@ async function getTeamProducao(filters = {}) {
   });
 
   const lista  = Object.values(teams).sort((a, b) => a.team_name.localeCompare(b.team_name));
-  const tipos  = [...new Set((data || []).map(r => r.tipo_code))].sort();
+  const tipos  = [...new Set(_onlyOficiais(data, 'team_name').map(r => r.tipo_code))].sort();
   return { equipes: lista, tipos };
 }
 
@@ -479,9 +498,9 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
     page++;
   }
 
-  // Mantém apenas o snapshot mais recente por (date, team_name)
+  // Filtra pela whitelist e mantém apenas o snapshot mais recente por (date, team_name)
   const latest = {};
-  allRows.forEach(r => {
+  _onlyOficiais(allRows, 'team_name').forEach(r => {
     const key = `${r.date}|${r.team_name}`;
     if (!latest[key]) latest[key] = r;
   });
@@ -541,15 +560,16 @@ async function getRealizadasDoDia(de, ate) {
   de  = de  || today;
   ate = ate || de;
 
+  // Lê do nível por-equipe e filtra pela whitelist antes de somar
   const { data, error } = await sb
-    .from('daily_totals')
-    .select('regional, count')
+    .from('team_daily_totals')
+    .select('team_name, regional, count')
     .gte('date', de)
     .lte('date', ate);
   if (error) throw error;
 
   const acc = { ALL: 0, GUA: 0, CAC: 0 };
-  (data || []).forEach(r => {
+  _onlyOficiais(data, 'team_name').forEach(r => {
     if (acc[r.regional] !== undefined) acc[r.regional] += r.count;
     acc.ALL += r.count;
   });
@@ -567,9 +587,10 @@ async function getDailySubcatTotals(de, ate, regional) {
   de  = de  || today;
   ate = ate || de;
 
+  // Lê do nível por-equipe e filtra pela whitelist antes de agregar
   let query = sb
-    .from('daily_subcat_totals')
-    .select('regional, tipo, sub_code, count, quantidade')
+    .from('team_daily_subcat_totals')
+    .select('team_name, regional, tipo, sub_code, count, quantidade')
     .gte('date', de)
     .lte('date', ate);
   if (regional && regional !== 'ALL') {
@@ -580,7 +601,7 @@ async function getDailySubcatTotals(de, ate, regional) {
 
   const totais = { ALL: {}, GUA: {}, CAC: {} };
   const quantidades = { ALL: {}, GUA: {}, CAC: {} };
-  (data || []).forEach(r => {
+  _onlyOficiais(data, 'team_name').forEach(r => {
     const key = r.sub_code === 'OUTROS' ? `${r.tipo}_OUTROS` : r.sub_code;
     const reg = r.regional;
     if (!totais[reg]) totais[reg] = {};
@@ -708,16 +729,44 @@ async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
  */
 async function getExportData(de, ate, regional) {
   const sb = getClient();
-  const [daily_subcat, team_subcat, team_totais, daily_totais] = await Promise.all([
-    _paginateTable(sb, 'daily_subcat_totals',
-      'date, regional, tipo, sub_code, count, quantidade', de, ate, regional),
+  // Lê tudo do nível por-equipe; agrega "daily_*" filtrando pela whitelist
+  const [team_subcat_raw, team_totais_raw] = await Promise.all([
     _paginateTable(sb, 'team_daily_subcat_totals',
       'date, team_name, regional, sector_id, tipo, sub_code, count, quantidade', de, ate, regional),
     _paginateTable(sb, 'team_daily_totals',
       'date, team_name, regional, sector_id, tipo_code, count', de, ate, regional),
-    _paginateTable(sb, 'daily_totals',
-      'date, regional, tipo_code, count', de, ate, regional),
   ]);
+
+  const team_subcat = _onlyOficiais(team_subcat_raw, 'team_name');
+  const team_totais = _onlyOficiais(team_totais_raw, 'team_name');
+
+  // Re-agrega daily_subcat e daily_totais a partir das tabelas por equipe (já filtradas)
+  const daily_subcat_map = {}; // key: date|regional|tipo|sub_code
+  team_subcat.forEach(r => {
+    const k = `${r.date}|${r.regional}|${r.tipo}|${r.sub_code}`;
+    if (!daily_subcat_map[k]) {
+      daily_subcat_map[k] = {
+        date: r.date, regional: r.regional, tipo: r.tipo, sub_code: r.sub_code,
+        count: 0, quantidade: 0,
+      };
+    }
+    daily_subcat_map[k].count      += r.count;
+    daily_subcat_map[k].quantidade += Number(r.quantidade || 0);
+  });
+  const daily_subcat = Object.values(daily_subcat_map);
+
+  const daily_totais_map = {}; // key: date|regional|tipo_code
+  team_totais.forEach(r => {
+    const k = `${r.date}|${r.regional}|${r.tipo_code}`;
+    if (!daily_totais_map[k]) {
+      daily_totais_map[k] = {
+        date: r.date, regional: r.regional, tipo_code: r.tipo_code, count: 0,
+      };
+    }
+    daily_totais_map[k].count += r.count;
+  });
+  const daily_totais = Object.values(daily_totais_map);
+
   return { daily_subcat, team_subcat, team_totais, daily_totais };
 }
 
@@ -738,7 +787,7 @@ async function getPerformanceEquipes(de, ate, regional, tipo) {
   if (error) throw error;
 
   const teams = {};
-  (data || []).forEach(row => {
+  _onlyOficiais(data, 'team_name').forEach(row => {
     const name  = row.team_name;
     const upper = name.toUpperCase();
     if (tipo === 'COMERCIAL' && !upper.startsWith('EC')) return;

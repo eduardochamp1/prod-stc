@@ -5,8 +5,16 @@
 
 const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/mockData');
 const { getTeamsBySector, REGIONAL_MAP } = require('./wpaService');
+const { isOficial } = require('./equipesOficiais');
 
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
+
+// Filtra um array de teams mantendo apenas equipes oficiais (whitelist).
+// Em modo "mock" não aplica filtro (mantém comportamento de teste).
+function _filterOficiais(teams) {
+  if (MODE === 'mock') return teams;
+  return (teams || []).filter(t => isOficial(t.sigla || t.teamName));
+}
 
 // ── SETORES POR REGIONAL ──────────────────────────────────────────────────────
 const SETORES = {
@@ -27,7 +35,7 @@ async function getTeams(filters = {}) {
 
   // Busca em paralelo
   const resultados = await Promise.all(setores.map(s => getTeamsBySector(s)));
-  return resultados.flat();
+  return _filterOficiais(resultados.flat());
 }
 
 // ── GET TEAM DETAIL ───────────────────────────────────────────────────────────
@@ -36,7 +44,7 @@ async function getTeamDetail(teamId) {
 
   // Busca em todos os setores até achar
   for (const setor of SETORES.ALL) {
-    const teams = await getTeamsBySector(setor);
+    const teams = _filterOficiais(await getTeamsBySector(setor));
     const found = teams.find(t => t.id === teamId || t.sigla === teamId || t.teamName === teamId);
     if (found) return found;
   }
@@ -54,7 +62,7 @@ async function getSummary() {
 
   return Promise.all(regionais.map(async r => {
     const resultados = await Promise.all(r.setores.map(s => getTeamsBySector(s)));
-    const teams = resultados.flat();
+    const teams = _filterOficiais(resultados.flat());
     return {
       regionalId:      r.regionalId,
       nome:            r.nome,
