@@ -4724,20 +4724,7 @@
       const totais = subcatData.totais?.[reg] || subcatData.totais?.ALL || {};
       const { de, ate } = grafRange();
 
-      // Escala a meta mensal (22 dias úteis) proporcionalmente ao período selecionado
-      // Conta dias úteis (seg-sex) no range de forma simples
-      function diasUteisRange(deStr, ateStr) {
-        let count = 0;
-        const d0 = new Date(deStr + 'T12:00:00');
-        const d1 = new Date(ateStr + 'T12:00:00');
-        for (let d = new Date(d0); d <= d1; d.setDate(d.getDate() + 1)) {
-          const dow = d.getDay();
-          if (dow !== 0 && dow !== 6) count++;
-        }
-        return count || 1;
-      }
-      const diasPeriodo  = diasUteisRange(de, ate);
-      const escalaFator  = diasPeriodo / 22; // 22 = dias úteis mensais usados para definir metas
+      // Sem escalonamento — gauge sempre mostra a meta mensal cheia configurada
 
       // ── Determina cor de fundo da meta para cada gauge ──────────────────
       const GAUGE_DEF = [
@@ -4749,12 +4736,13 @@
         { key: 'BTZ013',  label: 'Sub CS',      metaKey: 'BTZ013' },
       ];
 
-      // Meta: se regional=ALL, somamos GUA+CAC; caso contrário usamos só a regional. Escala pro período.
+      // Meta: se regional=ALL, somamos GUA+CAC; caso contrário usamos só a regional.
+      // Sempre retorna a meta MENSAL configurada (sem escalonamento por período).
       function getMeta(metaKey) {
         const base = regional === 'ALL'
           ? (metas.GUA?.[metaKey] || 0) + (metas.CAC?.[metaKey] || 0)
           : (metas[regional]?.[metaKey] || 0);
-        return base > 0 ? Math.round(base * escalaFator) : 0;
+        return base > 0 ? base : 0;
       }
 
       const gaugesHTML = GAUGE_DEF.map(g => {
