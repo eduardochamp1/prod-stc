@@ -5,6 +5,7 @@
 
 const { getClient } = require('./supabaseClient');
 const { dateBRT, dateBRTMinusDays } = require('./timeUtil');
+const log = require('./logger').forModule('supabase');
 
 // Data operacional BRT (America/Sao_Paulo). Usar UTC daria a data errada após 21:00 BRT
 // (quando UTC já virou pro dia seguinte) e desalinharia tudo com o front.
@@ -43,7 +44,7 @@ async function saveSnapshot(teams, date) {
 
   const { error } = await sb.from('snapshots').insert(rows);
   if (error) throw error;
-  console.log(`[SUPABASE] snapshots: ${rows.length} equipes salvas`);
+  log.info('snapshots_saved', { teams: rows.length });
 }
 
 /**
@@ -64,7 +65,7 @@ async function pushTeams(teams) {
     await new Promise(r => setTimeout(r, 100));
   }
   if (_pushTeamsLock) {
-    console.warn('[SUPABASE] pushTeams: lock expirou — prosseguindo mesmo assim para não travar o cron');
+    log.warn('push_teams_lock_expired', {});
   }
   _pushTeamsLock = true;
 
@@ -96,9 +97,9 @@ async function pushTeams(teams) {
       .delete({ count: 'exact' })
       .lt('updated_at', ttlThreshold);
     if (ttlErr) {
-      console.warn('[SUPABASE] teams_current TTL: falha ao limpar linhas expiradas:', ttlErr.message);
+      log.warn('teams_current_ttl_failed', { msg: ttlErr.message });
     } else if (ttlCount > 0) {
-      console.log(`[SUPABASE] teams_current TTL: ${ttlCount} linha(s) expirada(s) removida(s)`);
+      log.info('teams_current_ttl_cleared', { removed: ttlCount });
     }
 
     // 3) Delete por nome — segunda camada de segurança para equipes que
@@ -112,13 +113,13 @@ async function pushTeams(teams) {
         .not('team_name', 'in', `(${aliveNames.join(',')})`)
         .gte('updated_at', ttlThreshold); // só linhas recentes (as expiradas já foram limpas acima)
       if (delErr) {
-        console.warn('[SUPABASE] teams_current: falha ao limpar equipes ausentes:', delErr.message);
+        log.warn('teams_current_delete_failed', { msg: delErr.message });
       } else if (count > 0) {
-        console.log(`[SUPABASE] teams_current: ${count} equipe(s) removida(s) (não está no WPA)`);
+        log.info('teams_current_offline_removed', { count });
       }
     }
 
-    console.log(`[SUPABASE] teams_current: ${teams.length} equipes atualizadas`);
+    log.info('teams_current_updated', { teams: teams.length });
   } finally {
     _pushTeamsLock = false;
   }
@@ -198,7 +199,7 @@ async function upsertTeamDailyTotals(teams, _date) {
 
   if (error) throw error;
   const dates = [...new Set(rows.map(r => r.date))].sort();
-  console.log(`[SUPABASE] team_daily_totals: ${rows.length} linhas em ${dates.length} dia(s) (${dates.join(', ')})`);
+  log.info('team_daily_totals_upserted', { rows: rows.length, dates });
 }
 
 /**
@@ -311,7 +312,7 @@ async function upsertSubcatTotals(teams, _date) {
       .upsert(teamRows, { onConflict: 'date,team_name,tipo,sub_code' });
     if (error) throw error;
     const datesT = [...new Set(teamRows.map(r => r.date))];
-    console.log(`[SUPABASE] team_daily_subcat_totals: ${teamRows.length} linhas em ${datesT.length} dia(s)`);
+    log.info('team_daily_subcat_upserted', { rows: teamRows.length, days: datesT.length });
   }
 }
 
@@ -338,7 +339,7 @@ async function consolidateDay(date) {
 
   if (e1) throw e1;
   if (!snaps || snaps.length === 0) {
-    console.log(`[SUPABASE] consolidateDay: nenhum snapshot para ${date}`);
+    log.info('consolidate_no_snapshot', { date });
     return;
   }
 
@@ -365,11 +366,11 @@ async function consolidateDay(date) {
 
   const teams = Object.values(latest);
   if (teams.length === 0) {
-    console.log(`[SUPABASE] consolidateDay: nenhuma equipe com sessionDate=${date}`);
+    log.info('consolidate_no_session', { date });
     return;
   }
 
-  console.log(`[SUPABASE] consolidateDay(${date}): ${teams.length} equipes (snapshot final por sessão)`);
+  log.info('consolidate_start', { date, teams: teams.length });
 
   // ── RESET ─────────────────────────────────────────────────────────────
   // Consolidação é a FONTE DA VERDADE para o dia: limpa as tabelas team-level
@@ -383,17 +384,17 @@ async function consolidateDay(date) {
     const { error } = await op;
     // Tabela pode não existir em ambientes antigos — ignora "relation does not exist"
     if (error && !/does not exist|PGRST204|42P01/i.test(error.message || '')) {
-      console.warn(`[SUPABASE] consolidateDay: erro no reset de ${date}: ${error.message}`);
+      log.warn('consolidate_reset_failed', { date, msg: error.message });
     }
   }
-  console.log(`[SUPABASE] consolidateDay(${date}): linhas agregadas anteriores limpas`);
+  log.info('consolidate_wipe_done', { date });
 
   // Reagrega via upsertTeamDailyTotals/upsertSubcatTotals.
   await upsertTeamDailyTotals(teams);
   try {
     await upsertSubcatTotals(teams);
   } catch (errSubcat) {
-    console.warn(`[SUPABASE] consolidateDay: upsertSubcatTotals falhou: ${errSubcat.message}`);
+    log.warn('consolidate_subcat_failed', { date, msg: errSubcat.message });
   }
 }
 
@@ -483,11 +484,11 @@ async function cleanOldSnapshots() {
     .lt('date', cutoff);
 
   if (error) {
-    console.warn('[SUPABASE] cleanOldSnapshots: erro ao limpar:', error.message);
+    log.warn('clean_snapshots_failed', { msg: error.message });
     return;
   }
   if (count > 0) {
-    console.log(`[SUPABASE] cleanOldSnapshots: ${count} snapshots anteriores a ${cutoff} removidos`);
+    log.info('clean_snapshots_done', { count, cutoff });
   }
 }
 
@@ -507,11 +508,11 @@ async function cleanOldNoteDetails() {
     .lt('fetched_at', cutoff);
 
   if (error) {
-    console.warn('[SUPABASE] cleanOldNoteDetails: erro ao limpar:', error.message);
+    log.warn('clean_note_details_failed', { msg: error.message });
     return;
   }
   if (count > 0) {
-    console.log(`[SUPABASE] cleanOldNoteDetails: ${count} payloads anteriores a ${cutoff.slice(0,10)} removidos`);
+    log.info('clean_note_details_done', { count, cutoff: cutoff.slice(0, 10) });
   }
 }
 

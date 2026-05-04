@@ -12,6 +12,7 @@ const cron                    = require('node-cron');
 const { getTeams }            = require('./dataService');
 const { forceRefresh }        = require('./wpaService');
 const { dateBRT, hourBRT }    = require('./timeUtil');
+const log                     = require('./logger').forModule('cron');
 
 let tokenJob        = null;
 let snapshotJob     = null;
@@ -51,10 +52,10 @@ async function runTokenRefresh() {
     const result = await forceRefresh();
     const exp = result?.token
       ? new Date(JSON.parse(Buffer.from(result.token.split('.')[1], 'base64').toString()).exp * 1000).toISOString()
-      : '?';
-    console.log(`[CRON] Token WPA renovado — expira em ${exp}`);
+      : null;
+    log.info('token_refreshed', { exp });
   } catch (err) {
-    console.error('[CRON] Falha ao renovar token WPA:', err.message);
+    log.error('token_refresh_failed', { msg: err.message });
   }
 }
 
@@ -65,10 +66,10 @@ async function runSnapshot() {
   if (isRunning) {
     const elapsed = Date.now() - isRunningAt;
     if (elapsed < MAX_RUN_MS) {
-      console.log(`[CRON] Snapshot ignorado — já está em execução há ${Math.round(elapsed / 1000)}s`);
+      log.info('snapshot_skipped_concurrent', { elapsed_s: Math.round(elapsed / 1000) });
       return;
     }
-    console.warn(`[CRON] Snapshot: isRunning travado por ${Math.round(elapsed / 1000)}s — forçando desbloqueio`);
+    log.warn('snapshot_unstuck', { elapsed_s: Math.round(elapsed / 1000) });
   }
   isRunning   = true;
   isRunningAt = Date.now();
@@ -82,11 +83,11 @@ async function runSnapshot() {
     const teams     = allTeams.filter(t => !t._ghostFromAcc);
     const ghostCount = allTeams.length - teams.length;
     if (ghostCount > 0) {
-      console.log(`[CRON] _acc: ${ghostCount} equipe(s) fantasma — excluída(s) de snapshots/teams_current, incluídas nos totais diários`);
+      log.info('ghost_teams', { count: ghostCount });
     }
 
     if (teams.length === 0) {
-      console.log('[CRON] Snapshot: nenhuma equipe ativa no WPA.');
+      log.info('snapshot_skipped_empty', {});
       return; // finally abaixo libera isRunning corretamente
     }
 
@@ -104,7 +105,7 @@ async function runSnapshot() {
     await upsertDailyTotals(allTeams);
     await upsertTeamDailyTotals(allTeams);
 
-    console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais, ${ghostCount} acumuladas nos totais às ${ts}`);
+    log.info('snapshot_saved', { teams: teams.length, ghosts: ghostCount, at: ts });
 
     // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot).
     // Quando concluir, dispara upsertSubcatTotals pra atualizar team_daily_subcat_totals.
@@ -124,19 +125,17 @@ async function runSnapshot() {
           throw err;
         }
       })
-      .catch(err =>
-        console.error('[CRON] Erro classificando subcategorias:', err.message)
-      );
+      .catch(err => log.error('classify_subcat_failed', { msg: err.message }));
 
     // Faz cache do payload completo das OS finalizadas (não bloqueia o snapshot).
     // Roda no servidor Engelmig (com IP autorizado pela WPA) e popula
     // `note_details` no Supabase, que é lido instantaneamente pela rota
     // /api/wpa/nota — inclusive na Vercel, que não consegue falar com a WPA.
     runCacheNotaDetails(teams).catch(err =>
-      console.error('[CRON] Erro cacheando detalhes de OS:', err.message)
+      log.error('cache_note_details_failed', { msg: err.message })
     );
   } catch (err) {
-    console.error('[CRON] Erro no snapshot:', err.message);
+    log.error('snapshot_failed', { msg: err.message });
   } finally {
     isRunning = false;
   }
@@ -362,7 +361,7 @@ async function runConsolidate(date) {
     await cleanOldSnapshots();
     await cleanOldNoteDetails();
   } catch (err) {
-    console.error('[CRON] Erro na consolidação:', err.message);
+    log.error('consolidate_failed', { date, msg: err.message });
   }
 }
 
@@ -382,18 +381,23 @@ async function runDriftCheck(date) {
     const report = await detectDrift(date);
 
     if (report.has_drift) {
-      console.warn(
-        `[CRON] DRIFT detectado em ${report.date}: snapshot=${report.snapshot_count} ` +
-        `tabela=${report.table_count} diff=${report.diff} (limiar=${report.threshold}) — reparando…`
-      );
+      log.warn('drift_detected', {
+        date: report.date,
+        snapshot: report.snapshot_count,
+        table:    report.table_count,
+        diff:     report.diff,
+        threshold: report.threshold,
+      });
       await consolidateDay(date);
 
       // Re-verifica após reparo
       const after = await detectDrift(date);
-      console.log(
-        `[CRON] Drift reparado em ${date}: agora snapshot=${after.snapshot_count} ` +
-        `tabela=${after.table_count} diff=${after.diff} ${after.has_drift ? '⚠ ainda há drift!' : '✓'}`
-      );
+      log.info('drift_repaired', {
+        date,
+        before_diff: report.diff,
+        after_diff:  after.diff,
+        still_drifting: after.has_drift,
+      });
 
       // Registra no app_settings para observabilidade
       try {
@@ -406,14 +410,16 @@ async function runDriftCheck(date) {
         });
       } catch (_) {}
     } else {
-      console.log(
-        `[CRON] Drift OK em ${report.date}: snapshot=${report.snapshot_count} ` +
-        `tabela=${report.table_count} diff=${report.diff}`
-      );
+      log.info('drift_ok', {
+        date: report.date,
+        snapshot: report.snapshot_count,
+        table:    report.table_count,
+        diff:     report.diff,
+      });
     }
     return report;
   } catch (err) {
-    console.error('[CRON] Erro no drift check:', err.message);
+    log.error('drift_check_failed', { date, msg: err.message });
     return null;
   }
 }
