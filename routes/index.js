@@ -966,6 +966,130 @@ router.get('/equipes/producao', async (req, res) => {
 
 // ── ADMIN ─────────────────────────────────────────────────────────────────────
 
+// GET /api/admin/health — saúde operacional consolidada do sistema
+//
+// Responde em < 2s e agrega:
+//  - whitelist: tamanho por regional
+//  - teams_logged_today: equipes oficiais que logaram hoje (por regional)
+//  - teams_missing_today: equipes oficiais que NÃO logaram (com tipo/placa)
+//  - last_snapshot: idade do snapshot mais recente em teams_current
+//  - subcat_error: último erro de classificação registrado (ou null)
+//  - token: status do JWT WPA
+//  - metas_configured: se metas estão preenchidas para GUA e CAC
+router.get('/admin/health', async (_req, res) => {
+  try {
+    const sq = sbq();
+    const { OFICIAIS_GUA, OFICIAIS_CAC, isOficial } = require('../services/equipesOficiais');
+    const { dateBRT } = require('../services/timeUtil');
+
+    const today = dateBRT();
+
+    // Estado base — sempre respondido mesmo se Supabase off
+    const out = {
+      ok:    true,
+      ts:    new Date().toISOString(),
+      today,
+      whitelist: {
+        total: OFICIAIS_GUA.length + OFICIAIS_CAC.length,
+        gua:   OFICIAIS_GUA.length,
+        cac:   OFICIAIS_CAC.length,
+      },
+      teams_logged_today:  null,
+      teams_missing_today: null,
+      last_snapshot:       null,
+      subcat_error:        null,
+      token:               null,
+      metas_configured:    null,
+    };
+
+    if (!sq) {
+      out.ok = false;
+      out.error = 'Supabase indisponível';
+      return res.json(out);
+    }
+
+    // Token WPA (best-effort — não quebra se falhar)
+    try {
+      out.token = getTokenStatus();
+    } catch (e) { out.token = { error: e.message }; }
+
+    // teams_current → quem está logado agora (whitelist apenas)
+    try {
+      const teams = await sq.getTeamsFromSupabase({});
+      const loggedSiglas = new Set(
+        teams
+          .map(t => (t.sigla || t.teamName || '').toUpperCase().trim())
+          .filter(s => s && isOficial(s))
+      );
+
+      const byRegional = { GUA: 0, CAC: 0 };
+      for (const t of teams) {
+        const s = (t.sigla || t.teamName || '').toUpperCase().trim();
+        if (!isOficial(s)) continue;
+        if (t.regional && byRegional[t.regional] !== undefined) byRegional[t.regional]++;
+      }
+
+      // Diff: oficiais ausentes hoje
+      const missing = [];
+      for (const e of OFICIAIS_GUA) {
+        if (!loggedSiglas.has(e.sigla.toUpperCase())) {
+          missing.push({ sigla: e.sigla, regional: 'GUA', tipo: e.tipo, placa: e.placa });
+        }
+      }
+      for (const e of OFICIAIS_CAC) {
+        if (!loggedSiglas.has(e.sigla.toUpperCase())) {
+          missing.push({ sigla: e.sigla, regional: 'CAC', tipo: e.tipo, placa: e.placa });
+        }
+      }
+
+      out.teams_logged_today  = { total: loggedSiglas.size, byRegional };
+      out.teams_missing_today = { total: missing.length, lista: missing };
+
+      // Idade do último snapshot — pega o updated_at mais recente
+      if (teams.length > 0) {
+        // teams_current.updated_at vem nos rows mas não no .data — refazemos query rápida
+        const { data: ages } = await require('../services/supabaseClient').getClient()
+          .from('teams_current')
+          .select('updated_at')
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (ages && ages[0]) {
+          const latest = new Date(ages[0].updated_at);
+          out.last_snapshot = {
+            ts:        latest.toISOString(),
+            ageMinutes: Math.round((Date.now() - latest.getTime()) / 60000),
+          };
+        }
+      }
+    } catch (e) {
+      out.teams_logged_today = { error: e.message };
+    }
+
+    // Último erro de classificação (auto-recovery)
+    try {
+      const setting = await sq.getSetting('subcat_error');
+      if (setting && setting.data && setting.data.message) {
+        out.subcat_error = setting.data;  // { message, ts }
+      } else {
+        out.subcat_error = null;          // sem erro pendente
+      }
+    } catch (e) { out.subcat_error = { error: e.message }; }
+
+    // Metas configuradas
+    try {
+      const metas = await sq.getMetas();
+      out.metas_configured = {
+        gua: metas.GUA && Object.keys(metas.GUA).length > 0,
+        cac: metas.CAC && Object.keys(metas.CAC).length > 0,
+      };
+    } catch (e) { out.metas_configured = { error: e.message }; }
+
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // GET /api/admin/wpa-diag — diagnóstico ZERO-retry: descobre por que WPA falha em produção.
 // Usar quando o /admin/warm sempre falha — esse endpoint mostra o que tá realmente acontecendo.
 router.get('/admin/wpa-diag', async (_req, res) => {

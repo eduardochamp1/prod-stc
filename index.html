@@ -4245,6 +4245,22 @@
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:20px">
 
+          <!-- Saúde do Sistema -->
+          <div>
+            <div class="modal-section-title">Saúde do Sistema</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Snapshot operacional: equipes oficiais sem login hoje, idade do snapshot,
+              erros pendentes de classificação e status do token WPA.
+            </div>
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px">
+              <button class="btn-refresh" onclick="runHealth()" style="height:40px;padding:0 20px;font-size:13px">
+                ❤️ Verificar Saúde
+              </button>
+              <span id="health-ts" style="font-size:11px;color:var(--text2)"></span>
+            </div>
+            <div id="health-result" style="display:none"></div>
+          </div>
+
           <!-- Backfill card -->
           <div>
             <div class="modal-section-title">Backfill Histórico</div>
@@ -6984,6 +7000,114 @@ ${equipes.length > 0 ? `<div class="perf-section">
       } catch (err) {
         out.textContent = `✗ Falha ao executar: ${err.message}`;
       }
+    }
+
+    // ── SAÚDE DO SISTEMA ──────────────────────────────────────────────────────
+    async function runHealth() {
+      const cont = document.getElementById('health-result');
+      const tsEl = document.getElementById('health-ts');
+      cont.style.display = 'block';
+      cont.innerHTML = '<div style="font-size:12px;color:var(--text2)">⏳ Coletando estado…</div>';
+      try {
+        const res = await fetch(`${API}/admin/health`);
+        const h   = await res.json();
+        if (tsEl) tsEl.textContent = `Atualizado ${new Date(h.ts).toLocaleTimeString('pt-BR')}`;
+        cont.innerHTML = renderHealth(h);
+      } catch (err) {
+        cont.innerHTML = `<div style="color:var(--vermelho);font-size:13px">✗ ${err.message}</div>`;
+      }
+    }
+
+    function renderHealth(h) {
+      const card = (label, value, color) =>
+        `<div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:10px 12px;font-size:12px">
+           <div style="color:var(--text2);font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${label}</div>
+           <div style="font-size:15px;font-weight:600;color:${color || 'var(--text)'}">${value}</div>
+         </div>`;
+
+      // Snapshot age
+      let snapStr = 'sem dados', snapColor = 'var(--vermelho)';
+      if (h.last_snapshot && h.last_snapshot.ageMinutes !== undefined) {
+        const m = h.last_snapshot.ageMinutes;
+        snapStr   = m < 60 ? `há ${m} min` : `há ${(m / 60).toFixed(1)}h`;
+        snapColor = m < 30 ? 'var(--verde)' : m < 90 ? 'var(--amarelo)' : 'var(--vermelho)';
+      }
+
+      // Token
+      let tokStr = '—', tokColor = 'var(--text2)';
+      if (h.token && h.token.expiresAt) {
+        const minLeft = Math.round((new Date(h.token.expiresAt).getTime() - Date.now()) / 60000);
+        tokStr   = minLeft > 0 ? `expira em ${minLeft} min` : 'EXPIRADO';
+        tokColor = minLeft > 30 ? 'var(--verde)' : minLeft > 5 ? 'var(--amarelo)' : 'var(--vermelho)';
+      } else if (h.token && h.token.error) {
+        tokStr = 'erro: ' + h.token.error.slice(0, 30);
+        tokColor = 'var(--vermelho)';
+      }
+
+      // Subcat error
+      let subcatStr = 'OK', subcatColor = 'var(--verde)';
+      if (h.subcat_error && h.subcat_error.message) {
+        subcatStr   = h.subcat_error.message.slice(0, 60);
+        subcatColor = 'var(--vermelho)';
+      }
+
+      // Metas
+      let metasStr = '—', metasColor = 'var(--text2)';
+      if (h.metas_configured) {
+        const ok = h.metas_configured.gua && h.metas_configured.cac;
+        metasStr   = ok ? 'GUA + CAC OK' : (h.metas_configured.gua ? 'só GUA' : h.metas_configured.cac ? 'só CAC' : 'NENHUMA');
+        metasColor = ok ? 'var(--verde)' : 'var(--amarelo)';
+      }
+
+      // Logged hoje
+      const logged   = h.teams_logged_today || {};
+      const totalLog = logged.total || 0;
+      const loggedStr = `${totalLog}/${h.whitelist.total} (GUA ${logged.byRegional?.GUA || 0} · CAC ${logged.byRegional?.CAC || 0})`;
+      const loggedColor = totalLog > h.whitelist.total * 0.7 ? 'var(--verde)' : totalLog > h.whitelist.total * 0.4 ? 'var(--amarelo)' : 'var(--vermelho)';
+
+      // Missing
+      const miss = h.teams_missing_today || {};
+      const missList = miss.lista || [];
+      let missingHTML = '';
+      if (missList.length > 0) {
+        const rows = missList.map(e =>
+          `<tr><td style="padding:4px 8px;font-family:monospace">${e.sigla}</td>
+               <td style="padding:4px 8px">${e.regional}</td>
+               <td style="padding:4px 8px">${e.tipo}</td>
+               <td style="padding:4px 8px;color:var(--text2)">${e.placa}</td></tr>`
+        ).join('');
+        missingHTML = `
+          <div style="margin-top:14px">
+            <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">
+              Equipes oficiais sem login hoje (${missList.length})
+            </div>
+            <div style="max-height:240px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px">
+              <table style="width:100%;border-collapse:collapse;font-size:12px">
+                <thead style="background:var(--cinza1);position:sticky;top:0">
+                  <tr style="text-transform:uppercase;letter-spacing:.04em;color:var(--text2);font-size:10px">
+                    <th style="padding:6px 8px;text-align:left">Sigla</th>
+                    <th style="padding:6px 8px;text-align:left">Reg</th>
+                    <th style="padding:6px 8px;text-align:left">Tipo</th>
+                    <th style="padding:6px 8px;text-align:left">Placa</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </div>`;
+      }
+
+      return `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px">
+          ${card('Logaram hoje', loggedStr, loggedColor)}
+          ${card('Último snapshot', snapStr, snapColor)}
+          ${card('Token WPA', tokStr, tokColor)}
+          ${card('Classificação subcat', subcatStr, subcatColor)}
+          ${card('Metas configuradas', metasStr, metasColor)}
+          ${card('Whitelist', `${h.whitelist.total} (GUA ${h.whitelist.gua} · CAC ${h.whitelist.cac})`, 'var(--text)')}
+        </div>
+        ${missingHTML}
+      `;
     }
 
     // ── EXPORTAÇÃO XLSX ───────────────────────────────────────────────────────
