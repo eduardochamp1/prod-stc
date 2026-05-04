@@ -20,6 +20,28 @@ let isRunning       = false;
 let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
 const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se travar
 
+// ── HELPERS DE OBSERVABILIDADE ────────────────────────────────────────────────
+// Registra/limpa erros do subcat aggregation em app_settings (key: subcat_error).
+// Permite que /admin/health ou logs externos detectem falhas persistentes.
+
+async function _recordSubcatError(err) {
+  try {
+    const sq = require('../db/supabaseQueries');
+    await sq.setSetting('subcat_error', {
+      message: err && err.message ? err.message : String(err),
+      ts:      new Date().toISOString(),
+    });
+  } catch (_) { /* setting opcional — não amplifica falha */ }
+}
+
+async function _clearSubcatError() {
+  try {
+    const sq = require('../db/supabaseQueries');
+    // Marca como resolvido (não deleta, mantém histórico do último sucesso)
+    await sq.setSetting('subcat_error', { message: null, ts: new Date().toISOString() });
+  } catch (_) {}
+}
+
 // ── RENOVAÇÃO DE TOKEN ────────────────────────────────────────────────────────
 
 async function runTokenRefresh() {
@@ -82,11 +104,23 @@ async function runSnapshot() {
     console.log(`[CRON] Snapshot salvo — ${teams.length} equipes reais, ${ghostCount} acumuladas nos totais às ${ts}`);
 
     // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot).
-    // Quando concluir, dispara upsertSubcatTotals pra atualizar daily_subcat_totals.
+    // Quando concluir, dispara upsertSubcatTotals pra atualizar team_daily_subcat_totals.
     // Usa allTeams (real + ghost) para incluir notas de equipes deslogadas.
+    //
+    // Auto-recovery: se uma execução anterior tiver falhado (registrado em
+    // app_settings → 'subcat_pending'), tenta também reprocessar essa data.
+    // Falhas são registradas com timestamp para visibilidade no /admin.
     runClassifyNewNotes(allTeams)
-      .then(() => upsertSubcatTotals(allTeams).catch(err =>
-        console.warn('[CRON] upsertSubcatTotals intraday falhou:', err.message)))
+      .then(async () => {
+        try {
+          await upsertSubcatTotals(allTeams);
+          await _clearSubcatError();      // sucesso: limpa flag de erro pendente
+        } catch (err) {
+          console.warn('[CRON] upsertSubcatTotals intraday falhou:', err.message);
+          await _recordSubcatError(err);
+          throw err;
+        }
+      })
       .catch(err =>
         console.error('[CRON] Erro classificando subcategorias:', err.message)
       );
@@ -170,7 +204,10 @@ async function runCacheNotaDetails(teams) {
           if (ce) subcat = { subCategoria: ce.sub_categoria, subcatCode: ce.sub_code, quantidade: ce.quantidade };
         } catch {}
         if (!subcat.subCategoria) {
-          const fb = classificarSubCategoria(raw.Type, raw.Code, raw.Comments, raw.Activities);
+          // GroupDescription pode vir em raw.GroupDescription ou raw.Group?.Description
+          // dependendo do endpoint. Passamos para alinhar com classifierService DD fallback.
+          const groupDesc = raw.GroupDescription || raw.Group?.Description || '';
+          const fb = classificarSubCategoria(raw.Type, raw.Code, raw.Comments, raw.Activities, groupDesc);
           subcat = { subCategoria: fb.subCategoria, subcatCode: fb.subcatCode, quantidade: fb.quantidade };
         }
 

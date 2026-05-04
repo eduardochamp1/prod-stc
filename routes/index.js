@@ -546,7 +546,8 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
       } catch {}
     }
     if (!subcat.subCategoria) {
-      const fb = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities);
+      const groupDesc = nota.GroupDescription || nota.Group?.Description || '';
+      const fb = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities, groupDesc);
       subcat = { subCategoria: fb.subCategoria, subcatCode: fb.subcatCode, quantidade: fb.quantidade };
     }
 

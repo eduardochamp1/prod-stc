@@ -289,29 +289,9 @@ async function getSessions(sectorId) {
   return data.Data || [];
 }
 
-/**
- * Retorna notas em execução no setor (dia corrente).
- * ATENÇÃO: não retorna notas ExecutionStatus 4/5 (exportadas). Mantido apenas para debug.
- * GET /api/notes/execution?sectorId={sectorId}
- */
-async function getNotesExecution(sectorId) {
-  const res  = await wpaFetch(`/api/notes/execution?sectorId=${sectorId}`);
-  if (!res.ok) throw new Error(`WPA notes/execution ${res.status}`);
-  const data = await res.json();
-  return data.Data?.Notes || [];
-}
-
-/**
- * Retorna carteira de notas por equipe no setor.
- * Mantido para compatibilidade/debug. O V2 já fornece Downloaded[] que substitui este endpoint.
- * GET /api/route/preroute?sectorId={sectorId}
- */
-async function getPreroute(sectorId) {
-  const res  = await wpaFetch(`/api/route/preroute?sectorId=${sectorId}`);
-  if (!res.ok) throw new Error(`WPA preroute ${res.status}`);
-  const data = await res.json();
-  return data.Data || [];
-}
+// getNotesExecution e getPreroute foram removidos (dead code).
+// O endpoint V2 (getTeamStatusV2) já provê os dados que estes retornavam,
+// com cobertura mais ampla e estrutura padronizada.
 
 /**
  * Retorna status completo das equipes do setor — mesmo endpoint do WPA Gestão Online.
@@ -967,8 +947,6 @@ module.exports = {
   getSessions,
   getSessionDetail,
   getNoteDetail,
-  getNotesExecution,
-  getPreroute,
   getTeamStatusV2,
   // Principal
   getTeamsBySector,

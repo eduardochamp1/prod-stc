@@ -130,17 +130,28 @@ function processarNota(nota, opts = {}) {
 }
 
 /**
- * Heurística de subcategoria quando não há entrada no cache `note_subcategorias`.
- * Mesma lógica que existia inline em routes/index.js — extraída pra ser usada
- * tanto na rota /api/wpa/nota quanto no cron de caching.
+ * Heurística de subcategoria — espelha exatamente classifierService.classificar()
+ * para casos em que já temos o payload completo da nota em mãos (sem fazer
+ * chamadas extras à WPA). Usada como fallback quando `note_subcategorias` ainda
+ * não tem o resultado, e na rota /api/wpa/nota.
+ *
+ * IMPORTANTE: para nada divergir do classificador autoritativo, retornamos
+ * sempre 'OUTROS' nos ramos else (em vez de devolver o code original) e
+ * aplicamos o mesmo fallback de "RAMAL DE LIGACAO" para DD com Activities=[].
+ *
+ * @param {string} tipo               'MD' | 'SF' | 'DD' | outros
+ * @param {string} code               Code da nota (SRED/SREB/SPEB/...)
+ * @param {string} comments           Comments (texto livre)
+ * @param {Array}  activities         Activities[] do details/optimized
+ * @param {string} [groupDescription] GroupDescription de /api/notes/dd (opcional, melhora DD)
  */
-function classificarSubCategoria(tipo, code, comments, activities) {
+function classificarSubCategoria(tipo, code, comments, activities, groupDescription) {
   const act = activities || [];
 
   if (tipo === 'SF') {
     if (code === 'SRED') return { subCategoria: 'Corte Disjuntor', subcatCode: 'L0', quantidade: null };
     if (code === 'SREB') return { subCategoria: 'Corte Borne',     subcatCode: 'L1', quantidade: null };
-    return { subCategoria: null, subcatCode: code || null, quantidade: null };
+    return { subCategoria: 'SF Outros', subcatCode: 'OUTROS', quantidade: null };
   }
 
   if (tipo === 'MD') {
@@ -152,7 +163,7 @@ function classificarSubCategoria(tipo, code, comments, activities) {
         quantidade:   null,
       };
     }
-    return { subCategoria: null, subcatCode: code || null, quantidade: null };
+    return { subCategoria: 'MD Outros', subcatCode: 'OUTROS', quantidade: null };
   }
 
   if (tipo === 'DD') {
@@ -163,10 +174,21 @@ function classificarSubCategoria(tipo, code, comments, activities) {
     const ativBTZ013 = findByCode('BTZ013');
     if (ativC93)    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: ativC93.Amount    ?? null };
     if (ativBTZ013) return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: ativBTZ013.Amount ?? null };
-    return { subCategoria: null, subcatCode: code || null, quantidade: null };
+
+    // Fallback: notas DD CAPEX de "RAMAL DE LIGACAO" vêm com Activities=[].
+    // GroupDescription do /api/notes/dd indica isso. Mesmo comportamento do
+    // classifierService.classificarDD para garantir consistência.
+    const desc = (groupDescription || '').toUpperCase();
+    if (/RAMAL\s+DE\s+LIGAC/.test(desc)) {
+      return { subCategoria: 'Subs Ramal', subcatCode: 'C93', quantidade: null };
+    }
+
+    return { subCategoria: 'DD Outros', subcatCode: 'OUTROS', quantidade: null };
   }
 
-  return { subCategoria: null, subcatCode: code || null, quantidade: null };
+  // Outros tipos não tem subcategorização — retornam OUTROS para alinhar com
+  // o classifier (que sempre retorna sub_code definido, nunca null/code original)
+  return { subCategoria: null, subcatCode: 'OUTROS', quantidade: null };
 }
 
 module.exports = { processarNota, classificarSubCategoria };

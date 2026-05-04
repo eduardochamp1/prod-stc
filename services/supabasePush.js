@@ -151,53 +151,14 @@ function _sessionDate(team) {
 /**
  * Atualiza `daily_totals` por regional/tipo (intraday — visão da regional).
  */
-async function upsertDailyTotals(teams, _date) {
-  const sb = getClient();
-
-  // Cada equipe é atribuída ao seu _sessionDate (data BRT do sessionBegin).
-  // Equipes sem sessão são descartadas. Múltiplas datas podem coexistir no
-  // mesmo batch (ex: equipe da virada com sessionDate = D-1 num cron de D).
-  const acc = {};
-  teams.forEach(t => {
-    const sessDate = _sessionDate(t);
-    if (!sessDate) return;
-    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
-    realizadas.forEach(n => {
-      const code = n.tipoCode || n.tipo_code;
-      if (!code) return;
-      const key = `${sessDate}|${t.regional}|${code}`;
-      acc[key] = (acc[key] || 0) + 1;
-    });
-  });
-
-  const newRows = Object.entries(acc).map(([key, count]) => {
-    const [date, regional, tipo_code] = key.split('|');
-    return { date, regional, tipo_code, count };
-  });
-
-  if (newRows.length === 0) return;
-
-  // Estratégia MAX (preservada): nunca deixa o contador diminuir entre snapshots
-  // do mesmo dia. Agora chave inclui date — busca existentes nas datas envolvidas.
-  const dates = [...new Set(newRows.map(r => r.date))];
-  const { data: existing } = await sb
-    .from('daily_totals')
-    .select('date, regional, tipo_code, count')
-    .in('date', dates);
-  const prev = {};
-  (existing || []).forEach(r => { prev[`${r.date}|${r.regional}|${r.tipo_code}`] = r.count; });
-
-  const rows = newRows.map(r => ({
-    ...r,
-    count: Math.max(r.count, prev[`${r.date}|${r.regional}|${r.tipo_code}`] || 0),
-  }));
-
-  const { error } = await sb
-    .from('daily_totals')
-    .upsert(rows, { onConflict: 'date,regional,tipo_code' });
-
-  if (error) throw error;
-  console.log(`[SUPABASE] daily_totals: ${rows.length} linhas em ${dates.length} dia(s) (${dates.join(', ')})`);
+/**
+ * @deprecated `daily_totals` não é mais lida pelo sistema (queries leem
+ * direto de `team_daily_totals` para permitir filtro pela whitelist).
+ * Mantida como no-op para preservar compatibilidade do callsite — qualquer
+ * agregação regional é re-feita em runtime nas funções de leitura.
+ */
+async function upsertDailyTotals(_teams, _date) {
+  // intencionalmente vazio
 }
 
 /**
@@ -308,8 +269,7 @@ async function upsertSubcatTotals(teams, _date) {
   // suportar múltiplas datas no mesmo batch (cron de D pegando equipes com
   // sessionDate D e raras com sessionDate D-1)
   const seen = new Set();
-  const byRegional = new Map();
-  const byTeam     = new Map();
+  const byTeam = new Map();
 
   events.forEach(e => {
     const dedupeKey = `${e.date}|${e.team}|${e.tipo}|${e.noteId}`;
@@ -326,17 +286,6 @@ async function upsertSubcatTotals(teams, _date) {
       quantidade = null;
     }
 
-    const rk = `${e.date}|${e.regional}|${e.tipo}|${sub_code}`;
-    if (!byRegional.has(rk)) {
-      byRegional.set(rk, {
-        date: e.date, regional: e.regional, tipo: e.tipo, sub_code,
-        count: 0, quantidade: null,
-      });
-    }
-    const r = byRegional.get(rk);
-    r.count += 1;
-    if (quantidade != null) r.quantidade = (r.quantidade ?? 0) + quantidade;
-
     const tk = `${e.date}|${e.team}|${e.tipo}|${sub_code}`;
     if (!byTeam.has(tk)) {
       byTeam.set(tk, {
@@ -350,36 +299,11 @@ async function upsertSubcatTotals(teams, _date) {
   });
 
   const now = new Date().toISOString();
-  const regionalRowsNew = [...byRegional.values()].map(r => ({ ...r, updated_at: now }));
-  const teamRows        = [...byTeam.values()].map(r => ({ ...r, updated_at: now }));
+  const teamRows = [...byTeam.values()].map(r => ({ ...r, updated_at: now }));
 
-  if (regionalRowsNew.length > 0) {
-    // Estratégia MAX — nunca reduz contadores já gravados
-    const dates = [...new Set(regionalRowsNew.map(r => r.date))];
-    const { data: exReg } = await sb
-      .from('daily_subcat_totals')
-      .select('date, regional, tipo, sub_code, count, quantidade')
-      .in('date', dates);
-    const prevReg = {};
-    (exReg || []).forEach(r => { prevReg[`${r.date}|${r.regional}|${r.tipo}|${r.sub_code}`] = r; });
-
-    const regionalRows = regionalRowsNew.map(r => {
-      const p = prevReg[`${r.date}|${r.regional}|${r.tipo}|${r.sub_code}`];
-      return {
-        ...r,
-        count:      Math.max(r.count,      p?.count      || 0),
-        quantidade: (r.quantidade != null || p?.quantidade != null)
-          ? Math.max(r.quantidade ?? 0, p?.quantidade ?? 0)
-          : null,
-      };
-    });
-
-    const { error } = await sb
-      .from('daily_subcat_totals')
-      .upsert(regionalRows, { onConflict: 'date,regional,tipo,sub_code' });
-    if (error) throw error;
-    console.log(`[SUPABASE] daily_subcat_totals: ${regionalRows.length} linhas em ${dates.length} dia(s)`);
-  }
+  // Nota: `daily_subcat_totals` (regional) não é mais escrita. Toda leitura
+  // re-agrega em runtime a partir de `team_daily_subcat_totals` para respeitar
+  // a whitelist de equipes oficiais.
   if (teamRows.length > 0) {
     const { error } = await sb
       .from('team_daily_subcat_totals')
@@ -447,30 +371,23 @@ async function consolidateDay(date) {
   console.log(`[SUPABASE] consolidateDay(${date}): ${teams.length} equipes (snapshot final por sessão)`);
 
   // ── RESET ─────────────────────────────────────────────────────────────
-  // Consolidação é a FONTE DA VERDADE para o dia: limpa todas as linhas
-  // agregadas existentes desse `date` antes de reagregar. Sem isso, a
-  // estratégia MAX em upsertDailyTotals/upsertSubcatTotals preserva valores
-  // inflados de runs anteriores (pré-_sessionDate ou de bugs posteriores)
-  // — e o contador nunca cai pro valor correto.
+  // Consolidação é a FONTE DA VERDADE para o dia: limpa as tabelas team-level
+  // antes de reagregar. As tabelas regionais (daily_totals/daily_subcat_totals)
+  // não são mais lidas — leituras agregam em runtime a partir das team-level.
   const wipeOps = [
-    sb.from('daily_totals').delete().eq('date', date),
-    sb.from('daily_subcat_totals').delete().eq('date', date),
     sb.from('team_daily_totals').delete().eq('date', date),
     sb.from('team_daily_subcat_totals').delete().eq('date', date),
   ];
   for (const op of wipeOps) {
     const { error } = await op;
-    // Tabela team_daily_subcat_totals pode não existir em ambientes mais antigos —
-    // ignora "relation does not exist" (PGRST204 / 42P01) sem abortar.
+    // Tabela pode não existir em ambientes antigos — ignora "relation does not exist"
     if (error && !/does not exist|PGRST204|42P01/i.test(error.message || '')) {
       console.warn(`[SUPABASE] consolidateDay: erro no reset de ${date}: ${error.message}`);
     }
   }
   console.log(`[SUPABASE] consolidateDay(${date}): linhas agregadas anteriores limpas`);
 
-  // Reagrega via upsertDailyTotals/upsertTeamDailyTotals/upsertSubcatTotals.
-  // Após o wipe, a comparação MAX nessas funções acha 0 e grava a contagem real.
-  await upsertDailyTotals(teams);
+  // Reagrega via upsertTeamDailyTotals/upsertSubcatTotals.
   await upsertTeamDailyTotals(teams);
   try {
     await upsertSubcatTotals(teams);
