@@ -29,6 +29,7 @@
  */
 
 const fetch = require('node-fetch');
+const { dateBRT } = require('./timeUtil');
 
 const WPA_AUTH = process.env.WPA_URL      || 'https://edp-wpa-po.azurewebsites.net';
 const WPA_API  = process.env.WPA_API_URL  || 'https://edp-wpa-web-api.azurewebsites.net';
@@ -613,8 +614,8 @@ const _acc = {
 };
 
 function _accReset() {
-  // Data BRT — UTC daria a virada do dia errada (21h BRT = 00h UTC do dia seguinte)
-  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  // Data BRT (America/Sao_Paulo) — respeita DST automaticamente
+  const today = dateBRT();
   if (_acc.date !== today) {
     _acc.date = today;
     _acc.notes.clear();
@@ -738,7 +739,11 @@ const REGIONAL_MAP = {
   DESC: 'CAC',
 };
 
-const ENGELMIG_COMPANY_ID = '92a2f98e-8877-433e-8358-173b94c13a54';
+// CompanyId Engelmig na WPA — usado para filtrar sessões/equipes da empresa.
+// Configurável via env var para permitir mudança sem redeploy de código.
+// Se a env não estiver setada, usa o ID atual conhecido como fallback.
+const ENGELMIG_COMPANY_ID = process.env.WPA_COMPANY_ID
+  || '92a2f98e-8877-433e-8358-173b94c13a54';
 
 /**
  * Normaliza uma nota do teamsstatus/V2.
@@ -806,7 +811,7 @@ async function getTeamsBySector(sectorId) {
   // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current).
   // Não filtramos por data: sessões abertas de dias anteriores (equipe esqueceu de encerrar)
   // devem aparecer — a data de início fica visível no card para identificação.
-  const todayBRT = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const todayBRT = dateBRT();
 
   const allEngelmig     = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
   const engelmigSessions = allEngelmig; // sem corte de data — todas as sessões abertas

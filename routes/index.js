@@ -6,6 +6,22 @@
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
 const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail } = require('../services/wpaService');
+const { dateBRT } = require('../services/timeUtil');
+
+// ── VALIDADORES DE PARAMS ─────────────────────────────────────────────────────
+const _RE_YYYYMM    = /^\d{4}-(0[1-9]|1[0-2])$/;
+const _RE_YYYYMMDD  = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const _RE_UUID      = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** Valida `?m=YYYY-MM`. Se inválido, retorna 400 e devolve null. */
+function _parseYearMonth(req, res) {
+  const raw = req.query.m;
+  if (raw !== undefined && !_RE_YYYYMM.test(raw)) {
+    res.status(400).json({ error: `Parâmetro m inválido: "${raw}". Use YYYY-MM.` });
+    return null;
+  }
+  return raw || new Date().toISOString().slice(0, 7);
+}
 const { login: authLogin, authMiddleware }    = require('../middleware/auth');
 
 const router = express.Router();
@@ -171,7 +187,7 @@ router.post('/metas', async (req, res) => {
 router.get('/totais/subcat', async (req, res) => {
   try {
     const sq = sbq();
-    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const today = dateBRT();
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
     const regional = req.query.regional || 'ALL';
@@ -189,7 +205,7 @@ router.get('/totais/subcat', async (req, res) => {
 router.get('/totais/dia', async (req, res) => {
   try {
     const sq = sbq();
-    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const today = dateBRT();
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
     if (!sq) return res.json({ de, ate, totais: { ALL: 0, GUA: 0, CAC: 0 } });
@@ -206,7 +222,7 @@ router.get('/totais/dia', async (req, res) => {
 router.get('/export/historico', async (req, res) => {
   try {
     const sq = sbq();
-    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const today = dateBRT();
     const firstOfMonth = today.slice(0, 8) + '01';
     const de       = req.query.de       || firstOfMonth;
     const ate      = req.query.ate      || today;
@@ -231,7 +247,7 @@ router.get('/export/historico', async (req, res) => {
 router.get('/performance/equipes', async (req, res) => {
   try {
     const sq = sbq();
-    const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const today = dateBRT();
     const de       = req.query.de       || today;
     const ate      = req.query.ate      || de;
     const regional = req.query.regional || 'ALL';
@@ -278,7 +294,7 @@ router.put('/settings/:key', async (req, res) => {
 router.get('/historico/mes', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const ym = _parseYearMonth(req, res); if (!ym) return;
     if (!sq) return res.json({ mes: ym, totais: { GUA: {}, CAC: {} } });
     const totais = await sq.getMonthTotals(ym);
     res.json({ mes: ym, totais });
@@ -297,7 +313,7 @@ router.get('/historico/sessoes', async (req, res) => {
     let ate = req.query.ate;
     // Fallback: se vier ?m=YYYY-MM (retrocompatibilidade), converte para de/ate
     if (!de || !ate) {
-      const ym = req.query.m || new Date().toISOString().slice(0, 7);
+      const ym = _parseYearMonth(req, res); if (!ym) return;
       de  = `${ym}-01`;
       const [year, month] = ym.split('-').map(Number);
       const ny = month === 12 ? year + 1 : year;
@@ -320,7 +336,7 @@ router.get('/historico/sessoes', async (req, res) => {
 router.get('/historico/diario', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const ym = _parseYearMonth(req, res); if (!ym) return;
     if (!sq) return res.json({ mes: ym, dias: [] });
     const dias = await sq.getDailyHistory(ym);
     res.json({ mes: ym, dias });
@@ -335,7 +351,7 @@ router.get('/historico/diario', async (req, res) => {
 router.get('/historico/subcats/mes', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const ym = _parseYearMonth(req, res); if (!ym) return;
     const regional = req.query.regional || null;
     if (!sq) return res.json({ mes: ym, totais: { GUA: {}, CAC: {} } });
     const totais = await sq.getSubcatMonthTotals(ym, regional);
@@ -351,7 +367,7 @@ router.get('/historico/subcats/mes', async (req, res) => {
 router.get('/historico/subcats/diario', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const ym = _parseYearMonth(req, res); if (!ym) return;
     const regional = req.query.regional || null;
     if (!sq) return res.json({ mes: ym, dias: [] });
     const dias = await sq.getSubcatDailyHistory(ym, regional);
@@ -367,7 +383,7 @@ router.get('/historico/subcats/diario', async (req, res) => {
 router.get('/historico/subcats/ranking', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const ym = _parseYearMonth(req, res); if (!ym) return;
     const regional = req.query.regional || null;
     const tipo     = req.query.tipo     || null;
     const subCode  = req.query.subCode  || null;
@@ -386,7 +402,7 @@ router.get('/historico/subcats/ranking', async (req, res) => {
 router.get('/metas/calculadas', async (req, res) => {
   try {
     const sq = sbq();
-    const ym = req.query.m || new Date().toISOString().slice(0, 7);
+    const ym = _parseYearMonth(req, res); if (!ym) return;
     if (!sq) return res.json({ mes: ym, regionais: {} });
     const resultado = await sq.getMetasCalculadas(ym);
     res.json(resultado);
@@ -402,7 +418,7 @@ router.get('/metas/calculadas', async (req, res) => {
 router.get('/ranking/equipes', async (req, res) => {
   try {
     const sq       = sbq();
-    const ym       = req.query.m        || new Date().toISOString().slice(0, 7);
+    const ym       = _parseYearMonth(req, res); if (!ym) return;
     const regional = req.query.regional || null;
     if (!sq) return res.json({ mes: ym, ranking: [] });
     const ranking = await sq.getTeamRanking(ym, regional);
@@ -417,7 +433,7 @@ router.get('/ranking/equipes', async (req, res) => {
 router.get('/historico/equipes', async (req, res) => {
   try {
     const sq   = sbq();
-    const ym   = req.query.m    || new Date().toISOString().slice(0, 7);
+    const ym   = _parseYearMonth(req, res); if (!ym) return;
     const team = req.query.team || null;
     if (!sq) return res.json({ mes: ym, dias: [] });
     const dias = await sq.getTeamDailyHistory(ym, team);
@@ -474,6 +490,18 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   let noteId           = noteIdOriginal;
   const sectorId       = req.query.sectorId || 'DESG';
   const incluirFotos   = req.query.fotos === '1';
+
+  // Sanitização: aceita apenas UUID OU alfanumérico/hífen até 64 chars (número
+  // de OS curto). Qualquer outra coisa pode ser tentativa de log injection ou
+  // bug de cliente — rejeita 400 sem chegar a logar o input.
+  if (!noteId || noteId.length > 64 || !/^[a-zA-Z0-9-]+$/.test(noteId)) {
+    return res.status(400).json({ error: 'noteId inválido. Use UUID ou número de OS.' });
+  }
+
+  // Validação de sectorId (só aceita os 3 conhecidos)
+  if (!['DESG', 'DEPT', 'DESC'].includes(sectorId)) {
+    return res.status(400).json({ error: `sectorId inválido: ${sectorId}` });
+  }
 
   // Tolerância: se chegar número de OS em vez de UUID (cache antigo do front
   // ou notas históricas sem UUID mapeado), tenta resolver via teams_current.
@@ -1191,7 +1219,7 @@ router.post('/admin/consolidar', async (req, res) => {
   try {
     const c    = cron();
     if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
-    const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const date = req.query.date || dateBRT();
     await c.runConsolidate(date);
     res.json({ ok: true, date });
   } catch (err) {

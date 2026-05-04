@@ -4,11 +4,12 @@
  */
 
 const { getClient } = require('./supabaseClient');
+const { dateBRT, dateBRTMinusDays } = require('./timeUtil');
 
-// Data operacional BRT (UTC-3). Usar UTC daria a data errada após 21:00 BRT
+// Data operacional BRT (America/Sao_Paulo). Usar UTC daria a data errada após 21:00 BRT
 // (quando UTC já virou pro dia seguinte) e desalinharia tudo com o front.
 function _hojeBRT() {
-  return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  return dateBRT();
 }
 
 // Lock simples para serializar execuções concorrentes de pushTeams.
@@ -404,9 +405,7 @@ async function consolidateDay(date) {
 async function cleanOldSnapshots() {
   const sb = getClient();
   // Data-limite: hoje BRT menos 30 dias
-  const cutoff = new Date(Date.now() - 3 * 3600 * 1000 - 30 * 24 * 3600 * 1000)
-    .toISOString()
-    .slice(0, 10);
+  const cutoff = dateBRTMinusDays(30);
 
   const { error, count } = await sb
     .from('snapshots')
@@ -422,4 +421,33 @@ async function cleanOldSnapshots() {
   }
 }
 
-module.exports = { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals, consolidateDay, cleanOldSnapshots };
+/**
+ * Remove note_details com mais de 90 dias (TTL).
+ * Cache de payloads completos de OS — útil só para consultas recentes.
+ * Chamado junto com cleanOldSnapshots no cron diário.
+ */
+async function cleanOldNoteDetails() {
+  const sb = getClient();
+  // Cutoff = hoje BRT - 90 dias, em formato ISO com hora 00:00 UTC
+  const cutoff = dateBRTMinusDays(90) + 'T00:00:00.000Z';
+
+  const { error, count } = await sb
+    .from('note_details')
+    .delete({ count: 'exact' })
+    .lt('fetched_at', cutoff);
+
+  if (error) {
+    console.warn('[SUPABASE] cleanOldNoteDetails: erro ao limpar:', error.message);
+    return;
+  }
+  if (count > 0) {
+    console.log(`[SUPABASE] cleanOldNoteDetails: ${count} payloads anteriores a ${cutoff.slice(0,10)} removidos`);
+  }
+}
+
+module.exports = {
+  saveSnapshot, pushTeams,
+  upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals,
+  consolidateDay,
+  cleanOldSnapshots, cleanOldNoteDetails,
+};

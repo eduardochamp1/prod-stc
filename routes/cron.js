@@ -16,6 +16,7 @@
 
 const express = require('express');
 const router  = express.Router();
+const { dateBRT } = require('../services/timeUtil');
 
 const SECRET = (process.env.CRON_SECRET || '').trim();
 
@@ -97,8 +98,8 @@ router.get('/consolidate', async (req, res) => {
   try {
     const cronSrv = require('../services/cronService');
     const t0 = Date.now();
-    // Sem ?date usa BRT (UTC-3) — evita consolidar "amanhã" depois das 21h UTC
-    const date = req.query.date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    // Sem ?date usa BRT (America/Sao_Paulo) — evita consolidar "amanhã" depois das 21h UTC
+    const date = req.query.date || dateBRT();
     await cronSrv.runConsolidate(date);
     res.json({ ok: true, ms: Date.now() - t0, date });
   } catch (err) {

@@ -5,6 +5,7 @@
 
 const { getClient } = require('../services/supabaseClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
+const { dateBRT } = require('../services/timeUtil');
 
 /**
  * Filtra um array de linhas mantendo só registros de equipes oficiais.
@@ -564,7 +565,7 @@ async function getRealizadasDoDia(de, ate) {
   const sb = getClient();
   // Default = data BRT atual (UTC-3). toISOString() puro daria a data UTC,
   // que após 21:00 BRT já virou pra "amanhã" e retornaria zero indevidamente.
-  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = dateBRT();
   de  = de  || today;
   ate = ate || de;
 
@@ -591,7 +592,7 @@ async function getRealizadasDoDia(de, ate) {
  */
 async function getDailySubcatTotals(de, ate, regional) {
   const sb = getClient();
-  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const today = dateBRT();
   de  = de  || today;
   ate = ate || de;
 

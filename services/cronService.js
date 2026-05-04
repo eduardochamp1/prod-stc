@@ -11,6 +11,7 @@
 const cron                    = require('node-cron');
 const { getTeams }            = require('./dataService');
 const { forceRefresh }        = require('./wpaService');
+const { dateBRT, hourBRT }    = require('./timeUtil');
 
 let tokenJob        = null;
 let snapshotJob     = null;
@@ -350,13 +351,14 @@ async function runUuidHealthCheck() {
 // ── CONSOLIDAÇÃO ──────────────────────────────────────────────────────────────
 
 async function runConsolidate(date) {
-  // Sem data explícita usa BRT (UTC-3) — evita consolidar "amanhã" depois das 21h UTC
-  date = date || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  // Sem data explícita usa BRT (America/Sao_Paulo) — evita consolidar "amanhã" depois das 21h UTC
+  date = date || dateBRT();
   try {
-    const { consolidateDay, cleanOldSnapshots } = require('./supabasePush');
+    const { consolidateDay, cleanOldSnapshots, cleanOldNoteDetails } = require('./supabasePush');
     await consolidateDay(date);
-    // Limpa snapshots velhos logo após a consolidação (uma vez por dia)
+    // Limpa registros antigos (uma vez por dia, após a consolidação)
     await cleanOldSnapshots();
+    await cleanOldNoteDetails();
   } catch (err) {
     console.error('[CRON] Erro na consolidação:', err.message);
   }
@@ -397,7 +399,7 @@ function startCron() {
   setTimeout(runTokenRefresh, 2000);
 
   // Snapshot imediato ao iniciar (se dentro do horário — usa hora BRT, não UTC)
-  const horaBRT = new Date(Date.now() - 3 * 3600 * 1000).getUTCHours();
+  const horaBRT = hourBRT();
   if (horaBRT >= 6 && horaBRT <= 20) {
     setTimeout(runSnapshot, 5000);
   }
