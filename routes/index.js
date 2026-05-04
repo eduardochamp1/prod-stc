@@ -1279,6 +1279,233 @@ router.post('/admin/drift/repair', async (req, res) => {
   }
 });
 
+// GET /api/admin/subcat-trace?date=YYYY-MM-DD&tipo=SF
+//
+// Rastreia a cadeia completa de classificação de subcategoria para um dia.
+// Mostra exatamente onde cada nota MD/SF/DD está (classificada, OUTROS por
+// fallback, ou ausente). Útil quando algum sub_code aparece zerado.
+//
+// Resposta:
+//   { date, tipo, totals: {snapshot, classified, unclassified},
+//     by_sub_code: { L0: N, L1: N, OUTROS: N, ... },
+//     samples: { unclassified: [{noteId, team, ...}], outros: [...] } }
+router.get('/admin/subcat-trace', async (req, res) => {
+  const date = req.query.date || dateBRT();
+  const tipo = (req.query.tipo || 'SF').toUpperCase();
+  if (!_RE_YYYYMMDD.test(date)) {
+    return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
+  }
+  if (!['MD', 'SF', 'DD'].includes(tipo)) {
+    return res.status(400).json({ error: 'tipo deve ser MD, SF ou DD' });
+  }
+
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/supabaseClient').getClient();
+    const { isOficial } = require('../services/equipesOficiais');
+
+    // Pega snapshot mais recente por (date, team) que tenha sessionDate=date
+    const dPlus1 = new Date(date + 'T12:00:00Z');
+    dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
+    const { data: snaps, error } = await sb
+      .from('snapshots')
+      .select('team_name, regional, sector_id, captured_at, data')
+      .in('date', [date, dPlus1.toISOString().slice(0, 10)])
+      .order('captured_at', { ascending: false });
+    if (error) throw error;
+
+    // Coleta UUIDs do tipo desejado, com snapshot mais recente por (team, sessionBegin)
+    const seenSession = new Set();
+    const noteRecs    = []; // [{noteId, team, regional}]
+    for (const s of (snaps || [])) {
+      const t = s.data;
+      if (!t || !t.sessionBegin) continue;
+      // sessionDate igual ao date alvo
+      const sessDate = String(t.sessionBegin).slice(0, 10);
+      if (sessDate !== date) continue;
+      const sk = `${s.team_name}|${t.sessionBegin}`;
+      if (seenSession.has(sk)) continue;
+      seenSession.add(sk);
+
+      // Filtra pela whitelist
+      if (!isOficial(s.team_name)) continue;
+
+      const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+      for (const n of realizadas) {
+        if (!n.id) continue;
+        const ntipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
+        if (ntipo !== tipo) continue;
+        noteRecs.push({
+          noteId:   n.id,
+          codigo:   n.codigo || n.code || null,
+          team:     s.team_name,
+          regional: s.regional,
+        });
+      }
+    }
+
+    // Dedupe por noteId (mesma OS pode estar em multiple snapshots ou em concluídas+executadas)
+    const uniqByNote = new Map();
+    for (const r of noteRecs) {
+      if (!uniqByNote.has(r.noteId)) uniqByNote.set(r.noteId, r);
+    }
+    const unique = [...uniqByNote.values()];
+
+    // Busca classificação atual em note_subcategorias
+    const ids = unique.map(r => r.noteId);
+    const subcatMap = {};
+    const CHUNK = 100;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const { data: subs, error: e2 } = await sb
+        .from('note_subcategorias')
+        .select('note_id, sub_code, code, code_text, quantidade')
+        .in('note_id', chunk);
+      if (e2) throw e2;
+      (subs || []).forEach(s => { subcatMap[s.note_id] = s; });
+    }
+
+    // Cruza dados: status por nota
+    const by_sub_code = {};
+    const samples = { unclassified: [], outros: [] };
+    let classified = 0, unclassified = 0;
+    for (const r of unique) {
+      const sc = subcatMap[r.noteId];
+      if (!sc) {
+        unclassified++;
+        if (samples.unclassified.length < 20) {
+          samples.unclassified.push({ noteId: r.noteId, codigo: r.codigo, team: r.team });
+        }
+        // Notas sem classificação caem em OUTROS no upsertSubcatTotals
+        by_sub_code['(unclassified→OUTROS)'] = (by_sub_code['(unclassified→OUTROS)'] || 0) + 1;
+      } else {
+        classified++;
+        by_sub_code[sc.sub_code] = (by_sub_code[sc.sub_code] || 0) + 1;
+        if (sc.sub_code === 'OUTROS' && samples.outros.length < 20) {
+          samples.outros.push({
+            noteId: r.noteId, codigo: r.codigo, team: r.team,
+            wpa_code: sc.code, wpa_code_text: sc.code_text,
+          });
+        }
+      }
+    }
+
+    res.json({
+      date,
+      tipo,
+      totals: {
+        snapshot:     unique.length,
+        classified,
+        unclassified,
+      },
+      by_sub_code,
+      samples,
+      hint: unclassified > 0
+        ? `${unclassified} nota(s) ainda não foram classificadas — caem em OUTROS no agregado. Use POST /admin/subcat-reclassify para reprocessar.`
+        : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/subcat-reclassify?date=YYYY-MM-DD&tipo=SF
+//
+// Reclassifica TODAS as notas MD/SF/DD do período (ou só do tipo especificado),
+// purgando de note_subcategorias antes — força o classifier a ler de novo do
+// WPA. Em seguida, re-agrega team_daily_subcat_totals via consolidateDay.
+//
+// CUIDADO: esta operação faz N chamadas WPA (uma por nota). Use só pra
+// corrigir dados ou após mudanças no classifier.
+router.post('/admin/subcat-reclassify', async (req, res) => {
+  const date = req.query.date || dateBRT();
+  const tipoFilter = req.query.tipo ? req.query.tipo.toUpperCase() : null;
+  if (!_RE_YYYYMMDD.test(date)) {
+    return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
+  }
+  if (tipoFilter && !['MD', 'SF', 'DD'].includes(tipoFilter)) {
+    return res.status(400).json({ error: 'tipo deve ser MD, SF ou DD' });
+  }
+
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/supabaseClient').getClient();
+    const { classificar } = require('../services/classifierService');
+    const { consolidateDay } = require('../services/supabasePush');
+
+    // 1. Coleta UUIDs MD/SF/DD do dia (de snapshots)
+    const dPlus1 = new Date(date + 'T12:00:00Z');
+    dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
+    const { data: snaps, error } = await sb
+      .from('snapshots')
+      .select('team_name, sector_id, data')
+      .in('date', [date, dPlus1.toISOString().slice(0, 10)]);
+    if (error) throw error;
+
+    const SUBCAT_TIPOS = tipoFilter ? new Set([tipoFilter]) : new Set(['MD', 'SF', 'DD']);
+    const seen = new Set();
+    const jobs = [];
+    for (const s of (snaps || [])) {
+      const t = s.data;
+      if (!t || !t.sessionBegin) continue;
+      if (String(t.sessionBegin).slice(0, 10) !== date) continue;
+      const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+      for (const n of realizadas) {
+        if (!n.id) continue;
+        const ntipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
+        if (!SUBCAT_TIPOS.has(ntipo)) continue;
+        if (seen.has(n.id)) continue;
+        seen.add(n.id);
+        jobs.push({ noteId: n.id, tipo: ntipo, sectorId: s.sector_id });
+      }
+    }
+
+    if (jobs.length === 0) {
+      return res.json({ ok: true, date, tipo: tipoFilter, processed: 0, msg: 'nenhuma nota encontrada' });
+    }
+
+    // 2. Apaga classificações existentes pra forçar reprocessamento
+    const ids = jobs.map(j => j.noteId);
+    const CHUNK = 100;
+    let deleted = 0;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const { error: e2 } = await sb.from('note_subcategorias').delete().in('note_id', ids.slice(i, i + CHUNK));
+      if (e2) throw e2;
+      deleted += Math.min(CHUNK, ids.length - i);
+    }
+
+    // 3. Reclassifica (concorrência limitada para não saturar a WPA)
+    const CONCURRENCY = 4;
+    const results = [];
+    for (let i = 0; i < jobs.length; i += CONCURRENCY) {
+      const slice = jobs.slice(i, i + CONCURRENCY);
+      const out = await Promise.all(slice.map(j =>
+        classificar(j.noteId, j.tipo, j).catch(err => ({ error: err.message, noteId: j.noteId }))
+      ));
+      results.push(...out);
+    }
+    const ok = results.filter(r => r && r.sub_code).length;
+    const failed = results.length - ok;
+
+    // 4. Re-consolida o dia (re-aggrega team_daily_subcat_totals com novos sub_codes)
+    await consolidateDay(date);
+
+    res.json({
+      ok: true,
+      date,
+      tipo: tipoFilter || 'ALL',
+      processed: jobs.length,
+      deleted,
+      classified_ok: ok,
+      classified_failed: failed,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/equipes/refresh — força recarga do cache em memória
 router.post('/admin/equipes/refresh', async (_req, res) => {
   try {
