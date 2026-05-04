@@ -1,6 +1,34 @@
 /**
  * db/supabaseQueries.js
  * Queries de leitura usadas pelo Vercel (DATA_MODE=supabase) e pelos endpoints de histórico.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * POLÍTICA DE PAGINAÇÃO (importante!)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * O PostgREST do Supabase tem limite default de 1000 linhas por SELECT.
+ * Queries que excedem esse limite são SILENCIOSAMENTE TRUNCADAS.
+ *
+ * Toda query desta camada deve seguir uma destas regras:
+ *
+ *   1. **Bounded por design** — A consulta tem WHERE/EQ que garante
+ *      retorno < 1000 rows (ex: getMetas retorna 2 linhas; teams_current
+ *      tem 1 row por equipe da whitelist, max ~60).
+ *
+ *   2. **`_selectAll(queryFactory)`** — Para qualquer query que pode
+ *      crescer com o tempo (mês de dados, todas as notas de N dias,
+ *      etc.). Pagina até esgotar os resultados (max 200 páginas).
+ *
+ *   3. **`_paginateTable()`** — Wrapper específico para export bruto
+ *      por intervalo de datas (usado em getExportData).
+ *
+ *   4. **`.maybeSingle()` / `.single()`** — Para lookups por PK.
+ *
+ * Ao adicionar uma nova query, escolha a categoria certa e documente
+ * no jsdoc qual ela é. Veja `_selectAll` abaixo para a implementação.
+ *
+ * Para verificar manualmente se uma query está truncando: rode em prod
+ * com um mês cheio e cheque se data.length === 1000 (suspeito).
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 const { getClient } = require('../services/supabaseClient');
