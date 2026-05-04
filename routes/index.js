@@ -979,10 +979,12 @@ router.get('/equipes/producao', async (req, res) => {
 router.get('/admin/health', async (_req, res) => {
   try {
     const sq = sbq();
-    const { OFICIAIS_GUA, OFICIAIS_CAC, isOficial } = require('../services/equipesOficiais');
+    const { getOficiais, isOficial, isFromSupabase } = require('../services/equipesOficiais');
     const { dateBRT } = require('../services/timeUtil');
 
-    const today = dateBRT();
+    const today    = dateBRT();
+    const oficGua  = getOficiais('GUA');
+    const oficCac  = getOficiais('CAC');
 
     // Estado base — sempre respondido mesmo se Supabase off
     const out = {
@@ -990,9 +992,10 @@ router.get('/admin/health', async (_req, res) => {
       ts:    new Date().toISOString(),
       today,
       whitelist: {
-        total: OFICIAIS_GUA.length + OFICIAIS_CAC.length,
-        gua:   OFICIAIS_GUA.length,
-        cac:   OFICIAIS_CAC.length,
+        total:  oficGua.length + oficCac.length,
+        gua:    oficGua.length,
+        cac:    oficCac.length,
+        source: isFromSupabase() ? 'supabase' : 'fallback',
       },
       teams_logged_today:  null,
       teams_missing_today: null,
@@ -1031,12 +1034,12 @@ router.get('/admin/health', async (_req, res) => {
 
       // Diff: oficiais ausentes hoje
       const missing = [];
-      for (const e of OFICIAIS_GUA) {
+      for (const e of oficGua) {
         if (!loggedSiglas.has(e.sigla.toUpperCase())) {
           missing.push({ sigla: e.sigla, regional: 'GUA', tipo: e.tipo, placa: e.placa });
         }
       }
-      for (const e of OFICIAIS_CAC) {
+      for (const e of oficCac) {
         if (!loggedSiglas.has(e.sigla.toUpperCase())) {
           missing.push({ sigla: e.sigla, regional: 'CAC', tipo: e.tipo, placa: e.placa });
         }
@@ -1087,6 +1090,174 @@ router.get('/admin/health', async (_req, res) => {
     res.json(out);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── EQUIPES OFICIAIS — CRUD da whitelist editável ────────────────────────────
+//
+// A whitelist está em equipes_oficiais (Supabase, migration 006). O serviço
+// services/equipesOficiais.js mantém cache em memória de 60s. Após cada
+// mutação aqui, chamamos forceRefresh() para garantir que o próximo lookup
+// reflita a mudança imediatamente.
+
+const _RE_SIGLA  = /^[A-Z0-9]{4,12}$/i;
+const _RE_TIPO   = /^(A1|A2|A3|L1)$/;
+const _RE_PLACA  = /^[A-Z0-9 -]{4,16}$/i;
+const _RE_REG    = /^(GUA|CAC)$/;
+
+function _validateEquipe(body) {
+  const errors = [];
+  if (!body || typeof body !== 'object') return ['body inválido'];
+  if (!_RE_SIGLA.test(body.sigla || ''))     errors.push('sigla inválida (4-12 alfanuméricos)');
+  if (!_RE_REG.test(body.regional || ''))    errors.push('regional deve ser GUA ou CAC');
+  if (!_RE_TIPO.test(body.tipo || ''))       errors.push('tipo deve ser A1/A2/A3/L1');
+  if (!_RE_PLACA.test(body.placa || ''))     errors.push('placa inválida');
+  return errors;
+}
+
+// GET /api/admin/equipes — lista todas (incluindo inativas)
+router.get('/admin/equipes', async (_req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/supabaseClient').getClient();
+    const { data, error } = await sb
+      .from('equipes_oficiais')
+      .select('sigla, regional, tipo, placa, ativo, created_at, updated_at')
+      .order('regional')
+      .order('sigla');
+    if (error) throw error;
+    res.json({ equipes: data || [], count: (data || []).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/equipes — cria nova equipe oficial
+router.post('/admin/equipes', async (req, res) => {
+  const errors = _validateEquipe(req.body);
+  if (errors.length > 0) return res.status(400).json({ error: errors.join('; ') });
+
+  try {
+    const sb = require('../services/supabaseClient').getClient();
+    const sigla = req.body.sigla.toUpperCase().trim();
+    const { error } = await sb
+      .from('equipes_oficiais')
+      .insert({
+        sigla,
+        regional: req.body.regional,
+        tipo:     req.body.tipo.toUpperCase(),
+        placa:    req.body.placa.toUpperCase().trim(),
+        ativo:    true,
+      });
+    if (error) {
+      if (/duplicate|unique/i.test(error.message)) {
+        return res.status(409).json({ error: `Sigla "${sigla}" já existe.` });
+      }
+      throw error;
+    }
+
+    // Invalida cache do whitelist em memória
+    const { forceRefresh } = require('../services/equipesOficiais');
+    await forceRefresh();
+
+    res.status(201).json({ ok: true, sigla });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/equipes/:sigla — atualiza tipo/placa/regional/ativo
+router.put('/admin/equipes/:sigla', async (req, res) => {
+  const sigla = (req.params.sigla || '').toUpperCase().trim();
+  if (!_RE_SIGLA.test(sigla)) return res.status(400).json({ error: 'sigla inválida' });
+
+  // Validação parcial — só os campos enviados
+  const upd = {};
+  const body = req.body || {};
+  if (body.regional !== undefined) {
+    if (!_RE_REG.test(body.regional)) return res.status(400).json({ error: 'regional inválida' });
+    upd.regional = body.regional;
+  }
+  if (body.tipo !== undefined) {
+    if (!_RE_TIPO.test(body.tipo)) return res.status(400).json({ error: 'tipo inválido' });
+    upd.tipo = body.tipo.toUpperCase();
+  }
+  if (body.placa !== undefined) {
+    if (!_RE_PLACA.test(body.placa)) return res.status(400).json({ error: 'placa inválida' });
+    upd.placa = body.placa.toUpperCase().trim();
+  }
+  if (body.ativo !== undefined) {
+    if (typeof body.ativo !== 'boolean') return res.status(400).json({ error: 'ativo deve ser boolean' });
+    upd.ativo = body.ativo;
+  }
+  if (Object.keys(upd).length === 0) return res.status(400).json({ error: 'nenhum campo para atualizar' });
+  upd.updated_at = new Date().toISOString();
+
+  try {
+    const sb = require('../services/supabaseClient').getClient();
+    const { data, error } = await sb
+      .from('equipes_oficiais')
+      .update(upd)
+      .eq('sigla', sigla)
+      .select();
+    if (error) throw error;
+    if (!data || data.length === 0) return res.status(404).json({ error: `Equipe "${sigla}" não encontrada.` });
+
+    const { forceRefresh } = require('../services/equipesOficiais');
+    await forceRefresh();
+
+    res.json({ ok: true, equipe: data[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/equipes/:sigla — soft delete (ativo=false)
+// Use ?hard=1 para deletar permanentemente (cuidado: perde histórico).
+router.delete('/admin/equipes/:sigla', async (req, res) => {
+  const sigla = (req.params.sigla || '').toUpperCase().trim();
+  if (!_RE_SIGLA.test(sigla)) return res.status(400).json({ error: 'sigla inválida' });
+
+  const hard = req.query.hard === '1';
+  try {
+    const sb = require('../services/supabaseClient').getClient();
+    let resp;
+    if (hard) {
+      resp = await sb.from('equipes_oficiais').delete().eq('sigla', sigla).select();
+    } else {
+      resp = await sb
+        .from('equipes_oficiais')
+        .update({ ativo: false, updated_at: new Date().toISOString() })
+        .eq('sigla', sigla)
+        .select();
+    }
+    if (resp.error) throw resp.error;
+    if (!resp.data || resp.data.length === 0) {
+      return res.status(404).json({ error: `Equipe "${sigla}" não encontrada.` });
+    }
+
+    const { forceRefresh } = require('../services/equipesOficiais');
+    await forceRefresh();
+
+    res.json({ ok: true, sigla, hard });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/equipes/refresh — força recarga do cache em memória
+router.post('/admin/equipes/refresh', async (_req, res) => {
+  try {
+    const { forceRefresh, isFromSupabase, getOficiais } = require('../services/equipesOficiais');
+    await forceRefresh();
+    res.json({
+      ok: true,
+      source: isFromSupabase() ? 'supabase' : 'fallback',
+      total:  getOficiais().length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

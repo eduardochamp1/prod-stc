@@ -4245,6 +4245,26 @@
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:20px">
 
+          <!-- Equipes Oficiais (whitelist) -->
+          <div>
+            <div class="modal-section-title">Equipes Oficiais</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Whitelist editável — apenas equipes ativas aqui entram nos cálculos
+              de Monitor, Gráficos, Ranking e Histórico. Mudanças refletem em até 60s.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+              <button class="btn-refresh" onclick="loadEquipesOficiais()" style="height:36px;padding:0 16px;font-size:12px">
+                ↻ Listar
+              </button>
+              <button class="btn-refresh" onclick="abrirNovaEquipe()" style="height:36px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
+                + Nova
+              </button>
+              <span id="eq-status" style="font-size:11px;color:var(--text2)"></span>
+            </div>
+            <div id="eq-tabela" style="display:none;max-height:340px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
+            <div id="eq-form" style="display:none;margin-top:12px;padding:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px"></div>
+          </div>
+
           <!-- Saúde do Sistema -->
           <div>
             <div class="modal-section-title">Saúde do Sistema</div>
@@ -6999,6 +7019,157 @@ ${equipes.length > 0 ? `<div class="perf-section">
         out.textContent = JSON.stringify(data, null, 2);
       } catch (err) {
         out.textContent = `✗ Falha ao executar: ${err.message}`;
+      }
+    }
+
+    // ── EQUIPES OFICIAIS (whitelist editável) ─────────────────────────────────
+    async function loadEquipesOficiais() {
+      const cont = document.getElementById('eq-tabela');
+      const status = document.getElementById('eq-status');
+      cont.style.display = 'block';
+      cont.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text2)">⏳ Carregando…</div>';
+      try {
+        const res = await fetch(`${API}/admin/equipes`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        const eqs = data.equipes || [];
+        if (status) status.textContent = `${eqs.length} equipes (${eqs.filter(e => e.ativo).length} ativas)`;
+        cont.innerHTML = renderEquipesTabela(eqs);
+      } catch (err) {
+        cont.innerHTML = `<div style="padding:12px;color:var(--vermelho);font-size:12px">✗ ${err.message}</div>`;
+      }
+    }
+
+    function renderEquipesTabela(eqs) {
+      if (eqs.length === 0) return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhuma equipe cadastrada.</div>';
+      const rows = eqs.map(e => {
+        const inativo = !e.ativo;
+        const styleRow = inativo ? 'opacity:.4' : '';
+        return `<tr style="${styleRow};border-top:1px solid var(--cinza2)">
+          <td style="padding:6px 8px;font-family:monospace;font-weight:600">${e.sigla}</td>
+          <td style="padding:6px 8px"><span style="background:${e.regional === 'GUA' ? '#fec40e22' : '#08673822'};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">${e.regional}</span></td>
+          <td style="padding:6px 8px">${e.tipo}</td>
+          <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2)">${e.placa}</td>
+          <td style="padding:6px 8px;font-size:11px">${inativo ? '<span style="color:var(--vermelho)">Inativa</span>' : '<span style="color:var(--verde)">Ativa</span>'}</td>
+          <td style="padding:6px 8px;text-align:right;white-space:nowrap">
+            <button onclick="editarEquipe('${e.sigla}', ${JSON.stringify(e).replace(/"/g, '&quot;')})"
+              style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px">✎</button>
+            <button onclick="alternarEquipeAtiva('${e.sigla}', ${!e.ativo})"
+              style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer">
+              ${inativo ? '↑ Ativar' : '↓ Desativar'}
+            </button>
+          </td>
+        </tr>`;
+      }).join('');
+      return `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="background:var(--cinza1);position:sticky;top:0">
+          <tr style="text-transform:uppercase;letter-spacing:.04em;color:var(--text2);font-size:10px">
+            <th style="padding:6px 8px;text-align:left">Sigla</th>
+            <th style="padding:6px 8px;text-align:left">Reg</th>
+            <th style="padding:6px 8px;text-align:left">Tipo</th>
+            <th style="padding:6px 8px;text-align:left">Placa</th>
+            <th style="padding:6px 8px;text-align:left">Status</th>
+            <th style="padding:6px 8px;text-align:right">Ação</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+
+    function abrirNovaEquipe() {
+      _renderEquipeForm({ sigla: '', regional: 'GUA', tipo: 'A1', placa: '', ativo: true }, true);
+    }
+
+    function editarEquipe(sigla, equipe) {
+      const e = typeof equipe === 'string' ? JSON.parse(equipe) : equipe;
+      _renderEquipeForm(e, false);
+    }
+
+    function _renderEquipeForm(e, isNew) {
+      const form = document.getElementById('eq-form');
+      form.style.display = 'block';
+      form.innerHTML = `
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px">${isNew ? 'Nova Equipe' : 'Editar ' + e.sigla}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Sigla</label>
+            <input id="eq-form-sigla" value="${e.sigla}" ${isNew ? '' : 'disabled'}
+              style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px;text-transform:uppercase" />
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Regional</label>
+            <select id="eq-form-regional" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
+              <option value="GUA" ${e.regional === 'GUA' ? 'selected' : ''}>GUA</option>
+              <option value="CAC" ${e.regional === 'CAC' ? 'selected' : ''}>CAC</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Tipo</label>
+            <select id="eq-form-tipo" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
+              ${['A1','A2','A3','L1'].map(t => `<option value="${t}" ${e.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Placa</label>
+            <input id="eq-form-placa" value="${e.placa}"
+              style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px;text-transform:uppercase" />
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button onclick="salvarEquipe(${isNew})" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
+            💾 Salvar
+          </button>
+          <button onclick="document.getElementById('eq-form').style.display='none'" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px">
+            Cancelar
+          </button>
+          <span id="eq-form-msg" style="font-size:11px;align-self:center"></span>
+        </div>`;
+    }
+
+    async function salvarEquipe(isNew) {
+      const msg = document.getElementById('eq-form-msg');
+      const body = {
+        sigla:    document.getElementById('eq-form-sigla').value.trim().toUpperCase(),
+        regional: document.getElementById('eq-form-regional').value,
+        tipo:     document.getElementById('eq-form-tipo').value,
+        placa:    document.getElementById('eq-form-placa').value.trim().toUpperCase(),
+      };
+      msg.textContent = '⏳ Salvando…';
+      msg.style.color = 'var(--text2)';
+      try {
+        const url    = isNew ? `${API}/admin/equipes` : `${API}/admin/equipes/${encodeURIComponent(body.sigla)}`;
+        const method = isNew ? 'POST' : 'PUT';
+        const res = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        msg.textContent = '✓ Salvo';
+        msg.style.color = 'var(--verde)';
+        document.getElementById('eq-form').style.display = 'none';
+        await loadEquipesOficiais();
+      } catch (err) {
+        msg.textContent = '✗ ' + err.message;
+        msg.style.color = 'var(--vermelho)';
+      }
+    }
+
+    async function alternarEquipeAtiva(sigla, novoAtivo) {
+      const acao = novoAtivo ? 'ATIVAR' : 'DESATIVAR';
+      if (!confirm(`${acao} a equipe ${sigla}?`)) return;
+      try {
+        const res = await fetch(`${API}/admin/equipes/${encodeURIComponent(sigla)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ativo: novoAtivo }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        await loadEquipesOficiais();
+      } catch (err) {
+        alert('✗ ' + err.message);
       }
     }
 
