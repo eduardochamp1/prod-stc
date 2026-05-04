@@ -186,8 +186,27 @@ async function getToken() {
   // 3. Login fresco — serializa logins concorrentes dentro do mesmo processo
   //    via _loginPromise (evita race onde WPA invalida o token do primeiro
   //    login ao receber o segundo). Login bem-sucedido grava no Supabase.
+  //
+  //    Cross-process: aplicamos double-check antes do login real — outro
+  //    container pode ter terminado de gravar o token enquanto chegávamos
+  //    aqui. Reduz a janela de race de ~3-5s (login completo) para ~50ms
+  //    (uma leitura extra do Supabase).
   if (!_loginPromise) {
-    _loginPromise = login().finally(() => { _loginPromise = null; });
+    _loginPromise = (async () => {
+      // Double-check: outro processo pode ter completado o login por nós
+      if (store) {
+        try {
+          const cached = await store.loadToken();
+          if (cached?.token && Date.now() < cached.expiresAt - 60_000) {
+            _token    = cached.token;
+            _expireAt = cached.expiresAt;
+            console.log(`[WPA] Token via double-check (outro container ganhou a corrida)`);
+            return;
+          }
+        } catch { /* fallthrough — tenta login real */ }
+      }
+      await login();
+    })().finally(() => { _loginPromise = null; });
   }
   await _loginPromise;
   return _token;

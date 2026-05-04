@@ -84,6 +84,33 @@ const SET_GUA = new Set(OFICIAIS_GUA.map(e => e.sigla.toUpperCase().trim()));
 const SET_CAC = new Set(OFICIAIS_CAC.map(e => e.sigla.toUpperCase().trim()));
 const SET_ALL = new Set([...SET_GUA, ...SET_CAC]);
 
+// ── VALIDAÇÃO FAIL-FAST ────────────────────────────────────────────────────────
+// teams_current.team_name é PRIMARY KEY no Supabase — siglas duplicadas entre
+// regionais causariam collision e a última escrita venceria silenciosamente.
+// Detectamos no startup para impedir que essa classe de bug exista em runtime.
+(function _validarSemDuplicatas() {
+  const dup = [...SET_GUA].filter(s => SET_CAC.has(s));
+  if (dup.length > 0) {
+    throw new Error(
+      `[equipesOficiais] sigla(s) duplicada(s) entre GUA e CAC: ${dup.join(', ')}. ` +
+      `Como teams_current.team_name é PK, isso causaria perda de dados.`
+    );
+  }
+  // Detecta também duplicatas DENTRO da mesma regional
+  const lookup = new Map();
+  for (const list of [['GUA', OFICIAIS_GUA], ['CAC', OFICIAIS_CAC]]) {
+    const [reg, arr] = list;
+    for (const e of arr) {
+      const key = e.sigla.toUpperCase().trim();
+      if (lookup.has(key)) {
+        throw new Error(`[equipesOficiais] sigla "${e.sigla}" duplicada em ${reg}.`);
+      }
+      lookup.set(key, true);
+    }
+    lookup.clear();
+  }
+})();
+
 // ── Mapa sigla → metadados ────────────────────────────────────────────────────
 const META_BY_SIGLA = new Map();
 for (const e of OFICIAIS_GUA) META_BY_SIGLA.set(e.sigla.toUpperCase().trim(), { ...e, regional: 'GUA' });

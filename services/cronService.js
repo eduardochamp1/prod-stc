@@ -98,7 +98,8 @@ async function runSnapshot() {
 
     // Totais diários: todas as equipes (real + ghost do _acc) — preserva notas
     // acumuladas de equipes que deslogaram durante o dia. Ghost teams têm regional
-    // e notas corretas; _belongsToDate filtra qualquer nota de dia anterior.
+    // e notas corretas; _sessionDate atribui cada equipe ao seu dia de sessionBegin
+    // (não importa o conclusionDate individual de cada nota).
     await upsertDailyTotals(allTeams);
     await upsertTeamDailyTotals(allTeams);
 
