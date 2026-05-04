@@ -117,7 +117,10 @@ async function loginAttempt() {
   // (ex: Lambdas Vercel) leem daqui antes de tentar login próprio.
   // saveToken não throws; falhas são logadas mas não quebram o login.
   const store = getTokenStore();
-  if (store) store.saveToken(_token, _expireAt, userId).catch(() => {});
+  if (store) {
+    store.saveToken(_token, _expireAt, userId)
+      .catch(err => console.warn('[WPA] saveToken falhou:', err && err.message ? err.message : err));
+  }
 
   return { token: _token, userId };
 }
