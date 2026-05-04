@@ -398,6 +398,76 @@ async function consolidateDay(date) {
 }
 
 /**
+ * Compara o total de OS produzidas (notas executadas + concluídas) em um dia
+ * entre as duas fontes:
+ *   - SNAPSHOTS: snapshot mais recente de cada equipe com sessionDate=date
+ *   - TABELA   : sum(count) de team_daily_totals para o mesmo date
+ *
+ * Drift positivo (snapshot > tabela) = consolidação atrasada / falha
+ * Drift negativo (snapshot < tabela) = tabela inflada / wipe não rodou
+ *
+ * Não considera whitelist — se houver drift em equipes não-oficiais ainda
+ * vale a pena saber (indica falha sistêmica).
+ *
+ * @param   {string} date  'YYYY-MM-DD' BRT
+ * @returns {Promise<{date, snapshot_count, table_count, diff, has_drift, threshold}>}
+ */
+async function detectDrift(date) {
+  const sb = getClient();
+  date = date || _hojeBRT();
+
+  // Snapshots: range date..date+1 (madrugada do dia seguinte conta pra date
+  // se sessionDate=date — mesma regra do consolidateDay).
+  const dPlus1 = new Date(date + 'T12:00:00Z');
+  dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
+  const dayPlus1 = dPlus1.toISOString().slice(0, 10);
+
+  const { data: snaps, error: e1 } = await sb
+    .from('snapshots')
+    .select('team_name, captured_at, data')
+    .in('date', [date, dayPlus1])
+    .order('captured_at', { ascending: false });
+  if (e1) throw e1;
+
+  // Mantém apenas o snapshot mais recente por (team, sessionBegin) cuja
+  // sessionDate seja exatamente o date alvo
+  const seen = new Set();
+  let snapshot_count = 0;
+  for (const s of (snaps || [])) {
+    const t = s.data;
+    if (!t || !t.sessionBegin) continue;
+    if (_sessionDate(t) !== date) continue;
+    const key = `${s.team_name}|${t.sessionBegin}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    snapshot_count += (t.notasExecutadas || []).length + (t.notasConcluidas || []).length;
+  }
+
+  // Tabela: sum(count) de team_daily_totals para o date
+  const { data: rows, error: e2 } = await sb
+    .from('team_daily_totals')
+    .select('count')
+    .eq('date', date);
+  if (e2) throw e2;
+  const table_count = (rows || []).reduce((sum, r) => sum + (r.count || 0), 0);
+
+  const diff = snapshot_count - table_count;
+  // Limiar: 5 OS de diferença OU 2% (o que for maior). Tolerância para
+  // pequenas inconsistências naturais (ex: 1 nota dedupada por dedupeKey).
+  const threshold = Math.max(5, Math.round(snapshot_count * 0.02));
+
+  return {
+    date,
+    snapshot_count,
+    table_count,
+    diff,
+    abs_diff:  Math.abs(diff),
+    threshold,
+    has_drift: Math.abs(diff) > threshold,
+  };
+}
+
+/**
  * Remove snapshots com mais de 30 dias da tabela `snapshots`.
  * Chamado uma vez por dia (após a consolidação). Evita crescimento indefinido
  * da tabela que não tem uso operacional para dados tão antigos.
@@ -448,6 +518,6 @@ async function cleanOldNoteDetails() {
 module.exports = {
   saveSnapshot, pushTeams,
   upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals,
-  consolidateDay,
+  consolidateDay, detectDrift,
   cleanOldSnapshots, cleanOldNoteDetails,
 };

@@ -17,6 +17,7 @@ let tokenJob        = null;
 let snapshotJob     = null;
 let consolidaJob    = null;
 let uuidHealthJob   = null;
+let driftJob        = null;
 let isRunning       = false;
 let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
 const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se travar
@@ -365,6 +366,71 @@ async function runConsolidate(date) {
   }
 }
 
+// ── RECONCILIAÇÃO (drift detection) ───────────────────────────────────────────
+//
+// Verifica se as tabelas agregadas (team_daily_totals) batem com os snapshots
+// para um dia específico. Se detectar drift > limiar, dispara um consolidateDay
+// novo para reagrupar a partir da fonte da verdade (snapshots).
+//
+// Roda 1x/dia às 02:00 BRT, verificando D-1 (ontem) e D-7 (uma semana atrás
+// — captura casos onde o cron de 20:30 falhou silenciosamente).
+
+async function runDriftCheck(date) {
+  try {
+    const { detectDrift, consolidateDay } = require('./supabasePush');
+    date = date || dateBRT();
+    const report = await detectDrift(date);
+
+    if (report.has_drift) {
+      console.warn(
+        `[CRON] DRIFT detectado em ${report.date}: snapshot=${report.snapshot_count} ` +
+        `tabela=${report.table_count} diff=${report.diff} (limiar=${report.threshold}) — reparando…`
+      );
+      await consolidateDay(date);
+
+      // Re-verifica após reparo
+      const after = await detectDrift(date);
+      console.log(
+        `[CRON] Drift reparado em ${date}: agora snapshot=${after.snapshot_count} ` +
+        `tabela=${after.table_count} diff=${after.diff} ${after.has_drift ? '⚠ ainda há drift!' : '✓'}`
+      );
+
+      // Registra no app_settings para observabilidade
+      try {
+        const sq = require('../db/supabaseQueries');
+        await sq.setSetting('drift_last_repair', {
+          date,
+          before: report,
+          after,
+          repaired_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+    } else {
+      console.log(
+        `[CRON] Drift OK em ${report.date}: snapshot=${report.snapshot_count} ` +
+        `tabela=${report.table_count} diff=${report.diff}`
+      );
+    }
+    return report;
+  } catch (err) {
+    console.error('[CRON] Erro no drift check:', err.message);
+    return null;
+  }
+}
+
+// Wrapper para o cron diário: verifica D-1 e D-7
+async function runDailyDriftSweep() {
+  const today = dateBRT();
+  // D-1 (ontem)
+  const d1 = new Date(today + 'T12:00:00Z');
+  d1.setUTCDate(d1.getUTCDate() - 1);
+  await runDriftCheck(d1.toISOString().slice(0, 10));
+  // D-7 (uma semana atrás)
+  const d7 = new Date(today + 'T12:00:00Z');
+  d7.setUTCDate(d7.getUTCDate() - 7);
+  await runDriftCheck(d7.toISOString().slice(0, 10));
+}
+
 // ── START / STOP ──────────────────────────────────────────────────────────────
 
 function startCron() {
@@ -394,7 +460,12 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
-  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health 1x/h (06–20h), consolidação 20:30');
+  // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
+  driftJob = cron.schedule('0 2 * * *', runDailyDriftSweep, {
+    timezone: 'America/Sao_Paulo',
+  });
+
+  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00');
 
   // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
   setTimeout(runTokenRefresh, 2000);
@@ -411,6 +482,12 @@ function stopCron() {
   snapshotJob?.stop();
   consolidaJob?.stop();
   uuidHealthJob?.stop();
+  driftJob?.stop();
 }
 
-module.exports = { startCron, stopCron, runSnapshot, runConsolidate, runTokenRefresh, runClassifyNewNotes, runCacheNotaDetails };
+module.exports = {
+  startCron, stopCron,
+  runSnapshot, runConsolidate, runTokenRefresh,
+  runClassifyNewNotes, runCacheNotaDetails,
+  runDriftCheck, runDailyDriftSweep,
+};

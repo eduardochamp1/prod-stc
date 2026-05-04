@@ -1246,6 +1246,39 @@ router.delete('/admin/equipes/:sigla', async (req, res) => {
   }
 });
 
+// GET /api/admin/drift?date=YYYY-MM-DD — verifica drift sem reparar
+// Compara snapshot_count vs table_count para o dia. has_drift=true se diff > limiar.
+router.get('/admin/drift', async (req, res) => {
+  const date = req.query.date || dateBRT();
+  if (!_RE_YYYYMMDD.test(date)) {
+    return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
+  }
+  try {
+    const { detectDrift } = require('../services/supabasePush');
+    const report = await detectDrift(date);
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/drift/repair?date=YYYY-MM-DD — re-consolida o dia (sobrescreve agregados)
+router.post('/admin/drift/repair', async (req, res) => {
+  const date = req.query.date || dateBRT();
+  if (!_RE_YYYYMMDD.test(date)) {
+    return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
+  }
+  try {
+    const { detectDrift, consolidateDay } = require('../services/supabasePush');
+    const before = await detectDrift(date);
+    await consolidateDay(date);
+    const after = await detectDrift(date);
+    res.json({ ok: true, date, before, after });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/equipes/refresh — força recarga do cache em memória
 router.post('/admin/equipes/refresh', async (_req, res) => {
   try {

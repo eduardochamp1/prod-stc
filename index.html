@@ -4343,6 +4343,28 @@
             <div id="cons-result" style="display:none;margin-top:12px;font-size:13px;font-weight:500"></div>
           </div>
 
+          <!-- Drift / Reconciliação -->
+          <div>
+            <div class="modal-section-title">Verificar Drift</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Compara snapshots vs tabelas agregadas para detectar inconsistências.
+              Cron noturno (02:00) verifica D-1 e D-7 automaticamente.
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-end">
+              <div class="filter-group" style="flex:1">
+                <span class="filter-label">Data</span>
+                <input type="date" class="month-input" id="drift-date" style="width:100%;border:none;outline:none" />
+              </div>
+              <button class="btn-refresh" onclick="runDriftCheck()" style="height:40px;padding:0 16px;font-size:13px">
+                🔍 Verificar
+              </button>
+              <button class="btn-refresh" id="drift-repair-btn" onclick="runDriftRepair()" style="height:40px;padding:0 16px;font-size:13px;background:var(--amarelo);color:var(--preto);display:none">
+                🔧 Reparar
+              </button>
+            </div>
+            <div id="drift-result" style="display:none;margin-top:12px;font-size:13px"></div>
+          </div>
+
           <!-- Snapshot imediato -->
           <div>
             <div class="modal-section-title">Snapshot Manual</div>
@@ -6876,6 +6898,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const consDt = document.getElementById('cons-date');
       if (!consDt.value) consDt.value = ontem;
       consDt.max = hoje;
+
+      const driftDt = document.getElementById('drift-date');
+      if (driftDt) {
+        if (!driftDt.value) driftDt.value = ontem;
+        driftDt.max = hoje;
+      }
     }
 
     /**
@@ -6991,6 +7019,62 @@ ${equipes.length > 0 ? `<div class="perf-section">
         result.style.color = 'var(--vermelho)';
         result.textContent = `✗ Falha: ${err.message}`;
       }
+    }
+
+    // ── DRIFT (reconciliação) ─────────────────────────────────────────────────
+    async function runDriftCheck() {
+      const date = document.getElementById('drift-date').value || new Date().toISOString().slice(0, 10);
+      const out  = document.getElementById('drift-result');
+      const btnRepair = document.getElementById('drift-repair-btn');
+      out.style.display = 'block';
+      out.innerHTML = '<div style="color:var(--text2)">⏳ Comparando snapshots vs tabela…</div>';
+      btnRepair.style.display = 'none';
+      try {
+        const res  = await fetch(`${API}/admin/drift?date=${encodeURIComponent(date)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        out.innerHTML = _renderDrift(data);
+        if (data.has_drift) btnRepair.style.display = 'inline-block';
+      } catch (err) {
+        out.innerHTML = `<div style="color:var(--vermelho)">✗ ${err.message}</div>`;
+      }
+    }
+
+    async function runDriftRepair() {
+      const date = document.getElementById('drift-date').value || new Date().toISOString().slice(0, 10);
+      if (!confirm(`Reparar drift de ${date}? Vai re-consolidar todos os agregados desse dia.`)) return;
+      const out = document.getElementById('drift-result');
+      out.innerHTML = '<div style="color:var(--text2)">⏳ Re-consolidando…</div>';
+      try {
+        const res = await fetch(`${API}/admin/drift/repair?date=${encodeURIComponent(date)}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        out.innerHTML = `
+          <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">
+            <div style="font-weight:600;margin-bottom:6px;color:var(--verde)">✓ Reparo concluído para ${data.date}</div>
+            <div style="margin-bottom:4px"><strong>Antes:</strong> snapshot=${data.before.snapshot_count} · tabela=${data.before.table_count} · diff=${data.before.diff}</div>
+            <div><strong>Depois:</strong> snapshot=${data.after.snapshot_count} · tabela=${data.after.table_count} · diff=${data.after.diff} ${data.after.has_drift ? '<span style="color:var(--amarelo)">(ainda há drift)</span>' : '<span style="color:var(--verde)">✓ OK</span>'}</div>
+          </div>`;
+        document.getElementById('drift-repair-btn').style.display = 'none';
+      } catch (err) {
+        out.innerHTML = `<div style="color:var(--vermelho)">✗ ${err.message}</div>`;
+      }
+    }
+
+    function _renderDrift(d) {
+      const color = d.has_drift ? 'var(--vermelho)' : 'var(--verde)';
+      const icon  = d.has_drift ? '⚠' : '✓';
+      const status = d.has_drift ? 'DRIFT detectado' : 'Sem drift';
+      return `
+        <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px">
+          <div style="font-weight:600;color:${color};margin-bottom:8px">${icon} ${status} em ${d.date}</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">
+            <div><div style="color:var(--text2);font-size:10px;text-transform:uppercase">Snapshot</div><div style="font-size:18px;font-weight:600">${d.snapshot_count}</div></div>
+            <div><div style="color:var(--text2);font-size:10px;text-transform:uppercase">Tabela</div><div style="font-size:18px;font-weight:600">${d.table_count}</div></div>
+            <div><div style="color:var(--text2);font-size:10px;text-transform:uppercase">Diferença</div><div style="font-size:18px;font-weight:600;color:${color}">${d.diff > 0 ? '+' : ''}${d.diff}</div></div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--text2)">Limiar: ${d.threshold} OS (max 5 ou 2% do snapshot)</div>
+        </div>`;
     }
 
     async function runSnapshot() {
