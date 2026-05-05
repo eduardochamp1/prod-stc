@@ -4343,6 +4343,27 @@
             <div id="cons-result" style="display:none;margin-top:12px;font-size:13px;font-weight:500"></div>
           </div>
 
+          <!-- Rastreio de Nota Específica -->
+          <div>
+            <div class="modal-section-title">Rastreio de Nota</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Cole o número de uma OS (ex: <code>035009000490</code>) pra ver se ela
+              entrou nos snapshots, foi classificada e em que dia/equipe.
+              Útil quando o WPA mostra uma OS que nosso sistema não está contabilizando.
+            </div>
+            <div style="display:flex;gap:8px;align-items:flex-end">
+              <div class="filter-group" style="flex:1">
+                <span class="filter-label">Número da OS</span>
+                <input type="text" id="note-trace-num" placeholder="ex: 035009000490"
+                  style="width:100%;padding:6px;border:none;outline:none;font-family:monospace" />
+              </div>
+              <button class="btn-refresh" onclick="runNoteTrace()" style="height:40px;padding:0 16px;font-size:13px">
+                🔍 Rastrear
+              </button>
+            </div>
+            <div id="note-trace-result" style="display:none;margin-top:12px;font-size:12px"></div>
+          </div>
+
           <!-- Diagnóstico de Subcategorias -->
           <div>
             <div class="modal-section-title">Diagnóstico de Subcategorias</div>
@@ -7056,6 +7077,62 @@ ${equipes.length > 0 ? `<div class="perf-section">
         result.style.color = 'var(--vermelho)';
         result.textContent = `✗ Falha: ${err.message}`;
       }
+    }
+
+    // ── RASTREIO DE NOTA ESPECÍFICA ───────────────────────────────────────────
+    async function runNoteTrace() {
+      const numero = document.getElementById('note-trace-num').value.trim();
+      const out = document.getElementById('note-trace-result');
+      if (!numero) {
+        out.style.display = 'block';
+        out.innerHTML = '<div style="color:var(--vermelho)">Informe um número de OS</div>';
+        return;
+      }
+      out.style.display = 'block';
+      out.innerHTML = '<div style="color:var(--text2)">⏳ Rastreando…</div>';
+      try {
+        const res = await fetch(`${API}/admin/note-trace?numero=${encodeURIComponent(numero)}`);
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'erro');
+        out.innerHTML = _renderNoteTrace(d);
+      } catch (err) {
+        out.innerHTML = `<div style="color:var(--vermelho)">✗ ${err.message}</div>`;
+      }
+    }
+
+    function _renderNoteTrace(d) {
+      const sec = (title, body) => `
+        <div style="margin-bottom:10px">
+          <div style="font-weight:600;color:var(--text2);font-size:11px;text-transform:uppercase;margin-bottom:4px">${title}</div>
+          <div>${body}</div>
+        </div>`;
+
+      const tcHtml = d.teams_current.length === 0
+        ? '<span style="color:var(--text2)">— Não está com nenhuma equipe agora</span>'
+        : d.teams_current.map(t => `<div><code>${t.team}</code> · ${t.regional} · ${t.tipo} · status=${t.status} · code=${t.codigo}</div>`).join('');
+
+      const snHtml = d.snapshots.length === 0
+        ? '<span style="color:var(--text2)">— Não apareceu em snapshot dos últimos 30 dias</span>'
+        : d.snapshots.slice(0, 10).map(s => `<div><strong>${s.date}</strong> · <code>${s.team}</code> · ${s.regional} · tipo=${s.tipo} · status=${s.status} · concDate=${s.conclusionDate || '-'}</div>`).join('') +
+          (d.snapshots.length > 10 ? `<div style="color:var(--text2);font-size:11px">…e mais ${d.snapshots.length - 10} ocorrências</div>` : '');
+
+      const nsc = d.note_subcategoria;
+      const nscHtml = !nsc
+        ? '<span style="color:var(--amarelo)">— Não classificada (cairá em OUTROS no agregado)</span>'
+        : `<div>tipo=<strong>${nsc.tipo}</strong> · sub_code=<strong style="color:var(--verde)">${nsc.sub_code}</strong> · code=<code>${nsc.code || '-'}</code> · classified_at=${nsc.classified_at}</div>`;
+
+      const aggHtml = d.team_daily_subcat.length === 0
+        ? '<span style="color:var(--text2)">— Não há agregado correspondente</span>'
+        : d.team_daily_subcat.map(a => `<div>${a.date} · <code>${a.team_name}</code> · ${a.tipo}/${a.sub_code} · count=${a.count}</div>`).join('');
+
+      return `
+        <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">
+          ${sec('Em campo agora (teams_current)', tcHtml)}
+          ${sec('Histórico em snapshots', snHtml)}
+          ${sec('Classificação (note_subcategorias)', nscHtml)}
+          ${sec('Agregado (team_daily_subcat_totals)', aggHtml)}
+          ${d.hint ? `<div style="margin-top:10px;padding:8px;background:#fec40e22;border-radius:4px"><strong>💡 ${d.hint}</strong></div>` : ''}
+        </div>`;
     }
 
     // ── DIAGNÓSTICO DE SUBCATEGORIAS ──────────────────────────────────────────

@@ -1506,6 +1506,144 @@ router.post('/admin/subcat-reclassify', async (req, res) => {
   }
 });
 
+// GET /api/admin/note-trace?numero=035009000490 OU ?id=UUID
+//
+// Rastreia uma OS específica em todo o pipeline:
+//   - teams_current (em campo agora?)
+//   - snapshots (em quais dias foi vista? por qual equipe?)
+//   - note_subcategorias (classificada com qual sub_code?)
+//   - team_daily_subcat_totals (já entrou no agregado?)
+//
+// Útil quando WPA mostra uma OS mas nosso sistema não a contabiliza.
+router.get('/admin/note-trace', async (req, res) => {
+  const numero = (req.query.numero || '').trim();
+  const id     = (req.query.id || '').trim();
+  if (!numero && !id) {
+    return res.status(400).json({ error: 'forneça ?numero= ou ?id=' });
+  }
+
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/supabaseClient').getClient();
+
+    const out = {
+      query: { numero: numero || null, id: id || null },
+      teams_current:    [],
+      snapshots:        [],
+      note_subcategoria: null,
+      team_daily_subcat: [],
+      hint: null,
+    };
+
+    // 1) teams_current (em campo agora?)
+    const { data: tc } = await sb.from('teams_current').select('team_name, regional, data');
+    for (const t of (tc || [])) {
+      const found = _findNoteInTeam(t.data, { numero, id });
+      if (found) {
+        out.teams_current.push({
+          team:     t.team_name,
+          regional: t.regional,
+          ...found,
+        });
+      }
+    }
+
+    // 2) snapshots (histórico — últimos 30 dias por simplicidade)
+    const { data: sn } = await sb
+      .from('snapshots')
+      .select('team_name, regional, date, captured_at, data')
+      .gte('date', new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10))
+      .order('captured_at', { ascending: false })
+      .range(0, 5000);  // limite de segurança
+    const snapsSeen = new Set();  // dedupe por (team, date)
+    for (const s of (sn || [])) {
+      const key = `${s.team_name}|${s.date}`;
+      if (snapsSeen.has(key)) continue;
+      const found = _findNoteInTeam(s.data, { numero, id });
+      if (found) {
+        snapsSeen.add(key);
+        out.snapshots.push({
+          team:        s.team_name,
+          regional:    s.regional,
+          date:        s.date,
+          captured_at: s.captured_at,
+          ...found,
+        });
+      }
+    }
+
+    // Pega o ID encontrado pra próximas etapas (se chegou via numero)
+    const noteId = id || (out.teams_current[0]?.id || out.snapshots[0]?.id);
+
+    // 3) note_subcategorias (classificada?)
+    if (noteId) {
+      const { data: nsc } = await sb
+        .from('note_subcategorias')
+        .select('*')
+        .eq('note_id', noteId)
+        .maybeSingle();
+      out.note_subcategoria = nsc || null;
+    }
+
+    // 4) team_daily_subcat_totals (entrou no agregado?)
+    // Não tem note_id na tabela — só agregado por (date, team, tipo, sub_code).
+    // Se snapshot mostrou a OS, podemos verificar se há linha pro mesmo dia/team/tipo.
+    if (out.snapshots.length > 0) {
+      const datesTeams = out.snapshots.map(s => `(${s.date},${s.team})`);
+      const dates  = [...new Set(out.snapshots.map(s => s.date))];
+      const teams  = [...new Set(out.snapshots.map(s => s.team))];
+      const tipos  = [...new Set(out.snapshots.map(s => s.tipo))];
+      const { data: tdsc } = await sb
+        .from('team_daily_subcat_totals')
+        .select('date, team_name, tipo, sub_code, count')
+        .in('date', dates)
+        .in('team_name', teams)
+        .in('tipo', tipos);
+      out.team_daily_subcat = tdsc || [];
+    }
+
+    // Hint heurístico
+    if (out.teams_current.length === 0 && out.snapshots.length === 0) {
+      out.hint = 'OS não encontrada em teams_current nem snapshots dos últimos 30 dias. ' +
+                 'Pode estar apenas EMITIDA no WPA mas não executada por equipe oficial. ' +
+                 'Verifique se a equipe responsável está na whitelist.';
+    } else if (out.snapshots.length > 0 && !out.note_subcategoria) {
+      out.hint = 'OS apareceu em snapshot(s) mas não está em note_subcategorias. ' +
+                 'Classifier ainda não processou — cairá em OUTROS no agregado até reclassificar.';
+    } else if (out.note_subcategoria && !out.team_daily_subcat.length) {
+      out.hint = 'OS classificada mas team_daily_subcat_totals do dia/equipe está vazio. ' +
+                 'Provável drift — rode reconciliação.';
+    }
+
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// helper: procura uma OS dentro do payload de uma team
+function _findNoteInTeam(teamData, { numero, id }) {
+  if (!teamData) return null;
+  const buckets = ['notasConcluidas', 'notasExecutadas', 'notasBaixadas', 'notasRejeitadas'];
+  for (const bucket of buckets) {
+    for (const n of (teamData[bucket] || [])) {
+      const matchById  = id     && n.id === id;
+      const matchByNum = numero && (n.codigo === numero || n.code === numero);
+      if (matchById || matchByNum) {
+        return {
+          id:      n.id,
+          codigo:  n.codigo || n.code,
+          tipo:    n.tipoCode || n.tipo_code,
+          status:  bucket.replace('notas', '').toLowerCase(),
+          conclusionDate: n.conclusionDate || null,
+        };
+      }
+    }
+  }
+  return null;
+}
+
 // POST /api/admin/equipes/refresh — força recarga do cache em memória
 router.post('/admin/equipes/refresh', async (_req, res) => {
   try {
