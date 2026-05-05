@@ -165,6 +165,11 @@ async function classificarDD(noteId, sectorId) {
 
   // Atividades do details/optimized (mais confiável quando presente, traz Amount)
   const activities = det?.Data?.Activities || [];
+  // Comments: contém metadados textuais como "TOTAL CLIENTES: N" usado pra
+  // determinar quantidade real de CS substituídos em BTZ013 (Activity.Amount
+  // sempre vem 1, representa "1 ação de manutenção" — não conta CS individuais).
+  const comments = det?.Data?.Comments || '';
+
   // Estrutura: { Activity: { Code, Description, ... }, Amount, IsPrimary, ... }
   // Prioriza atividade primária (IsPrimary=true) — uma nota pode ter várias secundárias.
   const findByCode = (code) =>
@@ -175,19 +180,20 @@ async function classificarDD(noteId, sectorId) {
 
   let sub_code, sub_categoria, quantidade = null;
 
-  // Estratégia: usar SOMENTE campos determinísticos (Activities[] + Code).
-  // Texto livre (GroupDescription) foi descartado — variações de grafia
-  // (acento, letra trocada, abreviação) tornavam o filtro impreciso.
-
   // ── 1ª PRIORIDADE: Activities[] (mais preciso, traz Amount real) ──────────
   if (ativC93) {
     sub_code      = 'C93';
     sub_categoria = 'Subs Ramal';
-    quantidade    = ativC93.Amount ?? null;
+    quantidade    = ativC93.Amount ?? null;        // C93 = metros de ramal (Amount real)
   } else if (ativBTZ013) {
     sub_code      = 'BTZ013';
     sub_categoria = 'Substituição CS';
-    quantidade    = ativBTZ013.Amount ?? null;
+    // Pra BTZ013, Activity.Amount é sempre 1 (representa "1 ação de manutenção").
+    // O número real de CS trocados está no Comments com o padrão "TOTAL CLIENTES: N".
+    // Confirmado em prod (05/05/2026): nota 17160974 → Activity.Amount=1 mas
+    // Comments tem "TOTAL CLIENTES: 6" → 6 CS efetivamente substituídos.
+    quantidade = parseTotalClientes(comments);
+    if (quantidade == null) quantidade = ativBTZ013.Amount ?? null;  // fallback legado
   } else {
     sub_code      = 'OUTROS';
     sub_categoria = nomeFallback('DD');
@@ -204,6 +210,8 @@ async function classificarDD(noteId, sectorId) {
     } else if (c === 'BTZ013') {
       sub_code = 'BTZ013';
       sub_categoria = 'Substituição CS';
+      // Sem Activities → tenta extrair quantidade do Comments também
+      quantidade = parseTotalClientes(comments);
     }
   }
 
@@ -219,8 +227,25 @@ async function classificarDD(noteId, sectorId) {
     code:      noteCode || groupCode,        // prefere Code; cai pra GroupCode
     code_text: groupDesc,
     quantidade,
-    raw: { dd: dd?.Data ?? null, activities: activitiesLight },
+    raw: {
+      dd: dd?.Data ?? null,
+      activities: activitiesLight,
+      // Snippet do Comments (preview pra debug, sem armazenar texto longo)
+      comments_preview: comments ? comments.slice(0, 200) : null,
+    },
   };
+}
+
+/**
+ * Extrai número de "TOTAL CLIENTES: N" do Comments da nota.
+ * Padrão observado em produção (template @MANUTBTZERO):
+ *   "* @MANUTBTZERO | CS_CP: ... | ... | TOTAL CLIENTES: 6 | @MANUTBTZERO"
+ * Retorna null se não casar — caller deve fazer fallback.
+ */
+function parseTotalClientes(comments) {
+  if (!comments) return null;
+  const m = String(comments).match(/TOTAL\s*CLIENTES\s*:\s*(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
 }
 
 // ── API pública ──────────────────────────────────────────────────────────────
