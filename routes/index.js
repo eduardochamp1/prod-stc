@@ -1701,6 +1701,61 @@ router.get('/admin/equipes-sem-producao', async (req, res) => {
   }
 });
 
+// GET /api/admin/team-search?siglas=ETGPR18,ETGPR19
+// Procura siglas em snapshots / teams_current SEM aplicar whitelist.
+// Útil pra ver se uma equipe existe no WPA sob qualquer sigla/setor.
+router.get('/admin/team-search', async (req, res) => {
+  const siglas = String(req.query.siglas || '').toUpperCase()
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (siglas.length === 0) return res.status(400).json({ error: 'parâmetro siglas obrigatório (separado por vírgula)' });
+  try {
+    const sb = require('../services/supabaseClient').getClient();
+
+    // Snapshots últimos 90 dias
+    const cutoff = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const { data: snaps, error } = await sb
+      .from('snapshots')
+      .select('team_name, regional, sector_id, date')
+      .in('team_name', siglas)
+      .gte('date', cutoff)
+      .order('date', { ascending: false });
+    if (error) throw error;
+
+    const byTeam = {};
+    for (const s of (snaps || [])) {
+      const k = s.team_name.toUpperCase();
+      if (!byTeam[k]) byTeam[k] = { sigla: k, dates: new Set(), regionals: new Set(), sectors: new Set() };
+      byTeam[k].dates.add(s.date);
+      byTeam[k].regionals.add(s.regional);
+      byTeam[k].sectors.add(s.sector_id);
+    }
+
+    // teams_current (em campo agora)
+    const { data: tc } = await sb
+      .from('teams_current')
+      .select('team_name, regional, sector_id')
+      .in('team_name', siglas);
+
+    const result = siglas.map(s => {
+      const t = byTeam[s];
+      const current = (tc || []).find(c => c.team_name.toUpperCase() === s);
+      return {
+        sigla: s,
+        encontrada: !!t,
+        em_campo_agora: current ? { regional: current.regional, sector: current.sector_id } : null,
+        dias_em_snapshots: t ? t.dates.size : 0,
+        ultima_data: t ? [...t.dates].sort().reverse()[0] : null,
+        regionais_vistas: t ? [...t.regionals] : [],
+        setores_vistos: t ? [...t.sectors] : [],
+      };
+    });
+
+    res.json({ siglas, cutoff, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/equipes/refresh — força recarga do cache em memória
 router.post('/admin/equipes/refresh', async (_req, res) => {
   try {
