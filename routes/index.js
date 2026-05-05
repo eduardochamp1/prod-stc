@@ -1656,6 +1656,51 @@ function _findNoteInTeam(teamData, { numero, id }) {
   return null;
 }
 
+// GET /api/admin/equipes-sem-producao?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=GUA
+// Lista equipes oficiais (whitelist) que NÃO tiveram nenhuma OS executada no período.
+// Útil para validar discrepâncias tipo "esperava 40 equipes mas painel mostra 35".
+router.get('/admin/equipes-sem-producao', async (req, res) => {
+  const de  = req.query.de;
+  const ate = req.query.ate;
+  const regional = (req.query.regional || 'ALL').toUpperCase();
+  if (!_RE_YYYYMMDD.test(de || '') || !_RE_YYYYMMDD.test(ate || '')) {
+    return res.status(400).json({ error: 'parâmetros de e ate obrigatórios (YYYY-MM-DD)' });
+  }
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/supabaseClient').getClient();
+    const { getOficiais } = require('../services/equipesOficiais');
+
+    // Quem produziu no período (qualquer equipe oficial com pelo menos 1 record)
+    const { data, error } = await sb
+      .from('team_daily_totals')
+      .select('team_name')
+      .gte('date', de)
+      .lte('date', ate);
+    if (error) throw error;
+    const produziram = new Set((data || []).map(r => String(r.team_name).toUpperCase()));
+
+    // Whitelist filtrada por regional
+    const all = getOficiais().filter(e =>
+      regional === 'ALL' || e.regional === regional
+    );
+    const ausentes = all.filter(e => !produziram.has(e.sigla.toUpperCase()));
+
+    res.json({
+      de, ate, regional,
+      total_whitelist: all.length,
+      total_com_producao: all.length - ausentes.length,
+      total_sem_producao: ausentes.length,
+      ausentes: ausentes.map(e => ({
+        sigla: e.sigla, setor: e.setor, regional: e.regional, tipo: e.tipo,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/equipes/refresh — força recarga do cache em memória
 router.post('/admin/equipes/refresh', async (_req, res) => {
   try {
