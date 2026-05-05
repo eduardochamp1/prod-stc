@@ -39,12 +39,13 @@ describe('equipesOficiais — whitelist', () => {
     }
   });
 
-  test('cada equipe tem sigla, tipo e placa', () => {
+  test('cada equipe tem sigla, setor e tipo (placa é opcional)', () => {
     for (const list of [oficiais.OFICIAIS_GUA, oficiais.OFICIAIS_CAC]) {
       for (const e of list) {
         assert.ok(e.sigla, `equipe sem sigla: ${JSON.stringify(e)}`);
+        assert.ok(e.setor, `${e.sigla} sem setor`);
         assert.ok(e.tipo,  `${e.sigla} sem tipo`);
-        assert.ok(e.placa, `${e.sigla} sem placa`);
+        assert.ok(['DESG', 'DEPT', 'DESC'].includes(e.setor), `${e.sigla} setor inválido: ${e.setor}`);
       }
     }
   });

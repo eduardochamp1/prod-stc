@@ -7347,11 +7347,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const rows = eqs.map(e => {
         const inativo = !e.ativo;
         const styleRow = inativo ? 'opacity:.4' : '';
+        const placaTxt = e.placa || '<span style="color:var(--cinza3)">—</span>';
         return `<tr style="${styleRow};border-top:1px solid var(--cinza2)">
           <td style="padding:6px 8px;font-family:monospace;font-weight:600">${e.sigla}</td>
+          <td style="padding:6px 8px;font-family:monospace;font-size:11px">${e.setor || '—'}</td>
           <td style="padding:6px 8px"><span style="background:${e.regional === 'GUA' ? '#fec40e22' : '#08673822'};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">${e.regional}</span></td>
-          <td style="padding:6px 8px">${e.tipo}</td>
-          <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2)">${e.placa}</td>
+          <td style="padding:6px 8px;font-size:11px">${e.tipo}</td>
+          <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2)">${placaTxt}</td>
           <td style="padding:6px 8px;font-size:11px">${inativo ? '<span style="color:var(--vermelho)">Inativa</span>' : '<span style="color:var(--verde)">Ativa</span>'}</td>
           <td style="padding:6px 8px;text-align:right;white-space:nowrap">
             <button onclick="editarEquipe('${e.sigla}', ${JSON.stringify(e).replace(/"/g, '&quot;')})"
@@ -7367,6 +7369,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         <thead style="background:var(--cinza1);position:sticky;top:0">
           <tr style="text-transform:uppercase;letter-spacing:.04em;color:var(--text2);font-size:10px">
             <th style="padding:6px 8px;text-align:left">Sigla</th>
+            <th style="padding:6px 8px;text-align:left">Setor</th>
             <th style="padding:6px 8px;text-align:left">Reg</th>
             <th style="padding:6px 8px;text-align:left">Tipo</th>
             <th style="padding:6px 8px;text-align:left">Placa</th>
@@ -7379,7 +7382,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     function abrirNovaEquipe() {
-      _renderEquipeForm({ sigla: '', regional: 'GUA', tipo: 'A1', placa: '', ativo: true }, true);
+      _renderEquipeForm({ sigla: '', setor: 'DESG', regional: 'GUA', tipo: 'COMERCIAL', placa: '', ativo: true }, true);
     }
 
     function editarEquipe(sigla, equipe) {
@@ -7387,16 +7390,31 @@ ${equipes.length > 0 ? `<div class="perf-section">
       _renderEquipeForm(e, false);
     }
 
+    // Tipos operacionais conhecidos (datalist permite usuário digitar outros)
+    const _TIPOS_EQUIPE = [
+      'BTZERO', 'CS', 'COMERCIAL', 'CORTE L0', 'CORTE L1',
+      'MD', 'MD E RAMAL', 'PLANTÃO', 'RAMAL', 'USO MUTUO',
+    ];
+
     function _renderEquipeForm(e, isNew) {
       const form = document.getElementById('eq-form');
       form.style.display = 'block';
+      const setor = e.setor || (e.regional === 'CAC' ? 'DESC' : 'DESG');
       form.innerHTML = `
         <div style="font-size:12px;font-weight:600;margin-bottom:8px">${isNew ? 'Nova Equipe' : 'Editar ' + e.sigla}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">
           <div>
             <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Sigla</label>
             <input id="eq-form-sigla" value="${e.sigla}" ${isNew ? '' : 'disabled'}
               style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px;text-transform:uppercase" />
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Setor</label>
+            <select id="eq-form-setor" onchange="_setorChanged()" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
+              <option value="DESG" ${setor === 'DESG' ? 'selected' : ''}>DESG</option>
+              <option value="DEPT" ${setor === 'DEPT' ? 'selected' : ''}>DEPT</option>
+              <option value="DESC" ${setor === 'DESC' ? 'selected' : ''}>DESC</option>
+            </select>
           </div>
           <div>
             <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Regional</label>
@@ -7407,13 +7425,15 @@ ${equipes.length > 0 ? `<div class="perf-section">
           </div>
           <div>
             <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Tipo</label>
-            <select id="eq-form-tipo" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
-              ${['A1','A2','A3','L1'].map(t => `<option value="${t}" ${e.tipo === t ? 'selected' : ''}>${t}</option>`).join('')}
-            </select>
+            <input id="eq-form-tipo" list="tipos-equipe-datalist" value="${e.tipo || ''}"
+              style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px;text-transform:uppercase" />
+            <datalist id="tipos-equipe-datalist">
+              ${_TIPOS_EQUIPE.map(t => `<option value="${t}">`).join('')}
+            </datalist>
           </div>
           <div>
-            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Placa</label>
-            <input id="eq-form-placa" value="${e.placa}"
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Placa (opc)</label>
+            <input id="eq-form-placa" value="${e.placa || ''}"
               style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px;text-transform:uppercase" />
           </div>
         </div>
@@ -7428,13 +7448,21 @@ ${equipes.length > 0 ? `<div class="perf-section">
         </div>`;
     }
 
+    // Auto-deriva regional ao trocar setor (DESG/DEPT → GUA, DESC → CAC)
+    function _setorChanged() {
+      const setor = document.getElementById('eq-form-setor').value;
+      const reg   = document.getElementById('eq-form-regional');
+      reg.value = (setor === 'DESC') ? 'CAC' : 'GUA';
+    }
+
     async function salvarEquipe(isNew) {
       const msg = document.getElementById('eq-form-msg');
       const body = {
         sigla:    document.getElementById('eq-form-sigla').value.trim().toUpperCase(),
+        setor:    document.getElementById('eq-form-setor').value,
         regional: document.getElementById('eq-form-regional').value,
-        tipo:     document.getElementById('eq-form-tipo').value,
-        placa:    document.getElementById('eq-form-placa').value.trim().toUpperCase(),
+        tipo:     document.getElementById('eq-form-tipo').value.trim().toUpperCase(),
+        placa:    (document.getElementById('eq-form-placa').value.trim().toUpperCase() || null),
       };
       msg.textContent = '⏳ Salvando…';
       msg.style.color = 'var(--text2)';

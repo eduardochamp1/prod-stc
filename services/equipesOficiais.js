@@ -18,70 +18,105 @@
 // FALLBACK HARDCODED (usado se a tabela Supabase estiver indisponível/vazia)
 // ──────────────────────────────────────────────────────────────────────────────
 
+// Versão maio/2026: 75 equipes (40 DESG + 35 DESC), tipos operacionais.
+// Sincronizar com migration 007_equipes_oficiais_setor.sql.
+//
+// Regional é derivada do setor:
+//   DESG → GUA, DEPT → GUA, DESC → CAC
+// (Mapping também em services/wpaService.js REGIONAL_MAP — manter alinhado.)
+
 const OFICIAIS_GUA_FALLBACK = [
-  { sigla: 'EBGPR62', tipo: 'A2', placa: 'QMS9I79' },
-  { sigla: 'EBGPR63', tipo: 'A3', placa: 'SFE8E68' },
-  { sigla: 'EBGPR64', tipo: 'A3', placa: 'QUS4128' },
-  { sigla: 'EBGPR65', tipo: 'A3', placa: 'TGX0G99' },
-  { sigla: 'ECACH50', tipo: 'A1', placa: 'SIG1A15' },
-  { sigla: 'ECANC50', tipo: 'L1', placa: 'TDY1C60' },
-  { sigla: 'ECGPR51', tipo: 'L1', placa: 'SHQ6F47' },
-  { sigla: 'ECGPR53', tipo: 'L1', placa: 'SH6F39'  },
-  { sigla: 'ECGPR54', tipo: 'L1', placa: 'SHU2I02' },
-  { sigla: 'ECGPR81', tipo: 'L1', placa: 'SHQ6F41' },
-  { sigla: 'ECGPR82', tipo: 'L1', placa: 'SHU2H93' },
-  { sigla: 'ECGPR90', tipo: 'L1', placa: 'TDY1C70' },
-  { sigla: 'ECGPR91', tipo: 'L1', placa: 'TDY1C67' },
-  { sigla: 'ECMRT50', tipo: 'L1', placa: 'TDY1C69' },
-  { sigla: 'ECMRT51', tipo: 'A2', placa: 'SIH0G13' },
-  { sigla: 'ECMRT80', tipo: 'L1', placa: 'TDY1C68' },
-  { sigla: 'ECPIU50', tipo: 'A1', placa: 'SIG0A67' },
-  { sigla: 'ECPIU90', tipo: 'L1', placa: 'TDY1C66' },
-  { sigla: 'ECPKE50', tipo: 'A1', placa: 'RVW0D45' },
-  { sigla: 'EPACH30', tipo: 'A1', placa: 'SIG0A46' },
-  { sigla: 'EPANC30', tipo: 'A1', placa: 'RMP2F33' },
-  { sigla: 'EPGPR30', tipo: 'A1', placa: 'SIG0A73' },
-  { sigla: 'EPGPR31', tipo: 'A1', placa: 'SIG4C84' },
-  { sigla: 'EPGPR32', tipo: 'A3', placa: 'SFD0F41' },
-  { sigla: 'EPGPR33', tipo: 'A1', placa: 'SIF8B17' },
-  { sigla: 'EPICO30', tipo: 'A1', placa: 'SNH8G77' },
-  { sigla: 'EPMRT30', tipo: 'A2', placa: 'SIH0G17' },
-  { sigla: 'EPMRT31', tipo: 'A3', placa: 'SFD0F63' },
-  { sigla: 'EPMRT32', tipo: 'A1', placa: 'SIG4C86' },
-  { sigla: 'EPPIU30', tipo: 'A3', placa: 'SFD0F63' },
-  { sigla: 'EPPIU31', tipo: 'A1', placa: 'SIG0A63' },
+  // BTZERO / CS
+  { sigla: 'EBGPR62', setor: 'DESG', tipo: 'BTZERO' },
+  { sigla: 'EBGPR63', setor: 'DESG', tipo: 'BTZERO' },
+  { sigla: 'EBGPR64', setor: 'DESG', tipo: 'CS' },
+  { sigla: 'EBGPR65', setor: 'DESG', tipo: 'BTZERO' },
+  // Comercial
+  { sigla: 'ECACH50', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECANC50', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECGPR51', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECGPR53', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECGPR54', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECMRT50', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECMRT51', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECPIU50', setor: 'DESG', tipo: 'COMERCIAL' },
+  { sigla: 'ECPKE50', setor: 'DESG', tipo: 'COMERCIAL' },
+  // Corte L0 (ET*)
+  { sigla: 'ETGPR15', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETGPR16', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETGPR17', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETGPR18', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETGPR19', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETMRT15', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETMRT16', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETPIU15', setor: 'DESG', tipo: 'CORTE L0' },
+  { sigla: 'ETPKE15', setor: 'DESG', tipo: 'CORTE L0' },
+  // Corte L1
+  { sigla: 'ECGPR90', setor: 'DESG', tipo: 'CORTE L1' },
+  { sigla: 'ECGPR91', setor: 'DESG', tipo: 'CORTE L1' },
+  { sigla: 'ECPIU90', setor: 'DESG', tipo: 'CORTE L1' },
+  // MD
+  { sigla: 'ECGPR82', setor: 'DESG', tipo: 'MD' },
+  // Plantão
+  { sigla: 'EPACH30', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPANC30', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPGPR30', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPGPR31', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPGPR32', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPGPR33', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPICO30', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPMRT30', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPMRT31', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPMRT32', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPPIU30', setor: 'DESG', tipo: 'PLANTÃO' },
+  { sigla: 'EPPIU31', setor: 'DESG', tipo: 'PLANTÃO' },
+  // Ramal
+  { sigla: 'ECGPR81', setor: 'DESG', tipo: 'RAMAL' },
+  { sigla: 'ECMRT80', setor: 'DESG', tipo: 'RAMAL' },
 ];
 
 const OFICIAIS_CAC_FALLBACK = [
-  { sigla: 'EPCIT30', tipo: 'A1', placa: 'RVW0D46' },
-  { sigla: 'EPCIT31', tipo: 'A1', placa: 'RVW0D53' },
-  { sigla: 'EPCIT32', tipo: 'A2', placa: 'SIG4C88' },
-  { sigla: 'EPVGA30', tipo: 'A1', placa: 'SIA6D14' },
-  { sigla: 'EPRNS30', tipo: 'A1', placa: 'SIG4C92' },
-  { sigla: 'EPVGA31', tipo: 'A1', placa: 'SIG0A56' },
-  { sigla: 'EPALE30', tipo: 'A1', placa: 'SIG4C91' },
-  { sigla: 'EPALE31', tipo: 'A1', placa: 'SIF8B13' },
-  { sigla: 'EPGUI30', tipo: 'A1', placa: 'SIH0G14' },
-  { sigla: 'EPGUI31', tipo: 'A1', placa: 'SIG0A40' },
-  { sigla: 'EPMUQ30', tipo: 'A1', placa: 'SIG0A62' },
-  { sigla: 'EPMSU31', tipo: 'A1', placa: 'SIH0G16' },
-  { sigla: 'EPBJE31', tipo: 'A1', placa: 'SIG4C85' },
-  { sigla: 'ECCIT50', tipo: 'L1', placa: 'TDY1C64' },
-  { sigla: 'ECCIT51', tipo: 'L1', placa: 'TDY1C71' },
-  { sigla: 'ECCIT53', tipo: 'L1', placa: 'TDY1C61' },
-  { sigla: 'ECCIT55', tipo: 'L1', placa: 'TDY1C73' },
-  { sigla: 'ECCIT56', tipo: 'L1', placa: 'TDY1C62' },
-  { sigla: 'ECCIT70', tipo: 'A2', placa: 'SIG4C88' },
-  { sigla: 'ECCIT80', tipo: 'A1', placa: 'RVW7J53' },
-  { sigla: 'ECCIT81', tipo: 'A1', placa: 'SIG0A48' },
-  { sigla: 'ECALE80', tipo: 'A1', placa: 'SFD0F53' },
-  { sigla: 'ECGUI80', tipo: 'L1', placa: 'TDY1C72' },
-  { sigla: 'ECCIT90', tipo: 'L1', placa: 'TDY1C65' },
-  { sigla: 'ECVGA50', tipo: 'A2', placa: 'SIH0G15' },
-  { sigla: 'ECALE50', tipo: 'L1', placa: 'SHQ6F37' },
-  { sigla: 'ECMSU50', tipo: 'A1', placa: 'SIG0A48' },
-  { sigla: 'ECGUI50', tipo: 'A2', placa: 'SIF8B11' },
-  { sigla: 'ECBJE50', tipo: 'A1', placa: 'SIG0A72' },
+  // Comercial
+  { sigla: 'ECALE50', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECBJE50', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECCIT50', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECCIT51', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECCIT53', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECCIT55', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECCIT56', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECGUI50', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECMSU50', setor: 'DESC', tipo: 'COMERCIAL' },
+  { sigla: 'ECVGA50', setor: 'DESC', tipo: 'COMERCIAL' },
+  // Corte L0 (ET*)
+  { sigla: 'ETALE15', setor: 'DESC', tipo: 'CORTE L0' },
+  { sigla: 'ETCIT15', setor: 'DESC', tipo: 'CORTE L0' },
+  { sigla: 'ETCIT16', setor: 'DESC', tipo: 'CORTE L0' },
+  { sigla: 'ETCIT17', setor: 'DESC', tipo: 'CORTE L0' },
+  { sigla: 'ETCIT18', setor: 'DESC', tipo: 'CORTE L0' },
+  // Corte L1
+  { sigla: 'ECCIT90', setor: 'DESC', tipo: 'CORTE L1' },
+  // MD e Ramal
+  { sigla: 'ECALE80', setor: 'DESC', tipo: 'MD E RAMAL' },
+  { sigla: 'ECCIT80', setor: 'DESC', tipo: 'MD E RAMAL' },
+  { sigla: 'ECCIT81', setor: 'DESC', tipo: 'MD E RAMAL' },
+  { sigla: 'ECGUI80', setor: 'DESC', tipo: 'MD E RAMAL' },
+  // Plantão
+  { sigla: 'EPALE30', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPALE31', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPBJE31', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPCIT30', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPCIT31', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPCIT32', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPCIT33', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPGUI30', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPGUI31', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPMSU31', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPMUQ30', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPRNS30', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPVGA30', setor: 'DESC', tipo: 'PLANTÃO' },
+  { sigla: 'EPVGA31', setor: 'DESC', tipo: 'PLANTÃO' },
+  // Uso Mútuo
+  { sigla: 'ECCIT70', setor: 'DESC', tipo: 'USO MUTUO' },
 ];
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -140,7 +175,8 @@ function _rebuildIndexesFromList(rows) {
     if (e.regional === 'GUA') setGua.add(k);
     else if (e.regional === 'CAC') setCac.add(k);
     meta.set(k, {
-      sigla: e.sigla, tipo: e.tipo, placa: e.placa, regional: e.regional,
+      sigla: e.sigla, setor: e.setor || null, tipo: e.tipo,
+      placa: e.placa || null, regional: e.regional,
     });
   }
   _activeList   = rows;
@@ -151,9 +187,11 @@ function _rebuildIndexesFromList(rows) {
 }
 
 function _rebuildFromFallback() {
+  // setor → regional: DESG/DEPT → GUA, DESC → CAC
+  const setorToRegional = (s) => (s === 'DESC' ? 'CAC' : 'GUA');
   const rows = [
-    ...OFICIAIS_GUA_FALLBACK.map(e => ({ ...e, regional: 'GUA', ativo: true })),
-    ...OFICIAIS_CAC_FALLBACK.map(e => ({ ...e, regional: 'CAC', ativo: true })),
+    ...OFICIAIS_GUA_FALLBACK.map(e => ({ ...e, regional: setorToRegional(e.setor), ativo: true })),
+    ...OFICIAIS_CAC_FALLBACK.map(e => ({ ...e, regional: setorToRegional(e.setor), ativo: true })),
   ];
   _rebuildIndexesFromList(rows);
   _isFromSupabase = false;
@@ -168,7 +206,7 @@ async function _doRefresh() {
     const sb = getClient();
     const { data, error } = await sb
       .from('equipes_oficiais')
-      .select('sigla, regional, tipo, placa, ativo')
+      .select('sigla, setor, regional, tipo, placa, ativo')
       .order('regional')
       .order('sigla');
     if (error) throw error;

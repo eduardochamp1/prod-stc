@@ -1101,17 +1101,20 @@ router.get('/admin/health', async (_req, res) => {
 // reflita a mudança imediatamente.
 
 const _RE_SIGLA  = /^[A-Z0-9]{4,12}$/i;
-const _RE_TIPO   = /^(A1|A2|A3|L1)$/;
+const _RE_TIPO   = /^[A-Z0-9 ÁÉÍÓÚÃÕÇ-]{1,30}$/i;  // tipo é livre (operacional)
 const _RE_PLACA  = /^[A-Z0-9 -]{4,16}$/i;
 const _RE_REG    = /^(GUA|CAC)$/;
+const _RE_SETOR  = /^(DESG|DEPT|DESC)$/;
 
 function _validateEquipe(body) {
   const errors = [];
   if (!body || typeof body !== 'object') return ['body inválido'];
-  if (!_RE_SIGLA.test(body.sigla || ''))     errors.push('sigla inválida (4-12 alfanuméricos)');
-  if (!_RE_REG.test(body.regional || ''))    errors.push('regional deve ser GUA ou CAC');
-  if (!_RE_TIPO.test(body.tipo || ''))       errors.push('tipo deve ser A1/A2/A3/L1');
-  if (!_RE_PLACA.test(body.placa || ''))     errors.push('placa inválida');
+  if (!_RE_SIGLA.test(body.sigla || ''))      errors.push('sigla inválida (4-12 alfanuméricos)');
+  if (!_RE_SETOR.test(body.setor || ''))      errors.push('setor deve ser DESG, DEPT ou DESC');
+  if (!_RE_REG.test(body.regional || ''))     errors.push('regional deve ser GUA ou CAC');
+  if (!_RE_TIPO.test(body.tipo || ''))        errors.push('tipo inválido (alfanumérico, máx 30)');
+  // placa é opcional agora
+  if (body.placa && !_RE_PLACA.test(body.placa)) errors.push('placa inválida');
   return errors;
 }
 
@@ -1145,9 +1148,10 @@ router.post('/admin/equipes', async (req, res) => {
       .from('equipes_oficiais')
       .insert({
         sigla,
+        setor:    req.body.setor,
         regional: req.body.regional,
         tipo:     req.body.tipo.toUpperCase(),
-        placa:    req.body.placa.toUpperCase().trim(),
+        placa:    req.body.placa ? req.body.placa.toUpperCase().trim() : null,
         ativo:    true,
       });
     if (error) {
@@ -1175,6 +1179,10 @@ router.put('/admin/equipes/:sigla', async (req, res) => {
   // Validação parcial — só os campos enviados
   const upd = {};
   const body = req.body || {};
+  if (body.setor !== undefined) {
+    if (!_RE_SETOR.test(body.setor)) return res.status(400).json({ error: 'setor inválido' });
+    upd.setor = body.setor;
+  }
   if (body.regional !== undefined) {
     if (!_RE_REG.test(body.regional)) return res.status(400).json({ error: 'regional inválida' });
     upd.regional = body.regional;
@@ -1184,8 +1192,8 @@ router.put('/admin/equipes/:sigla', async (req, res) => {
     upd.tipo = body.tipo.toUpperCase();
   }
   if (body.placa !== undefined) {
-    if (!_RE_PLACA.test(body.placa)) return res.status(400).json({ error: 'placa inválida' });
-    upd.placa = body.placa.toUpperCase().trim();
+    if (body.placa && !_RE_PLACA.test(body.placa)) return res.status(400).json({ error: 'placa inválida' });
+    upd.placa = body.placa ? body.placa.toUpperCase().trim() : null;
   }
   if (body.ativo !== undefined) {
     if (typeof body.ativo !== 'boolean') return res.status(400).json({ error: 'ativo deve ser boolean' });
