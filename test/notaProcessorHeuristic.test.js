@@ -99,6 +99,35 @@ describe('notaProcessor.classificarSubCategoria — heurística alinhada ao clas
     assert.equal(r.quantidade, 50);
   });
 
+  // ── Fallbacks reforçados (camadas 2 e 3 do classifier DD) ──
+  test('DD sem Activity mas com code top-level "C93" → C93', () => {
+    const r = classificarSubCategoria('DD', 'C93', null, []);
+    assert.equal(r.subcatCode, 'C93');
+    assert.equal(r.subCategoria, 'Subs Ramal');
+  });
+
+  test('DD sem Activity mas com code top-level "BTZ013" → BTZ013', () => {
+    const r = classificarSubCategoria('DD', 'BTZ013', null, []);
+    assert.equal(r.subcatCode, 'BTZ013');
+    assert.equal(r.subCategoria, 'Substituição CS');
+  });
+
+  test('DD GroupDescription "SUBSTITUIR RAMAL LIGAÇÃO" (sem "DE") → C93', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'SUBSTITUIR RAMAL LIGAÇÃO');
+    assert.equal(r.subcatCode, 'C93', 'regex deve aceitar variações de RAMAL');
+  });
+
+  test('DD GroupDescription "CAIXA SECCIONADORA - CAPEX" → BTZ013 (fallback novo)', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'CAIXA SECCIONADORA - CAPEX');
+    assert.equal(r.subcatCode, 'BTZ013');
+    assert.equal(r.subCategoria, 'Substituição CS');
+  });
+
+  test('DD GroupDescription "SUBSTITUIÇÃO DE CS" → BTZ013', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'SUBSTITUIÇÃO DE CS');
+    assert.equal(r.subcatCode, 'BTZ013');
+  });
+
   // ── Outros tipos ──
   test('LN, RL, etc. (tipos sem subcat) retornam OUTROS', () => {
     const r = classificarSubCategoria('LN', 'algumcode', null, []);

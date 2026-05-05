@@ -158,11 +158,14 @@ async function classificarDD(noteId, sectorId) {
     safeJson(`/api/Notes/${noteId}/details/optimized?sectorId=${sectorId || 'DESG'}`),
   ]);
 
+  // Campos do /api/notes/dd: Code (note-level), GroupCode, GroupDescription
+  const noteCode  = dd?.Data?.Code             || null;  // ex: 'C93' direto na nota
   const groupCode = dd?.Data?.GroupCode        || null;
   const groupDesc = dd?.Data?.GroupDescription || '';
 
+  // Atividades do details/optimized (mais confiável quando presente, traz Amount)
   const activities = det?.Data?.Activities || [];
-  // Estrutura real: cada item é { Activity: { Code, Description, ... }, Amount, IsPrimary, ... }
+  // Estrutura: { Activity: { Code, Description, ... }, Amount, IsPrimary, ... }
   // Prioriza atividade primária (IsPrimary=true) — uma nota pode ter várias secundárias.
   const findByCode = (code) =>
     activities.find(a => a.Activity?.Code === code && a.IsPrimary) ||
@@ -171,29 +174,49 @@ async function classificarDD(noteId, sectorId) {
   const ativBTZ013 = findByCode('BTZ013');
 
   let sub_code, sub_categoria, quantidade = null;
+
+  // ── 1ª PRIORIDADE: Activities[] (mais preciso, traz Amount real) ──────────
   if (ativC93) {
-    sub_code = 'C93';
+    sub_code      = 'C93';
     sub_categoria = 'Subs Ramal';
-    quantidade = ativC93.Amount ?? null;
+    quantidade    = ativC93.Amount ?? null;
   } else if (ativBTZ013) {
-    sub_code = 'BTZ013';
+    sub_code      = 'BTZ013';
     sub_categoria = 'Substituição CS';
-    quantidade = ativBTZ013.Amount ?? null;
+    quantidade    = ativBTZ013.Amount ?? null;
   } else {
-    sub_code = 'OUTROS';
+    sub_code      = 'OUTROS';
     sub_categoria = nomeFallback('DD');
   }
 
-  // Fallback: notas DD CAPEX de RAMAL DE LIGACAO geralmente vêm com Activities=[]
-  // (visto em ~27 notas em prod com GroupDescription "RAMAL DE LIGACAO - CAPEX").
-  // Os campos Component/EletricEquipment do /api/notes/dd já indicam Subs Ramal,
-  // então classificamos via GroupDescription quando Activities[] está vazio.
-  // Quantidade fica null porque não temos Activities[].Amount nesse caminho.
+  // ── 2ª PRIORIDADE: noteCode (top-level) e groupCode ──────────────────────
+  // Usado quando Activities[] vem vazio (ex: notas CAPEX antigas) mas a nota
+  // ou seu grupo identificam o tipo no campo Code/GroupCode diretamente.
   if (sub_code === 'OUTROS') {
-    const desc = (groupDesc || '').toUpperCase();
-    if (/RAMAL\s+DE\s+LIGAC/.test(desc)) {
+    const c = (noteCode || groupCode || '').toUpperCase();
+    if (c === 'C93') {
       sub_code = 'C93';
       sub_categoria = 'Subs Ramal';
+    } else if (c === 'BTZ013') {
+      sub_code = 'BTZ013';
+      sub_categoria = 'Substituição CS';
+    }
+  }
+
+  // ── 3ª PRIORIDADE: GroupDescription (texto livre) ────────────────────────
+  // Cobre casos onde nem Activities, nem Code, nem GroupCode estão presentes
+  // mas o texto da descrição identifica o tipo (ex: "SUBSTITUIR RAMAL LIGAÇÃO",
+  // "SUBSTITUIÇÃO DE CAIXA SECCIONADORA", etc).
+  if (sub_code === 'OUTROS') {
+    const desc = (groupDesc || '').toUpperCase()
+      // Normaliza acentos pra simplificar regex
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (/RAMAL/.test(desc)) {
+      sub_code = 'C93';
+      sub_categoria = 'Subs Ramal';
+    } else if (/CAIXA\s+SECCIO|SUBST.*\bCS\b|\bCS\b.*SUBST|SECCIONAD/.test(desc)) {
+      sub_code = 'BTZ013';
+      sub_categoria = 'Substituição CS';
     }
   }
 
@@ -206,7 +229,7 @@ async function classificarDD(noteId, sectorId) {
 
   return {
     sub_code, sub_categoria,
-    code:      groupCode,
+    code:      noteCode || groupCode,        // prefere Code; cai pra GroupCode
     code_text: groupDesc,
     quantidade,
     raw: { dd: dd?.Data ?? null, activities: activitiesLight },

@@ -167,6 +167,7 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
   }
 
   if (tipo === 'DD') {
+    // 1ª prioridade: Activities[] (mais preciso, com Amount real)
     const findByCode = (c) =>
       act.find(a => a.Activity?.Code === c && a.IsPrimary) ||
       act.find(a => a.Activity?.Code === c);
@@ -175,12 +176,19 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
     if (ativC93)    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: ativC93.Amount    ?? null };
     if (ativBTZ013) return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: ativBTZ013.Amount ?? null };
 
-    // Fallback: notas DD CAPEX de "RAMAL DE LIGACAO" vêm com Activities=[].
-    // GroupDescription do /api/notes/dd indica isso. Mesmo comportamento do
-    // classifierService.classificarDD para garantir consistência.
-    const desc = (groupDescription || '').toUpperCase();
-    if (/RAMAL\s+DE\s+LIGAC/.test(desc)) {
+    // 2ª prioridade: code top-level da nota (igual ao classifierService.classificarDD)
+    const c = String(code || '').toUpperCase();
+    if (c === 'C93')    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: null };
+    if (c === 'BTZ013') return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: null };
+
+    // 3ª prioridade: GroupDescription (texto livre)
+    const desc = (groupDescription || '').toUpperCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (/RAMAL/.test(desc)) {
       return { subCategoria: 'Subs Ramal', subcatCode: 'C93', quantidade: null };
+    }
+    if (/CAIXA\s+SECCIO|SUBST.*\bCS\b|\bCS\b.*SUBST|SECCIONAD/.test(desc)) {
+      return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: null };
     }
 
     return { subCategoria: 'DD Outros', subcatCode: 'OUTROS', quantidade: null };
