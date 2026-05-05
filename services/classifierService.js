@@ -175,6 +175,10 @@ async function classificarDD(noteId, sectorId) {
 
   let sub_code, sub_categoria, quantidade = null;
 
+  // Estratégia: usar SOMENTE campos determinísticos (Activities[] + Code).
+  // Texto livre (GroupDescription) foi descartado — variações de grafia
+  // (acento, letra trocada, abreviação) tornavam o filtro impreciso.
+
   // ── 1ª PRIORIDADE: Activities[] (mais preciso, traz Amount real) ──────────
   if (ativC93) {
     sub_code      = 'C93';
@@ -189,32 +193,15 @@ async function classificarDD(noteId, sectorId) {
     sub_categoria = nomeFallback('DD');
   }
 
-  // ── 2ª PRIORIDADE: noteCode (top-level) e groupCode ──────────────────────
-  // Usado quando Activities[] vem vazio (ex: notas CAPEX antigas) mas a nota
-  // ou seu grupo identificam o tipo no campo Code/GroupCode diretamente.
+  // ── 2ª PRIORIDADE: Code top-level / GroupCode ────────────────────────────
+  // Usado quando Activities[] vem vazio (ex: notas CAPEX). C93 = Subs Ramal,
+  // BTZ013 = Substituição CS — mapeamento 1:1 oficial da WPA.
   if (sub_code === 'OUTROS') {
     const c = (noteCode || groupCode || '').toUpperCase();
     if (c === 'C93') {
       sub_code = 'C93';
       sub_categoria = 'Subs Ramal';
     } else if (c === 'BTZ013') {
-      sub_code = 'BTZ013';
-      sub_categoria = 'Substituição CS';
-    }
-  }
-
-  // ── 3ª PRIORIDADE: GroupDescription (texto livre) ────────────────────────
-  // Cobre casos onde nem Activities, nem Code, nem GroupCode estão presentes
-  // mas o texto da descrição identifica o tipo (ex: "SUBSTITUIR RAMAL LIGAÇÃO",
-  // "SUBSTITUIÇÃO DE CAIXA SECCIONADORA", etc).
-  if (sub_code === 'OUTROS') {
-    const desc = (groupDesc || '').toUpperCase()
-      // Normaliza acentos pra simplificar regex
-      .normalize('NFD').replace(/[̀-ͯ]/g, '');
-    if (/RAMAL/.test(desc)) {
-      sub_code = 'C93';
-      sub_categoria = 'Subs Ramal';
-    } else if (/CAIXA\s+SECCIO|SUBST.*\bCS\b|\bCS\b.*SUBST|SECCIONAD/.test(desc)) {
       sub_code = 'BTZ013';
       sub_categoria = 'Substituição CS';
     }

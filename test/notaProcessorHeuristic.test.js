@@ -73,21 +73,21 @@ describe('notaProcessor.classificarSubCategoria — heurística alinhada ao clas
     assert.equal(r.quantidade, 4);
   });
 
-  test('DD com Activities=[] e GroupDescription "RAMAL DE LIGACAO" → C93 (fallback)', () => {
-    const r = classificarSubCategoria('DD', null, null, [], 'RAMAL DE LIGACAO - CAPEX');
-    assert.equal(r.subcatCode, 'C93', 'fallback para CAPEX RAMAL deve aplicar');
-    assert.equal(r.subCategoria, 'Subs Ramal');
-    assert.equal(r.quantidade, null, 'sem Activities, quantidade é null');
-  });
-
-  test('DD com Activities=[] e GroupDescription que não é RAMAL → OUTROS', () => {
-    const r = classificarSubCategoria('DD', null, null, [], 'OUTRA COISA');
-    assert.equal(r.subcatCode, 'OUTROS');
-  });
-
-  test('DD com Activities=[] e sem GroupDescription → OUTROS', () => {
+  test('DD com Activities=[] e sem Code → OUTROS', () => {
     const r = classificarSubCategoria('DD', null, null, []);
     assert.equal(r.subcatCode, 'OUTROS');
+  });
+
+  test('DD com Activities=[] e Code arbitrário diferente → OUTROS', () => {
+    const r = classificarSubCategoria('DD', 'XYZ999', null, []);
+    assert.equal(r.subcatCode, 'OUTROS', 'só C93 e BTZ013 viram subcat — outros codes são OUTROS');
+  });
+
+  // GroupDescription regex foi REMOVIDO intencionalmente — texto livre é frágil.
+  // Notas DD são classificadas apenas por Activities[] e Code (campos determinísticos).
+  test('DD com Activities=[] mas com GroupDescription "RAMAL" → OUTROS (regex removido)', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'SUBSTITUIR RAMAL LIGAÇÃO');
+    assert.equal(r.subcatCode, 'OUTROS', 'GroupDescription não é mais usada — só Activities + Code');
   });
 
   test('DD prioriza Activity IsPrimary=true sobre as não-primárias', () => {
@@ -112,20 +112,10 @@ describe('notaProcessor.classificarSubCategoria — heurística alinhada ao clas
     assert.equal(r.subCategoria, 'Substituição CS');
   });
 
-  test('DD GroupDescription "SUBSTITUIR RAMAL LIGAÇÃO" (sem "DE") → C93', () => {
-    const r = classificarSubCategoria('DD', null, null, [], 'SUBSTITUIR RAMAL LIGAÇÃO');
-    assert.equal(r.subcatCode, 'C93', 'regex deve aceitar variações de RAMAL');
-  });
-
-  test('DD GroupDescription "CAIXA SECCIONADORA - CAPEX" → BTZ013 (fallback novo)', () => {
-    const r = classificarSubCategoria('DD', null, null, [], 'CAIXA SECCIONADORA - CAPEX');
-    assert.equal(r.subcatCode, 'BTZ013');
-    assert.equal(r.subCategoria, 'Substituição CS');
-  });
-
-  test('DD GroupDescription "SUBSTITUIÇÃO DE CS" → BTZ013', () => {
-    const r = classificarSubCategoria('DD', null, null, [], 'SUBSTITUIÇÃO DE CS');
-    assert.equal(r.subcatCode, 'BTZ013');
+  test('DD com Code C93 prevalece sobre GroupDescription "OUTRO TEXTO"', () => {
+    // mesmo com texto enganoso, Code C93 é determinístico
+    const r = classificarSubCategoria('DD', 'C93', null, [], 'TEXTO ALEATORIO QUE NAO IMPORTA');
+    assert.equal(r.subcatCode, 'C93');
   });
 
   // ── Outros tipos ──

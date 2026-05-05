@@ -53,7 +53,8 @@ function loadClassifierWith(fixturesByPath) {
 const md       = (Code, CodeText = 'Substituição Projetos Especiais') => ({ Data: { Code, CodeText } });
 const mdDet    = (Comments)                             => ({ Data: { Comments } }); // /details/optimized
 const sf       = (Code, CodeText = 'desc')             => ({ Data: { Code, CodeText } });
-const dd       = (GroupCode = '63', GroupDescription = 'BF-CHAVE FUSIVEL') => ({ Data: { GroupCode, GroupDescription } });
+const dd       = (GroupCode = '63', GroupDescription = 'BF-CHAVE FUSIVEL', Code = null) =>
+                   ({ Data: { Code, GroupCode, GroupDescription } });
 const details  = (Activities)                          => ({ Data: { Activities } });
 const activity = (Code, Amount, IsPrimary = true)      => ({
   Activity:  { Code, Description: Code },
@@ -336,26 +337,39 @@ describe('classificarDD', () => {
     assert.equal(r.sub_code, 'BTZ013');
   });
 
-  test('Fallback: Activities=[] + GroupDescription "RAMAL DE LIGACAO - CAPEX" → sub_code=C93 (quantidade=null)', async () => {
+  test('Fallback: Activities=[] + Code "C93" no campo top-level → sub_code=C93', async () => {
+    // Casos CAPEX onde Activities[] vem vazio mas o Code da nota é C93.
+    // Substitui o antigo fallback baseado em GroupDescription regex (frágil).
     const id = 'dd-ramal-fallback';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/dd?noteId=${id}`]: dd('0000000000000000058', 'RAMAL DE LIGACAO - CAPEX'),
+      [`/api/notes/dd?noteId=${id}`]: dd('63', 'RAMAL DE LIGACAO - CAPEX', 'C93'),
       [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([]),
     });
     const r = await classificar(id, 'DD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'C93');
     assert.equal(r.sub_categoria, 'Subs Ramal');
     assert.equal(r.quantidade,    null); // sem Activities[].Amount, quantidade fica null
-    assert.equal(r.code_text,     'RAMAL DE LIGACAO - CAPEX');
   });
 
-  test('Fallback NÃO dispara em GroupDescriptions OPEX (PODA, MANUT, INSPECAO, BF-CHAVE)', async () => {
-    // Garante que o fallback do RAMAL é específico — não vaza pra OPEX.
+  test('Fallback: Activities=[] + Code "BTZ013" no top-level → sub_code=BTZ013', async () => {
+    const id = 'dd-cs-fallback';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/dd?noteId=${id}`]: dd('99', 'CAIXA SECCIONADORA', 'BTZ013'),
+      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([]),
+    });
+    const r = await classificar(id, 'DD', { sectorId: 'DESG' });
+    assert.equal(r.sub_code,      'BTZ013');
+    assert.equal(r.sub_categoria, 'Substituição CS');
+  });
+
+  test('Activities=[] e Code/GroupCode diferente de C93/BTZ013 → OUTROS (regex de descrição não usa mais)', async () => {
+    // Mesmo com GroupDescription "RAMAL", se Code/GroupCode não bater → OUTROS.
+    // Texto livre foi removido por ser frágil (variações de grafia).
     const cases = [
       'PODA DE ARVORES - OPEX',
       'MANUT. CIRC. PRIMARIO - MT - OPEX',
-      'INSPECAO DE REDES E EQUIPTO - OPEX',
       'BF-CHAVE FUSIVEL <34,5 kV - OPEX',
+      'SUBSTITUIR RAMAL LIGACAO',  // mesmo isto fica OUTROS sem Code C93
     ];
     for (const desc of cases) {
       const id = 'dd-' + desc.slice(0, 6).toLowerCase().replace(/\W/g, '-');
@@ -364,16 +378,15 @@ describe('classificarDD', () => {
         [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([]),
       });
       const r = await classificar(id, 'DD', { sectorId: 'DESG' });
-      assert.equal(r.sub_code, 'OUTROS', `"${desc}" deveria ficar em OUTROS`);
+      assert.equal(r.sub_code, 'OUTROS', `"${desc}" sem Code C93/BTZ013 deveria ficar em OUTROS`);
     }
   });
 
-  test('Fallback prioridade: Activities com BTZ013 vence GroupDescription RAMAL', async () => {
-    // Garante que o fallback só dispara quando Activities está vazio.
-    // Se uma nota tem GroupDescription RAMAL mas Activities tem BTZ013, vence Activities.
+  test('Activities com BTZ013 vence Code top-level "C93"', async () => {
+    // Garante que Activities[] (mais preciso) tem prioridade sobre Code.
     const id = 'dd-conflict';
     const { classificar } = loadClassifierWith({
-      [`/api/notes/dd?noteId=${id}`]: dd('058', 'RAMAL DE LIGACAO - CAPEX'),
+      [`/api/notes/dd?noteId=${id}`]: dd('058', 'qualquer', 'C93'),
       [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([
         activity('BTZ013', 1, true),
       ]),
