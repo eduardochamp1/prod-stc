@@ -18,6 +18,7 @@ let tokenJob        = null;
 let snapshotJob     = null;
 let consolidaJob    = null;
 let uuidHealthJob   = null;
+let retryOutrosJob  = null;
 let driftJob        = null;
 let isRunning       = false;
 let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
@@ -288,6 +289,87 @@ async function runClassifyNewNotes(teams) {
   }
 }
 
+// ── RETRY DE DD/OUTROS RECENTES ────────────────────────────────────────────────
+// Bug histórico: equipes lançam Activities[] no WPA progressivamente durante o
+// dia. O cron `runClassifyNewNotes` vê a nota cedo (sem Activities) e classifica
+// como OUTROS. Quando a equipe registra BTZ013/C93 horas depois, o cache em
+// note_subcategorias já está como OUTROS e o ID está em getClassifiedIds() →
+// nunca mais é re-classificado.
+//
+// Solução: cron dedicado que pega DDs em OUTROS classificadas nas últimas 24h
+// e re-classifica. Se Activities[] foi populada nesse meio-tempo, atualiza pra
+// BTZ013/C93. Após 24h, considera-se que a nota é genuinamente OUTROS
+// (PODA/MANUT/INSPECAO).
+//
+// Roda 1x por hora durante expediente (06-20h). Concorrência baixa (4) — cada
+// chamada classificarDD faz GET /api/notes/dd (~2 KB) + GET /details/optimized
+// (~50-150 KB), então N*2 chamadas por execução.
+
+async function runRetryRecentOutros() {
+  const { getClient } = require('./supabaseClient');
+  const { upsertSubcategorias } = require('../db/subcategoriasQueries');
+  const { classificarBatch } = require('./classifierService');
+  const { consolidateDay } = require('./supabasePush');
+  const sb = getClient();
+
+  const HOURS_BACK = 24;
+  const cutoff = new Date(Date.now() - HOURS_BACK * 3600 * 1000).toISOString();
+
+  const { data, error } = await sb
+    .from('note_subcategorias')
+    .select('note_id, numero')
+    .eq('tipo', 'DD')
+    .eq('sub_code', 'OUTROS')
+    .gte('classified_at', cutoff);
+
+  if (error) {
+    console.warn('[CRON] retry-outros: falha ao buscar:', error.message);
+    return;
+  }
+  if (!data || data.length === 0) {
+    return;  // nada pra reprocessar (silencioso)
+  }
+
+  console.log(`[CRON] retry-outros: ${data.length} DD/OUTROS classificadas nas últimas ${HOURS_BACK}h — re-classificando`);
+
+  const jobs = data.map(r => ({
+    noteId:   r.note_id,
+    tipo:     'DD',
+    sectorId: 'DESG',  // default — details/optimized aceita qualquer sectorId
+    numero:   r.numero || null,
+  }));
+
+  const t0 = Date.now();
+  const classifs = await classificarBatch(jobs, 4);
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+
+  // Só persiste os que efetivamente mudaram de OUTROS pra outra coisa
+  const changed = classifs.filter(c => c.sub_code !== 'OUTROS');
+
+  if (changed.length === 0) {
+    console.log(`[CRON] retry-outros: ${jobs.length} re-classificadas em ${dt}s, nenhuma mudou de OUTROS`);
+    return;
+  }
+
+  await upsertSubcategorias(changed);
+  const breakdown = {};
+  changed.forEach(c => { breakdown[c.sub_code] = (breakdown[c.sub_code] || 0) + 1; });
+  const summary = Object.entries(breakdown).map(([k, v]) => `${k}=${v}`).join(' ');
+  console.log(`[CRON] retry-outros: ✓ ${changed.length}/${jobs.length} reclassificadas em ${dt}s — ${summary}`);
+
+  // Re-roda consolidação dos 2 últimos dias (cobre a janela de 24h)
+  // pra propagar mudanças pra daily_subcat_totals + team_daily_subcat_totals.
+  const today     = new Date(Date.now() -  3 * 3600 * 1000).toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 27 * 3600 * 1000).toISOString().slice(0, 10);
+  for (const d of [today, yesterday]) {
+    try {
+      await consolidateDay(d);
+    } catch (errC) {
+      console.warn(`[CRON] retry-outros: consolidateDay(${d}) falhou:`, errC.message);
+    }
+  }
+}
+
 // ── HEALTH-CHECK DE UUID ───────────────────────────────────────────────────────
 // Verifica % de notas (em notasConcluidas + notasExecutadas) com `id` (UUID)
 // nos snapshots da última hora. Loga warn se < 95%.
@@ -466,12 +548,19 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
+  // Retry de DD/OUTROS recentes (até 24h) — reclassifica caso Activities[]
+  // tenha sido populada após classificação inicial. Roda no minuto 25 pra
+  // não bater com snapshots (00,15,30,45) nem uuid-health (05).
+  retryOutrosJob = cron.schedule('25 6-20 * * *', runRetryRecentOutros, {
+    timezone: 'America/Sao_Paulo',
+  });
+
   // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
   driftJob = cron.schedule('0 2 * * *', runDailyDriftSweep, {
     timezone: 'America/Sao_Paulo',
   });
 
-  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00');
+  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health/retry-outros 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00');
 
   // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
   setTimeout(runTokenRefresh, 2000);
@@ -488,6 +577,7 @@ function stopCron() {
   snapshotJob?.stop();
   consolidaJob?.stop();
   uuidHealthJob?.stop();
+  retryOutrosJob?.stop();
   driftJob?.stop();
 }
 
