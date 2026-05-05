@@ -50,7 +50,13 @@ async function fetchSnapshotsRange(de, ate) {
   let from = 0;
   const PAGE = 1000;
   while (true) {
-    let q = sb.from('snapshots').select('date, sector_id, regional, team_name, data').order('date', { ascending: true });
+    // captured_at é CRÍTICO — usado em indexSnapshots pra escolher o snapshot
+    // MAIS RECENTE de cada (team, sessionBegin). Sem ele, comparações viram
+    // undefined > undefined = false, e o Map mantém o primeiro snapshot
+    // encontrado (que pode ser velho e com poucas notas concluídas).
+    let q = sb.from('snapshots')
+      .select('date, sector_id, regional, team_name, captured_at, data')
+      .order('captured_at', { ascending: false }); // mais recente primeiro
     if (de)  q = q.gte('date', de);
     if (ate) q = q.lte('date', ate);
     const { data, error } = await q.range(from, from + PAGE - 1);
@@ -108,6 +114,9 @@ function indexSnapshots(snapshots) {
   // da sessão) — assim não duplicamos contagem por aparecer em múltiplos snapshots.
   const latestBySession = new Map(); // key: `${team}|${sessionBegin}` → snapshot
 
+  // Snapshots vêm ordenados por captured_at DESC do fetchSnapshotsRange,
+  // então o primeiro snapshot de cada (team, sessionBegin) que encontrarmos
+  // já é o mais recente. Comparação explícita não necessária.
   snapshots.forEach(snap => {
     const t = snap.data;
     if (!t) return;
@@ -119,9 +128,7 @@ function indexSnapshots(snapshots) {
     if (!sessDate) return;
 
     const key = `${team}|${t.sessionBegin}`;
-    const prev = latestBySession.get(key);
-    // Mantém só o snapshot mais recente (captured_at maior) por sessão
-    if (!prev || (snap.captured_at > prev.snap.captured_at)) {
+    if (!latestBySession.has(key)) {
       latestBySession.set(key, { snap, team, reg, sector, sessDate });
     }
   });
