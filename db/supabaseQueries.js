@@ -618,13 +618,14 @@ async function getRealizadasDoDia(de, ate) {
  * { GUA: { L0: n, L1: n, ... }, CAC: { ... }, ALL: { ... } }
  * com quantidades separadas para DD (metros/pontos).
  */
-async function getDailySubcatTotals(de, ate, regional) {
+async function getDailySubcatTotals(de, ate, regional, team) {
   const sb = getClient();
   const today = dateBRT();
   de  = de  || today;
   ate = ate || de;
 
-  // Lê do nível por-equipe (paginado) e filtra pela whitelist antes de agregar
+  // Lê do nível por-equipe (paginado) e filtra pela whitelist antes de agregar.
+  // Filtro opcional por equipe específica (param team) — útil pra UI de drill-down.
   const data = await _selectAll(() => {
     let query = sb
       .from('team_daily_subcat_totals')
@@ -633,6 +634,9 @@ async function getDailySubcatTotals(de, ate, regional) {
       .lte('date', ate);
     if (regional && regional !== 'ALL') {
       query = query.eq('regional', regional);
+    }
+    if (team && team !== 'ALL') {
+      query = query.eq('team_name', team);
     }
     return query;
   });
@@ -812,7 +816,7 @@ async function getExportData(de, ate, regional) {
  * Performance de equipes num período: total OS, dias trabalhados, média OS/dia.
  * tipo: 'COMERCIAL' (team_name starts with EC), 'PLANTAO' (starts with EP), 'TODAS'
  */
-async function getPerformanceEquipes(de, ate, regional, tipo) {
+async function getPerformanceEquipes(de, ate, regional, tipo, team) {
   const sb = getClient();
   const data = await _selectAll(() => {
     let query = sb
@@ -821,6 +825,7 @@ async function getPerformanceEquipes(de, ate, regional, tipo) {
     if (de)                                     query = query.gte('date', de);
     if (ate)                                    query = query.lte('date', ate);
     if (regional && regional !== 'ALL')         query = query.eq('regional', regional);
+    if (team && team !== 'ALL')                 query = query.eq('team_name', team);
     return query;
   });
 

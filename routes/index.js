@@ -191,8 +191,9 @@ router.get('/totais/subcat', async (req, res) => {
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
     const regional = req.query.regional || 'ALL';
+    const team     = req.query.team     || null;   // sigla específica ou null/ALL
     if (!sq) return res.json({ de, ate, totais: { ALL: {}, GUA: {}, CAC: {} }, quantidades: { ALL: {}, GUA: {}, CAC: {} } });
-    const result = await sq.getDailySubcatTotals(de, ate, regional);
+    const result = await sq.getDailySubcatTotals(de, ate, regional, team);
     res.json({ de, ate, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -252,8 +253,9 @@ router.get('/performance/equipes', async (req, res) => {
     const ate      = req.query.ate      || de;
     const regional = req.query.regional || 'ALL';
     const tipo     = req.query.tipo     || 'TODAS';
+    const team     = req.query.team     || null;
     if (!sq) return res.json({ equipes: [], de, ate });
-    const result = await sq.getPerformanceEquipes(de, ate, regional, tipo);
+    const result = await sq.getPerformanceEquipes(de, ate, regional, tipo, team);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

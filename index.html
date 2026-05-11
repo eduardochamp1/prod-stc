@@ -4205,11 +4205,17 @@
             </select>
           </div>
           <div class="filter-group">
-            <span class="filter-label">Equipes</span>
+            <span class="filter-label">Tipo</span>
             <select class="filter-select" id="graf-tipo-select" onchange="loadGraficos()">
               <option value="TODAS">Todas</option>
               <option value="COMERCIAL">Comercial (EC)</option>
               <option value="PLANTAO">Plantão (EP)</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Equipe</span>
+            <select class="filter-select" id="graf-equipe-select" onchange="loadGraficos()" style="min-width:160px">
+              <option value="ALL">Todas as equipes</option>
             </select>
           </div>
           <button class="btn-refresh" onclick="loadGraficos()">↻ Atualizar</button>
@@ -4756,11 +4762,40 @@
       loadGraficos();
     }
 
+    // Cache do dropdown de equipes (populado 1x no primeiro load)
+    let _grafEquipesPopuladas = false;
+    async function _popularDropdownEquipes() {
+      if (_grafEquipesPopuladas) return;
+      const sel = document.getElementById('graf-equipe-select');
+      if (!sel) return;
+      try {
+        const res = await fetch(`${API}/admin/equipes`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
+          a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla)
+        );
+        // Agrupa por regional via optgroup pra ficar mais legível
+        const guaOpts = eqs.filter(e => e.regional === 'GUA').map(e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`).join('');
+        const cacOpts = eqs.filter(e => e.regional === 'CAC').map(e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`).join('');
+        sel.innerHTML = `
+          <option value="ALL">Todas as equipes</option>
+          <optgroup label="Guarapari (${eqs.filter(e => e.regional === 'GUA').length})">${guaOpts}</optgroup>
+          <optgroup label="Cachoeiro (${eqs.filter(e => e.regional === 'CAC').length})">${cacOpts}</optgroup>
+        `;
+        _grafEquipesPopuladas = true;
+      } catch (err) {
+        console.warn('Falha ao popular dropdown de equipes:', err.message);
+      }
+    }
+
     async function loadGraficos() {
       initGraficos();
+      await _popularDropdownEquipes();
       const { de, ate } = grafRange();
       const regional = document.getElementById('graf-regional-select')?.value || 'ALL';
       const tipo     = document.getElementById('graf-tipo-select')?.value    || 'TODAS';
+      const team     = document.getElementById('graf-equipe-select')?.value  || 'ALL';
 
       const lbl = document.getElementById('graf-periodo-label');
       if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
@@ -4769,15 +4804,16 @@
       cont.innerHTML = `<div class="empty-state"><div class="spinner"></div><br>Carregando gráficos…</div>`;
 
       try {
+        const teamQs = team && team !== 'ALL' ? `&team=${encodeURIComponent(team)}` : '';
         const [subcatRes, equipeRes] = await Promise.all([
-          fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regional=${regional}`),
-          fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}`),
+          fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regional=${regional}${teamQs}`),
+          fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}${teamQs}`),
         ]);
         const subcatData  = subcatRes.ok  ? await subcatRes.json()  : { totais: { ALL:{},GUA:{},CAC:{} }, quantidades:{} };
         const equipeData  = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
 
         const metas = getMetas();
-        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas);
+        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team);
       } catch (err) {
         cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
       }
@@ -4829,7 +4865,7 @@
 </svg>`;
     }
 
-    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas) {
+    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team) {
       const reg  = (regional === 'ALL') ? 'ALL' : regional;
       const totais = subcatData.totais?.[reg] || subcatData.totais?.ALL || {};
       const { de, ate } = grafRange();
@@ -4977,7 +5013,7 @@
 </div>
 
 <div class="perf-section">
-  <div class="perf-section-title">Gauges de Subcategoria (${regional === 'ALL' ? 'Todas Regionais' : regional})</div>
+  <div class="perf-section-title">Gauges de Subcategoria (${team && team !== 'ALL' ? `Equipe ${team}` : (regional === 'ALL' ? 'Todas Regionais' : regional)})</div>
   <div class="gauge-grid">${gaugesHTML}</div>
 </div>
 
