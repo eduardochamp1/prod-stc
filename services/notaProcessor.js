@@ -184,6 +184,18 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
     if (c === 'C93')    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: null };
     if (c === 'BTZ013') return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: null };
 
+    // 3ª prioridade: GroupDescription ancorada (notas CAPEX sem Code nem Activities)
+    // Formato estruturado da EDP: "<TIPO> - CAPEX|OPEX"
+    // Match ancorado no INÍCIO pra evitar falsos positivos.
+    const desc = String(groupDescription || '').toUpperCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (/^RAMAL\s+DE\s+LIGAC/.test(desc)) {
+      return { subCategoria: 'Subs Ramal', subcatCode: 'C93', quantidade: null };
+    }
+    if (/^CAIXA\s+SECCION/.test(desc) || /^SUBSTITU.*\bCS\b/.test(desc)) {
+      return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: null };
+    }
+
     return { subCategoria: 'DD Outros', subcatCode: 'OUTROS', quantidade: null };
   }
 

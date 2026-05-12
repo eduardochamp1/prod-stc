@@ -215,6 +215,28 @@ async function classificarDD(noteId, sectorId) {
     }
   }
 
+  // ── 3ª PRIORIDADE: GroupDescription ANCORADA (notas CAPEX) ───────────────
+  // Confirmado em prod (12/05/2026): notas CAPEX vêm com:
+  //   - Code: undefined no payload
+  //   - GroupCode: número arbitrário (ex: "000000000000000058")
+  //   - Activities: []
+  //   - GroupDescription: formato estruturado "<TIPO> - CAPEX|OPEX"
+  //     Ex: "RAMAL DE LIGACAO - CAPEX", "PODA DE ARVORES - OPEX"
+  // Esse é o ÚNICO sinal disponível pra classificar nota CAPEX.
+  // Regex ancorada no INÍCIO (^) pra evitar falsos positivos.
+  if (sub_code === 'OUTROS') {
+    const desc = (groupDesc || '').toUpperCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (/^RAMAL\s+DE\s+LIGAC/.test(desc)) {
+      sub_code = 'C93';
+      sub_categoria = 'Subs Ramal';
+    } else if (/^CAIXA\s+SECCION/.test(desc) || /^SUBSTITU.*\bCS\b/.test(desc)) {
+      sub_code = 'BTZ013';
+      sub_categoria = 'Substituição CS';
+      quantidade = parseTotalClientes(comments);
+    }
+  }
+
   // Guarda apenas campos relevantes no raw — descarta photos/checkpoints (1.6 MB)
   const activitiesLight = activities.map(a => ({
     Code:      a.Activity?.Code      ?? null,

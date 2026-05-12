@@ -118,6 +118,43 @@ describe('notaProcessor.classificarSubCategoria — heurística alinhada ao clas
     assert.equal(r.subcatCode, 'C93');
   });
 
+  // ── Fallback de GroupDescription ANCORADA (camada 3) — para notas CAPEX ──
+  // Notas CAPEX vêm sem Code e sem Activities. GroupDescription é o único sinal,
+  // mas usamos regex ancorada no INÍCIO pra evitar falsos positivos.
+
+  test('DD CAPEX: "RAMAL DE LIGACAO - CAPEX" → C93 (ancora no inicio)', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'RAMAL DE LIGACAO - CAPEX');
+    assert.equal(r.subcatCode, 'C93');
+    assert.equal(r.subCategoria, 'Subs Ramal');
+  });
+
+  test('DD CAPEX: "RAMAL DE LIGAÇÃO - CAPEX" (com acento) → C93', () => {
+    // Normalização NFD remove acento na regex
+    const r = classificarSubCategoria('DD', null, null, [], 'RAMAL DE LIGAÇÃO - CAPEX');
+    assert.equal(r.subcatCode, 'C93');
+  });
+
+  test('DD CAPEX: "CAIXA SECCIONADORA - CAPEX" → BTZ013', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'CAIXA SECCIONADORA - CAPEX');
+    assert.equal(r.subcatCode, 'BTZ013');
+  });
+
+  test('DD OPEX: "PODA DE ARVORES - OPEX" continua OUTROS (regex ancorada nao matcha)', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'PODA DE ARVORES - OPEX');
+    assert.equal(r.subcatCode, 'OUTROS');
+  });
+
+  test('DD: "PODA NA RUA DO RAMAL" continua OUTROS (RAMAL no meio nao conta)', () => {
+    // Antes da ancora, regex /RAMAL/ pegaria isso. Agora /^RAMAL DE LIGAC/ nao.
+    const r = classificarSubCategoria('DD', null, null, [], 'PODA NA RUA DO RAMAL DE OURO');
+    assert.equal(r.subcatCode, 'OUTROS');
+  });
+
+  test('DD: "MANUT. CIRC. PRIMARIO - MT - OPEX" continua OUTROS', () => {
+    const r = classificarSubCategoria('DD', null, null, [], 'MANUT. CIRC. PRIMARIO - MT - OPEX');
+    assert.equal(r.subcatCode, 'OUTROS');
+  });
+
   // ── Outros tipos ──
   test('LN, RL, etc. (tipos sem subcat) retornam OUTROS', () => {
     const r = classificarSubCategoria('LN', 'algumcode', null, []);
