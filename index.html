@@ -5549,19 +5549,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
         return;
       }
 
-      // ── 1. Cards de resumo (totais do mês) ──────────────────────────────────
-      // mesTotais é { GUA: { 'MD/TL11': {count, quantidade}, ... }, CAC: {...} }
-      // Se regional filtrada, mostra só ela; senão soma GUA+CAC
-      const consolidaTotais = (regional && regional !== 'ALL')
-        ? (mesTotais[regional] || {})
-        : Object.values(mesTotais).reduce((acc, regMap) => {
-            Object.entries(regMap || {}).forEach(([k, v]) => {
-              if (!acc[k]) acc[k] = { count: 0, quantidade: 0 };
-              acc[k].count += v.count;
-              acc[k].quantidade += Number(v.quantidade || 0);
-            });
-            return acc;
-          }, {});
+      // ── 1. Cards de resumo — soma dos dias dentro do range filtrado ────────────
+      // Calculado a partir de dentroDoRange (mesmos dados da matriz abaixo),
+      // garantindo que cards e totais de linha sempre batem com o período selecionado.
+      const consolidaTotais = {};
+      const regsVisiveis = (regional && regional !== 'ALL') ? [regional] : ['GUA', 'CAC'];
+      dentroDoRange.forEach(d => {
+        regsVisiveis.forEach(r => {
+          Object.entries(d[r] || {}).forEach(([key, v]) => {
+            if (!consolidaTotais[key]) consolidaTotais[key] = { count: 0, quantidade: 0 };
+            consolidaTotais[key].count     += v.count      || 0;
+            consolidaTotais[key].quantidade += Number(v.quantidade || 0);
+          });
+        });
+      });
 
       const cardsHtml = SUBCAT_DISPLAY.map(s => {
         const key = `${s.tipo}/${s.sub_code}`;
