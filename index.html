@@ -4866,24 +4866,25 @@
     }
 
     function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team) {
-      const reg  = (regional === 'ALL') ? 'ALL' : regional;
-      const totais = subcatData.totais?.[reg] || subcatData.totais?.ALL || {};
+      const reg       = (regional === 'ALL') ? 'ALL' : regional;
+      const totais    = subcatData.totais?.[reg]     || subcatData.totais?.ALL     || {};
+      const quantidades = subcatData.quantidades?.[reg] || subcatData.quantidades?.ALL || {};
       const { de, ate } = grafRange();
 
       // Sem escalonamento — gauge sempre mostra a meta mensal cheia configurada
 
-      // ── Determina cor de fundo da meta para cada gauge ──────────────────
+      // ── Definição dos gauges ─────────────────────────────────────────────
+      // qtd:true → usa quantidades[] em vez de totais[] (ex: CS substituídas em unidades)
       const GAUGE_DEF = [
-        { key: 'L0',      label: 'Corte L0',   metaKey: 'L0'     },
-        { key: 'L1',      label: 'Corte L1',   metaKey: 'L1'     },
-        { key: 'C93',     label: 'Ramal',       metaKey: 'C93'    },
-        { key: 'OBSOLETO',label: 'Obsoleto',    metaKey: 'OBSOLETO'},
-        { key: 'TL11',    label: 'TL11',        metaKey: 'TL11'   },
-        { key: 'BTZ013',  label: 'Sub CS',      metaKey: 'BTZ013' },
+        { key: 'L0',      label: 'Corte L0',        metaKey: 'L0'      },
+        { key: 'L1',      label: 'Corte L1',        metaKey: 'L1'      },
+        { key: 'C93',     label: 'Ramal',            metaKey: 'C93'     },
+        { key: 'OBSOLETO',label: 'Obsoleto',         metaKey: 'OBSOLETO'},
+        { key: 'TL11',    label: 'TL11',             metaKey: 'TL11'    },
+        { key: 'BTZ013',  label: 'Sub CS (un.)',     metaKey: 'BTZ013',  qtd: true },
       ];
 
       // Meta: se regional=ALL, somamos GUA+CAC; caso contrário usamos só a regional.
-      // Sempre retorna a meta MENSAL configurada (sem escalonamento por período).
       function getMeta(metaKey) {
         const base = regional === 'ALL'
           ? (metas.GUA?.[metaKey] || 0) + (metas.CAC?.[metaKey] || 0)
@@ -4892,7 +4893,8 @@
       }
 
       const gaugesHTML = GAUGE_DEF.map(g => {
-        const val  = totais[g.key] || 0;
+        // BTZ013 (qtd:true) exibe unidades substituídas; demais exibem contagem de notas
+        const val  = g.qtd ? Math.round(quantidades[g.key] || 0) : (totais[g.key] || 0);
         const meta = getMeta(g.metaKey);
         const pct  = meta > 0 ? val / meta : null;
         const cor  = pct === null ? '#b0b0aa'
