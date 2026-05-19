@@ -871,6 +871,107 @@ async function getPerformanceEquipes(de, ate, regional, tipo, team) {
   return { equipes: lista, de, ate };
 }
 
+/**
+ * Retorna notas com checkpoints GPS de uma equipe em um dia específico.
+ * Busca o snapshot mais recente do dia, extrai todas as notas (concluídas,
+ * rejeitadas, executadas, baixadas), e enriquece com `note_details` (checkpoints).
+ *
+ * Categoria: Bounded por design — 1 snapshot + N note_details (< 200 notas/dia/equipe).
+ *
+ * @param {string} team  Sigla da equipe (ex: 'GUA01')
+ * @param {string} date  Data no formato YYYY-MM-DD
+ * @returns {{ notes, team, date, teamInfo }}
+ */
+async function getMapaEquipe(team, date) {
+  const sb = getClient();
+
+  // 1. Snapshot mais recente do dia
+  const { data: snapRows, error: snapErr } = await sb
+    .from('snapshots')
+    .select('data, captured_at')
+    .eq('team_name', team)
+    .eq('date', date)
+    .order('captured_at', { ascending: false })
+    .limit(1);
+
+  if (snapErr) throw new Error(`[getMapaEquipe] snapshots: ${snapErr.message}`);
+  if (!snapRows || !snapRows.length) return { notes: [], team, date, teamInfo: {} };
+
+  const snap     = snapRows[0];
+  const snapData = snap.data || {};
+
+  // 2. Coletar notas de todos os status relevantes
+  const STATUS_MAP = [
+    ['notasConcluidas',  'concluida'],
+    ['notasRejeitadas',  'rejeitada'],
+    ['notasExecutadas',  'executada'],
+    ['notasBaixadas',    'baixada'],
+  ];
+
+  const seen   = new Set();
+  const merged = [];
+  for (const [key, status] of STATUS_MAP) {
+    const arr = snapData[key] || [];
+    for (const n of arr) {
+      if (!n.id || seen.has(n.id)) continue;
+      seen.add(n.id);
+      merged.push({ ...n, status });
+    }
+  }
+
+  if (!merged.length) return { notes: [], team, date, teamInfo: _buildTeamInfo(snapData) };
+
+  // 3. Buscar note_details para os IDs coletados
+  const ids = merged.map(n => n.id);
+  const { data: details, error: detErr } = await sb
+    .from('note_details')
+    .select('note_id, numero, tipo, payload')
+    .in('note_id', ids);
+
+  if (detErr) throw new Error(`[getMapaEquipe] note_details: ${detErr.message}`);
+
+  const detailMap = {};
+  (details || []).forEach(d => { detailMap[d.note_id] = d; });
+
+  // 4. Combinar e construir lista final
+  const notes = merged.map(n => {
+    const d        = detailMap[n.id];
+    const payload  = d?.payload || {};
+    const checkpoints = Array.isArray(payload.checkpoints) ? payload.checkpoints : [];
+    return {
+      id:           n.id,
+      numero:       d?.numero   || n.numero   || n.number || '',
+      tipo:         d?.tipo     || n.tipo     || n.type   || '',
+      status:       n.status,
+      subCategoria: n.subCategoria || n.sub_categoria || payload.subCategoria || '',
+      checkpoints,
+      endereco:     payload.endereco  || n.endereco  || {},
+      datas:        payload.datas     || n.datas     || {},
+      hasCached:    !!d,
+    };
+  });
+
+  // 5. Ordenar pelo timestamp do ev:0 (partida)
+  notes.sort((a, b) => {
+    const depA = (a.checkpoints || []).find(c => c.event === 0);
+    const depB = (b.checkpoints || []).find(c => c.event === 0);
+    if (!depA && !depB) return 0;
+    if (!depA) return 1;
+    if (!depB) return -1;
+    return new Date(depA.timestamp) - new Date(depB.timestamp);
+  });
+
+  return { notes, team, date, teamInfo: _buildTeamInfo(snapData) };
+}
+
+function _buildTeamInfo(snapData) {
+  return {
+    regional:     snapData.regional     || null,
+    sessionBegin: snapData.sessionBegin || snapData.session_begin || null,
+    sessionEnd:   snapData.sessionEnd   || snapData.session_end   || null,
+  };
+}
+
 module.exports = {
   getRealizadasDoDia,
   getNoteDetailCache, setNoteDetailCache, filtrarNotesNaoCacheadas,
@@ -885,4 +986,5 @@ module.exports = {
   getDailySubcatTotals,
   getPerformanceEquipes,
   getExportData,
+  getMapaEquipe,
 };

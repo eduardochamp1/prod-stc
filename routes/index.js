@@ -1,4 +1,4 @@
-/**
+﻿/**
  * routes/index.js
  * Rotas da API do WPA Monitor.
  */
@@ -2034,4 +2034,21 @@ router.post('/admin/consolidar', async (req, res) => {
   }
 });
 
+
+// GET /api/mapa/equipe?team=SIGLA&date=YYYY-MM-DD
+// Retorna notas com checkpoints GPS de uma equipe no dia.
+router.get('/mapa/equipe', async (req, res) => {
+  try {
+    const sq   = sbq();
+    const team = req.query.team;
+    if (!team) return res.status(400).json({ error: 'Parâmetro team é obrigatório.' });
+    const date = req.query.date || dateBRT();
+    if (!sq) return res.json({ notes: [], team, date, teamInfo: {} });
+    const result = await sq.getMapaEquipe(team, date);
+    res.json(result);
+  } catch (err) {
+    console.error('[mapa/equipe]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 module.exports = router;
