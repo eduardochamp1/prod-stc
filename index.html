@@ -3770,6 +3770,57 @@
     }
     .mapa-nota-card:hover  { border-color: var(--amarelo); }
     .mapa-nota-card.active { border-color: var(--verde); background: #f5fff8; }
+    .mapa-nota-header      { cursor: pointer; }
+
+    /* Lista expansível de checkpoints dentro de cada card de nota */
+    .mapa-cp-list {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 4px 2px;
+      margin-top: 8px;
+      border-top: 1px dashed var(--cinza2);
+    }
+    .mapa-nota-card.expanded .mapa-cp-list { display: flex; }
+
+    .mapa-cp-item {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 4px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .mapa-cp-item:hover { background: var(--cinza1); }
+    .mapa-cp-badge {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #fff;
+    }
+    .mapa-cp-info { flex: 1; min-width: 0; }
+    .mapa-cp-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .mapa-cp-ts {
+      font-weight: 400;
+      font-size: 10px;
+      color: var(--text2);
+    }
+    .mapa-cp-meta {
+      font-size: 10px;
+      color: var(--text2);
+      margin-top: 1px;
+    }
 
     .gauge-grid {
       display: grid;
@@ -7850,9 +7901,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     // ── ABA MAPA ──────────────────────────────────────────────────────────────────
-    let _mapaMap       = null;
-    let _mapaLayers    = [];
-    let _mapaCircleMap = {};
+    let _mapaMap        = null;
+    let _mapaLayers     = [];
+    let _mapaCircleMap  = {};   // noteId -> primeiro marcador de cp (foco do card)
+    let _mapaCpMarkers  = {};   // 'noteId:cpIdx' -> marcador específico
     let _mapaTeamLoaded = false;
 
     function initMapa() {
@@ -7917,6 +7969,50 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }
     }
 
+    // ── OSRM (roteamento por vias reais) ─────────────────────────────────
+    // Cache em memória da geometria das rotas — evita re-chamar OSRM ao alternar
+    // notas dentro da mesma sessão. Key = string com lat,lng;lat,lng;...
+    const _osrmCache = new Map();
+
+    /**
+     * Busca a geometria de uma rota pelas vias usando o OSRM público.
+     * Retorna GeoJSON LineString ou null se falhar/sem internet.
+     *
+     * @param {Array<[number,number]>} coords  [[lat,lng], ...] em ordem cronológica
+     */
+    async function _fetchRouteGeometry(coords) {
+      if (!coords || coords.length < 2) return null;
+      // OSRM tem limite de URL — agrupa apenas pontos distintos consecutivos
+      const dedup = [coords[0]];
+      for (let i = 1; i < coords.length; i++) {
+        const [la, lo] = coords[i];
+        const [pa, po] = dedup[dedup.length - 1];
+        if (Math.abs(la - pa) > 1e-6 || Math.abs(lo - po) > 1e-6) dedup.push(coords[i]);
+      }
+      if (dedup.length < 2) return null;
+
+      const key = dedup.map(c => `${c[0].toFixed(5)},${c[1].toFixed(5)}`).join(';');
+      if (_osrmCache.has(key)) return _osrmCache.get(key);
+
+      try {
+        const coordStr = dedup.map(c => `${c[1]},${c[0]}`).join(';'); // OSRM = lng,lat
+        const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?geometries=geojson&overview=full`;
+        const r = await fetch(url);
+        if (!r.ok) { _osrmCache.set(key, null); return null; }
+        const data = await r.json();
+        if (data.code !== 'Ok' || !data.routes?.length) { _osrmCache.set(key, null); return null; }
+        const geom = data.routes[0].geometry;
+        _osrmCache.set(key, geom);
+        return geom;
+      } catch {
+        _osrmCache.set(key, null);
+        return null;
+      }
+    }
+
+    // Ícones e labels dos checkpoints — espelham CP_LABELS/CP_ICONS do modal de OS
+    const _MAPA_CP_COLORS = ['#2c2c28', '#c49000', '#086738', '#1565c0', '#7a7a72'];
+
     function _renderMapaDia(data) {
       const { notes, teamInfo } = data;
 
@@ -7924,6 +8020,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       _mapaLayers.forEach(l => _mapaMap.removeLayer(l));
       _mapaLayers = [];
       _mapaCircleMap = {};
+      _mapaCpMarkers = {}; // { 'noteId:idx' -> marker }
 
       const COR = {
         concluida:  '#086738',
@@ -7937,32 +8034,79 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const cardData = [];
       let   notaIdx  = 0;
 
+      // Renderização síncrona dos pontos + linha tracejada (fallback)
+      // O routing OSRM é assíncrono e substitui a linha tracejada quando chega.
       notes.forEach(nota => {
-        const cps = nota.checkpoints || [];
-        if (!cps.length) return;
+        const rawCps = (nota.checkpoints || []).filter(c => c.latitude && c.longitude);
+        if (!rawCps.length) return;
+        // Ordena por timestamp pra garantir trajeto cronológico correto
+        const cps = [...rawCps].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        const cor  = COR[nota.status] || '#888';
+        const cor = COR[nota.status] || '#888';
+        notaIdx++;
+        const numLocal = notaIdx;
+
+        // 1) Coordenadas para a polyline
+        const coords = cps.map(c => [c.latitude, c.longitude]);
+
+        // Fallback inicial: linha reta tracejada (substituída pela rota OSRM ao chegar)
+        const fallback = L.polyline(coords, {
+          color: cor, weight: 2.5, dashArray: '6 5', opacity: 0.7,
+        }).addTo(_mapaMap);
+        _mapaLayers.push(fallback);
+
+        // 2) Marcador por checkpoint (ícone do evento)
+        cps.forEach((cp, cpIdx) => {
+          bounds.push([cp.latitude, cp.longitude]);
+          const ev = cp.event;
+          const evCor = _MAPA_CP_COLORS[Math.min(ev, 4)] || '#7a7a72';
+          const evIcon = CP_ICONS[ev] || '📌';
+          const evLbl  = CP_LABELS[ev] || `Evento ${ev}`;
+
+          const html = `
+            <div style="position:relative;width:30px;height:30px">
+              <div style="position:absolute;inset:0;background:${evCor};border:2px solid #fff;border-radius:50%;
+                          display:flex;align-items:center;justify-content:center;font-size:13px;
+                          box-shadow:0 2px 5px rgba(0,0,0,.35)">${evIcon}</div>
+              <div style="position:absolute;top:-7px;right:-7px;width:16px;height:16px;background:${cor};
+                          color:#fff;border:1.5px solid #fff;border-radius:50%;font-size:9px;font-weight:700;
+                          display:flex;align-items:center;justify-content:center">${numLocal}</div>
+            </div>`;
+          const icon = L.divIcon({ className: '', html, iconSize: [30, 30], iconAnchor: [15, 15] });
+
+          const m = L.marker([cp.latitude, cp.longitude], { icon }).addTo(_mapaMap);
+          m.bindPopup(`
+            <div style="font-family:Roboto,sans-serif;min-width:200px;font-size:12px;line-height:1.5">
+              <div style="font-weight:700;font-size:13px;margin-bottom:4px">
+                <span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;margin-right:4px">${nota.tipo}</span>${nota.numero}
+              </div>
+              <div style="font-weight:700;color:${evCor}">${evIcon} ${evLbl}</div>
+              <div style="color:#555;margin-top:3px">${_fmtNotaDate(cp.timestamp)}</div>
+              ${cp.mileage > 0 ? `<div style="font-size:11px;color:#666">${cp.mileage.toFixed(2)} km · 🔋 ${cp.battery ?? '?'}%</div>` : ''}
+            </div>`);
+          _mapaLayers.push(m);
+          _mapaCpMarkers[`${nota.id}:${cpIdx}`] = m;
+
+          // Marcador do PRIMEIRO checkpoint = também é o "foco" do card da nota
+          if (cpIdx === 0) _mapaCircleMap[nota.id] = m;
+        });
+
+        // 3) OSRM async — substitui a linha tracejada pela rota pelas vias
+        _fetchRouteGeometry(coords).then(geom => {
+          if (!geom) return; // mantém fallback tracejado
+          _mapaMap.removeLayer(fallback);
+          _mapaLayers = _mapaLayers.filter(l => l !== fallback);
+          const route = L.geoJSON(geom, {
+            style: { color: cor, weight: 4, opacity: 0.85 },
+          }).addTo(_mapaMap);
+          _mapaLayers.push(route);
+        }).catch(() => {});
+
+        // 4) Tempos / distâncias para o sidebar
         const dep  = cps.find(c => c.event === 0);
         const arr  = cps.find(c => c.event === 1);
         const exec = cps.find(c => c.event === 2);
         const conc = cps.find(c => c.event === 3);
-
-        // Linha de deslocamento (tracejada)
-        if (dep?.latitude && arr?.latitude) {
-          const line = L.polyline(
-            [[dep.latitude, dep.longitude], [arr.latitude, arr.longitude]],
-            { color: '#bbb', weight: 2.5, dashArray: '6 5', opacity: 0.85 }
-          ).addTo(_mapaMap);
-          _mapaLayers.push(line);
-          bounds.push([dep.latitude, dep.longitude]);
-        }
-
-        // Ponto de trabalho
-        const wp = arr || exec || cps[cps.length - 1];
-        if (!wp?.latitude) return;
-        bounds.push([wp.latitude, wp.longitude]);
-
-        // Tempos
         const dispMin = (dep && arr)
           ? Math.round((new Date(arr.timestamp) - new Date(dep.timestamp)) / 60000) : null;
         const execMin = (exec && conc)
@@ -7970,40 +8114,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const distKm  = (dep && arr && arr.mileage != null && dep.mileage != null && arr.mileage > dep.mileage)
           ? (arr.mileage - dep.mileage).toFixed(1) : null;
 
-        notaIdx++;
-        const numLocal = notaIdx;
-
-        // Marcador circular colorido
-        const circle = L.circleMarker([wp.latitude, wp.longitude], {
-          radius: 13, fillColor: cor, color: '#fff', weight: 2.5, fillOpacity: 0.92,
-        });
-
-        const popup = `<div style="font-family:Roboto,sans-serif;min-width:190px;font-size:12px;line-height:1.5">
-          <div style="font-weight:700;font-size:13px;margin-bottom:5px">
-            <span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;margin-right:4px">${nota.tipo}</span>${nota.numero}
-          </div>
-          ${nota.subCategoria ? `<div style="color:#555;margin-bottom:5px">${nota.subCategoria}</div>` : ''}
-          ${nota.endereco?.logradouro ? `<div style="margin-bottom:6px">📍 ${nota.endereco.logradouro}${nota.endereco.bairro ? ', ' + nota.endereco.bairro : ''}</div>` : ''}
-          <div style="padding-top:6px;border-top:1px solid #eee;display:flex;flex-direction:column;gap:3px">
-            ${dispMin !== null ? `<span>🚗 Deslocamento: <b>${dispMin} min</b>${distKm ? ` · ${distKm} km` : ''}</span>` : '<span style="color:#aaa;font-size:11px">🚗 sem dados de deslocamento</span>'}
-            ${execMin !== null ? `<span>🔧 Execução: <b>${execMin} min</b></span>` : ''}
-          </div>
-        </div>`;
-        circle.bindPopup(popup);
-        circle.addTo(_mapaMap);
-        _mapaLayers.push(circle);
-        _mapaCircleMap[nota.id] = circle;
-
-        // Número sobre o marcador
-        const icon = L.divIcon({
-          className: '',
-          html: `<div style="width:20px;height:20px;background:${cor};color:#fff;border:2.5px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.3)">${numLocal}</div>`,
-          iconSize: [20, 20], iconAnchor: [10, 10],
-        });
-        const num = L.marker([wp.latitude, wp.longitude], { icon, interactive: false }).addTo(_mapaMap);
-        _mapaLayers.push(num);
-
-        cardData.push({ nota, num: numLocal, dispMin, execMin, distKm, cor });
+        cardData.push({ nota, cps, num: numLocal, dispMin, execMin, distKm, cor });
       });
 
       // Ajusta zoom ao conteúdo
@@ -8027,31 +8138,65 @@ ${equipes.length > 0 ? `<div class="perf-section">
         </div>`;
       })() : '';
 
-      const cardsHtml = cardData.map(({ nota, num, dispMin, execMin, distKm, cor }) => `
-        <div class="mapa-nota-card" onclick="mapaFocusNota('${nota.id}', this)">
-          <div style="display:flex;align-items:center;gap:7px">
-            <div style="width:20px;height:20px;background:${cor};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0">${num}</div>
-            <span style="font-weight:700;font-size:12px">${nota.tipo} · ${nota.numero}</span>
-          </div>
-          ${nota.subCategoria ? `<div style="font-size:10px;color:var(--text2);margin-top:2px;padding-left:27px">${nota.subCategoria}</div>` : ''}
-          <div style="display:flex;gap:10px;margin-top:4px;padding-left:27px;font-size:10px;color:var(--text2)">
-            ${dispMin !== null ? `<span title="Deslocamento">🚗 ${dispMin}min${distKm ? ` · ${distKm}km` : ''}</span>` : ''}
-            ${execMin !== null ? `<span title="Execução">🔧 ${execMin}min</span>` : ''}
-          </div>
-        </div>
-      `).join('');
+      // Cards de nota: clicar no header dá zoom; clicar em "ver checkpoints" expande
+      const cardsHtml = cardData.map(({ nota, cps, num, dispMin, execMin, distKm, cor }) => {
+        const cpListHtml = cps.map((cp, idx) => {
+          const ev = cp.event;
+          const lbl = CP_LABELS[ev] ?? `Evento ${ev}`;
+          const icon = CP_ICONS[ev] ?? '📌';
+          const mileage = cp.mileage > 0 ? ` · ${cp.mileage.toFixed(2)} km` : '';
+          const acc = cp.accuracy ? ` · ±${cp.accuracy.toFixed ? cp.accuracy.toFixed(4) : cp.accuracy}m` : '';
+          const fotos = cp.fotosCount > 0 ? ` · 📷 ${cp.fotosCount}` : '';
+          return `
+            <div class="mapa-cp-item" onclick="event.stopPropagation();mapaFocusCheckpoint('${nota.id}', ${idx})">
+              <div class="mapa-cp-badge cp-badge-${Math.min(ev, 4)}">${icon}</div>
+              <div class="mapa-cp-info">
+                <div class="mapa-cp-title">${lbl} <span class="mapa-cp-ts">${_fmtNotaDate(cp.timestamp)}</span></div>
+                <div class="mapa-cp-meta">${mileage.replace(/^ · /, '')}${acc}${fotos} · 🔋${cp.battery ?? '?'}%</div>
+              </div>
+            </div>`;
+        }).join('');
+
+        return `
+          <div class="mapa-nota-card" data-nota-id="${nota.id}">
+            <div class="mapa-nota-header" onclick="mapaFocusNota('${nota.id}', this.parentElement)">
+              <div style="display:flex;align-items:center;gap:7px">
+                <div style="width:22px;height:22px;background:${cor};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${num}</div>
+                <span style="font-weight:700;font-size:12px">${nota.tipo} · ${nota.numero}</span>
+              </div>
+              ${nota.subCategoria ? `<div style="font-size:10px;color:var(--text2);margin-top:2px;padding-left:29px">${nota.subCategoria}</div>` : ''}
+              <div style="display:flex;gap:10px;margin-top:4px;padding-left:29px;font-size:10px;color:var(--text2)">
+                ${dispMin !== null ? `<span title="Deslocamento">🚗 ${dispMin}min${distKm ? ` · ${distKm}km` : ''}</span>` : ''}
+                ${execMin !== null ? `<span title="Execução">🔧 ${execMin}min</span>` : ''}
+                <span style="margin-left:auto" title="${cps.length} checkpoints"
+                      onclick="event.stopPropagation();this.parentElement.parentElement.parentElement.classList.toggle('expanded')">
+                  📍 ${cps.length} ▾
+                </span>
+              </div>
+            </div>
+            <div class="mapa-cp-list">${cpListHtml}</div>
+          </div>`;
+      }).join('');
 
       document.getElementById('mapa-sidebar-list').innerHTML = sessionHtml + cardsHtml;
     }
 
     function mapaFocusNota(noteId, cardEl) {
-      const circle = _mapaCircleMap[noteId];
-      if (circle) {
-        _mapaMap.setView(circle.getLatLng(), 16, { animate: true });
-        circle.openPopup();
+      const m = _mapaCircleMap[noteId];
+      if (m) {
+        _mapaMap.setView(m.getLatLng(), 16, { animate: true });
+        m.openPopup();
       }
       document.querySelectorAll('.mapa-nota-card').forEach(c => c.classList.remove('active'));
       if (cardEl) cardEl.classList.add('active');
+    }
+
+    function mapaFocusCheckpoint(noteId, cpIdx) {
+      const m = _mapaCpMarkers[`${noteId}:${cpIdx}`];
+      if (m) {
+        _mapaMap.setView(m.getLatLng(), 17, { animate: true });
+        m.openPopup();
+      }
     }
     // ── /ABA MAPA ─────────────────────────────────────────────────────────────────
 
