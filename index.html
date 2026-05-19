@@ -3770,6 +3770,8 @@
     }
     .mapa-nota-card:hover  { border-color: var(--amarelo); }
     .mapa-nota-card.active { border-color: var(--verde); background: #f5fff8; }
+    .mapa-nota-card.dimmed { opacity: 0.45; }
+    .mapa-nota-card.dimmed:hover { opacity: 1; }
     .mapa-nota-header      { cursor: pointer; }
 
     /* Lista expansível de checkpoints dentro de cada card de nota */
@@ -7901,11 +7903,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     // ── ABA MAPA ──────────────────────────────────────────────────────────────────
-    let _mapaMap        = null;
-    let _mapaLayers     = [];
-    let _mapaCircleMap  = {};   // noteId -> primeiro marcador de cp (foco do card)
-    let _mapaCpMarkers  = {};   // 'noteId:cpIdx' -> marcador específico
-    let _mapaTeamLoaded = false;
+    let _mapaMap            = null;
+    let _mapaLayers         = [];
+    let _mapaCircleMap      = {};   // noteId -> primeiro marcador de cp (foco do card)
+    let _mapaCpMarkers      = {};   // 'noteId:cpIdx' -> marcador específico
+    let _mapaTeamLoaded     = false;
+    let _mapaRawData        = null; // último response do /api/mapa/equipe
+    let _mapaSelectedNoteId = null; // se !=null, mostra apenas esta nota no mapa
 
     function initMapa() {
       const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
@@ -7962,6 +7966,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const res = await fetch(`${API}/mapa/equipe?team=${encodeURIComponent(team)}&date=${date}`);
         const data = await res.json();
         if (data.error) throw new Error(data.error);
+        _mapaRawData = data;
+        _mapaSelectedNoteId = null; // reset filtro ao trocar equipe/data
         _renderMapaDia(data);
       } catch (err) {
         document.getElementById('mapa-sidebar-list').innerHTML =
@@ -8014,7 +8020,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
     const _MAPA_CP_COLORS = ['#2c2c28', '#c49000', '#086738', '#1565c0', '#7a7a72'];
 
     function _renderMapaDia(data) {
-      const { notes, teamInfo } = data;
+      const { notes: allNotes, teamInfo } = data;
+
+      // Aplica filtro de seleção: se _mapaSelectedNoteId está setado,
+      // mostra apenas essa nota no mapa (mas todas continuam visíveis na sidebar).
+      const notes = _mapaSelectedNoteId
+        ? allNotes.filter(n => n.id === _mapaSelectedNoteId)
+        : allNotes;
 
       // Limpa camadas anteriores
       _mapaLayers.forEach(l => _mapaMap.removeLayer(l));
@@ -8032,7 +8044,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const bounds   = [];
       const cardData = [];
-      let   notaIdx  = 0;
+
+      // Numeração estável baseada em allNotes (não muda ao filtrar).
+      // Só conta notas que têm GPS — assim a numeração visível no mapa bate
+      // exatamente com a numeração da sidebar.
+      const numByNoteId = {};
+      let _nNum = 0;
+      allNotes.forEach(n => {
+        const has = (n.checkpoints || []).some(c => c.latitude && c.longitude);
+        if (has) { _nNum++; numByNoteId[n.id] = _nNum; }
+      });
 
       // Renderização síncrona dos pontos + linha tracejada (fallback)
       // O routing OSRM é assíncrono e substitui a linha tracejada quando chega.
@@ -8043,8 +8064,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const cps = [...rawCps].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
         const cor = COR[nota.status] || '#888';
-        notaIdx++;
-        const numLocal = notaIdx;
+        const numLocal = numByNoteId[nota.id] || '?';
 
         // 1) Coordenadas para a polyline
         const coords = cps.map(c => [c.latitude, c.longitude]);
@@ -8124,12 +8144,46 @@ ${equipes.length > 0 ? `<div class="perf-section">
         _mapaMap.setView(bounds[0], 15);
       }
 
-      // Sidebar
-      if (!cardData.length) {
+      // ── Sidebar: SEMPRE renderiza TODAS as notas (não só as filtradas) ───────────
+      // Calcula cardData equivalente para todas as notas (pra dados serem exibidos
+      // independente do filtro atual no mapa).
+      const allCardData = [];
+      allNotes.forEach(nota => {
+        const rawCps = (nota.checkpoints || []).filter(c => c.latitude && c.longitude);
+        if (!rawCps.length) return;
+        const cps = [...rawCps].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        const dep  = cps.find(c => c.event === 0);
+        const arr  = cps.find(c => c.event === 1);
+        const exec = cps.find(c => c.event === 2);
+        const conc = cps.find(c => c.event === 3);
+        const dispMin = (dep && arr)
+          ? Math.round((new Date(arr.timestamp) - new Date(dep.timestamp)) / 60000) : null;
+        const execMin = (exec && conc)
+          ? Math.round((new Date(conc.timestamp) - new Date(exec.timestamp)) / 60000) : null;
+        const distKm  = (dep && arr && arr.mileage != null && dep.mileage != null && arr.mileage > dep.mileage)
+          ? (arr.mileage - dep.mileage).toFixed(1) : null;
+        allCardData.push({
+          nota, cps,
+          num: numByNoteId[nota.id] || '?',
+          dispMin, execMin, distKm,
+          cor: COR[nota.status] || '#888',
+        });
+      });
+
+      if (!allCardData.length) {
         document.getElementById('mapa-sidebar-list').innerHTML =
           '<div class="empty-state" style="font-size:12px">Nenhuma nota com GPS encontrada.<br><small>Notas sem UUID ou sem cache não aparecem.</small></div>';
         return;
       }
+
+      // Botão de "voltar" quando uma nota está filtrada
+      const backHtml = _mapaSelectedNoteId ? `
+        <div onclick="mapaClearSelection()" style="cursor:pointer;font-size:12px;font-weight:700;
+                    color:var(--verde);padding:8px 11px;background:#e8f5e9;border-radius:8px;
+                    margin-bottom:8px;display:flex;align-items:center;gap:6px;border:1px solid #c8e6c9">
+          ← Voltar para todas as notas
+        </div>
+      ` : '';
 
       const sessionHtml = teamInfo?.sessionBegin ? (() => {
         const fmt = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -8138,8 +8192,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         </div>`;
       })() : '';
 
-      // Cards de nota: clicar no header dá zoom; clicar em "ver checkpoints" expande
-      const cardsHtml = cardData.map(({ nota, cps, num, dispMin, execMin, distKm, cor }) => {
+      // Cards de nota: clicar no header alterna seleção; clicar em "📍 N ▾" expande
+      const cardsHtml = allCardData.map(({ nota, cps, num, dispMin, execMin, distKm, cor }) => {
         const cpListHtml = cps.map((cp, idx) => {
           const ev = cp.event;
           const lbl = CP_LABELS[ev] ?? `Evento ${ev}`;
@@ -8157,9 +8211,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
             </div>`;
         }).join('');
 
+        const isSelected = _mapaSelectedNoteId === nota.id;
+        const isDimmed   = _mapaSelectedNoteId && !isSelected;
+
         return `
-          <div class="mapa-nota-card" data-nota-id="${nota.id}">
-            <div class="mapa-nota-header" onclick="mapaFocusNota('${nota.id}', this.parentElement)">
+          <div class="mapa-nota-card ${isSelected ? 'active' : ''} ${isDimmed ? 'dimmed' : ''}" data-nota-id="${nota.id}">
+            <div class="mapa-nota-header" onclick="mapaToggleNotaFilter('${nota.id}')">
               <div style="display:flex;align-items:center;gap:7px">
                 <div style="width:22px;height:22px;background:${cor};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${num}</div>
                 <span style="font-weight:700;font-size:12px">${nota.tipo} · ${nota.numero}</span>
@@ -8178,17 +8235,29 @@ ${equipes.length > 0 ? `<div class="perf-section">
           </div>`;
       }).join('');
 
-      document.getElementById('mapa-sidebar-list').innerHTML = sessionHtml + cardsHtml;
+      document.getElementById('mapa-sidebar-list').innerHTML = backHtml + sessionHtml + cardsHtml;
     }
 
-    function mapaFocusNota(noteId, cardEl) {
-      const m = _mapaCircleMap[noteId];
-      if (m) {
-        _mapaMap.setView(m.getLatLng(), 16, { animate: true });
-        m.openPopup();
+    /**
+     * Alterna o filtro de nota única no mapa:
+     *   - 1ª vez clicando: filtra para mostrar SÓ essa nota no mapa
+     *   - 2ª vez clicando (na mesma nota): volta a mostrar TODAS
+     *   - Clicando em OUTRA nota: troca o filtro pra essa nota
+     */
+    function mapaToggleNotaFilter(noteId) {
+      if (!_mapaRawData) return;
+      if (_mapaSelectedNoteId === noteId) {
+        _mapaSelectedNoteId = null; // toggle off → mostra todas
+      } else {
+        _mapaSelectedNoteId = noteId;
       }
-      document.querySelectorAll('.mapa-nota-card').forEach(c => c.classList.remove('active'));
-      if (cardEl) cardEl.classList.add('active');
+      _renderMapaDia(_mapaRawData);
+    }
+
+    /** Desmarca o filtro de nota e volta a mostrar todas */
+    function mapaClearSelection() {
+      _mapaSelectedNoteId = null;
+      if (_mapaRawData) _renderMapaDia(_mapaRawData);
     }
 
     function mapaFocusCheckpoint(noteId, cpIdx) {
