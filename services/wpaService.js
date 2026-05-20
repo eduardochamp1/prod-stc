@@ -645,8 +645,15 @@ function _accReset() {
 function _accRecord(teams) {
   _accReset();
   teams.forEach(t => {
-    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
-    realizadas.forEach(n => {
+    // Acumulamos executadas + concluidas + rejeitadas — todas precisam persistir
+    // entre snapshots para os indicadores se manterem corretos mesmo quando
+    // equipes deslogam no meio do dia.
+    const todasRealizadas = [
+      ...(t.notasExecutadas || []),
+      ...(t.notasConcluidas || []),
+      ...(t.notasRejeitadas || []),
+    ];
+    todasRealizadas.forEach(n => {
       const chave = n.id || n.codigo;
       if (chave && !_acc.notes.has(chave)) {
         _acc.notes.set(chave, {
@@ -656,7 +663,7 @@ function _accRecord(teams) {
           tipoNome: n.tipoNome || n.tipoCode,
           teamName: t.teamName,
           regional: t.regional,
-          status:   n.status,
+          status:   n.status,  // 'executada' | 'concluida' | 'rejeitada'
           conclusionDate: n.conclusionDate || null,
         });
       }
@@ -668,9 +675,10 @@ function _accApply(teams) {
   _accReset();
   if (_acc.notes.size === 0) return teams;
 
-  // Agrupa as notas acumuladas por equipe e por status
+  // Agrupa as notas acumuladas por equipe e por status (3 buckets agora: exec, conc, rej)
   const extrasExec = {};
   const extrasConc = {};
+  const extrasRej  = {};
   _acc.notes.forEach(info => {
     const nota = {
       id:       info.id,
@@ -681,11 +689,11 @@ function _accApply(teams) {
       conclusionDate: info.conclusionDate,
     };
     if (info.status === 'executada') {
-      if (!extrasExec[info.teamName]) extrasExec[info.teamName] = [];
-      extrasExec[info.teamName].push(nota);
+      (extrasExec[info.teamName] ||= []).push(nota);
+    } else if (info.status === 'rejeitada') {
+      (extrasRej[info.teamName] ||= []).push(nota);
     } else {
-      if (!extrasConc[info.teamName]) extrasConc[info.teamName] = [];
-      extrasConc[info.teamName].push(nota);
+      (extrasConc[info.teamName] ||= []).push(nota);
     }
   });
 
@@ -696,14 +704,17 @@ function _accApply(teams) {
     const existentes = new Set([
       ...(t.notasExecutadas || []).map(n => n.id || n.codigo),
       ...(t.notasConcluidas || []).map(n => n.id || n.codigo),
+      ...(t.notasRejeitadas || []).map(n => n.id || n.codigo),
     ]);
     const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
     const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
-    if (novasExec.length === 0 && novasConc.length === 0) return t;
+    const novasRej  = (extrasRej[t.teamName]  || []).filter(n => !existentes.has(n.id || n.codigo));
+    if (novasExec.length === 0 && novasConc.length === 0 && novasRej.length === 0) return t;
     return {
       ...t,
       notasExecutadas: [...(t.notasExecutadas || []), ...novasExec],
       notasConcluidas: [...(t.notasConcluidas || []), ...novasConc],
+      notasRejeitadas: [...(t.notasRejeitadas || []), ...novasRej],
     };
   });
 
@@ -711,7 +722,11 @@ function _accApply(teams) {
   // sintético invisível (sessionEnd preenchido) só com as notas acumuladas,
   // garantindo que entrem nos somatórios mesmo sem aparecer como ativas.
   const nomesAtivos = new Set(teams.map(t => t.teamName));
-  const fantasmas = new Set([...Object.keys(extrasExec), ...Object.keys(extrasConc)]);
+  const fantasmas = new Set([
+    ...Object.keys(extrasExec),
+    ...Object.keys(extrasConc),
+    ...Object.keys(extrasRej),
+  ]);
   fantasmas.forEach(nome => {
     if (nomesAtivos.has(nome)) return;
     // Resolve regional procurando qualquer nota acumulada desta equipe
@@ -742,7 +757,7 @@ function _accApply(teams) {
       notasBaixadas:    [],
       notasExecutadas:  extrasExec[nome] || [],
       notasConcluidas:  extrasConc[nome] || [],
-      notasRejeitadas:  [],
+      notasRejeitadas:  extrasRej[nome]  || [],
       _ghostFromAcc:    true,   // sinaliza ao front: equipe acumulada do dia
     });
   });
