@@ -335,7 +335,7 @@ async function runRetryRecentOutros(daysBack) {
     return;  // nada pra reprocessar (silencioso)
   }
 
-  console.log(`[CRON] retry-outros: ${data.length} DD/OUTROS classificadas nas últimas ${HOURS_BACK}h — re-classificando`);
+  console.log(`[CRON] retry-outros: ${data.length} DD/OUTROS classificadas nos últimos ${DAYS_BACK} dias — re-classificando`);
 
   const jobs = data.map(r => ({
     noteId:   r.note_id,
