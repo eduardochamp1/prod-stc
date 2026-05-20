@@ -305,15 +305,20 @@ async function runClassifyNewNotes(teams) {
 // chamada classificarDD faz GET /api/notes/dd (~2 KB) + GET /details/optimized
 // (~50-150 KB), então N*2 chamadas por execução.
 
-async function runRetryRecentOutros() {
+async function runRetryRecentOutros(daysBack) {
   const { getClient } = require('./supabaseClient');
   const { upsertSubcategorias } = require('../db/subcategoriasQueries');
   const { classificarBatch } = require('./classifierService');
   const { consolidateDay } = require('./supabasePush');
   const sb = getClient();
 
-  const HOURS_BACK = 24;
-  const cutoff = new Date(Date.now() - HOURS_BACK * 3600 * 1000).toISOString();
+  // Janela default = 7 dias. Alguns Activities[] só são populadas pela WPA dias
+  // após a conclusão (notas CAPEX/PREV especialmente). 24h era curto demais e
+  // deixava C93/BTZ013 presos em OUTROS pra sempre. Após 7 dias considera-se
+  // que a nota é genuinamente OUTROS (PODA/MANUT/INSPECAO).
+  // Permite override (via rota admin) para reclassificação ampla pontual.
+  const DAYS_BACK = Number.isFinite(daysBack) && daysBack > 0 ? daysBack : 7;
+  const cutoff = new Date(Date.now() - DAYS_BACK * 24 * 3600 * 1000).toISOString();
 
   const { data, error } = await sb
     .from('note_subcategorias')
@@ -357,17 +362,21 @@ async function runRetryRecentOutros() {
   const summary = Object.entries(breakdown).map(([k, v]) => `${k}=${v}`).join(' ');
   console.log(`[CRON] retry-outros: ✓ ${changed.length}/${jobs.length} reclassificadas em ${dt}s — ${summary}`);
 
-  // Re-roda consolidação dos 2 últimos dias (cobre a janela de 24h)
+  // Re-consolida todos os dias da janela (cobre a janela de DAYS_BACK)
   // pra propagar mudanças pra daily_subcat_totals + team_daily_subcat_totals.
-  const today     = new Date(Date.now() -  3 * 3600 * 1000).toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 27 * 3600 * 1000).toISOString().slice(0, 10);
-  for (const d of [today, yesterday]) {
+  const todayMs = Date.now() - 3 * 3600 * 1000;
+  const datasParaConsolidar = new Set();
+  for (let i = 0; i <= DAYS_BACK; i++) {
+    datasParaConsolidar.add(new Date(todayMs - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
+  }
+  for (const d of [...datasParaConsolidar].sort().reverse()) {
     try {
       await consolidateDay(d);
     } catch (errC) {
       console.warn(`[CRON] retry-outros: consolidateDay(${d}) falhou:`, errC.message);
     }
   }
+  return { reclassified: changed.length, total: jobs.length, summary, days: datasParaConsolidar.size };
 }
 
 // ── HEALTH-CHECK DE UUID ───────────────────────────────────────────────────────
@@ -586,4 +595,5 @@ module.exports = {
   runSnapshot, runConsolidate, runTokenRefresh,
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
+  runRetryRecentOutros,
 };

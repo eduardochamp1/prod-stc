@@ -2034,6 +2034,27 @@ router.post('/admin/consolidar', async (req, res) => {
   }
 });
 
+// POST /api/admin/retry-outros?days=30
+// Re-classifica todas as notas DD/OUTROS dos últimos N dias (default 7).
+// Útil quando Activities[] da WPA só são populadas dias depois da conclusão,
+// deixando C93/BTZ013 presos como OUTROS no cache.
+// Após reclassificar, consolida automaticamente todos os dias da janela.
+router.post('/admin/retry-outros', async (req, res) => {
+  try {
+    const c = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const days = parseInt(req.query.days || '7', 10);
+    if (!Number.isFinite(days) || days < 1 || days > 90) {
+      return res.status(400).json({ error: 'Parâmetro days deve ser entre 1 e 90' });
+    }
+    const result = await c.runRetryRecentOutros(days);
+    res.json({ ok: true, days, ...(result || {}) });
+  } catch (err) {
+    console.error('[retry-outros]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // GET /api/mapa/equipe?team=SIGLA&date=YYYY-MM-DD
 // Retorna notas com checkpoints GPS de uma equipe no dia.
