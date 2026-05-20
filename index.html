@@ -6500,7 +6500,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const concluidasLive = teamsAll.reduce((s, t) =>
         s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
 
-      const rejeitadas = teamsAll.reduce((s, t) => s + (t.notasRejeitadas || []).length, 0);
+      // Rejeitadas: filtradas por conclusionDate dentro do range (mesma lógica
+       // de executadas/concluídas). Sem isso, o card mostrava TODO o histórico
+       // disponível das equipes ativas, independente do range selecionado.
+      const rejeitadas = teamsAll.reduce((s, t) =>
+        s + (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
       const relogins = teamsVisible.reduce((s, t) => s + (t.relogins || 0), 0);
       const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline).length;
 

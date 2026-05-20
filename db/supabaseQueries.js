@@ -236,17 +236,19 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
   }
 
   // Intervalo: snapshot base = o mais recente de cada equipe (para dados de sessão)
-  // Notas concluídas = acumuladas de todos os dias do período (sem duplicar por código)
+  // Notas concluídas/executadas/rejeitadas = acumuladas de todos os dias do período
+  // (sem duplicar por código).
   const baseByTeam   = {};   // snapshot mais recente por equipe
-  const notasByTeam  = {};   // Set de códigos já vistos por equipe
+  const notasByTeam  = {};   // Set de códigos já vistos por equipe + buckets
 
   // Percorre do mais recente para o mais antigo (já ordenado por captured_at desc)
   rows.forEach(r => {
     const name = r.team_name;
     if (!baseByTeam[name]) baseByTeam[name] = r;  // snapshot mais recente = base
-    if (!notasByTeam[name]) notasByTeam[name] = { conc: [], exec: [], codigos: new Set() };
+    if (!notasByTeam[name]) notasByTeam[name] = { conc: [], exec: [], rej: [], codigos: new Set() };
 
-    // Acumula notas concluídas de cada snapshot dedupicando por código
+    // Acumula notas de cada snapshot dedupicando por código (1 nota só conta 1x
+    // mesmo aparecendo em vários snapshots do range).
     (r.data?.notasConcluidas || []).forEach(n => {
       const cod = n.codigo || n.code;
       if (cod && !notasByTeam[name].codigos.has(cod)) {
@@ -261,17 +263,28 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
         notasByTeam[name].exec.push(n);
       }
     });
+    // Rejeitadas: histórico antes não acumulava — card "OS Rejeitadas" no
+    // monitor histórico vinha sempre só do snapshot base (último dia), perdendo
+    // todas as rejeições dos dias anteriores do range.
+    (r.data?.notasRejeitadas || []).forEach(n => {
+      const cod = n.codigo || n.code;
+      if (cod && !notasByTeam[name].codigos.has(cod)) {
+        notasByTeam[name].codigos.add(cod);
+        notasByTeam[name].rej.push(n);
+      }
+    });
   });
 
   return Object.values(baseByTeam)
     .sort((a, b) => a.team_name.localeCompare(b.team_name))
     .map(r => {
       const name  = r.team_name;
-      const notas = notasByTeam[name] || { conc: [], exec: [] };
+      const notas = notasByTeam[name] || { conc: [], exec: [], rej: [] };
       return {
         ...r.data,
         notasConcluidas: notas.conc,
         notasExecutadas: notas.exec,
+        notasRejeitadas: notas.rej,
         _snapshotAt: r.captured_at,
         _period: `${de} → ${ate}`,
       };
