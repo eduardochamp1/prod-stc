@@ -4220,9 +4220,19 @@
           </div>
           <div class="filter-group">
             <span class="filter-label">Equipe</span>
-            <select class="filter-select" id="mapa-team-select" style="min-width:180px" onchange="loadMapa()">
-              <option value="">— Selecione uma equipe —</option>
-            </select>
+            <input type="text"
+                   class="filter-select"
+                   id="mapa-team-select"
+                   list="mapa-team-list"
+                   placeholder="Digite a sigla (ex: ETGPR16)"
+                   autocomplete="off"
+                   style="min-width:220px"
+                   onchange="onMapaTeamChange()"
+                   oninput="onMapaTeamChange()" />
+            <datalist id="mapa-team-list"></datalist>
+            <button class="btn-refresh" onclick="clearMapaTeam()"
+                    style="font-size:11px;padding:4px 8px;margin-left:4px"
+                    title="Limpar seleção">✕</button>
           </div>
           <button class="btn-refresh" onclick="loadMapa()">↻ Atualizar</button>
         </div>
@@ -8055,25 +8065,51 @@ ${equipes.length > 0 ? `<div class="perf-section">
       _popularMapaTeamSelect();
     }
 
+    // Lista válida de siglas em memória (pra validar input do usuário no datalist)
+    let _mapaTeamSiglasValidas = new Set();
+
     async function _popularMapaTeamSelect() {
       if (_mapaTeamLoaded) return;
-      const sel = document.getElementById('mapa-team-select');
-      if (!sel) return;
+      const dl = document.getElementById('mapa-team-list');
+      if (!dl) return;
       try {
         const r = await fetch(`${API}/admin/equipes`);
         if (!r.ok) return;
         const { equipes } = await r.json();
         const sorted = (equipes || []).filter(e => e.ativo)
           .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
-        const gua = sorted.filter(e => e.regional === 'GUA')
-          .map(e => `<option value="${e.sigla}">${e.sigla}</option>`).join('');
-        const cac = sorted.filter(e => e.regional === 'CAC')
-          .map(e => `<option value="${e.sigla}">${e.sigla}</option>`).join('');
-        sel.innerHTML = `<option value="">— Selecione uma equipe —</option>
-          <optgroup label="Guarapari (${sorted.filter(e=>e.regional==='GUA').length})">${gua}</optgroup>
-          <optgroup label="Cachoeiro (${sorted.filter(e=>e.regional==='CAC').length})">${cac}</optgroup>`;
+
+        // Popula datalist — value = sigla, label = "Guarapari · EC" pra dar contexto
+        // ao usuário enquanto digita. Filtragem é nativa do browser.
+        dl.innerHTML = sorted.map(e => {
+          const regNome = e.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
+          const tipo = e.tipo ? ` · ${e.tipo}` : '';
+          return `<option value="${e.sigla}">${regNome}${tipo}</option>`;
+        }).join('');
+
+        _mapaTeamSiglasValidas = new Set(sorted.map(e => e.sigla));
         _mapaTeamLoaded = true;
       } catch {}
+    }
+
+    /**
+     * Dispara loadMapa apenas quando a sigla digitada bate com uma equipe válida.
+     * Evita re-renderizar o mapa a cada caractere digitado.
+     */
+    function onMapaTeamChange() {
+      const el = document.getElementById('mapa-team-select');
+      if (!el) return;
+      const v = (el.value || '').toUpperCase().trim();
+      el.value = v;  // normaliza maiúscula
+      if (v === '' || _mapaTeamSiglasValidas.has(v)) {
+        loadMapa();
+      }
+      // Se digitando parcial, espera completar antes de carregar
+    }
+
+    function clearMapaTeam() {
+      const el = document.getElementById('mapa-team-select');
+      if (el) { el.value = ''; loadMapa(); }
     }
 
     async function loadMapa() {
