@@ -320,18 +320,29 @@ async function runRetryRecentOutros(daysBack) {
   const DAYS_BACK = Number.isFinite(daysBack) && daysBack > 0 ? daysBack : 7;
   const cutoff = new Date(Date.now() - DAYS_BACK * 24 * 3600 * 1000).toISOString();
 
-  const { data, error } = await sb
-    .from('note_subcategorias')
-    .select('note_id, numero')
-    .eq('tipo', 'DD')
-    .eq('sub_code', 'OUTROS')
-    .gte('classified_at', cutoff);
-
-  if (error) {
-    console.warn('[CRON] retry-outros: falha ao buscar:', error.message);
-    return;
+  // PAGINADO — sem isso, Supabase corta em 1000 e perde notas mais antigas.
+  const data = [];
+  let pageR = 0;
+  while (true) {
+    const { data: chunk, error } = await sb
+      .from('note_subcategorias')
+      .select('note_id, numero')
+      .eq('tipo', 'DD')
+      .eq('sub_code', 'OUTROS')
+      .gte('classified_at', cutoff)
+      .order('classified_at', { ascending: false })
+      .range(pageR * 1000, (pageR + 1) * 1000 - 1);
+    if (error) {
+      console.warn('[CRON] retry-outros: falha ao buscar:', error.message);
+      return;
+    }
+    if (!chunk || chunk.length === 0) break;
+    data.push(...chunk);
+    if (chunk.length < 1000) break;
+    pageR++;
   }
-  if (!data || data.length === 0) {
+
+  if (data.length === 0) {
     return;  // nada pra reprocessar (silencioso)
   }
 
@@ -396,18 +407,29 @@ async function runRevalidateDD(daysBack) {
   const DAYS_BACK = Number.isFinite(daysBack) && daysBack > 0 ? daysBack : 30;
   const cutoff = new Date(Date.now() - DAYS_BACK * 24 * 3600 * 1000).toISOString();
 
-  // Pega todas as DD classificadas no período (qualquer sub_code)
-  const { data, error } = await sb
-    .from('note_subcategorias')
-    .select('note_id, numero, sub_code, quantidade')
-    .eq('tipo', 'DD')
-    .gte('classified_at', cutoff);
-
-  if (error) {
-    console.warn('[CRON] revalidate-dd: falha ao buscar:', error.message);
-    return { error: error.message };
+  // Pega TODAS as DD classificadas no período (qualquer sub_code) — PAGINADO
+  // Sem paginação, Supabase corta em 1000 e deixa de fora notas mais antigas.
+  const data = [];
+  let page = 0;
+  while (true) {
+    const { data: chunk, error } = await sb
+      .from('note_subcategorias')
+      .select('note_id, numero, sub_code, quantidade')
+      .eq('tipo', 'DD')
+      .gte('classified_at', cutoff)
+      .order('classified_at', { ascending: false })
+      .range(page * 1000, (page + 1) * 1000 - 1);
+    if (error) {
+      console.warn('[CRON] revalidate-dd: falha ao buscar:', error.message);
+      return { error: error.message };
+    }
+    if (!chunk || chunk.length === 0) break;
+    data.push(...chunk);
+    if (chunk.length < 1000) break;
+    page++;
   }
-  if (!data || data.length === 0) {
+
+  if (data.length === 0) {
     return { reclassified: 0, total: 0, summary: 'nada para revalidar' };
   }
 
