@@ -210,7 +210,7 @@ async function runCacheNotaDetails(teams) {
           // GroupDescription pode vir em raw.GroupDescription ou raw.Group?.Description
           // dependendo do endpoint. Passamos para alinhar com classifierService DD fallback.
           const groupDesc = raw.GroupDescription || raw.Group?.Description || '';
-          const fb = classificarSubCategoria(raw.Type, raw.Code, raw.Comments, raw.Activities, groupDesc);
+          const fb = classificarSubCategoria(raw.Type, raw.Code, raw.Comments, raw.Activities, groupDesc, raw.Address);
           subcat = { subCategoria: fb.subCategoria, subcatCode: fb.subcatCode, quantidade: fb.quantidade };
         }
 
@@ -374,6 +374,94 @@ async function runRetryRecentOutros(daysBack) {
       await consolidateDay(d);
     } catch (errC) {
       console.warn(`[CRON] retry-outros: consolidateDay(${d}) falhou:`, errC.message);
+    }
+  }
+  return { reclassified: changed.length, total: jobs.length, summary, days: datasParaConsolidar.size };
+}
+
+// ── REVALIDAÇÃO DE DD (RAMAL BT) ──────────────────────────────────────────────
+// Após introdução da regra "Address contém 'RAMAL BT'" para classificar C93,
+// notas já cacheadas como C93 podem estar erroneamente infladas (têm Activity
+// C93 mas Address sem "Ramal BT" — outras manutenções de ramal).
+//
+// Esta função re-roda o classificador em TODAS as DD classificadas (qualquer
+// sub_code) dos últimos N dias e atualiza o cache. Reconsolida os dias afetados.
+async function runRevalidateDD(daysBack) {
+  const { getClient }           = require('./supabaseClient');
+  const { upsertSubcategorias } = require('../db/subcategoriasQueries');
+  const { classificarBatch }    = require('./classifierService');
+  const { consolidateDay }      = require('./supabasePush');
+  const sb = getClient();
+
+  const DAYS_BACK = Number.isFinite(daysBack) && daysBack > 0 ? daysBack : 30;
+  const cutoff = new Date(Date.now() - DAYS_BACK * 24 * 3600 * 1000).toISOString();
+
+  // Pega todas as DD classificadas no período (qualquer sub_code)
+  const { data, error } = await sb
+    .from('note_subcategorias')
+    .select('note_id, numero, sub_code, quantidade')
+    .eq('tipo', 'DD')
+    .gte('classified_at', cutoff);
+
+  if (error) {
+    console.warn('[CRON] revalidate-dd: falha ao buscar:', error.message);
+    return { error: error.message };
+  }
+  if (!data || data.length === 0) {
+    return { reclassified: 0, total: 0, summary: 'nada para revalidar' };
+  }
+
+  console.log(`[CRON] revalidate-dd: ${data.length} DD classificadas nos últimos ${DAYS_BACK} dias — revalidando regra RAMAL BT`);
+
+  const jobs = data.map(r => ({
+    noteId:   r.note_id,
+    tipo:     'DD',
+    sectorId: 'DESG',
+    numero:   r.numero || null,
+  }));
+
+  const prevByNote = {};
+  data.forEach(r => { prevByNote[r.note_id] = r; });
+
+  const t0 = Date.now();
+  const classifs = await classificarBatch(jobs, 4);
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+
+  // Só persiste os que efetivamente MUDARAM
+  const changed = classifs.filter(c => {
+    const prev = prevByNote[c.note_id];
+    if (!prev) return false;
+    return prev.sub_code !== c.sub_code || Number(prev.quantidade ?? -1) !== Number(c.quantidade ?? -1);
+  });
+
+  if (changed.length === 0) {
+    console.log(`[CRON] revalidate-dd: ${jobs.length} processadas em ${dt}s, nada mudou`);
+    return { reclassified: 0, total: jobs.length, summary: 'sem mudanças', days: 0 };
+  }
+
+  await upsertSubcategorias(changed);
+
+  // Sumário das mudanças
+  const transicoes = {};
+  changed.forEach(c => {
+    const prev = prevByNote[c.note_id];
+    const key = `${prev.sub_code} → ${c.sub_code}`;
+    transicoes[key] = (transicoes[key] || 0) + 1;
+  });
+  const summary = Object.entries(transicoes).map(([k, v]) => `${k}: ${v}`).join(' | ');
+  console.log(`[CRON] revalidate-dd: ✓ ${changed.length}/${jobs.length} reclassificadas em ${dt}s — ${summary}`);
+
+  // Re-consolida todos os dias da janela
+  const todayMs = Date.now() - 3 * 3600 * 1000;
+  const datasParaConsolidar = new Set();
+  for (let i = 0; i <= DAYS_BACK; i++) {
+    datasParaConsolidar.add(new Date(todayMs - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
+  }
+  for (const d of [...datasParaConsolidar].sort().reverse()) {
+    try {
+      await consolidateDay(d);
+    } catch (errC) {
+      console.warn(`[CRON] revalidate-dd: consolidateDay(${d}) falhou:`, errC.message);
     }
   }
   return { reclassified: changed.length, total: jobs.length, summary, days: datasParaConsolidar.size };
@@ -595,5 +683,5 @@ module.exports = {
   runSnapshot, runConsolidate, runTokenRefresh,
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
-  runRetryRecentOutros,
+  runRetryRecentOutros, runRevalidateDD,
 };

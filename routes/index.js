@@ -577,7 +577,7 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     }
     if (!subcat.subCategoria) {
       const groupDesc = nota.GroupDescription || nota.Group?.Description || '';
-      const fb = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities, groupDesc);
+      const fb = classificarSubCategoria(nota.Type, nota.Code, nota.Comments, nota.Activities, groupDesc, nota.Address);
       subcat = { subCategoria: fb.subCategoria, subcatCode: fb.subcatCode, quantidade: fb.quantidade };
     }
 
@@ -2051,6 +2051,27 @@ router.post('/admin/retry-outros', async (req, res) => {
     res.json({ ok: true, days, ...(result || {}) });
   } catch (err) {
     console.error('[retry-outros]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/revalidate-dd?days=30
+// Revalida TODAS as notas DD (qualquer sub_code) dos últimos N dias usando
+// regras atualizadas do classificador. Útil quando muda critério de negócio
+// (ex: introdução da exigência "RAMAL BT no Address" pra C93).
+// Reconsolida automaticamente os dias afetados.
+router.post('/admin/revalidate-dd', async (req, res) => {
+  try {
+    const c = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const days = parseInt(req.query.days || '30', 10);
+    if (!Number.isFinite(days) || days < 1 || days > 90) {
+      return res.status(400).json({ error: 'Parâmetro days deve ser entre 1 e 90' });
+    }
+    const result = await c.runRevalidateDD(days);
+    res.json({ ok: true, days, ...(result || {}) });
+  } catch (err) {
+    console.error('[revalidate-dd]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

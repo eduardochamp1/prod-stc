@@ -170,6 +170,13 @@ async function classificarDD(noteId, sectorId) {
   // sempre vem 1, representa "1 ação de manutenção" — não conta CS individuais).
   const comments = det?.Data?.Comments || '';
 
+  // Address: regra de negócio EDP — só notas com "RAMAL BT" no endereço contam
+  // como Subs Ramal. Notas DD com Activity C93 mas SEM "Ramal BT" no Address
+  // são outras manutenções de ramal (não-BT) e não devem inflar o indicador.
+  // Confirmado em campo (20/05/2026, Clarissa @engelmig): regra usada pela EDP no BI.
+  const address  = det?.Data?.Address || '';
+  const isRamalBT = /ramal\s+bt/i.test(address);
+
   // Estrutura: { Activity: { Code, Description, ... }, Amount, IsPrimary, ... }
   // Prioriza atividade primária (IsPrimary=true) — uma nota pode ter várias secundárias.
   const findByCode = (code) =>
@@ -181,10 +188,11 @@ async function classificarDD(noteId, sectorId) {
   let sub_code, sub_categoria, quantidade = null;
 
   // ── 1ª PRIORIDADE: Activities[] (mais preciso, traz Amount real) ──────────
-  if (ativC93) {
+  // C93 só é considerada Subs Ramal se Address contém "RAMAL BT" (regra EDP).
+  if (ativC93 && isRamalBT) {
     sub_code      = 'C93';
     sub_categoria = 'Subs Ramal';
-    quantidade    = ativC93.Amount ?? null;        // C93 = metros de ramal (Amount real)
+    quantidade    = ativC93.Amount ?? null;        // C93 = qtd de ramais executados
   } else if (ativBTZ013) {
     sub_code      = 'BTZ013';
     sub_categoria = 'Substituição CS';
@@ -202,9 +210,10 @@ async function classificarDD(noteId, sectorId) {
   // ── 2ª PRIORIDADE: Code top-level / GroupCode ────────────────────────────
   // Usado quando Activities[] vem vazio (ex: notas CAPEX). C93 = Subs Ramal,
   // BTZ013 = Substituição CS — mapeamento 1:1 oficial da WPA.
+  // C93 ainda exige "RAMAL BT" no Address (regra EDP).
   if (sub_code === 'OUTROS') {
     const c = (noteCode || groupCode || '').toUpperCase();
-    if (c === 'C93') {
+    if (c === 'C93' && isRamalBT) {
       sub_code = 'C93';
       sub_categoria = 'Subs Ramal';
     } else if (c === 'BTZ013') {
@@ -224,10 +233,11 @@ async function classificarDD(noteId, sectorId) {
   //     Ex: "RAMAL DE LIGACAO - CAPEX", "PODA DE ARVORES - OPEX"
   // Esse é o ÚNICO sinal disponível pra classificar nota CAPEX.
   // Regex ancorada no INÍCIO (^) pra evitar falsos positivos.
+  // C93 ainda exige "RAMAL BT" no Address (regra EDP).
   if (sub_code === 'OUTROS') {
     const desc = (groupDesc || '').toUpperCase()
       .normalize('NFD').replace(/[̀-ͯ]/g, '');
-    if (/^RAMAL\s+DE\s+LIGAC/.test(desc)) {
+    if (/^RAMAL\s+DE\s+LIGAC/.test(desc) && isRamalBT) {
       sub_code = 'C93';
       sub_categoria = 'Subs Ramal';
     } else if (/^CAIXA\s+SECCION/.test(desc) || /^SUBSTITU.*\bCS\b/.test(desc)) {

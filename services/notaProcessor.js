@@ -144,8 +144,9 @@ function processarNota(nota, opts = {}) {
  * @param {string} comments           Comments (texto livre)
  * @param {Array}  activities         Activities[] do details/optimized
  * @param {string} [groupDescription] GroupDescription de /api/notes/dd (opcional, melhora DD)
+ * @param {string} [address]          Address da nota — usado pra exigir "RAMAL BT" em C93
  */
-function classificarSubCategoria(tipo, code, comments, activities, groupDescription) {
+function classificarSubCategoria(tipo, code, comments, activities, groupDescription, address) {
   const act = activities || [];
 
   if (tipo === 'SF') {
@@ -170,26 +171,34 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
     // Estratégia: usar SOMENTE campos determinísticos (Activities[] + Code).
     // Texto livre foi descartado — sujeito a variações de grafia.
 
+    // Regra de negócio EDP: C93 (Subs Ramal) só conta se Address contém "RAMAL BT".
+    // Sem isso, mesmo com Activity C93 a nota é outra manutenção (não inflate).
+    const isRamalBT = /ramal\s+bt/i.test(address || '');
+
     // 1ª prioridade: Activities[] (mais preciso, com Amount real)
     const findByCode = (c) =>
       act.find(a => a.Activity?.Code === c && a.IsPrimary) ||
       act.find(a => a.Activity?.Code === c);
     const ativC93    = findByCode('C93');
     const ativBTZ013 = findByCode('BTZ013');
-    if (ativC93)    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: ativC93.Amount    ?? null };
-    if (ativBTZ013) return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: ativBTZ013.Amount ?? null };
+    if (ativC93 && isRamalBT)
+      return { subCategoria: 'Subs Ramal', subcatCode: 'C93', quantidade: ativC93.Amount ?? null };
+    if (ativBTZ013)
+      return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: ativBTZ013.Amount ?? null };
 
     // 2ª prioridade: code top-level da nota (mapeamento 1:1 oficial WPA)
     const c = String(code || '').toUpperCase();
-    if (c === 'C93')    return { subCategoria: 'Subs Ramal',      subcatCode: 'C93',    quantidade: null };
-    if (c === 'BTZ013') return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: null };
+    if (c === 'C93' && isRamalBT)
+      return { subCategoria: 'Subs Ramal', subcatCode: 'C93', quantidade: null };
+    if (c === 'BTZ013')
+      return { subCategoria: 'Substituição CS', subcatCode: 'BTZ013', quantidade: null };
 
     // 3ª prioridade: GroupDescription ancorada (notas CAPEX sem Code nem Activities)
     // Formato estruturado da EDP: "<TIPO> - CAPEX|OPEX"
     // Match ancorado no INÍCIO pra evitar falsos positivos.
     const desc = String(groupDescription || '').toUpperCase()
       .normalize('NFD').replace(/[̀-ͯ]/g, '');
-    if (/^RAMAL\s+DE\s+LIGAC/.test(desc)) {
+    if (/^RAMAL\s+DE\s+LIGAC/.test(desc) && isRamalBT) {
       return { subCategoria: 'Subs Ramal', subcatCode: 'C93', quantidade: null };
     }
     if (/^CAIXA\s+SECCION/.test(desc) || /^SUBSTITU.*\bCS\b/.test(desc)) {
