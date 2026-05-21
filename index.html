@@ -4345,6 +4345,28 @@
             ⬇ Baixar XLSX
           </button>
         </div>
+
+        <!-- Ciclo Sub CS — período de competência separado (16 do mês anterior a 15 do mês atual) -->
+        <div class="filter-controls" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--cinza2);gap:10px">
+          <span style="font-size:11px;font-weight:700;color:var(--text2);align-self:center">
+            📅 Ciclo Sub CS:
+          </span>
+          <div class="filter-group">
+            <span class="filter-label">De</span>
+            <input type="date" class="filter-select" id="graf-cs-de-input" style="min-width:140px"
+              onchange="loadGraficos()" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Até</span>
+            <input type="date" class="filter-select" id="graf-cs-ate-input" style="min-width:140px"
+              onchange="loadGraficos()" />
+          </div>
+          <button class="btn-refresh" onclick="resetCicloCS()"
+            style="font-size:11px;padding:5px 10px"
+            title="Restaura o ciclo padrão (16 do mês anterior a 15 do mês atual)">
+            ↺ Default (16→15)
+          </button>
+        </div>
       </div>
 
       <div id="graf-content">
@@ -4866,12 +4888,48 @@
       const ateEl = document.getElementById('graf-ate-input');
       if (deEl  && !deEl.value)  deEl.value  = primeiroDia;
       if (ateEl && !ateEl.value) ateEl.value = hoje;
+
+      // Inicializa ciclo Sub CS: dia 16 do mês anterior → dia 15 do mês atual
+      const csDeEl  = document.getElementById('graf-cs-de-input');
+      const csAteEl = document.getElementById('graf-cs-ate-input');
+      if (csDeEl && !csDeEl.value)   csDeEl.value  = defaultCicloCS().de;
+      if (csAteEl && !csAteEl.value) csAteEl.value = defaultCicloCS().ate;
+    }
+
+    /**
+     * Calcula o ciclo Sub CS default: dia 16 do mês anterior a dia 15 do mês atual,
+     * baseado no mês de hoje (BRT). Ex: hoje=20/05/2026 → ciclo = 16/04/2026 → 15/05/2026
+     */
+    function defaultCicloCS() {
+      const hoje = new Date(Date.now() - 3*3600000);
+      const ano  = hoje.getUTCFullYear();
+      const mes  = hoje.getUTCMonth(); // 0-indexed
+      // De = dia 16 do mês anterior; Até = dia 15 do mês atual
+      const de  = new Date(Date.UTC(ano, mes - 1, 16)).toISOString().slice(0,10);
+      const ate = new Date(Date.UTC(ano, mes,     15)).toISOString().slice(0,10);
+      return { de, ate };
+    }
+
+    /** Restaura o ciclo Sub CS ao default e recarrega gráficos */
+    function resetCicloCS() {
+      const { de, ate } = defaultCicloCS();
+      document.getElementById('graf-cs-de-input').value  = de;
+      document.getElementById('graf-cs-ate-input').value = ate;
+      loadGraficos();
     }
 
     function grafRange() {
       const hoje = new Date(Date.now() - 3*3600000).toISOString().slice(0,10);
       const de  = document.getElementById('graf-de-input')?.value  || hoje.slice(0,8) + '01';
       const ate = document.getElementById('graf-ate-input')?.value || hoje;
+      return { de, ate };
+    }
+
+    /** Range específico do ciclo Sub CS (BTZ013) */
+    function grafCsCicloRange() {
+      const def = defaultCicloCS();
+      const de  = document.getElementById('graf-cs-de-input')?.value  || def.de;
+      const ate = document.getElementById('graf-cs-ate-input')?.value || def.ate;
       return { de, ate };
     }
 
@@ -4925,15 +4983,22 @@
 
       try {
         const teamQs = team && team !== 'ALL' ? `&team=${encodeURIComponent(team)}` : '';
-        const [subcatRes, equipeRes] = await Promise.all([
+
+        // Sub CS (BTZ013) tem ciclo de competência próprio (16 mês anterior a 15 mês atual).
+        // Fetch separado com range específico — outros gauges seguem range global.
+        const cs = grafCsCicloRange();
+
+        const [subcatRes, equipeRes, csRes] = await Promise.all([
           fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regional=${regional}${teamQs}`),
           fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}${teamQs}`),
+          fetch(`${API}/totais/subcat?de=${cs.de}&ate=${cs.ate}&regional=${regional}${teamQs}`),
         ]);
-        const subcatData  = subcatRes.ok  ? await subcatRes.json()  : { totais: { ALL:{},GUA:{},CAC:{} }, quantidades:{} };
-        const equipeData  = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
+        const subcatData = subcatRes.ok ? await subcatRes.json() : { totais: { ALL:{},GUA:{},CAC:{} }, quantidades:{} };
+        const equipeData = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
+        const csData     = csRes.ok     ? await csRes.json()     : null;
 
         const metas = getMetas();
-        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team);
+        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, cs);
       } catch (err) {
         cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
       }
@@ -4985,23 +5050,27 @@
 </svg>`;
     }
 
-    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team) {
+    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, csRange) {
       const reg       = (regional === 'ALL') ? 'ALL' : regional;
       const totais    = subcatData.totais?.[reg]     || subcatData.totais?.ALL     || {};
       const quantidades = subcatData.quantidades?.[reg] || subcatData.quantidades?.ALL || {};
       const { de, ate } = grafRange();
 
+      // Sub CS (BTZ013) tem ciclo de competência próprio — usa dados/range específicos
+      const csTotais = csData?.totais?.[reg] || csData?.totais?.ALL || {};
+
       // Sem escalonamento — gauge sempre mostra a meta mensal cheia configurada
 
       // ── Definição dos gauges ─────────────────────────────────────────────
-      // qtd:true → usa quantidades[] em vez de totais[] (ex: CS substituídas em unidades)
+      // qtd:true     → usa quantidades[] em vez de totais[] (ex: C93 = ramais)
+      // useCsCycle:true → usa csData (ciclo 16-15) em vez do range global
       const GAUGE_DEF = [
         { key: 'L0',      label: 'Corte L0',        metaKey: 'L0'      },
         { key: 'L1',      label: 'Corte L1',        metaKey: 'L1'      },
         { key: 'C93',     label: 'Ramal',             metaKey: 'C93',     qtd: true },
         { key: 'OBSOLETO',label: 'Obsoleto',         metaKey: 'OBSOLETO'},
         { key: 'TL11',    label: 'TL11',             metaKey: 'TL11'    },
-        { key: 'BTZ013',  label: 'Sub CS',            metaKey: 'BTZ013' },
+        { key: 'BTZ013',  label: 'Sub CS',            metaKey: 'BTZ013',  useCsCycle: true },
       ];
 
       // Meta: se regional=ALL, somamos GUA+CAC; caso contrário usamos só a regional.
@@ -5013,8 +5082,16 @@
       }
 
       const gaugesHTML = GAUGE_DEF.map(g => {
-        // BTZ013 (qtd:true) exibe unidades substituídas; demais exibem contagem de notas
-        const val  = g.qtd ? Math.round(quantidades[g.key] || 0) : (totais[g.key] || 0);
+        let val;
+        if (g.useCsCycle) {
+          // BTZ013: contagem de notas dentro do ciclo de competência (16-15)
+          val = csTotais[g.key] || 0;
+        } else if (g.qtd) {
+          // C93: soma de quantidade (ex: ramais substituídos)
+          val = Math.round(quantidades[g.key] || 0);
+        } else {
+          val = totais[g.key] || 0;
+        }
         const meta = getMeta(g.metaKey);
         const pct  = meta > 0 ? val / meta : null;
         const cor  = pct === null ? '#b0b0aa'
@@ -5022,9 +5099,18 @@
                    : pct >= 0.7 ? '#FEC40E'
                    : '#ED1C24';
         const svg  = buildGaugeSVG(val, meta, cor);
+
+        // Label de ciclo só aparece no card Sub CS
+        const cicloLabel = g.useCsCycle && csRange
+          ? `<div style="font-size:9px;color:var(--text2);text-align:center;margin-top:-4px;line-height:1.25">
+               📅 ${fmtDateBR(csRange.de)} → ${fmtDateBR(csRange.ate)}
+             </div>`
+          : '';
+
         return `<div class="gauge-card">
   <div class="gauge-label">${g.label}</div>
   ${svg}
+  ${cicloLabel}
 </div>`;
       }).join('');
 
