@@ -12,6 +12,8 @@
   <!-- Leaflet.js — mapas interativos -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Setas direcionais na polyline (mostra ordem dos checkpoints na rota) -->
+  <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
   <style>
     :root {
       --verde: #086738;
@@ -3773,6 +3775,76 @@
     .mapa-nota-card.dimmed { opacity: 0.45; }
     .mapa-nota-card.dimmed:hover { opacity: 1; }
     .mapa-nota-header      { cursor: pointer; }
+
+    /* Stats cards no topo da sidebar do mapa (clicáveis pra filtrar por status) */
+    .mapa-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin-bottom: 8px;
+    }
+    .mapa-stat-card {
+      background: var(--branco);
+      border: 1.5px solid transparent;
+      border-radius: 7px;
+      padding: 6px 8px;
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+      box-shadow: var(--shadow-sm);
+    }
+    .mapa-stat-card:hover { background: var(--cinza1); }
+    .mapa-stat-card.active {
+      border-color: var(--verde);
+      background: #f5fff8;
+    }
+    .mapa-stat-num {
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .mapa-stat-lbl {
+      font-size: 10px;
+      color: var(--text2);
+      margin-top: 2px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    /* Linha de filtros na sidebar (busca + selects compactos) */
+    .mapa-filters {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      margin-bottom: 8px;
+      padding: 8px;
+      background: var(--branco);
+      border-radius: 7px;
+      box-shadow: var(--shadow-sm);
+    }
+    .mapa-filters input,
+    .mapa-filters select {
+      font-size: 11px;
+      padding: 4px 6px;
+      border: 1px solid var(--cinza2);
+      border-radius: 5px;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .mapa-filters input:focus,
+    .mapa-filters select:focus { border-color: var(--amarelo); }
+
+    /* Badge pra notas com múltiplas visitas (rejeitada + reprogramada) */
+    .mapa-visit-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 700;
+      background: #ff9800;
+      color: #fff;
+      padding: 1px 5px;
+      border-radius: 8px;
+      margin-left: 4px;
+    }
 
     /* Lista expansível de checkpoints dentro de cada card de nota */
     .mapa-cp-list {
@@ -8046,6 +8118,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
     let _mapaRawData        = null; // último response do /api/mapa/equipe
     let _mapaSelectedNoteId = null; // se !=null, mostra apenas esta nota no mapa
 
+    // Filtros adicionais na sidebar do mapa
+    let _mapaFilterStatus   = null;  // 'concluida' | 'rejeitada' | 'executada' | 'baixada'
+    let _mapaFilterSearch   = '';    // texto digitado no campo de busca
+    let _mapaFilterTipo     = '';    // ex: 'DD', 'SF', 'MD'
+    let _mapaFilterSubcat   = '';    // ex: 'C93', 'L0', 'OBSOLETO'
+
     function initMapa() {
       const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
       const di = document.getElementById('mapa-date-input');
@@ -8128,7 +8206,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const data = await res.json();
         if (data.error) throw new Error(data.error);
         _mapaRawData = data;
-        _mapaSelectedNoteId = null; // reset filtro ao trocar equipe/data
+        // Reseta todos os filtros ao trocar equipe/data
+        _mapaSelectedNoteId = null;
+        _mapaFilterStatus   = null;
+        _mapaFilterSearch   = '';
+        _mapaFilterTipo     = '';
+        _mapaFilterSubcat   = '';
         _renderMapaDia(data);
       } catch (err) {
         document.getElementById('mapa-sidebar-list').innerHTML =
@@ -8180,11 +8263,47 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // Ícones e labels dos checkpoints — espelham CP_LABELS/CP_ICONS do modal de OS
     const _MAPA_CP_COLORS = ['#2c2c28', '#c49000', '#086738', '#1565c0', '#7a7a72'];
 
+    /**
+     * Detecta múltiplas visitas (rejeitada+reprogramada) olhando ev:0 repetido
+     * com intervalo > 30 min. Cada bloco de checkpoints com início em ev:0
+     * conta como uma visita.
+     */
+    function _contarVisitas(cps) {
+      if (!cps?.length) return 1;
+      const ev0s = cps.filter(c => c.event === 0);
+      return Math.max(ev0s.length, 1);
+    }
+
+    /**
+     * Aplica filtros (status, busca, tipo, subcat) num cardData e retorna subset.
+     * Sempre usa allCardData como fonte — filtros são UI, não mexem nos dados.
+     */
+    function _mapaAplicarFiltros(allCardData) {
+      const q = (_mapaFilterSearch || '').toLowerCase().trim();
+      return allCardData.filter(({ nota }) => {
+        if (_mapaFilterStatus && nota.status !== _mapaFilterStatus) return false;
+        if (_mapaFilterTipo   && nota.tipo   !== _mapaFilterTipo)   return false;
+        if (_mapaFilterSubcat) {
+          // sub_code pode estar em nota.subCategoria (texto) ou inferir de outras formas
+          // Usamos uma busca flexível no texto da subcategoria
+          const sub = (nota.subCategoria || '').toLowerCase();
+          if (!sub.includes(_mapaFilterSubcat.toLowerCase())) return false;
+        }
+        if (q) {
+          const num = String(nota.numero || '').toLowerCase();
+          if (!num.includes(q)) return false;
+        }
+        return true;
+      });
+    }
+
     function _renderMapaDia(data) {
       const { notes: allNotes, teamInfo } = data;
 
-      // Aplica filtro de seleção: se _mapaSelectedNoteId está setado,
-      // mostra apenas essa nota no mapa (mas todas continuam visíveis na sidebar).
+      // Filtro de "nota única no mapa" tem precedência sobre filtros de UI:
+      // se o usuário clicou em uma nota específica, mostra só ela no mapa.
+      // Os filtros da sidebar afetam APENAS a lista exibida + quais notas
+      // são candidatas a aparecer no mapa quando nenhuma está selecionada.
       const notes = _mapaSelectedNoteId
         ? allNotes.filter(n => n.id === _mapaSelectedNoteId)
         : allNotes;
@@ -8281,6 +8400,29 @@ ${equipes.length > 0 ? `<div class="perf-section">
             style: { color: cor, weight: 4, opacity: 0.85 },
           }).addTo(_mapaMap);
           _mapaLayers.push(route);
+
+          // Setas direcionais sobre a rota — mostra a direção do trajeto
+          // (a cada ~7% do comprimento, pequena seta na cor do status).
+          if (typeof L.polylineDecorator === 'function') {
+            try {
+              // Extrai linhas do GeoJSON (LineString → [[lng,lat], ...])
+              const lineCoords = (geom.coordinates || []).map(c => [c[1], c[0]]);
+              if (lineCoords.length >= 2) {
+                const decorator = L.polylineDecorator(L.polyline(lineCoords), {
+                  patterns: [{
+                    offset: '5%',
+                    repeat: '8%',
+                    symbol: L.Symbol.arrowHead({
+                      pixelSize: 9,
+                      polygon: false,
+                      pathOptions: { color: cor, weight: 2.5, opacity: 0.9 },
+                    }),
+                  }],
+                }).addTo(_mapaMap);
+                _mapaLayers.push(decorator);
+              }
+            } catch (e) { /* polylineDecorator não carregou — segue sem setas */ }
+          }
         }).catch(() => {});
 
         // 4) Tempos / distâncias para o sidebar
@@ -8305,13 +8447,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
         _mapaMap.setView(bounds[0], 15);
       }
 
-      // ── Sidebar: SEMPRE renderiza TODAS as notas (não só as filtradas) ───────────
-      // Calcula cardData equivalente para todas as notas (pra dados serem exibidos
-      // independente do filtro atual no mapa).
+      // ── Sidebar: monta cardData de TODAS as notas (mesmo sem GPS) ───────────────
+      // Notas sem GPS aparecem na lista (com aviso) mas não no mapa.
       const allCardData = [];
       allNotes.forEach(nota => {
         const rawCps = (nota.checkpoints || []).filter(c => c.latitude && c.longitude);
-        if (!rawCps.length) return;
         const cps = [...rawCps].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         const dep  = cps.find(c => c.event === 0);
         const arr  = cps.find(c => c.event === 1);
@@ -8323,21 +8463,34 @@ ${equipes.length > 0 ? `<div class="perf-section">
           ? Math.round((new Date(conc.timestamp) - new Date(exec.timestamp)) / 60000) : null;
         const distKm  = (dep && arr && arr.mileage != null && dep.mileage != null && arr.mileage > dep.mileage)
           ? (arr.mileage - dep.mileage).toFixed(1) : null;
+        const visitas = _contarVisitas(cps);
         allCardData.push({
           nota, cps,
           num: numByNoteId[nota.id] || '?',
-          dispMin, execMin, distKm,
+          dispMin, execMin, distKm, visitas,
+          temGps: cps.length > 0,
           cor: COR[nota.status] || '#888',
         });
       });
 
       if (!allCardData.length) {
         document.getElementById('mapa-sidebar-list').innerHTML =
-          '<div class="empty-state" style="font-size:12px">Nenhuma nota com GPS encontrada.<br><small>Notas sem UUID ou sem cache não aparecem.</small></div>';
+          '<div class="empty-state" style="font-size:12px">Nenhuma nota encontrada para essa equipe e data.</div>';
         return;
       }
 
-      // Botão de "voltar" quando uma nota está filtrada
+      // Stats por status (sempre baseados em TODAS — não muda com filtros)
+      const stats = { concluida: 0, executada: 0, rejeitada: 0, baixada: 0 };
+      allCardData.forEach(c => { stats[c.nota.status] = (stats[c.nota.status] || 0) + 1; });
+
+      // Listas únicas de tipos e subcategorias presentes (para popular selects)
+      const tiposUnicos   = [...new Set(allCardData.map(c => c.nota.tipo).filter(Boolean))].sort();
+      const subcatsUnicas = [...new Set(allCardData.map(c => c.nota.subCategoria).filter(Boolean))].sort();
+
+      // Aplica filtros da UI pra decidir o que aparece na lista
+      const filteredCardData = _mapaAplicarFiltros(allCardData);
+
+      // Botão de "voltar" quando uma nota específica está em foco no mapa
       const backHtml = _mapaSelectedNoteId ? `
         <div onclick="mapaClearSelection()" style="cursor:pointer;font-size:12px;font-weight:700;
                     color:var(--verde);padding:8px 11px;background:#e8f5e9;border-radius:8px;
@@ -8353,8 +8506,50 @@ ${equipes.length > 0 ? `<div class="perf-section">
         </div>`;
       })() : '';
 
+      // Stats cards clicáveis (filtram por status)
+      const statCard = (status, label, n, c) => `
+        <div class="mapa-stat-card ${_mapaFilterStatus === status ? 'active' : ''}"
+             style="border-color: ${_mapaFilterStatus === status ? c : 'transparent'}"
+             onclick="mapaSetStatusFilter('${status}')">
+          <div class="mapa-stat-num" style="color:${c}">${n}</div>
+          <div class="mapa-stat-lbl">${label}</div>
+        </div>`;
+      const statsHtml = `
+        <div class="mapa-stats">
+          ${statCard('concluida', 'Concluídas', stats.concluida || 0, COR.concluida)}
+          ${statCard('rejeitada', 'Rejeitadas', stats.rejeitada || 0, COR.rejeitada)}
+          ${statCard('executada', 'Em execução', stats.executada || 0, COR.executada)}
+          ${statCard('baixada',   'Em carteira', stats.baixada || 0, COR.baixada)}
+        </div>`;
+
+      // Linha de filtros (busca + tipo + subcat)
+      const tipoOpts = tiposUnicos.map(t => `<option value="${t}" ${_mapaFilterTipo === t ? 'selected' : ''}>${t}</option>`).join('');
+      const subOpts  = subcatsUnicas.map(s => `<option value="${s}" ${_mapaFilterSubcat === s ? 'selected' : ''}>${s}</option>`).join('');
+      const filtersHtml = `
+        <div class="mapa-filters">
+          <input type="text" placeholder="🔍 Pesquisar nº da nota..."
+                 value="${_mapaFilterSearch.replace(/"/g, '&quot;')}"
+                 oninput="mapaSetSearchFilter(this.value)" />
+          <select onchange="mapaSetTipoFilter(this.value)">
+            <option value="">Todos os tipos</option>${tipoOpts}
+          </select>
+          <select onchange="mapaSetSubcatFilter(this.value)">
+            <option value="">Todas as subcategorias</option>${subOpts}
+          </select>
+          ${(_mapaFilterStatus || _mapaFilterSearch || _mapaFilterTipo || _mapaFilterSubcat) ? `
+          <button class="btn-refresh" onclick="mapaResetarFiltros()"
+                  style="font-size:10px;padding:3px 6px;background:var(--cinza2);color:var(--text)">
+            ✕ Limpar filtros
+          </button>` : ''}
+          <div style="font-size:10px;color:var(--text2);text-align:center">
+            Mostrando <strong>${filteredCardData.length}</strong> de ${allCardData.length}
+          </div>
+        </div>`;
+
       // Cards de nota: clicar no header alterna seleção; clicar em "📍 N ▾" expande
-      const cardsHtml = allCardData.map(({ nota, cps, num, dispMin, execMin, distKm, cor }) => {
+      const cardsHtml = filteredCardData.length === 0
+        ? '<div class="empty-state" style="font-size:11px">Nenhuma nota com esses filtros.</div>'
+        : filteredCardData.map(({ nota, cps, num, dispMin, execMin, distKm, visitas, temGps, cor }) => {
         const cpListHtml = cps.map((cp, idx) => {
           const ev = cp.event;
           const lbl = CP_LABELS[ev] ?? `Evento ${ev}`;
@@ -8374,29 +8569,84 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
         const isSelected = _mapaSelectedNoteId === nota.id;
         const isDimmed   = _mapaSelectedNoteId && !isSelected;
+        // Badge de múltiplas visitas (ex: rejeitada e re-executada)
+        const visitBadge = visitas > 1 ? `<span class="mapa-visit-badge" title="A equipe foi até a nota ${visitas} vezes">${visitas}× visitas</span>` : '';
+        const noGpsBadge = !temGps ? '<span class="mapa-visit-badge" style="background:#888" title="Sem GPS / sem cache">sem GPS</span>' : '';
 
         return `
           <div class="mapa-nota-card ${isSelected ? 'active' : ''} ${isDimmed ? 'dimmed' : ''}" data-nota-id="${nota.id}">
-            <div class="mapa-nota-header" onclick="mapaToggleNotaFilter('${nota.id}')">
+            <div class="mapa-nota-header" onclick="${temGps ? `mapaToggleNotaFilter('${nota.id}')` : ''}">
               <div style="display:flex;align-items:center;gap:7px">
                 <div style="width:22px;height:22px;background:${cor};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${num}</div>
                 <span style="font-weight:700;font-size:12px">${nota.tipo} · ${nota.numero}</span>
+                ${visitBadge}${noGpsBadge}
               </div>
               ${nota.subCategoria ? `<div style="font-size:10px;color:var(--text2);margin-top:2px;padding-left:29px">${nota.subCategoria}</div>` : ''}
               <div style="display:flex;gap:10px;margin-top:4px;padding-left:29px;font-size:10px;color:var(--text2)">
                 ${dispMin !== null ? `<span title="Deslocamento">🚗 ${dispMin}min${distKm ? ` · ${distKm}km` : ''}</span>` : ''}
                 ${execMin !== null ? `<span title="Execução">🔧 ${execMin}min</span>` : ''}
-                <span style="margin-left:auto" title="${cps.length} checkpoints"
+                ${temGps ? `<span style="margin-left:auto" title="${cps.length} checkpoints"
                       onclick="event.stopPropagation();this.parentElement.parentElement.parentElement.classList.toggle('expanded')">
                   📍 ${cps.length} ▾
-                </span>
+                </span>` : '<span style="margin-left:auto;opacity:0.5">—</span>'}
               </div>
             </div>
             <div class="mapa-cp-list">${cpListHtml}</div>
           </div>`;
       }).join('');
 
-      document.getElementById('mapa-sidebar-list').innerHTML = backHtml + sessionHtml + cardsHtml;
+      document.getElementById('mapa-sidebar-list').innerHTML =
+        backHtml + sessionHtml + statsHtml + filtersHtml + cardsHtml;
+    }
+
+    // ── Handlers dos filtros da sidebar do mapa ─────────────────────────────────
+    // Cada um seta o estado e dispara re-render apenas da sidebar/mapa, sem
+    // refazer a chamada ao backend (todos os dados já estão em _mapaRawData).
+
+    function mapaSetStatusFilter(status) {
+      _mapaFilterStatus = _mapaFilterStatus === status ? null : status;
+      if (_mapaRawData) _renderMapaDia(_mapaRawData);
+    }
+
+    function mapaSetSearchFilter(v) {
+      _mapaFilterSearch = v || '';
+      // Re-renderiza só a sidebar (não toca no mapa pra evitar flicker)
+      _mapaRerenderSidebar();
+    }
+
+    function mapaSetTipoFilter(v) {
+      _mapaFilterTipo = v || '';
+      if (_mapaRawData) _renderMapaDia(_mapaRawData);
+    }
+
+    function mapaSetSubcatFilter(v) {
+      _mapaFilterSubcat = v || '';
+      if (_mapaRawData) _renderMapaDia(_mapaRawData);
+    }
+
+    function mapaResetarFiltros() {
+      _mapaFilterStatus = null;
+      _mapaFilterSearch = '';
+      _mapaFilterTipo   = '';
+      _mapaFilterSubcat = '';
+      if (_mapaRawData) _renderMapaDia(_mapaRawData);
+    }
+
+    /** Re-render leve só da sidebar (usado pelo search input — evita flicker do mapa) */
+    function _mapaRerenderSidebar() {
+      if (!_mapaRawData) return;
+      // Por simplicidade, re-renderiza tudo. Mapa não fica piscando porque
+      // as camadas atuais já estão estáveis e _renderMapaDia faz remoção/inclusão
+      // rápida — o impacto visual é mínimo.
+      _renderMapaDia(_mapaRawData);
+      // Re-foca o campo de busca (perdeu o foco com o innerHTML)
+      const input = document.querySelector('.mapa-filters input[type=text]');
+      if (input) {
+        input.focus();
+        // Move cursor para o final
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+      }
     }
 
     /**
