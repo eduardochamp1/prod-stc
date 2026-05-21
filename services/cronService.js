@@ -397,28 +397,32 @@ async function runRetryRecentOutros(daysBack) {
 //
 // Esta função re-roda o classificador em TODAS as DD classificadas (qualquer
 // sub_code) dos últimos N dias e atualiza o cache. Reconsolida os dias afetados.
-async function runRevalidateDD(daysBack) {
+async function runRevalidateDD(daysBack, opts = {}) {
   const { getClient }           = require('./supabaseClient');
   const { upsertSubcategorias } = require('../db/subcategoriasQueries');
   const { classificarBatch }    = require('./classifierService');
   const { consolidateDay }      = require('./supabasePush');
   const sb = getClient();
 
+  // Modo "all=true" ignora janela de tempo e revalida TODAS as DD do banco
+  // (útil quando muda regra de negócio e precisa propagar pra notas antigas).
+  const ALL = !!opts.all;
   const DAYS_BACK = Number.isFinite(daysBack) && daysBack > 0 ? daysBack : 30;
   const cutoff = new Date(Date.now() - DAYS_BACK * 24 * 3600 * 1000).toISOString();
 
-  // Pega TODAS as DD classificadas no período (qualquer sub_code) — PAGINADO
+  // Pega TODAS as DD classificadas (qualquer sub_code) — PAGINADO
   // Sem paginação, Supabase corta em 1000 e deixa de fora notas mais antigas.
   const data = [];
   let page = 0;
   while (true) {
-    const { data: chunk, error } = await sb
+    let q = sb
       .from('note_subcategorias')
       .select('note_id, numero, sub_code, quantidade')
       .eq('tipo', 'DD')
-      .gte('classified_at', cutoff)
       .order('classified_at', { ascending: false })
       .range(page * 1000, (page + 1) * 1000 - 1);
+    if (!ALL) q = q.gte('classified_at', cutoff);
+    const { data: chunk, error } = await q;
     if (error) {
       console.warn('[CRON] revalidate-dd: falha ao buscar:', error.message);
       return { error: error.message };
@@ -433,7 +437,8 @@ async function runRevalidateDD(daysBack) {
     return { reclassified: 0, total: 0, summary: 'nada para revalidar' };
   }
 
-  console.log(`[CRON] revalidate-dd: ${data.length} DD classificadas nos últimos ${DAYS_BACK} dias — revalidando regra RAMAL BT`);
+  const escopo = ALL ? 'TODAS no banco' : `últimos ${DAYS_BACK} dias`;
+  console.log(`[CRON] revalidate-dd: ${data.length} DD classificadas — escopo: ${escopo} — revalidando regra RAMAL BT`);
 
   const jobs = data.map(r => ({
     noteId:   r.note_id,
@@ -473,10 +478,11 @@ async function runRevalidateDD(daysBack) {
   const summary = Object.entries(transicoes).map(([k, v]) => `${k}: ${v}`).join(' | ');
   console.log(`[CRON] revalidate-dd: ✓ ${changed.length}/${jobs.length} reclassificadas em ${dt}s — ${summary}`);
 
-  // Re-consolida todos os dias da janela
+  // Re-consolida todos os dias afetados (janela ou 60 dias se ALL=true)
   const todayMs = Date.now() - 3 * 3600 * 1000;
+  const diasConsolidar = ALL ? 60 : DAYS_BACK;
   const datasParaConsolidar = new Set();
-  for (let i = 0; i <= DAYS_BACK; i++) {
+  for (let i = 0; i <= diasConsolidar; i++) {
     datasParaConsolidar.add(new Date(todayMs - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
   }
   for (const d of [...datasParaConsolidar].sort().reverse()) {

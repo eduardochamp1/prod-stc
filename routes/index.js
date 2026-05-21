@@ -2055,21 +2055,23 @@ router.post('/admin/retry-outros', async (req, res) => {
   }
 });
 
-// POST /api/admin/revalidate-dd?days=30
-// Revalida TODAS as notas DD (qualquer sub_code) dos últimos N dias usando
-// regras atualizadas do classificador. Útil quando muda critério de negócio
-// (ex: introdução da exigência "RAMAL BT no Address" pra C93).
+// POST /api/admin/revalidate-dd?days=30  ou  ?all=true
+// Revalida notas DD usando regras atualizadas do classificador.
+//   - days=N  → últimos N dias (default 30, máx 90)
+//   - all=true → TODAS as DD do banco (ignora janela de tempo)
+// Útil quando muda critério de negócio (ex: regra "RAMAL BT no Address" pra C93).
 // Reconsolida automaticamente os dias afetados.
 router.post('/admin/revalidate-dd', async (req, res) => {
   try {
     const c = cron();
     if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const all = req.query.all === 'true' || req.query.all === '1';
     const days = parseInt(req.query.days || '30', 10);
-    if (!Number.isFinite(days) || days < 1 || days > 90) {
-      return res.status(400).json({ error: 'Parâmetro days deve ser entre 1 e 90' });
+    if (!all && (!Number.isFinite(days) || days < 1 || days > 90)) {
+      return res.status(400).json({ error: 'Parâmetro days deve ser entre 1 e 90 (ou use all=true)' });
     }
-    const result = await c.runRevalidateDD(days);
-    res.json({ ok: true, days, ...(result || {}) });
+    const result = await c.runRevalidateDD(days, { all });
+    res.json({ ok: true, days: all ? 'TODAS' : days, ...(result || {}) });
   } catch (err) {
     console.error('[revalidate-dd]', err.message);
     res.status(500).json({ error: err.message });
