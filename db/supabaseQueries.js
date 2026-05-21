@@ -785,11 +785,12 @@ async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
 async function getExportData(de, ate, regional) {
   const sb = getClient();
   // Lê tudo do nível por-equipe; agrega "daily_*" filtrando pela whitelist
-  const [team_subcat_raw, team_totais_raw] = await Promise.all([
+  const [team_subcat_raw, team_totais_raw, notas_individuais] = await Promise.all([
     _paginateTable(sb, 'team_daily_subcat_totals',
       'date, team_name, regional, sector_id, tipo, sub_code, count, quantidade', de, ate, regional),
     _paginateTable(sb, 'team_daily_totals',
       'date, team_name, regional, sector_id, tipo_code, count', de, ate, regional),
+    getNotasIndividuais(de, ate, regional),
   ]);
 
   const team_subcat = _onlyOficiais(team_subcat_raw, 'team_name');
@@ -822,7 +823,131 @@ async function getExportData(de, ate, regional) {
   });
   const daily_totais = Object.values(daily_totais_map);
 
-  return { daily_subcat, team_subcat, team_totais, daily_totais };
+  return { daily_subcat, team_subcat, team_totais, daily_totais, notas_individuais };
+}
+
+/**
+ * Lista nota a nota (1 linha por OS) do período/regional, com:
+ *   - codigo (número), uuid, equipe, regional, setor
+ *   - data de conclusão (do snapshot mais recente que contém a nota)
+ *   - tipo, sub_code, sub_categoria, quantidade  (de note_subcategorias)
+ *   - status (concluida/executada/rejeitada/baixada)
+ *   - endereco (de note_details, se cacheado)
+ *
+ * Estratégia: percorre snapshots do range, dedup por UUID mantendo apenas
+ * o snapshot mais recente de cada nota (com status final do dia). Cruza
+ * com note_subcategorias e note_details em chunks de 200.
+ *
+ * Whitelist aplicada: só notas de equipes oficiais entram no resultado.
+ */
+async function getNotasIndividuais(de, ate, regional) {
+  const sb = getClient();
+  de  = de  || dateBRT();
+  ate = ate || de;
+
+  // Pagina snapshots do range
+  const snaps = await _selectAll(() => {
+    let q = sb.from('snapshots')
+      .select('team_name, regional, sector_id, captured_at, date, data')
+      .gte('date', de).lte('date', ate)
+      .order('captured_at', { ascending: false });
+    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    return q;
+  });
+
+  if (!snaps || snaps.length === 0) return [];
+
+  // Whitelist nas equipes
+  const rows = _onlyOficiais(snaps, 'team_name');
+
+  // Dedup por UUID: pra cada nota, fica o snapshot MAIS recente
+  // (rows já vem ordenado por captured_at DESC, então primeiro a setar é mais recente).
+  const notaMap = new Map();   // noteId -> { ... }
+  const LISTAS = [
+    ['notasConcluidas', 'concluida'],
+    ['notasExecutadas', 'executada'],
+    ['notasRejeitadas', 'rejeitada'],
+    ['notasBaixadas',   'baixada'  ],
+  ];
+  rows.forEach(r => {
+    const t = r.data;
+    if (!t) return;
+    LISTAS.forEach(([listKey, statusFallback]) => {
+      (t[listKey] || []).forEach(n => {
+        const uuid = n.id;
+        if (!uuid || notaMap.has(uuid)) return;
+        notaMap.set(uuid, {
+          uuid,
+          numero:         n.codigo || '',
+          tipo:           n.tipoCode || '',
+          status:         n.status || statusFallback,
+          conclusionDate: n.conclusionDate || null,
+          date:           r.date,
+          team_name:      r.team_name,
+          regional:       r.regional,
+          sector_id:      r.sector_id,
+        });
+      });
+    });
+  });
+
+  const ids = [...notaMap.keys()];
+  if (ids.length === 0) return [];
+
+  // Cruza com note_subcategorias (em chunks de 200)
+  const subcatMap = {};
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await sb.from('note_subcategorias')
+      .select('note_id, sub_code, sub_categoria, quantidade')
+      .in('note_id', ids.slice(i, i + 200));
+    (data || []).forEach(r => { subcatMap[r.note_id] = r; });
+  }
+
+  // Cruza com note_details pra ter endereço (em chunks de 200)
+  const enderecoMap = {};
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await sb.from('note_details')
+      .select('note_id, payload')
+      .in('note_id', ids.slice(i, i + 200));
+    (data || []).forEach(r => {
+      const e = r.payload?.endereco;
+      enderecoMap[r.note_id] = {
+        logradouro: e?.logradouro || '',
+        bairro:     e?.bairro     || '',
+        cidade:     e?.cidade     || '',
+      };
+    });
+  }
+
+  // Monta as linhas finais
+  return ids.map(id => {
+    const n  = notaMap.get(id);
+    const sc = subcatMap[id] || {};
+    const en = enderecoMap[id] || {};
+    return {
+      data:          n.date,
+      numero:        n.numero,
+      uuid:          n.uuid,
+      equipe:        n.team_name,
+      regional:      n.regional,
+      setor:         n.sector_id,
+      tipo:          n.tipo,
+      sub_code:      sc.sub_code      || '',
+      sub_categoria: sc.sub_categoria || '',
+      quantidade:    sc.quantidade != null ? Number(sc.quantidade) : null,
+      status:        n.status,
+      motivo:        '',   // reservado para integração futura com BI EDP (rejeição/conta paga)
+      logradouro:    en.logradouro,
+      bairro:        en.bairro,
+      cidade:        en.cidade,
+      conclusionDate: n.conclusionDate,
+    };
+  }).sort((a, b) => {
+    // Ordena por data desc, depois por equipe e número
+    if (a.data !== b.data) return b.data.localeCompare(a.data);
+    if (a.equipe !== b.equipe) return a.equipe.localeCompare(b.equipe);
+    return (a.numero || '').localeCompare(b.numero || '');
+  });
 }
 
 /**
@@ -999,5 +1124,6 @@ module.exports = {
   getDailySubcatTotals,
   getPerformanceEquipes,
   getExportData,
+  getNotasIndividuais,
   getMapaEquipe,
 };

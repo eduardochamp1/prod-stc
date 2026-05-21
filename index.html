@@ -7973,6 +7973,41 @@ ${equipes.length > 0 ? `<div class="perf-section">
           XLSX.utils.book_append_sheet(wb, ws, 'Totais Regionais');
         }
 
+        // ── Aba 5: Notas (uma a uma) ─────────────────────────────────────────
+        // Cada linha = 1 OS individual. Útil pra auditoria/cruzamento com BI.
+        // Motivo de rejeição fica vazio: WPA mobile API não expõe esse dado
+        // (fica apenas no EDP back-office — espaço reservado pra integração futura).
+        const STATUS_LABEL = {
+          concluida:  'Concluída',
+          executada:  'Em execução',
+          rejeitada:  'Rejeitada',
+          baixada:    'Em carteira',
+          vistoriada: 'Vistoriada',
+        };
+        {
+          const hdr = [
+            'Data', 'Número', 'UUID', 'Equipe', 'Regional', 'Setor',
+            'Tipo', 'Nome Tipo', 'Sub Code', 'Subcategoria', 'Quantidade',
+            'Status', 'Motivo', 'Endereço', 'Bairro', 'Cidade', 'Data Conclusão',
+          ];
+          const rows = (d.notas_individuais || []).map(r => [
+            r.data, r.numero, r.uuid,
+            r.equipe, r.regional, r.setor,
+            r.tipo, TIPO_NOME[r.tipo] || r.tipo,
+            r.sub_code, r.sub_categoria || (SUBCAT_NOME[r.sub_code] || ''),
+            r.quantidade != null ? Number(r.quantidade) : '',
+            STATUS_LABEL[r.status] || r.status || '',
+            r.motivo || '',
+            r.logradouro || '',
+            r.bairro || '',
+            r.cidade || '',
+            r.conclusionDate || '',
+          ]);
+          const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
+          _autoWidth(ws, [hdr, ...rows]);
+          XLSX.utils.book_append_sheet(wb, ws, 'Notas (uma a uma)');
+        }
+
         // ── Dispara download ─────────────────────────────────────────────────
         const regLabel = regional === 'ALL' ? 'todas' : regional.toLowerCase();
         XLSX.writeFile(wb, `historico_${de}_${ate}_${regLabel}.xlsx`);
