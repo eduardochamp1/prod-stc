@@ -227,12 +227,29 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
   const isSingleDay = de === ate;
 
   if (isSingleDay) {
-    // Dia único: snapshot mais recente por equipe
-    const latest = {};
-    rows.forEach(r => { if (!latest[r.team_name]) latest[r.team_name] = r; });
+    // Dia único: snapshot mais recente por equipe + sessionBeginReal do primeiro
+    // snapshot do dia (importante quando equipe relogou — sem isso o card mostra
+    // o logon da sessão atual, não o do início real do dia).
+    const latest = {};   // snapshot mais recente
+    const first  = {};   // snapshot mais antigo
+    rows.forEach(r => {
+      if (!latest[r.team_name]) latest[r.team_name] = r;
+      // rows vem ordenado por captured_at DESC, então o "primeiro" do dia é o ÚLTIMO no loop
+      first[r.team_name] = r;
+    });
     return Object.values(latest)
       .sort((a, b) => a.team_name.localeCompare(b.team_name))
-      .map(r => ({ ...r.data, _snapshotAt: r.captured_at }));
+      .map(r => {
+        const firstSnap = first[r.team_name];
+        const sb1 = firstSnap?.data?.sessionBegin || firstSnap?.data?.session_begin || null;
+        const sbAtual = r.data?.sessionBegin || r.data?.session_begin || null;
+        return {
+          ...r.data,
+          _snapshotAt: r.captured_at,
+          sessionBeginReal: sb1 || sbAtual,
+          relogouNoDia:     !!(sb1 && sbAtual && sb1 !== sbAtual),
+        };
+      });
   }
 
   // Intervalo: snapshot base = o mais recente de cada equipe (para dados de sessão)

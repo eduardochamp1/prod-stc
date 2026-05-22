@@ -177,6 +177,10 @@ function _rebuildIndexesFromList(rows) {
     meta.set(k, {
       sigla: e.sigla, setor: e.setor || null, tipo: e.tipo,
       placa: e.placa || null, regional: e.regional,
+      // Escala configurada (turno previsto da equipe). Pode estar null se a
+      // migration ainda não rodou ou se a equipe foi cadastrada sem escala.
+      escala_inicio: e.escala_inicio || null,
+      escala_fim:    e.escala_fim    || null,
     });
   }
   _activeList   = rows;
@@ -204,11 +208,23 @@ async function _doRefresh() {
   try {
     const { getClient } = require('./supabaseClient');
     const sb = getClient();
-    const { data, error } = await sb
+    // Tenta com escala primeiro; se a migration ainda não rodou, faz fallback
+    // sem essas colunas (não quebra o serviço).
+    let { data, error } = await sb
       .from('equipes_oficiais')
-      .select('sigla, setor, regional, tipo, placa, ativo')
+      .select('sigla, setor, regional, tipo, placa, ativo, escala_inicio, escala_fim')
       .order('regional')
       .order('sigla');
+    if (error && /escala_inicio|escala_fim/.test(error.message || '')) {
+      console.warn('[equipesOficiais] colunas escala_inicio/fim não existem — rode migrations/add_escala_equipes.sql');
+      const fb = await sb
+        .from('equipes_oficiais')
+        .select('sigla, setor, regional, tipo, placa, ativo')
+        .order('regional')
+        .order('sigla');
+      data = fb.data;
+      error = fb.error;
+    }
     if (error) throw error;
     if (!data || data.length === 0) {
       console.warn('[equipesOficiais] tabela equipes_oficiais vazia — usando fallback hardcoded');

@@ -5489,6 +5489,39 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (!iso) return false;
       return iso.slice(0, 10) < todayBRT();
     }
+
+    /**
+     * Formata logon → logoff de uma equipe com indicador de atraso vs escala.
+     * Usa sessionBeginReal (primeiro snapshot do dia) ao invés de sessionBegin
+     * (sessão atual, que pode ser do relogin).
+     */
+    function _horaLogon(t) {
+      const inicio = t.sessionBeginReal || t.sessionBegin;
+      if (!inicio) return 'sem dado';
+      const fmtH = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const inicioFmt = sessaoAnterior(inicio) ? fmtInicio(inicio) : fmtH(inicio);
+      const fimFmt = t.sessionEnd ? fmtH(t.sessionEnd) : 'em campo';
+
+      // Atraso vs escala: compara só HH:mm do logon contra escala_inicio (formato 'HH:mm:ss')
+      let atrasoTag = '';
+      if (t.escala_inicio && inicio) {
+        const escalaMin = _toMin(t.escala_inicio);
+        const logonMin  = new Date(inicio).getHours() * 60 + new Date(inicio).getMinutes();
+        const diff = logonMin - escalaMin;
+        if (Math.abs(diff) <= 5) atrasoTag = '<span style="color:var(--verde);font-size:10px" title="No horário">✓</span>';
+        else if (diff > 5) atrasoTag = `<span style="color:#ED1C24;font-size:10px;font-weight:700" title="Atrasou ${diff} min">⚠ +${diff}min</span>`;
+        else atrasoTag = `<span style="color:#1565c0;font-size:10px" title="Adiantou ${-diff} min">−${-diff}min</span>`;
+      }
+      return `${inicioFmt} → ${fimFmt} ${atrasoTag}`;
+    }
+
+    /** Converte 'HH:MM' ou 'HH:MM:SS' em minutos desde 00:00 */
+    function _toMin(hms) {
+      if (!hms) return 0;
+      const [h, m] = String(hms).split(':');
+      return (parseInt(h, 10) || 0) * 60 + (parseInt(m, 10) || 0);
+    }
+
     function duracao(inicio, fim) {
       if (!inicio || !fim) return '—';
       const ms = new Date(fim) - new Date(inicio);
@@ -6936,13 +6969,23 @@ ${equipes.length > 0 ? `<div class="perf-section">
           </div>
           <div class="team-card-body">
             <div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>
+            ${(t.escala_inicio || t.escala_fim) ? `
             <div class="team-row">
-              <span class="team-row-label">Sessão</span>
-              <span style="color:var(--text);font-size:12px;display:flex;align-items:center;gap:5px">
-                ${sessaoAnterior(t.sessionBegin)
+              <span class="team-row-label">Escala</span>
+              <span style="color:var(--text);font-size:12px">
+                ${(t.escala_inicio || '').slice(0,5)} – ${(t.escala_fim || '').slice(0,5)}
+              </span>
+            </div>` : ''}
+            <div class="team-row">
+              <span class="team-row-label">${t.sessionEnd ? 'Logon → Logoff' : 'Logon'}</span>
+              <span style="color:var(--text);font-size:12px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+                ${sessaoAnterior(t.sessionBeginReal || t.sessionBegin)
             ? `<span style="background:#f39c12;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;letter-spacing:.03em">📅 DIA ANT.</span>`
             : ''}
-                ${fmtInicio(t.sessionBegin)} → ${t.sessionEnd ? fmt(t.sessionEnd) : 'em andamento'}
+                ${_horaLogon(t)}
+                ${t.relogouNoDia
+            ? `<span title="A equipe relogou durante o dia (sessão atual começou às ${fmt(t.sessionBegin)})" style="background:#fff8e1;color:#c49000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;border:1px solid #ffe082">⚠ relogou</span>`
+            : ''}
               </span>
             </div>
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
@@ -6967,7 +7010,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
       document.getElementById('modal-title').textContent = t.sigla || t.teamName;
       document.getElementById('modal-sub').textContent = `${regionalNome} · ${t.sectorId} · ${t.date}`;
-      const dur = duracao(t.sessionBegin, t.sessionEnd);
+      // Logon REAL (primeiro snapshot do dia). Pra retroativo, usa o que veio do backend.
+      const logonReal = t.sessionBeginReal || t.sessionBegin;
+      const dur = duracao(logonReal, t.sessionEnd);
       const colabs = t.collaborators || [];
       const sessoes = t.sessions || [];
       const sesoesHtml = sessoes.length > 0
@@ -6985,12 +7030,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
       <div class="modal-section">
         <div class="modal-section-title">Sessão do dia</div>
         <div class="info-grid">
-          <div class="info-item"><div class="lbl">Início</div><div class="val">${fmt(t.sessionBegin)}</div></div>
-          <div class="info-item"><div class="lbl">Fim</div><div class="val">${t.sessionEnd ? fmt(t.sessionEnd) : '— em andamento'}</div></div>
+          ${(t.escala_inicio || t.escala_fim) ? `
+          <div class="info-item">
+            <div class="lbl">Escala</div>
+            <div class="val">${(t.escala_inicio || '').slice(0,5)} – ${(t.escala_fim || '').slice(0,5)}</div>
+          </div>` : ''}
+          <div class="info-item"><div class="lbl">${t.relogouNoDia ? 'Logon REAL' : 'Início'}</div><div class="val">${fmt(logonReal)}</div></div>
+          <div class="info-item"><div class="lbl">${t.sessionEnd ? 'Logoff' : 'Fim'}</div><div class="val">${t.sessionEnd ? fmt(t.sessionEnd) : '— em andamento'}</div></div>
           <div class="info-item"><div class="lbl">Duração</div><div class="val">${dur}</div></div>
           <div class="info-item"><div class="lbl">Placa</div><div class="val"><span class="tag-placa">${t.vehiclePlate || '—'}</span></div></div>
           <div class="info-item"><div class="lbl">Check-in GPS</div><div class="val">${fmt(t.checkinTime)}</div></div>
-          <div class="info-item"><div class="lbl">Re-logins</div><div class="val">${t.relogins} desconexão(ões)</div></div>
+          <div class="info-item"><div class="lbl">Re-logins</div><div class="val">${t.relogins} desconexão(ões)${t.relogouNoDia ? ` <span style="color:#c49000;font-size:11px">⚠ sessão atual: ${fmt(t.sessionBegin)}</span>` : ''}</div></div>
         </div>
       </div>
       <div class="modal-section">

@@ -5,7 +5,7 @@
 
 const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/mockData');
 const { getTeamsBySector, REGIONAL_MAP } = require('./wpaService');
-const { isOficial } = require('./equipesOficiais');
+const { isOficial, getMeta } = require('./equipesOficiais');
 
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 
@@ -14,6 +14,79 @@ const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 function _filterOficiais(teams) {
   if (MODE === 'mock') return teams;
   return (teams || []).filter(t => isOficial(t.sigla || t.teamName));
+}
+
+// Data BRT no formato YYYY-MM-DD (mesma lógica usada em outros lugares).
+function _hojeBRT() {
+  return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Enriquecer teams com:
+ *   - escala_inicio / escala_fim (turno configurado em equipes_oficiais)
+ *   - sessionBeginReal: sessionBegin do PRIMEIRO snapshot do dia (não o atual).
+ *     Sem isso, equipes que relogaram aparecem como se tivessem começado tarde.
+ *
+ * Falha silenciosa: se o Supabase estiver fora ou ainda não tiver snapshots de hoje,
+ * apenas mantém os valores do WPA.
+ */
+async function _enrichComEscalaELogonReal(teams) {
+  if (!teams || teams.length === 0) return teams;
+
+  // 1) Escala vem do cache local (equipesOficiais)
+  teams.forEach(t => {
+    const meta = getMeta(t.sigla || t.teamName);
+    if (meta) {
+      t.escala_inicio = meta.escala_inicio || null;
+      t.escala_fim    = meta.escala_fim    || null;
+    }
+  });
+
+  // 2) sessionBeginReal: primeiro snapshot do dia (BRT) de cada equipe
+  try {
+    const { getClient } = require('./supabaseClient');
+    const sb = getClient();
+    if (!sb) return teams;
+    const hoje = _hojeBRT();
+    const siglas = teams.map(t => t.teamName || t.sigla).filter(Boolean);
+    if (siglas.length === 0) return teams;
+
+    // Pega TODOS os snapshots de hoje das equipes ativas (paginado, ordenado por captured_at ASC).
+    // Pra cada equipe, o PRIMEIRO snapshot vai ter o sessionBegin original do dia.
+    const primeiroSessionBegin = {};
+    let page = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from('snapshots')
+        .select('team_name, data, captured_at')
+        .eq('date', hoje)
+        .in('team_name', siglas)
+        .order('captured_at', { ascending: true })
+        .range(page * 1000, (page + 1) * 1000 - 1);
+      if (error) break;
+      if (!data || data.length === 0) break;
+      data.forEach(r => {
+        if (primeiroSessionBegin[r.team_name]) return; // já temos o primeiro
+        const sb1 = r.data?.sessionBegin || r.data?.session_begin || null;
+        if (sb1) primeiroSessionBegin[r.team_name] = sb1;
+      });
+      if (data.length < 1000) break;
+      page++;
+    }
+
+    teams.forEach(t => {
+      const nome = t.teamName || t.sigla;
+      const primeiro = primeiroSessionBegin[nome];
+      // Se há um primeiro snapshot e seu sessionBegin é DIFERENTE do atual,
+      // a equipe relogou. Salva o primeiro como sessionBeginReal e marca o flag.
+      t.sessionBeginReal = primeiro || t.sessionBegin || null;
+      t.relogouNoDia     = !!(primeiro && t.sessionBegin && primeiro !== t.sessionBegin);
+    });
+  } catch (err) {
+    console.warn('[dataService] enrich logon real falhou:', err.message);
+  }
+
+  return teams;
 }
 
 // ── SETORES POR REGIONAL ──────────────────────────────────────────────────────
@@ -35,7 +108,10 @@ async function getTeams(filters = {}) {
 
   // Busca em paralelo
   const resultados = await Promise.all(setores.map(s => getTeamsBySector(s)));
-  return _filterOficiais(resultados.flat());
+  const teams = _filterOficiais(resultados.flat());
+
+  // Enriquecer com escala (de equipes_oficiais) e sessionBeginReal (primeiro snapshot do dia)
+  return await _enrichComEscalaELogonReal(teams);
 }
 
 // ── GET TEAM DETAIL ───────────────────────────────────────────────────────────
