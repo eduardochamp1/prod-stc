@@ -3834,6 +3834,75 @@
     .mapa-filters input:focus,
     .mapa-filters select:focus { border-color: var(--amarelo); }
 
+    /* Dropdown custom de equipe (combobox com search) */
+    .mapa-team-dd {
+      position: relative;
+      display: inline-block;
+    }
+    .mapa-team-dd-toggle {
+      gap: 8px;
+    }
+    .mapa-team-dd-panel {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 100%;
+      max-width: 320px;
+      background: #fff;
+      border: 1px solid var(--cinza2);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 1000;
+      padding: 8px;
+    }
+    .mapa-team-dd-panel input[type=text] {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 12px;
+      border: 1px solid var(--cinza2);
+      border-radius: 5px;
+      outline: none;
+      margin-bottom: 6px;
+      box-sizing: border-box;
+    }
+    .mapa-team-dd-panel input[type=text]:focus { border-color: var(--amarelo); }
+    .mapa-team-dd-options {
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .mapa-team-dd-options .mapa-team-group {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text2);
+      text-transform: uppercase;
+      padding: 6px 4px 3px;
+      letter-spacing: 0.04em;
+      border-top: 1px solid var(--cinza2);
+    }
+    .mapa-team-dd-options .mapa-team-group:first-child { border-top: 0; }
+    .mapa-team-dd-options .mapa-team-opt {
+      padding: 6px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      border-radius: 5px;
+    }
+    .mapa-team-dd-options .mapa-team-opt:hover,
+    .mapa-team-dd-options .mapa-team-opt.highlight {
+      background: var(--amarelo);
+      color: var(--preto);
+    }
+    .mapa-team-dd-options .mapa-team-opt-meta {
+      font-size: 10px;
+      color: var(--text2);
+      margin-left: 4px;
+    }
+    .mapa-team-dd-options .mapa-team-empty {
+      padding: 12px 8px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text2);
+    }
+
     /* Badge pra notas com múltiplas visitas (rejeitada + reprogramada) */
     .mapa-visit-badge {
       display: inline-block;
@@ -4290,22 +4359,47 @@
             <span class="filter-label">Data</span>
             <input type="date" class="filter-select" id="mapa-date-input" style="min-width:140px" onchange="loadMapa()"/>
           </div>
+
+          <!-- Dropdown custom de equipe com campo de busca interno -->
           <div class="filter-group">
             <span class="filter-label">Equipe</span>
-            <input type="text"
-                   class="filter-select"
-                   id="mapa-team-select"
-                   list="mapa-team-list"
-                   placeholder="Digite a sigla (ex: ETGPR16)"
-                   autocomplete="off"
-                   style="min-width:220px"
-                   onchange="onMapaTeamChange()"
-                   oninput="onMapaTeamChange()" />
-            <datalist id="mapa-team-list"></datalist>
-            <button class="btn-refresh" onclick="clearMapaTeam()"
-                    style="font-size:11px;padding:4px 8px;margin-left:4px"
-                    title="Limpar seleção">✕</button>
+            <div class="mapa-team-dd" id="mapa-team-dd">
+              <input type="hidden" id="mapa-team-select" />
+              <button type="button" class="filter-select mapa-team-dd-toggle"
+                      id="mapa-team-toggle"
+                      style="min-width:220px;text-align:left;display:flex;align-items:center;justify-content:space-between;cursor:pointer"
+                      onclick="mapaTeamDDToggle(event)">
+                <span id="mapa-team-display" style="color:var(--text2)">— Selecione uma equipe —</span>
+                <span style="font-size:10px;opacity:0.6">▾</span>
+              </button>
+              <div class="mapa-team-dd-panel" id="mapa-team-panel" hidden>
+                <input type="text" id="mapa-team-search" placeholder="🔍 Pesquisar..."
+                       oninput="mapaTeamDDFilter(this.value)"
+                       onkeydown="mapaTeamDDKeydown(event)"
+                       autocomplete="off" />
+                <div class="mapa-team-dd-options" id="mapa-team-options"></div>
+              </div>
+            </div>
           </div>
+
+          <!-- Filtros de tipo e subcategoria — só visíveis após equipe selecionada -->
+          <div class="filter-group" id="mapa-tipo-group" style="display:none">
+            <span class="filter-label">Tipo</span>
+            <select class="filter-select" id="mapa-tipo-select"
+                    style="min-width:140px"
+                    onchange="mapaSetTipoFilter(this.value)">
+              <option value="">Todos os tipos</option>
+            </select>
+          </div>
+          <div class="filter-group" id="mapa-subcat-group" style="display:none">
+            <span class="filter-label">Subcategoria</span>
+            <select class="filter-select" id="mapa-subcat-select"
+                    style="min-width:160px"
+                    onchange="mapaSetSubcatFilter(this.value)">
+              <option value="">Todas</option>
+            </select>
+          </div>
+
           <button class="btn-refresh" onclick="loadMapa()">↻ Atualizar</button>
         </div>
         <div class="mapa-layout">
@@ -8143,52 +8237,113 @@ ${equipes.length > 0 ? `<div class="perf-section">
       _popularMapaTeamSelect();
     }
 
-    // Lista válida de siglas em memória (pra validar input do usuário no datalist)
-    let _mapaTeamSiglasValidas = new Set();
+    // ── Dropdown custom de equipe ──────────────────────────────────────────────
+    let _mapaTeamLista = [];   // [{sigla, regional, tipo}] — populado via /admin/equipes
+    let _mapaTeamFiltro = '';  // texto digitado no campo de busca
+    let _mapaTeamHighlight = -1; // índice do item destacado pelo teclado
 
     async function _popularMapaTeamSelect() {
       if (_mapaTeamLoaded) return;
-      const dl = document.getElementById('mapa-team-list');
-      if (!dl) return;
       try {
         const r = await fetch(`${API}/admin/equipes`);
         if (!r.ok) return;
         const { equipes } = await r.json();
-        const sorted = (equipes || []).filter(e => e.ativo)
+        _mapaTeamLista = (equipes || []).filter(e => e.ativo)
           .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
-
-        // Popula datalist — value = sigla, label = "Guarapari · EC" pra dar contexto
-        // ao usuário enquanto digita. Filtragem é nativa do browser.
-        dl.innerHTML = sorted.map(e => {
-          const regNome = e.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
-          const tipo = e.tipo ? ` · ${e.tipo}` : '';
-          return `<option value="${e.sigla}">${regNome}${tipo}</option>`;
-        }).join('');
-
-        _mapaTeamSiglasValidas = new Set(sorted.map(e => e.sigla));
         _mapaTeamLoaded = true;
+        _renderMapaTeamOptions();
       } catch {}
     }
 
-    /**
-     * Dispara loadMapa apenas quando a sigla digitada bate com uma equipe válida.
-     * Evita re-renderizar o mapa a cada caractere digitado.
-     */
-    function onMapaTeamChange() {
-      const el = document.getElementById('mapa-team-select');
-      if (!el) return;
-      const v = (el.value || '').toUpperCase().trim();
-      el.value = v;  // normaliza maiúscula
-      if (v === '' || _mapaTeamSiglasValidas.has(v)) {
-        loadMapa();
+    function _renderMapaTeamOptions() {
+      const box = document.getElementById('mapa-team-options');
+      if (!box) return;
+      const q = (_mapaTeamFiltro || '').toLowerCase().trim();
+      const filtrados = _mapaTeamLista.filter(e =>
+        !q || e.sigla.toLowerCase().includes(q) || (e.tipo || '').toLowerCase().includes(q)
+      );
+
+      if (filtrados.length === 0) {
+        box.innerHTML = '<div class="mapa-team-empty">Nenhuma equipe encontrada</div>';
+        _mapaTeamHighlight = -1;
+        return;
       }
-      // Se digitando parcial, espera completar antes de carregar
+
+      // Agrupa por regional
+      const gua = filtrados.filter(e => e.regional === 'GUA');
+      const cac = filtrados.filter(e => e.regional === 'CAC');
+
+      const renderGrupo = (titulo, list, baseIdx) => list.length === 0 ? '' : `
+        <div class="mapa-team-group">${titulo} (${list.length})</div>
+        ${list.map((e, i) => `
+          <div class="mapa-team-opt ${baseIdx + i === _mapaTeamHighlight ? 'highlight' : ''}"
+               data-sigla="${e.sigla}"
+               onclick="mapaTeamDDSelect('${e.sigla}')">
+            <strong>${e.sigla}</strong>
+            <span class="mapa-team-opt-meta">${e.tipo || ''}</span>
+          </div>
+        `).join('')}
+      `;
+
+      box.innerHTML = renderGrupo('Guarapari', gua, 0) + renderGrupo('Cachoeiro', cac, gua.length);
     }
 
-    function clearMapaTeam() {
-      const el = document.getElementById('mapa-team-select');
-      if (el) { el.value = ''; loadMapa(); }
+    function mapaTeamDDToggle(evt) {
+      evt?.stopPropagation();
+      const panel = document.getElementById('mapa-team-panel');
+      if (!panel) return;
+      const opening = panel.hasAttribute('hidden');
+      if (opening) {
+        panel.removeAttribute('hidden');
+        // Foca campo de busca e limpa filtro pra mostrar tudo
+        const search = document.getElementById('mapa-team-search');
+        if (search) { search.value = ''; _mapaTeamFiltro = ''; _renderMapaTeamOptions(); setTimeout(() => search.focus(), 0); }
+      } else {
+        panel.setAttribute('hidden', '');
+      }
     }
+
+    function mapaTeamDDFilter(v) {
+      _mapaTeamFiltro = v || '';
+      _mapaTeamHighlight = -1;
+      _renderMapaTeamOptions();
+    }
+
+    function mapaTeamDDKeydown(e) {
+      const panel = document.getElementById('mapa-team-panel');
+      if (!panel || panel.hasAttribute('hidden')) return;
+      const opts = [..._mapaTeamLista].filter(x => {
+        const q = (_mapaTeamFiltro || '').toLowerCase().trim();
+        return !q || x.sigla.toLowerCase().includes(q) || (x.tipo || '').toLowerCase().includes(q);
+      });
+      if (e.key === 'ArrowDown') { e.preventDefault(); _mapaTeamHighlight = Math.min(_mapaTeamHighlight + 1, opts.length - 1); _renderMapaTeamOptions(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); _mapaTeamHighlight = Math.max(_mapaTeamHighlight - 1, 0); _renderMapaTeamOptions(); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        // Se nenhum destacado, pega o primeiro
+        const idx = _mapaTeamHighlight >= 0 ? _mapaTeamHighlight : 0;
+        if (opts[idx]) mapaTeamDDSelect(opts[idx].sigla);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        panel.setAttribute('hidden', '');
+      }
+    }
+
+    function mapaTeamDDSelect(sigla) {
+      document.getElementById('mapa-team-select').value = sigla;
+      document.getElementById('mapa-team-display').textContent = sigla;
+      document.getElementById('mapa-team-display').style.color = 'var(--text)';
+      document.getElementById('mapa-team-panel').setAttribute('hidden', '');
+      loadMapa();
+    }
+
+    // Fecha o dropdown ao clicar fora
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('mapa-team-dd');
+      if (!dd || dd.contains(e.target)) return;
+      const panel = document.getElementById('mapa-team-panel');
+      if (panel) panel.setAttribute('hidden', '');
+    });
 
     async function loadMapa() {
       if (!_mapaMap) return; // ainda não inicializado
@@ -8297,22 +8452,236 @@ ${equipes.length > 0 ? `<div class="perf-section">
       });
     }
 
+    /**
+     * Popula os selects de Tipo e Subcategoria na barra do topo.
+     * Mostra os filtros apenas quando há equipe selecionada com dados.
+     */
+    function _mapaPopularFiltrosTopo(tipos, subcats) {
+      const tipoSel   = document.getElementById('mapa-tipo-select');
+      const subSel    = document.getElementById('mapa-subcat-select');
+      const tipoGrp   = document.getElementById('mapa-tipo-group');
+      const subGrp    = document.getElementById('mapa-subcat-group');
+      if (!tipoSel || !subSel) return;
+
+      // Só mostra os filtros se há equipe selecionada com dados disponíveis
+      const visivel = tipos.length > 0 || subcats.length > 0;
+      if (tipoGrp) tipoGrp.style.display = visivel ? '' : 'none';
+      if (subGrp)  subGrp.style.display  = visivel ? '' : 'none';
+
+      tipoSel.innerHTML = '<option value="">Todos os tipos</option>' +
+        tipos.map(t => `<option value="${t}" ${_mapaFilterTipo === t ? 'selected' : ''}>${t}</option>`).join('');
+      subSel.innerHTML = '<option value="">Todas</option>' +
+        subcats.map(s => `<option value="${s}" ${_mapaFilterSubcat === s ? 'selected' : ''}>${s}</option>`).join('');
+    }
+
+    /**
+     * MODO GERAL: 1 ponto por nota (local da obra) + rota OSRM única
+     * conectando todos em ordem cronológica de atendimento.
+     */
+    function _renderMapaModoGeral(allCardData, bounds, COR) {
+      // Filtra notas que devem aparecer no mapa: tem GPS + passa nos filtros UI
+      const visiveisData = _mapaAplicarFiltros(allCardData).filter(c => c.temGps);
+      if (visiveisData.length === 0) return;
+
+      // Ordena pela ordem cronológica do ponto representativo (mesmo critério da numeração)
+      const ordenados = [...visiveisData].sort((a, b) => {
+        const ra = _pontoRepresentativo(a.cps);
+        const rb = _pontoRepresentativo(b.cps);
+        return (ra ? new Date(ra.timestamp).getTime() : 0) - (rb ? new Date(rb.timestamp).getTime() : 0);
+      });
+
+      // Sequência de coordenadas para a rota OSRM (1 por nota)
+      const sequenciaCoords = [];
+
+      // Plota 1 marcador por nota — o local da obra (ponto representativo)
+      ordenados.forEach(({ nota, cps, num, cor }) => {
+        const rep = _pontoRepresentativo(cps);
+        if (!rep) return;
+        bounds.push([rep.latitude, rep.longitude]);
+        sequenciaCoords.push([rep.latitude, rep.longitude]);
+
+        // Marcador com pin colorido + número grande
+        const html = `
+          <div style="position:relative;width:36px;height:42px;cursor:pointer">
+            <svg viewBox="0 0 36 42" width="36" height="42" style="filter:drop-shadow(0 2px 3px rgba(0,0,0,.4))">
+              <path d="M18 0 C8 0 0 8 0 18 C0 30 18 42 18 42 C18 42 36 30 36 18 C36 8 28 0 18 0 Z" fill="${cor}"/>
+              <circle cx="18" cy="17" r="11" fill="#fff"/>
+            </svg>
+            <div style="position:absolute;top:7px;left:0;width:36px;text-align:center;
+                        font-weight:700;font-size:13px;color:${cor}">${num}</div>
+          </div>`;
+        const icon = L.divIcon({ className: '', html, iconSize: [36, 42], iconAnchor: [18, 42] });
+        const m = L.marker([rep.latitude, rep.longitude], { icon }).addTo(_mapaMap);
+
+        const tempoPercurso = (() => {
+          const dep = cps.find(c => c.event === 0);
+          const arr = cps.find(c => c.event === 1);
+          if (!dep || !arr) return '';
+          const min = Math.round((new Date(arr.timestamp) - new Date(dep.timestamp)) / 60000);
+          return `🚗 ${min} min até a chegada`;
+        })();
+
+        m.bindPopup(`
+          <div style="font-family:Roboto,sans-serif;min-width:200px;font-size:12px;line-height:1.5">
+            <div style="font-weight:700;font-size:13px;margin-bottom:4px">
+              <span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;margin-right:4px">${num}</span>
+              ${nota.tipo} · ${nota.numero}
+            </div>
+            ${nota.subCategoria ? `<div style="color:#555;margin-bottom:3px">${nota.subCategoria}</div>` : ''}
+            ${nota.endereco?.logradouro ? `<div style="font-size:11px;color:#666;margin-bottom:4px">📍 ${nota.endereco.logradouro}</div>` : ''}
+            <div style="font-size:11px;color:#666">${tempoPercurso}</div>
+            <div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee;font-size:11px;color:var(--verde);font-weight:700;cursor:pointer"
+                 onclick="mapaToggleNotaFilter('${nota.id}')">
+              🔎 Ver detalhes desta nota →
+            </div>
+          </div>`);
+        _mapaLayers.push(m);
+        _mapaCircleMap[nota.id] = m;
+      });
+
+      // Rota OSRM ÚNICA conectando todos os pontos em ordem
+      if (sequenciaCoords.length >= 2) {
+        // Fallback inicial: linha reta tracejada
+        const fallback = L.polyline(sequenciaCoords, {
+          color: '#555', weight: 2.5, dashArray: '6 5', opacity: 0.6,
+        }).addTo(_mapaMap);
+        _mapaLayers.push(fallback);
+
+        _fetchRouteGeometry(sequenciaCoords).then(geom => {
+          if (!geom) return;
+          _mapaMap.removeLayer(fallback);
+          _mapaLayers = _mapaLayers.filter(l => l !== fallback);
+          const route = L.geoJSON(geom, {
+            style: { color: '#0d47a1', weight: 4, opacity: 0.75 },
+          }).addTo(_mapaMap);
+          _mapaLayers.push(route);
+
+          if (typeof L.polylineDecorator === 'function') {
+            try {
+              const lineCoords = (geom.coordinates || []).map(c => [c[1], c[0]]);
+              if (lineCoords.length >= 2) {
+                const decorator = L.polylineDecorator(L.polyline(lineCoords), {
+                  patterns: [{
+                    offset: '5%', repeat: '6%',
+                    symbol: L.Symbol.arrowHead({
+                      pixelSize: 10, polygon: false,
+                      pathOptions: { color: '#0d47a1', weight: 3, opacity: 0.9 },
+                    }),
+                  }],
+                }).addTo(_mapaMap);
+                _mapaLayers.push(decorator);
+              }
+            } catch {}
+          }
+        }).catch(() => {});
+      }
+    }
+
+    /**
+     * MODO DETALHE: 1 nota selecionada — mostra TODOS os checkpoints dela
+     * com ícones por evento + rota OSRM tracejada conectando os pontos.
+     */
+    function _renderMapaModoDetalhe(allCardData, bounds, COR) {
+      const card = allCardData.find(c => c.nota.id === _mapaSelectedNoteId);
+      if (!card || !card.temGps) return;
+      const { nota, cps, cor, num } = card;
+
+      const coords = cps.map(c => [c.latitude, c.longitude]);
+
+      // Fallback inicial: linha reta tracejada
+      const fallback = L.polyline(coords, {
+        color: cor, weight: 2.5, dashArray: '6 5', opacity: 0.7,
+      }).addTo(_mapaMap);
+      _mapaLayers.push(fallback);
+
+      // Marcador para cada checkpoint
+      cps.forEach((cp, cpIdx) => {
+        bounds.push([cp.latitude, cp.longitude]);
+        const ev = cp.event;
+        const evCor  = _MAPA_CP_COLORS[Math.min(ev, 4)] || '#7a7a72';
+        const evIcon = CP_ICONS[ev] || '📌';
+        const evLbl  = CP_LABELS[ev] || `Evento ${ev}`;
+
+        const html = `
+          <div style="position:relative;width:30px;height:30px">
+            <div style="position:absolute;inset:0;background:${evCor};border:2px solid #fff;border-radius:50%;
+                        display:flex;align-items:center;justify-content:center;font-size:13px;
+                        box-shadow:0 2px 5px rgba(0,0,0,.35)">${evIcon}</div>
+            <div style="position:absolute;top:-7px;right:-7px;width:18px;height:18px;background:${cor};
+                        color:#fff;border:1.5px solid #fff;border-radius:50%;font-size:10px;font-weight:700;
+                        display:flex;align-items:center;justify-content:center">${cpIdx + 1}</div>
+          </div>`;
+        const icon = L.divIcon({ className: '', html, iconSize: [30, 30], iconAnchor: [15, 15] });
+
+        const m = L.marker([cp.latitude, cp.longitude], { icon }).addTo(_mapaMap);
+        m.bindPopup(`
+          <div style="font-family:Roboto,sans-serif;min-width:200px;font-size:12px;line-height:1.5">
+            <div style="font-weight:700;font-size:13px;margin-bottom:4px">
+              <span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;margin-right:4px">${nota.tipo}</span>${nota.numero}
+            </div>
+            <div style="font-weight:700;color:${evCor}">${cpIdx + 1}. ${evIcon} ${evLbl}</div>
+            <div style="color:#555;margin-top:3px">${_fmtNotaDate(cp.timestamp)}</div>
+            ${cp.mileage > 0 ? `<div style="font-size:11px;color:#666">${cp.mileage.toFixed(2)} km · 🔋 ${cp.battery ?? '?'}%</div>` : ''}
+          </div>`);
+        _mapaLayers.push(m);
+        _mapaCpMarkers[`${nota.id}:${cpIdx}`] = m;
+        if (cpIdx === 0) _mapaCircleMap[nota.id] = m;
+      });
+
+      // Rota OSRM SEGUINDO AS VIAS — linha tracejada conforme o usuário pediu
+      _fetchRouteGeometry(coords).then(geom => {
+        if (!geom) return;
+        _mapaMap.removeLayer(fallback);
+        _mapaLayers = _mapaLayers.filter(l => l !== fallback);
+        const route = L.geoJSON(geom, {
+          style: { color: cor, weight: 3.5, opacity: 0.85, dashArray: '8 6' },
+        }).addTo(_mapaMap);
+        _mapaLayers.push(route);
+
+        // Setas direcionais sobre a rota tracejada
+        if (typeof L.polylineDecorator === 'function') {
+          try {
+            const lineCoords = (geom.coordinates || []).map(c => [c[1], c[0]]);
+            if (lineCoords.length >= 2) {
+              const decorator = L.polylineDecorator(L.polyline(lineCoords), {
+                patterns: [{
+                  offset: '5%', repeat: '8%',
+                  symbol: L.Symbol.arrowHead({
+                    pixelSize: 9, polygon: false,
+                    pathOptions: { color: cor, weight: 2.5, opacity: 0.9 },
+                  }),
+                }],
+              }).addTo(_mapaMap);
+              _mapaLayers.push(decorator);
+            }
+          } catch {}
+        }
+      }).catch(() => {});
+    }
+
+    /**
+     * Pega o melhor checkpoint pra representar o "local da obra" no modo geral.
+     * Prioridade: ev:1 (chegada) > ev:2 (início trabalho) > ev:3 (conclusão) > último.
+     */
+    function _pontoRepresentativo(cps) {
+      if (!cps?.length) return null;
+      const ev1 = cps.find(c => c.event === 1);
+      if (ev1) return ev1;
+      const ev2 = cps.find(c => c.event === 2);
+      if (ev2) return ev2;
+      const ev3 = cps.find(c => c.event === 3);
+      if (ev3) return ev3;
+      return cps[cps.length - 1];
+    }
+
     function _renderMapaDia(data) {
       const { notes: allNotes, teamInfo } = data;
-
-      // Filtro de "nota única no mapa" tem precedência sobre filtros de UI:
-      // se o usuário clicou em uma nota específica, mostra só ela no mapa.
-      // Os filtros da sidebar afetam APENAS a lista exibida + quais notas
-      // são candidatas a aparecer no mapa quando nenhuma está selecionada.
-      const notes = _mapaSelectedNoteId
-        ? allNotes.filter(n => n.id === _mapaSelectedNoteId)
-        : allNotes;
 
       // Limpa camadas anteriores
       _mapaLayers.forEach(l => _mapaMap.removeLayer(l));
       _mapaLayers = [];
       _mapaCircleMap = {};
-      _mapaCpMarkers = {}; // { 'noteId:idx' -> marker }
+      _mapaCpMarkers = {};
 
       const COR = {
         concluida:  '#086738',
@@ -8322,133 +8691,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         vistoriada: '#3b82f6',
       };
 
-      const bounds   = [];
-      const cardData = [];
-
-      // Numeração estável baseada em allNotes (não muda ao filtrar).
-      // Só conta notas que têm GPS — assim a numeração visível no mapa bate
-      // exatamente com a numeração da sidebar.
-      const numByNoteId = {};
-      let _nNum = 0;
-      allNotes.forEach(n => {
-        const has = (n.checkpoints || []).some(c => c.latitude && c.longitude);
-        if (has) { _nNum++; numByNoteId[n.id] = _nNum; }
-      });
-
-      // Renderização síncrona dos pontos + linha tracejada (fallback)
-      // O routing OSRM é assíncrono e substitui a linha tracejada quando chega.
-      notes.forEach(nota => {
-        const rawCps = (nota.checkpoints || []).filter(c => c.latitude && c.longitude);
-        if (!rawCps.length) return;
-        // Ordena por timestamp pra garantir trajeto cronológico correto
-        const cps = [...rawCps].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-        const cor = COR[nota.status] || '#888';
-        const numLocal = numByNoteId[nota.id] || '?';
-
-        // 1) Coordenadas para a polyline
-        const coords = cps.map(c => [c.latitude, c.longitude]);
-
-        // Fallback inicial: linha reta tracejada (substituída pela rota OSRM ao chegar)
-        const fallback = L.polyline(coords, {
-          color: cor, weight: 2.5, dashArray: '6 5', opacity: 0.7,
-        }).addTo(_mapaMap);
-        _mapaLayers.push(fallback);
-
-        // 2) Marcador por checkpoint (ícone do evento)
-        cps.forEach((cp, cpIdx) => {
-          bounds.push([cp.latitude, cp.longitude]);
-          const ev = cp.event;
-          const evCor = _MAPA_CP_COLORS[Math.min(ev, 4)] || '#7a7a72';
-          const evIcon = CP_ICONS[ev] || '📌';
-          const evLbl  = CP_LABELS[ev] || `Evento ${ev}`;
-
-          const html = `
-            <div style="position:relative;width:30px;height:30px">
-              <div style="position:absolute;inset:0;background:${evCor};border:2px solid #fff;border-radius:50%;
-                          display:flex;align-items:center;justify-content:center;font-size:13px;
-                          box-shadow:0 2px 5px rgba(0,0,0,.35)">${evIcon}</div>
-              <div style="position:absolute;top:-7px;right:-7px;width:16px;height:16px;background:${cor};
-                          color:#fff;border:1.5px solid #fff;border-radius:50%;font-size:9px;font-weight:700;
-                          display:flex;align-items:center;justify-content:center">${numLocal}</div>
-            </div>`;
-          const icon = L.divIcon({ className: '', html, iconSize: [30, 30], iconAnchor: [15, 15] });
-
-          const m = L.marker([cp.latitude, cp.longitude], { icon }).addTo(_mapaMap);
-          m.bindPopup(`
-            <div style="font-family:Roboto,sans-serif;min-width:200px;font-size:12px;line-height:1.5">
-              <div style="font-weight:700;font-size:13px;margin-bottom:4px">
-                <span style="background:${cor};color:#fff;padding:1px 7px;border-radius:4px;margin-right:4px">${nota.tipo}</span>${nota.numero}
-              </div>
-              <div style="font-weight:700;color:${evCor}">${evIcon} ${evLbl}</div>
-              <div style="color:#555;margin-top:3px">${_fmtNotaDate(cp.timestamp)}</div>
-              ${cp.mileage > 0 ? `<div style="font-size:11px;color:#666">${cp.mileage.toFixed(2)} km · 🔋 ${cp.battery ?? '?'}%</div>` : ''}
-            </div>`);
-          _mapaLayers.push(m);
-          _mapaCpMarkers[`${nota.id}:${cpIdx}`] = m;
-
-          // Marcador do PRIMEIRO checkpoint = também é o "foco" do card da nota
-          if (cpIdx === 0) _mapaCircleMap[nota.id] = m;
-        });
-
-        // 3) OSRM async — substitui a linha tracejada pela rota pelas vias
-        _fetchRouteGeometry(coords).then(geom => {
-          if (!geom) return; // mantém fallback tracejado
-          _mapaMap.removeLayer(fallback);
-          _mapaLayers = _mapaLayers.filter(l => l !== fallback);
-          const route = L.geoJSON(geom, {
-            style: { color: cor, weight: 4, opacity: 0.85 },
-          }).addTo(_mapaMap);
-          _mapaLayers.push(route);
-
-          // Setas direcionais sobre a rota — mostra a direção do trajeto
-          // (a cada ~7% do comprimento, pequena seta na cor do status).
-          if (typeof L.polylineDecorator === 'function') {
-            try {
-              // Extrai linhas do GeoJSON (LineString → [[lng,lat], ...])
-              const lineCoords = (geom.coordinates || []).map(c => [c[1], c[0]]);
-              if (lineCoords.length >= 2) {
-                const decorator = L.polylineDecorator(L.polyline(lineCoords), {
-                  patterns: [{
-                    offset: '5%',
-                    repeat: '8%',
-                    symbol: L.Symbol.arrowHead({
-                      pixelSize: 9,
-                      polygon: false,
-                      pathOptions: { color: cor, weight: 2.5, opacity: 0.9 },
-                    }),
-                  }],
-                }).addTo(_mapaMap);
-                _mapaLayers.push(decorator);
-              }
-            } catch (e) { /* polylineDecorator não carregou — segue sem setas */ }
-          }
-        }).catch(() => {});
-
-        // 4) Tempos / distâncias para o sidebar
-        const dep  = cps.find(c => c.event === 0);
-        const arr  = cps.find(c => c.event === 1);
-        const exec = cps.find(c => c.event === 2);
-        const conc = cps.find(c => c.event === 3);
-        const dispMin = (dep && arr)
-          ? Math.round((new Date(arr.timestamp) - new Date(dep.timestamp)) / 60000) : null;
-        const execMin = (exec && conc)
-          ? Math.round((new Date(conc.timestamp) - new Date(exec.timestamp)) / 60000) : null;
-        const distKm  = (dep && arr && arr.mileage != null && dep.mileage != null && arr.mileage > dep.mileage)
-          ? (arr.mileage - dep.mileage).toFixed(1) : null;
-
-        cardData.push({ nota, cps, num: numLocal, dispMin, execMin, distKm, cor });
-      });
-
-      // Ajusta zoom ao conteúdo
-      if (bounds.length > 1) {
-        _mapaMap.fitBounds(bounds, { padding: [40, 40] });
-      } else if (bounds.length === 1) {
-        _mapaMap.setView(bounds[0], 15);
-      }
-
-      // ── Sidebar: monta cardData de TODAS as notas (mesmo sem GPS) ───────────────
-      // Notas sem GPS aparecem na lista (com aviso) mas não no mapa.
+      // Pré-calcula cardData de TODAS as notas (usado pra sidebar e numeração)
       const allCardData = [];
       allNotes.forEach(nota => {
         const rawCps = (nota.checkpoints || []).filter(c => c.latitude && c.longitude);
@@ -8466,16 +8709,52 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const visitas = _contarVisitas(cps);
         allCardData.push({
           nota, cps,
-          num: numByNoteId[nota.id] || '?',
           dispMin, execMin, distKm, visitas,
           temGps: cps.length > 0,
           cor: COR[nota.status] || '#888',
         });
       });
 
+      // Numeração estável baseada em allCardData.
+      // No modo GERAL: ordenada cronologicamente pelo ponto representativo.
+      // No modo DETALHE: irrelevante (só uma nota visível).
+      // Notas sem GPS NÃO recebem número (não aparecem no mapa).
+      const numByNoteId = {};
+      const ordenadaPorTempo = allCardData
+        .filter(c => c.temGps)
+        .map(c => {
+          const rep = _pontoRepresentativo(c.cps);
+          return { id: c.nota.id, t: rep ? new Date(rep.timestamp).getTime() : 0 };
+        })
+        .sort((a, b) => a.t - b.t);
+      ordenadaPorTempo.forEach((item, i) => { numByNoteId[item.id] = i + 1; });
+
+      // Adiciona num/cor em cada cardData (depois da numeração estar pronta)
+      allCardData.forEach(c => { c.num = numByNoteId[c.nota.id] || '?'; });
+
+      const bounds = [];
+
+      // ── DOIS MODOS DE RENDERIZAÇÃO ──────────────────────────────────────────
+      if (_mapaSelectedNoteId) {
+        // ─── MODO DETALHE: 1 nota selecionada, mostra TODOS checkpoints ─────
+        _renderMapaModoDetalhe(allCardData, bounds, COR);
+      } else {
+        // ─── MODO GERAL: 1 ponto por nota + rota OSRM única ─────────────────
+        _renderMapaModoGeral(allCardData, bounds, COR);
+      }
+
+      // Ajusta zoom ao conteúdo
+      if (bounds.length > 1) {
+        _mapaMap.fitBounds(bounds, { padding: [40, 40] });
+      } else if (bounds.length === 1) {
+        _mapaMap.setView(bounds[0], 15);
+      }
+
+      // allCardData já foi montado no início (logo após limpar layers).
       if (!allCardData.length) {
         document.getElementById('mapa-sidebar-list').innerHTML =
           '<div class="empty-state" style="font-size:12px">Nenhuma nota encontrada para essa equipe e data.</div>';
+        _mapaPopularFiltrosTopo([], []);
         return;
       }
 
@@ -8483,9 +8762,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const stats = { concluida: 0, executada: 0, rejeitada: 0, baixada: 0 };
       allCardData.forEach(c => { stats[c.nota.status] = (stats[c.nota.status] || 0) + 1; });
 
-      // Listas únicas de tipos e subcategorias presentes (para popular selects)
+      // Listas únicas de tipos e subcategorias presentes — popula selects do topo
       const tiposUnicos   = [...new Set(allCardData.map(c => c.nota.tipo).filter(Boolean))].sort();
       const subcatsUnicas = [...new Set(allCardData.map(c => c.nota.subCategoria).filter(Boolean))].sort();
+      _mapaPopularFiltrosTopo(tiposUnicos, subcatsUnicas);
 
       // Aplica filtros da UI pra decidir o que aparece na lista
       const filteredCardData = _mapaAplicarFiltros(allCardData);
@@ -8522,20 +8802,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
           ${statCard('baixada',   'Em carteira', stats.baixada || 0, COR.baixada)}
         </div>`;
 
-      // Linha de filtros (busca + tipo + subcat)
-      const tipoOpts = tiposUnicos.map(t => `<option value="${t}" ${_mapaFilterTipo === t ? 'selected' : ''}>${t}</option>`).join('');
-      const subOpts  = subcatsUnicas.map(s => `<option value="${s}" ${_mapaFilterSubcat === s ? 'selected' : ''}>${s}</option>`).join('');
+      // Linha compacta de busca por número (tipo/subcat estão na barra do topo agora)
       const filtersHtml = `
         <div class="mapa-filters">
           <input type="text" placeholder="🔍 Pesquisar nº da nota..."
                  value="${_mapaFilterSearch.replace(/"/g, '&quot;')}"
                  oninput="mapaSetSearchFilter(this.value)" />
-          <select onchange="mapaSetTipoFilter(this.value)">
-            <option value="">Todos os tipos</option>${tipoOpts}
-          </select>
-          <select onchange="mapaSetSubcatFilter(this.value)">
-            <option value="">Todas as subcategorias</option>${subOpts}
-          </select>
           ${(_mapaFilterStatus || _mapaFilterSearch || _mapaFilterTipo || _mapaFilterSubcat) ? `
           <button class="btn-refresh" onclick="mapaResetarFiltros()"
                   style="font-size:10px;padding:3px 6px;background:var(--cinza2);color:var(--text)">
