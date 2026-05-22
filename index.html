@@ -4524,33 +4524,35 @@
               <option value="ALL">Todas as equipes</option>
             </select>
           </div>
-          <div class="filter-group">
-            <span class="filter-label">Tipo Serviço</span>
-            <select class="filter-select" id="graf-tipo-servico-select" onchange="loadGraficos()" style="min-width:140px">
-              <option value="ALL">Todos</option>
-              <option value="SF">SF (Cortes)</option>
-              <option value="DD">DD (Distribuição)</option>
-              <option value="MD">MD (Medição)</option>
-            </select>
+        </div>
+
+        <!-- Segunda linha de filtros: Tipos de serviço + subcategorias + botões -->
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px dashed var(--cinza2)">
+          <div class="tipos-filter-wrap" id="graf-tipos-wrap">
+            <button class="tipos-filter-btn" id="graf-tipos-btn" onclick="grafToggleTiposPanel(event)">
+              🔧 Tipos <span class="tipos-filter-badge" id="graf-tipos-badge"></span>
+            </button>
+            <div class="tipos-filter-panel" id="graf-tipos-panel">
+              <div class="tipos-filter-actions">
+                <button class="tipos-filter-action" onclick="grafToggleAllTipos(true)">Todos</button>
+                <button class="tipos-filter-action" onclick="grafToggleAllTipos(false)">Nenhum</button>
+              </div>
+              <div id="graf-tipos-checkboxes"></div>
+            </div>
           </div>
-          <div class="filter-group">
-            <span class="filter-label">Subcategoria</span>
-            <select class="filter-select" id="graf-subcat-select" onchange="loadGraficos()" style="min-width:160px">
-              <option value="ALL">Todas</option>
-              <optgroup label="SF (Cortes)">
-                <option value="L0">L0 — Corte Disjuntor</option>
-                <option value="L1">L1 — Corte Borne</option>
-              </optgroup>
-              <optgroup label="DD (Distribuição)">
-                <option value="C93">C93 — Subs Ramal</option>
-                <option value="BTZ013">BTZ013 — Sub CS</option>
-              </optgroup>
-              <optgroup label="MD (Medição)">
-                <option value="OBSOLETO">Subs Obsoleto</option>
-                <option value="TL11">Subs TL11</option>
-              </optgroup>
-            </select>
+          <div class="tipos-filter-wrap" id="graf-subcats-wrap">
+            <button class="tipos-filter-btn" id="graf-subcats-btn" onclick="grafToggleSubcatsPanel(event)">
+              📑 Subcategorias <span class="tipos-filter-badge" id="graf-subcats-badge"></span>
+            </button>
+            <div class="tipos-filter-panel" id="graf-subcats-panel">
+              <div class="tipos-filter-actions">
+                <button class="tipos-filter-action" onclick="grafToggleAllSubcats(true)">Todas</button>
+                <button class="tipos-filter-action" onclick="grafToggleAllSubcats(false)">Nenhuma</button>
+              </div>
+              <div id="graf-subcats-checkboxes"></div>
+            </div>
           </div>
+          <div style="flex:1"></div>
           <button class="btn-refresh" onclick="loadGraficos()">↻ Atualizar</button>
           <button class="btn-refresh" id="btn-export-graf-xlsx"
             onclick="downloadGraficosXLSX()"
@@ -5181,6 +5183,171 @@
       }
     }
 
+    // ── Filtros multi-select da aba Gráficos ─────────────────────────────────
+    // Tipos disponíveis com suas subcategorias (espelha PROD_LINHAS).
+    // Subcategoria 'OUTROS' = catch-all do tipo (notas que não bateram em nenhuma subcategoria conhecida).
+    const GRAF_TIPOS_SUBCATS = {
+      LN: { nome: 'Ligação Nova',              subcats: [] },
+      LE: { nome: 'Ligação Existente',         subcats: [] },
+      DL: { nome: 'Desligamento',              subcats: [] },
+      MD: { nome: 'Modificação',               subcats: [
+        { code: 'OBSOLETO', nome: 'Subs Obsoleto' },
+        { code: 'TL11',     nome: 'Subs TL11' },
+        { code: 'OUTROS',   nome: 'MD Outros' },
+      ]},
+      SF: { nome: 'Suspensão de Fornecimento', subcats: [
+        { code: 'L0',     nome: 'Corte Disjuntor' },
+        { code: 'L1',     nome: 'Corte Borne' },
+        { code: 'OUTROS', nome: 'SF Outros' },
+      ]},
+      RL: { nome: 'Religa',                    subcats: [] },
+      UG: { nome: 'Uso Geral',                 subcats: [] },
+      DD: { nome: 'Falhas para Distribuição',  subcats: [
+        { code: 'C93',    nome: 'Subs Ramal' },
+        { code: 'BTZ013', nome: 'Substituição CS' },
+        { code: 'OUTROS', nome: 'DD Outros' },
+      ]},
+      II: { nome: 'Inspeção de Irregularidade',subcats: [] },
+      PO: { nome: 'Ordem Prioritária',         subcats: [] },
+      SO: { nome: 'SO',                        subcats: [] },
+      RD: { nome: 'RD',                        subcats: [] },
+    };
+
+    // Estado dos filtros: todos selecionados por padrão
+    let grafTiposSel   = new Set(Object.keys(GRAF_TIPOS_SUBCATS));
+    let grafSubcatsSel = new Set(); // populado dinamicamente conforme tipos selecionados
+
+    function _grafSubcatsDisponiveis() {
+      const out = [];
+      [...grafTiposSel].forEach(tipo => {
+        (GRAF_TIPOS_SUBCATS[tipo]?.subcats || []).forEach(sc => {
+          out.push({ tipo, code: sc.code, nome: sc.nome });
+        });
+      });
+      return out;
+    }
+
+    function _grafRenderTiposCheckboxes() {
+      const box = document.getElementById('graf-tipos-checkboxes');
+      if (!box) return;
+      box.innerHTML = Object.entries(GRAF_TIPOS_SUBCATS).map(([code, info]) => `
+        <label style="display:flex;align-items:center;gap:6px;padding:4px 0;cursor:pointer">
+          <input type="checkbox" value="${code}" ${grafTiposSel.has(code) ? 'checked' : ''}
+                 onchange="grafToggleTipo('${code}', this.checked)" />
+          <span style="background:var(--cinza1);color:var(--text);font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px">${code}</span>
+          <span style="font-size:12px">${info.nome}</span>
+        </label>
+      `).join('');
+      _grafAtualizarBadgeTipos();
+    }
+
+    function _grafRenderSubcatsCheckboxes() {
+      const box = document.getElementById('graf-subcats-checkboxes');
+      if (!box) return;
+      const disponiveis = _grafSubcatsDisponiveis();
+      if (disponiveis.length === 0) {
+        box.innerHTML = '<div style="font-size:11px;color:var(--text2);padding:6px">Nenhuma subcategoria nos tipos selecionados</div>';
+        _grafAtualizarBadgeSubcats();
+        return;
+      }
+      // Agrupa por tipo
+      const porTipo = {};
+      disponiveis.forEach(s => { (porTipo[s.tipo] ||= []).push(s); });
+      box.innerHTML = Object.entries(porTipo).map(([tipo, list]) => `
+        <div style="font-size:10px;font-weight:700;color:var(--text2);margin-top:8px;padding-top:4px;border-top:1px solid var(--cinza2)">${tipo} — ${GRAF_TIPOS_SUBCATS[tipo].nome}</div>
+        ${list.map(s => {
+          const key = `${s.tipo}/${s.code}`;
+          return `
+            <label style="display:flex;align-items:center;gap:6px;padding:3px 0;padding-left:10px;cursor:pointer">
+              <input type="checkbox" value="${key}" ${grafSubcatsSel.has(key) ? 'checked' : ''}
+                     onchange="grafToggleSubcat('${key}', this.checked)" />
+              <span style="font-size:11px">${s.nome}</span>
+              <span style="margin-left:auto;font-size:9px;color:var(--text2)">${s.code}</span>
+            </label>`;
+        }).join('')}
+      `).join('');
+      _grafAtualizarBadgeSubcats();
+    }
+
+    function _grafAtualizarBadgeTipos() {
+      const badge = document.getElementById('graf-tipos-badge');
+      const total = Object.keys(GRAF_TIPOS_SUBCATS).length;
+      if (badge) badge.textContent = grafTiposSel.size === total ? 'Todos' : `${grafTiposSel.size}/${total}`;
+    }
+
+    function _grafAtualizarBadgeSubcats() {
+      const badge = document.getElementById('graf-subcats-badge');
+      const total = _grafSubcatsDisponiveis().length;
+      if (!badge) return;
+      if (total === 0) { badge.textContent = '—'; return; }
+      badge.textContent = grafSubcatsSel.size === total ? 'Todas' : `${grafSubcatsSel.size}/${total}`;
+    }
+
+    function grafToggleTipo(code, checked) {
+      if (checked) grafTiposSel.add(code); else grafTiposSel.delete(code);
+      // Remove subcategorias de tipos que não estão mais selecionados
+      const validas = new Set(_grafSubcatsDisponiveis().map(s => `${s.tipo}/${s.code}`));
+      grafSubcatsSel = new Set([...grafSubcatsSel].filter(k => validas.has(k)));
+      // Se o tipo foi habilitado e tem subcats, marca todas como default
+      if (checked) {
+        (GRAF_TIPOS_SUBCATS[code]?.subcats || []).forEach(s => grafSubcatsSel.add(`${code}/${s.code}`));
+      }
+      _grafRenderSubcatsCheckboxes();
+      _grafAtualizarBadgeTipos();
+      loadGraficos();
+    }
+
+    function grafToggleSubcat(key, checked) {
+      if (checked) grafSubcatsSel.add(key); else grafSubcatsSel.delete(key);
+      _grafAtualizarBadgeSubcats();
+      loadGraficos();
+    }
+
+    function grafToggleAllTipos(all) {
+      grafTiposSel = all ? new Set(Object.keys(GRAF_TIPOS_SUBCATS)) : new Set();
+      // Sincroniza subcategorias
+      if (all) grafSubcatsSel = new Set(_grafSubcatsDisponiveis().map(s => `${s.tipo}/${s.code}`));
+      else     grafSubcatsSel = new Set();
+      _grafRenderTiposCheckboxes();
+      _grafRenderSubcatsCheckboxes();
+      loadGraficos();
+    }
+
+    function grafToggleAllSubcats(all) {
+      grafSubcatsSel = all
+        ? new Set(_grafSubcatsDisponiveis().map(s => `${s.tipo}/${s.code}`))
+        : new Set();
+      _grafRenderSubcatsCheckboxes();
+      loadGraficos();
+    }
+
+    function grafToggleTiposPanel(e) {
+      e?.stopPropagation();
+      document.getElementById('graf-tipos-panel')?.classList.toggle('open');
+      document.getElementById('graf-subcats-panel')?.classList.remove('open');
+    }
+    function grafToggleSubcatsPanel(e) {
+      e?.stopPropagation();
+      document.getElementById('graf-subcats-panel')?.classList.toggle('open');
+      document.getElementById('graf-tipos-panel')?.classList.remove('open');
+    }
+
+    // Fecha painéis ao clicar fora
+    document.addEventListener('click', (e) => {
+      ['graf-tipos', 'graf-subcats'].forEach(prefix => {
+        const wrap = document.getElementById(prefix + '-wrap');
+        const panel = document.getElementById(prefix + '-panel');
+        if (wrap && panel && !wrap.contains(e.target)) panel.classList.remove('open');
+      });
+    });
+
+    // Inicializa: marca todos os tipos + todas subcategorias de MD/SF/DD
+    (function _grafInitFiltros() {
+      _grafRenderTiposCheckboxes();
+      grafSubcatsSel = new Set(_grafSubcatsDisponiveis().map(s => `${s.tipo}/${s.code}`));
+      _grafRenderSubcatsCheckboxes();
+    })();
+
     async function loadGraficos() {
       initGraficos();
       await _popularDropdownEquipes();
@@ -5276,24 +5443,45 @@
       // Sem escalonamento — gauge sempre mostra a meta mensal cheia configurada
 
       // ── Definição dos gauges ─────────────────────────────────────────────
+      // Inclui TODOS os tipos+subcategorias. Filtros (grafTiposSel + grafSubcatsSel)
+      // determinam quais aparecem visualmente.
       // qtd:true        → usa quantidades[] em vez de totais[] (ex: C93 = ramais)
       // useCsCycle:true → usa csData (ciclo 16-15) em vez do range global
-      // tipo            → tipo de serviço (SF/DD/MD) usado pelos filtros
       const GAUGE_DEF_FULL = [
-        { key: 'L0',      label: 'Corte L0',  metaKey: 'L0',      tipo: 'SF' },
-        { key: 'L1',      label: 'Corte L1',  metaKey: 'L1',      tipo: 'SF' },
-        { key: 'C93',     label: 'Ramal',     metaKey: 'C93',     tipo: 'DD', qtd: true },
-        { key: 'OBSOLETO',label: 'Obsoleto',  metaKey: 'OBSOLETO',tipo: 'MD' },
-        { key: 'TL11',    label: 'TL11',      metaKey: 'TL11',    tipo: 'MD' },
-        { key: 'BTZ013',  label: 'Sub CS',    metaKey: 'BTZ013',  tipo: 'DD', useCsCycle: true },
+        // SF
+        { key: 'L0',         label: 'Corte L0',        metaKey: 'L0',       tipo: 'SF', subcat: 'L0' },
+        { key: 'L1',         label: 'Corte L1',        metaKey: 'L1',       tipo: 'SF', subcat: 'L1' },
+        { key: 'SF_OUTROS',  label: 'SF Outros',       metaKey: null,       tipo: 'SF', subcat: 'OUTROS', totalKey: 'SF_OUTROS' },
+        // MD
+        { key: 'OBSOLETO',   label: 'Obsoleto',        metaKey: 'OBSOLETO', tipo: 'MD', subcat: 'OBSOLETO' },
+        { key: 'TL11',       label: 'TL11',            metaKey: 'TL11',     tipo: 'MD', subcat: 'TL11' },
+        { key: 'MD_OUTROS',  label: 'MD Outros',       metaKey: null,       tipo: 'MD', subcat: 'OUTROS', totalKey: 'MD_OUTROS' },
+        // DD
+        { key: 'C93',        label: 'Ramal',           metaKey: 'C93',      tipo: 'DD', subcat: 'C93',    qtd: true },
+        { key: 'BTZ013',     label: 'Sub CS',          metaKey: 'BTZ013',   tipo: 'DD', subcat: 'BTZ013', useCsCycle: true },
+        { key: 'DD_OUTROS',  label: 'DD Outros',       metaKey: null,       tipo: 'DD', subcat: 'OUTROS', totalKey: 'DD_OUTROS' },
+        // Tipos sem subcategoria — gauge mostra contagem direta do tipo
+        { key: 'LN',         label: 'Ligação Nova',         metaKey: 'LN',  tipo: 'LN', totalKey: 'LN' },
+        { key: 'LE',         label: 'Ligação Existente',    metaKey: 'LE',  tipo: 'LE', totalKey: 'LE' },
+        { key: 'DL',         label: 'Desligamento',         metaKey: 'DL',  tipo: 'DL', totalKey: 'DL' },
+        { key: 'RL',         label: 'Religa',               metaKey: 'RL',  tipo: 'RL', totalKey: 'RL' },
+        { key: 'UG',         label: 'Uso Geral',            metaKey: 'UG',  tipo: 'UG', totalKey: 'UG' },
+        { key: 'II',         label: 'Insp. Irregularidade', metaKey: 'II',  tipo: 'II', totalKey: 'II' },
+        { key: 'PO',         label: 'Ordem Prioritária',    metaKey: 'PO',  tipo: 'PO', totalKey: 'PO' },
+        { key: 'SO',         label: 'SO',                   metaKey: 'SO',  tipo: 'SO', totalKey: 'SO' },
+        { key: 'RD',         label: 'RD',                   metaKey: 'RD',  tipo: 'RD', totalKey: 'RD' },
       ];
 
-      // Filtros visuais: tipo serviço (SF/DD/MD) + subcategoria específica (L0/C93/etc)
-      const filtroTipo   = document.getElementById('graf-tipo-servico-select')?.value || 'ALL';
-      const filtroSubcat = document.getElementById('graf-subcat-select')?.value || 'ALL';
+      // Aplica filtros multi-select (Tipos + Subcategorias)
       const GAUGE_DEF = GAUGE_DEF_FULL.filter(g => {
-        if (filtroTipo   !== 'ALL' && g.tipo !== filtroTipo)   return false;
-        if (filtroSubcat !== 'ALL' && g.key  !== filtroSubcat) return false;
+        // Filtro de tipo: só mostra se o tipo está marcado
+        if (!grafTiposSel.has(g.tipo)) return false;
+        // Filtro de subcategoria: se o tipo tem subcats e o usuário marcou alguma específica
+        const tipoTemSubcats = (GRAF_TIPOS_SUBCATS[g.tipo]?.subcats || []).length > 0;
+        if (tipoTemSubcats && g.subcat) {
+          const key = `${g.tipo}/${g.subcat}`;
+          return grafSubcatsSel.has(key);
+        }
         return true;
       });
 
