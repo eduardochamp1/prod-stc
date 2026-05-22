@@ -5526,8 +5526,26 @@
 </div>`;
       }).join('');
 
-      // ── KPIs resumo ─────────────────────────────────────────────────────
-      const equipes = equipeData.equipes || [];
+      // ── KPIs resumo (aplicando filtro de Tipos) ────────────────────────
+      // Recalcula total/média de cada equipe considerando APENAS os tipos
+      // marcados em grafTiposSel. Sem isso, KPIs e tabela mostram tipos que
+      // o usuário desmarcou — bate de cabeça com a regra "filtros se aplicam".
+      const tiposVisiveis = grafTiposSel;
+      const todosOsTiposMarcados = tiposVisiveis.size === Object.keys(GRAF_TIPOS_SUBCATS).length;
+
+      const equipesRaw = equipeData.equipes || [];
+      const equipes = equipesRaw.map(e => {
+        if (todosOsTiposMarcados) return e;  // sem filtro = usa total original
+        const porTipo = e.por_tipo || {};
+        const totalFiltrado = Object.entries(porTipo)
+          .filter(([t]) => tiposVisiveis.has(t))
+          .reduce((s, [, v]) => s + (Number(v) || 0), 0);
+        const mediaFiltrada = e.dias_trabalhados > 0 ? totalFiltrado / e.dias_trabalhados : 0;
+        return { ...e, total: totalFiltrado, media: mediaFiltrada };
+      })
+      .filter(e => todosOsTiposMarcados || e.total > 0)  // remove equipes sem produção nos tipos filtrados
+      .sort((a, b) => b.media - a.media);                // re-ordena pela nova média
+
       const totalEquipes = equipes.length;
       const totalOS      = equipes.reduce((s, e) => s + e.total, 0);
       const mediaGeral   = totalEquipes > 0
@@ -5592,16 +5610,15 @@
         : `<div class="perf-bar-wrap">${barRows}${legendHTML}</div>`;
 
       // ── Tabela: tipo de nota por equipe (top 30) ────────────────────────
-      // Coletar todos os tipos presentes
-      const tiposSet = new Set();
-      equipes.forEach(e => Object.keys(e.por_tipo || {}).forEach(t => tiposSet.add(t)));
-      const tiposCols = [...tiposSet].sort();
+      // Colunas = APENAS tipos selecionados em grafTiposSel (preserva ordem original
+      // do TIPOS_SERVICO pra manter consistência visual quando o user muda filtros).
+      const tiposCols = Object.keys(GRAF_TIPOS_SUBCATS).filter(t => tiposVisiveis.has(t));
 
-      const tableHeaderCols = tiposCols.map(t => `<th>${TIPOS_SERVICO[t] ? `${t}` : t}</th>`).join('');
+      const tableHeaderCols = tiposCols.map(t => `<th title="${GRAF_TIPOS_SUBCATS[t]?.nome || t}">${t}</th>`).join('');
       const tableRows = equipes.slice(0, 30).map(e => {
         const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC'
                     : e.tipo_equipe === 'PLANTAO'   ? 'EP' : 'OP';
-        const tipoCells = tiposCols.map(t => `<td style="text-align:center">${e.por_tipo[t] || '—'}</td>`).join('');
+        const tipoCells = tiposCols.map(t => `<td style="text-align:center">${e.por_tipo?.[t] || '—'}</td>`).join('');
         return `<tr>
   <td><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
   <td style="text-align:center">${e.total}</td>
