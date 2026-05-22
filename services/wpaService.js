@@ -991,5 +991,6 @@ module.exports = {
   getTeamsBySector,
   // Histórico
   getTeamsByDate,
+  getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)
   REGIONAL_MAP,
 };
