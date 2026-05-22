@@ -2055,6 +2055,28 @@ router.post('/admin/retry-outros', async (req, res) => {
   }
 });
 
+// POST /api/admin/sync-logoffs?date=YYYY-MM-DD
+// Busca sessões finalizadas do dia via /api/Sessions/all/date e atualiza
+// sessionEnd nos snapshots correspondentes. Útil quando o cron noturno
+// falhou ou pra dias antigos onde queremos preencher logoff retroativo.
+// Default: dia anterior (BRT).
+router.post('/admin/sync-logoffs', async (req, res) => {
+  try {
+    const c = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const date = req.query.date;
+    if (date && !dateRe.test(date)) {
+      return res.status(400).json({ error: 'Parâmetro date deve ser YYYY-MM-DD' });
+    }
+    const result = await c.runSyncLogoffs(date || undefined);
+    res.json({ ok: true, ...(result || {}) });
+  } catch (err) {
+    console.error('[sync-logoffs]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/revalidate-dd?days=30  ou  ?all=true
 // Revalida notas DD usando regras atualizadas do classificador.
 //   - days=N  → últimos N dias (default 30, máx 90)

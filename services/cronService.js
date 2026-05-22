@@ -677,6 +677,14 @@ function startCron() {
   if (!global._extraCronJobs) global._extraCronJobs = [];
   global._extraCronJobs.push(madrugadaJob);
 
+  // Sync de logoffs do dia anterior — roda às 03:00 BRT.
+  // Usa /api/Sessions/all/date pra pegar sessões finalizadas (que somem do
+  // /sessions/current após logoff) e atualiza sessionEnd nos snapshots.
+  const syncLogoffsJob = cron.schedule('0 3 * * *', () => runSyncLogoffs(), {
+    timezone: 'America/Sao_Paulo',
+  });
+  global._extraCronJobs.push(syncLogoffsJob);
+
   // Consolidação diária às 23:50 (logo após o último snapshot do dia)
   consolidaJob = cron.schedule('50 23 * * *', runConsolidate, {
     timezone: 'America/Sao_Paulo',
@@ -726,10 +734,91 @@ function stopCron() {
   }
 }
 
+// ── SYNC DE LOGOFFS NOTURNOS ─────────────────────────────────────────────────
+// Quando a equipe desloga, ela sai do payload de /api/sessions/current. Nosso
+// cron de snapshot só vê sessões ABERTAS, então nunca captura o sessionEnd.
+// Esta função chama /api/Sessions/all/date que retorna TODAS as sessões do dia
+// (incluindo fechadas com EndTime preenchido) e atualiza o último snapshot
+// de cada equipe no Supabase com o sessionEnd correto.
+//
+// Roda 1x por dia às 03:00 BRT (depois que o expediente acabou pra todas as
+// equipes — inclusive plantão noturno).
+
+async function runSyncLogoffs(targetDate) {
+  if (process.env.DATA_MODE === 'mock') return;
+
+  const { getSessionsByDate } = require('./wpaService');
+  const { getClient } = require('./supabaseClient');
+  const sb = getClient();
+  if (!sb) return;
+
+  // Default: dia anterior (BRT). Se passou dia específico, usa esse.
+  const date = targetDate || new Date(Date.now() - (3 + 24) * 3600 * 1000).toISOString().slice(0, 10);
+
+  console.log(`[CRON] sync-logoffs: buscando sessões finalizadas de ${date}`);
+  const SETORES = ['DESG', 'DEPT', 'DESC'];
+  const ENGELMIG_COMPANY_ID = process.env.WPA_COMPANY_ID || '92a2f98e-8877-433e-8358-173b94c13a54';
+
+  let totalUpdated = 0;
+  for (const sectorId of SETORES) {
+    try {
+      const sessions = await getSessionsByDate(sectorId, date);
+      // Filtra só Engelmig + com EndTime preenchido (= sessões realmente fechadas)
+      const fechadas = sessions.filter(s =>
+        s.Team?.CompanyId === ENGELMIG_COMPANY_ID && s.EndTime && s.EndTime !== '0001-01-01T00:00:00'
+      );
+      if (fechadas.length === 0) {
+        console.log(`[CRON] sync-logoffs: ${sectorId} sem sessões fechadas`);
+        continue;
+      }
+
+      // Para cada sessão fechada, atualiza o snapshot mais recente daquela
+      // equipe que ainda tem sessionEnd=null (= snapshot da sessão aberta).
+      for (const s of fechadas) {
+        const teamName = s.Team?.Name || s.Team?.ExternalReference;
+        if (!teamName) continue;
+        const beginTime = s.BeginTime;
+        const endTime   = s.EndTime;
+
+        // Busca último snap dessa equipe cujo sessionBegin bate
+        const { data: rows } = await sb
+          .from('snapshots')
+          .select('id, data, captured_at')
+          .eq('team_name', teamName)
+          .gte('date', date)
+          .order('captured_at', { ascending: false })
+          .limit(20);
+
+        if (!rows || rows.length === 0) continue;
+
+        // Acha o snap com sessionBegin == beginTime E sessionEnd null (precisa atualizar)
+        const snap = rows.find(r => {
+          const sb1 = r.data?.sessionBegin || r.data?.session_begin;
+          const se1 = r.data?.sessionEnd || r.data?.session_end;
+          return sb1 === beginTime && !se1;
+        });
+        if (!snap) continue;
+
+        // Atualiza o sessionEnd no payload
+        const newData = { ...snap.data, sessionEnd: endTime };
+        const { error } = await sb.from('snapshots').update({ data: newData }).eq('id', snap.id);
+        if (!error) totalUpdated++;
+        else console.warn(`[CRON] sync-logoffs: falha update ${teamName}: ${error.message}`);
+      }
+      console.log(`[CRON] sync-logoffs: ${sectorId} - ${fechadas.length} sessões fechadas processadas`);
+    } catch (err) {
+      console.warn(`[CRON] sync-logoffs: ${sectorId} falhou: ${err.message}`);
+    }
+  }
+  console.log(`[CRON] sync-logoffs: ✓ ${totalUpdated} snapshots atualizados com sessionEnd`);
+  return { date, updated: totalUpdated };
+}
+
 module.exports = {
   startCron, stopCron,
   runSnapshot, runConsolidate, runTokenRefresh,
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,
+  runSyncLogoffs,
 };
