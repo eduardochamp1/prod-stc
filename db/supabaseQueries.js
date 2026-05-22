@@ -208,49 +208,78 @@ async function getTeamsFromSupabase(filters = {}) {
  */
 async function getTeamsByDateFromSnapshots(de, ate, regional) {
   const sb = getClient();
+
+  // Pra capturar o LOGOFF de equipes que viram a meia-noite, expande o range
+  // de busca em +1 dia (snapshot da madrugada seguinte pode ter sessionEnd
+  // preenchido com sessionBegin do dia filtrado). Esse "lookahead" é a mesma
+  // regra usada em consolidateDay e detectDrift.
+  const dPlus1 = new Date(ate + 'T12:00:00Z');
+  dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
+  const ateExpand = dPlus1.toISOString().slice(0, 10);
+
   // Pagina (snapshots a cada 15min × N dias × N equipes pode ultrapassar 1k)
   const rows0 = await _selectAll(() => {
     let q = sb
       .from('snapshots')
       .select('team_name, regional, sector_id, captured_at, date, data')
       .gte('date', de)
-      .lte('date', ate)
+      .lte('date', ateExpand)
       .order('captured_at', { ascending: false });
     if (regional && regional !== 'ALL') q = q.eq('regional', regional);
     return q;
   });
   // Aplica whitelist: só equipes oficiais entram no histórico
-  const rows = _onlyOficiais(rows0, 'team_name');
+  const rows0Filt = _onlyOficiais(rows0, 'team_name');
 
-  if (!rows || rows.length === 0) return [];
+  if (!rows0Filt || rows0Filt.length === 0) return [];
 
   const isSingleDay = de === ate;
 
   if (isSingleDay) {
-    // Dia único: snapshot mais recente por equipe + sessionBeginReal do primeiro
-    // snapshot do dia (importante quando equipe relogou — sem isso o card mostra
-    // o logon da sessão atual, não o do início real do dia).
-    const latest = {};   // snapshot mais recente
-    const first  = {};   // snapshot mais antigo
-    rows.forEach(r => {
+    // Dia único: precisamos resolver pra cada equipe o logon do PRIMEIRO snap do dia
+    // (sessionBeginReal) e o logoff REAL (que pode estar num snap de date+1).
+    //
+    // Regra: filtra os snapshots cujo sessionBegin pertence ao dia filtrado.
+    // Esses são os snapshots da SESSÃO desse dia (independente de quando foram
+    // capturados — pode ser na madrugada seguinte).
+    const pertenceAoDia = (snap) => {
+      const sb1 = snap.data?.sessionBegin || snap.data?.session_begin;
+      if (!sb1) return false;
+      return String(sb1).slice(0, 10) === de;
+    };
+
+    // Filtra snaps que pertencem à sessão do dia alvo (pode incluir snaps de date+1)
+    const rowsDoDia = rows0Filt.filter(r => r.date === de || pertenceAoDia(r));
+
+    // Pra cada equipe, pega snap mais recente E mais antigo
+    const latest = {};   // snapshot mais recente (com sessionEnd se já deslogou)
+    const first  = {};   // snapshot mais antigo (sessionBegin original do dia)
+    rowsDoDia.forEach(r => {
       if (!latest[r.team_name]) latest[r.team_name] = r;
-      // rows vem ordenado por captured_at DESC, então o "primeiro" do dia é o ÚLTIMO no loop
-      first[r.team_name] = r;
+      first[r.team_name] = r;  // como rows estão DESC, o último do loop é o mais antigo
     });
+
     return Object.values(latest)
       .sort((a, b) => a.team_name.localeCompare(b.team_name))
       .map(r => {
         const firstSnap = first[r.team_name];
+        // Logon REAL = sessionBegin do primeiro snap que pertence à sessão desse dia
         const sb1 = firstSnap?.data?.sessionBegin || firstSnap?.data?.session_begin || null;
         const sbAtual = r.data?.sessionBegin || r.data?.session_begin || null;
+        // Logoff REAL = sessionEnd do snap mais recente (pode estar em date+1)
+        const seEnd   = r.data?.sessionEnd   || r.data?.session_end   || null;
         return {
           ...r.data,
-          _snapshotAt: r.captured_at,
+          _snapshotAt:      r.captured_at,
           sessionBeginReal: sb1 || sbAtual,
+          sessionEnd:       seEnd,
           relogouNoDia:     !!(sb1 && sbAtual && sb1 !== sbAtual),
         };
       });
   }
+
+  // Para intervalo, continua usando o range original (sem expandir)
+  const rows = rows0Filt.filter(r => r.date >= de && r.date <= ate);
 
   // Intervalo: snapshot base = o mais recente de cada equipe (para dados de sessão)
   // Notas concluídas/executadas/rejeitadas = acumuladas de todos os dias do período
