@@ -151,6 +151,34 @@ function _sessionDate(team) {
 }
 
 /**
+ * Data EFETIVA da nota para fins de agregação.
+ *
+ * Regra geral: a nota pertence ao DIA DA SESSÃO (_sessionDate) — equipes que
+ * viram a meia-noite seguem contando no dia em que começaram a trabalhar.
+ *
+ * EXCEÇÃO (mai/2026): se a nota tem `conclusionDate` claramente anterior ao
+ * sessionBegin (executada em dia anterior, antes da sessão atual começar),
+ * usa o dia da conclusão. Isso evita inflação quando uma equipe loga hoje
+ * carregando notas que ela já executou ontem.
+ *
+ * Confirmado em prod: ETGPR15/ETPIU15 logaram em 22/05 com 77 notas L0 em
+ * `notasConcluidas` cujo `conclusionDate` era 21/05 12h–17h.
+ */
+function _notaDate(n, sessDate, sessionBegin) {
+  if (!n.conclusionDate) return sessDate;
+  const cd = String(n.conclusionDate).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(cd)) return sessDate;
+
+  // Se conclusionDate é de dia anterior ao sessionDate, usa conclusionDate.
+  // (Se for igual ou posterior, mantém sessionDate — preserva regra "vira-noite")
+  if (cd < sessDate) return cd;
+
+  // Caso especial: nota concluída no mesmo dia mas ANTES do sessionBegin
+  // (ex: notas que apareceram na próxima sessão da mesma data). Mantém sessDate.
+  return sessDate;
+}
+
+/**
  * Atualiza `daily_totals` por regional/tipo (intraday — visão da regional).
  */
 /**
@@ -169,7 +197,8 @@ async function upsertDailyTotals(_teams, _date) {
 async function upsertTeamDailyTotals(teams, _date) {
   const sb = getClient();
 
-  // Chave: (sessDate, team_name, tipo_code). sessDate vem do sessionBegin da equipe.
+  // Chave: (notaDate, team_name, tipo_code). notaDate respeita conclusionDate
+  // de notas executadas em dia anterior à sessão atual (evita inflação).
   const acc = {};
   teams.forEach(t => {
     const sessDate = _sessionDate(t);
@@ -179,10 +208,11 @@ async function upsertTeamDailyTotals(teams, _date) {
     realizadas.forEach(n => {
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
-      const key = `${sessDate}|${teamName}|${code}`;
+      const notaDate = _notaDate(n, sessDate, t.sessionBegin);
+      const key = `${notaDate}|${teamName}|${code}`;
       if (!acc[key]) {
         acc[key] = {
-          date: sessDate, team_name: teamName, regional: t.regional, sector_id: t.sectorId,
+          date: notaDate, team_name: teamName, regional: t.regional, sector_id: t.sectorId,
           tipo_code: code, count: 0,
         };
       }
@@ -237,8 +267,11 @@ async function upsertSubcatTotals(teams, _date) {
       const tipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
       if (!tipo) return;
       const isSubcat = SUBCATEGORIZED.has(tipo);
+      // Usa conclusionDate quando ela aponta pra dia anterior à sessão atual
+      // (notas que vieram "do passado" via WPA não devem inflar o dia atual).
+      const notaDate = _notaDate(n, sessDate, t.sessionBegin);
       events.push({
-        date:     sessDate,
+        date:     notaDate,
         team:     teamName,
         regional: t.regional,
         sector:   t.sectorId,
@@ -324,17 +357,22 @@ async function consolidateDay(date) {
   const sb = getClient();
   date = date || _hojeBRT();
 
-  // Busca snapshots de date E date+1 (madrugada do dia seguinte) — equipes que
-  // ainda estavam ativas após meia-noite seguem com sessionBegin = date e suas
-  // notas pertencem a date pela regra de negócio.
+  // Busca snapshots de date-1, date E date+1 — cobre 3 casos:
+  //   - date+1: madrugada (equipe virando a noite, sessionBegin=date)
+  //   - date-1: notas executadas no dia anterior carregadas na sessão atual
+  //   - date: snapshots normais do dia
   const dPlus1 = new Date(date + 'T12:00:00Z');
   dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
   const dayPlus1 = dPlus1.toISOString().slice(0, 10);
 
+  const dMinus1 = new Date(date + 'T12:00:00Z');
+  dMinus1.setUTCDate(dMinus1.getUTCDate() - 1);
+  const dayMinus1 = dMinus1.toISOString().slice(0, 10);
+
   const { data: snaps, error: e1 } = await sb
     .from('snapshots')
     .select('team_name, regional, sector_id, captured_at, data')
-    .in('date', [date, dayPlus1])
+    .in('date', [dayMinus1, date, dayPlus1])
     .order('captured_at', { ascending: false });
 
   if (e1) throw e1;
@@ -343,14 +381,17 @@ async function consolidateDay(date) {
     return;
   }
 
-  // Filtra só equipes cujo sessionBegin === date (regra de produção por sessão).
-  // Mantém apenas o snapshot MAIS RECENTE de cada (team_name, sessionBegin) — ordem
-  // captured_at desc garante que o primeiro a setar é o mais recente.
+  // Mantém snap mais recente de cada (team, sessionBegin) cujo sessionDate IN
+  // (date-1, date). Equipes com sessionDate em date-1 são incluídas porque
+  // suas notas (conclusionDate < date-1) podem migrar pra date-2 — mas o foco
+  // principal é processar AMBAS as datas date-1 e date numa rodada só, pra
+  // que o wipe + reagregação não percam linhas legítimas.
   const latest = {};
   snaps.forEach(s => {
     const t = s.data;
     if (!t) return;
-    if (_sessionDate(t) !== date) return;
+    const sd = _sessionDate(t);
+    if (sd !== date && sd !== dayMinus1) return;
     const key = `${s.team_name}|${t.sessionBegin}`;
     if (!latest[key]) {
       latest[key] = {
@@ -373,21 +414,21 @@ async function consolidateDay(date) {
   log.info('consolidate_start', { date, teams: teams.length });
 
   // ── RESET ─────────────────────────────────────────────────────────────
-  // Consolidação é a FONTE DA VERDADE para o dia: limpa as tabelas team-level
-  // antes de reagregar. As tabelas regionais (daily_totals/daily_subcat_totals)
-  // não são mais lidas — leituras agregam em runtime a partir das team-level.
-  const wipeOps = [
-    sb.from('team_daily_totals').delete().eq('date', date),
-    sb.from('team_daily_subcat_totals').delete().eq('date', date),
-  ];
-  for (const op of wipeOps) {
-    const { error } = await op;
-    // Tabela pode não existir em ambientes antigos — ignora "relation does not exist"
-    if (error && !/does not exist|PGRST204|42P01/i.test(error.message || '')) {
-      log.warn('consolidate_reset_failed', { date, msg: error.message });
+  // Wipa date E date-1 — cobre notas migradas pelo _notaDate (notas executadas
+  // em D-1 carregadas em sessão de D). Sem wipar D-1, upserts duplicam linhas.
+  const datesToWipe = [dayMinus1, date];
+  for (const d of datesToWipe) {
+    for (const op of [
+      sb.from('team_daily_totals').delete().eq('date', d),
+      sb.from('team_daily_subcat_totals').delete().eq('date', d),
+    ]) {
+      const { error } = await op;
+      if (error && !/does not exist|PGRST204|42P01/i.test(error.message || '')) {
+        log.warn('consolidate_reset_failed', { date: d, msg: error.message });
+      }
     }
   }
-  log.info('consolidate_wipe_done', { date });
+  log.info('consolidate_wipe_done', { date, range: datesToWipe });
 
   // Reagrega via upsertTeamDailyTotals/upsertSubcatTotals.
   await upsertTeamDailyTotals(teams);
