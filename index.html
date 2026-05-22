@@ -4259,7 +4259,7 @@
           <div class="metric-value verde" id="m-concluidas">—</div>
           <div class="metric-sub" id="m-concluidas-pct"></div>
         </div>
-        <div class="metric-card accent-amarelo">
+        <div class="metric-card accent-amarelo" id="card-andamento">
           <div class="metric-label">Em Andamento</div>
           <div class="metric-value amarelo" id="m-executadas">—</div>
         </div>
@@ -4267,7 +4267,7 @@
           <div class="metric-label">OS Rejeitadas</div>
           <div class="metric-value vermelho" id="m-rejeitadas">—</div>
         </div>
-        <div class="metric-card accent-preto">
+        <div class="metric-card accent-preto" id="card-carteira">
           <div class="metric-label">OS em Carteira</div>
           <div class="metric-value" id="m-baixadas">—</div>
         </div>
@@ -5938,7 +5938,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const grid = document.getElementById('prod-grid');
       const title = document.getElementById('prod-title');
       const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : (currentRegional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
-      title.textContent = `Produtividade do Dia — ${labelRegional}`;
+      // Título depende do range: dia único = "do Dia", range = "do Período"
+      const { de: deTitle, ate: ateTitle, isLiveToday: liveToday } = currentMonitorRange();
+      const tituloPrefixo = (deTitle === ateTitle && liveToday)
+        ? 'Produtividade do Dia'
+        : (deTitle === ateTitle ? `Produtividade de ${fmtDateBR(deTitle)}` : `Produtividade do Período (${fmtDateBR(deTitle)} → ${fmtDateBR(ateTitle)})`);
+      title.textContent = `${tituloPrefixo} — ${labelRegional}`;
       const metasReg  = currentRegional === 'ALL' ? metasAcumuladas(metas) : (metas[currentRegional] || {});
       const totaisReg = currentRegional === 'ALL' ? totaisLive.ALL : (totaisLive[currentRegional] || {});
       const qtdReg    = currentRegional === 'ALL' ? qtdLive.ALL    : (qtdLive[currentRegional]    || {});
@@ -7063,13 +7068,31 @@ ${equipes.length > 0 ? `<div class="perf-section">
       document.getElementById('m-baixadas').textContent = emCarteira;
       document.getElementById('m-relogins').textContent = relogins;
 
+      // ── Modo histórico: oculta cards de estado atual ─────────────────────
+      // "Em Andamento" (executando AGORA) e "OS em Carteira" (carteira AGORA)
+      // não fazem sentido em datas passadas — viram de estado de tempo real.
+      const cardAndamento = document.getElementById('card-andamento');
+      const cardCarteira  = document.getElementById('card-carteira');
+      if (cardAndamento) cardAndamento.style.display = isLiveToday ? '' : 'none';
+      if (cardCarteira)  cardCarteira.style.display  = isLiveToday ? '' : 'none';
+
       // Render imediato do KPI realizadas com dado local (rápido, mas pode estar
       // baixo se equipes deslogaram). Em paralelo busca o acumulador persistente
       // do Supabase (daily_totals somado no range) e atualiza — esse não cai com logoff.
       const realizadasLive = executadas + concluidasLive;
-      const pctLive = emCarteira > 0 ? Math.round((realizadasLive / emCarteira) * 100) : 0;
       document.getElementById('m-concluidas').textContent = realizadasLive;
-      document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
+      // Em modo histórico, carteira não faz sentido — mostra range em vez de "%"
+      if (isLiveToday) {
+        const pctLive = emCarteira > 0 ? Math.round((realizadasLive / emCarteira) * 100) : 0;
+        document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
+      } else {
+        const dias = (() => {
+          const ms = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
+          return Math.round(ms / 86400000) + 1;
+        })();
+        document.getElementById('m-concluidas-pct').textContent =
+          dias === 1 ? 'no dia selecionado' : `em ${dias} dias`;
+      }
 
       try {
         const r = await fetch(`${API}/totais/dia?de=${de}&ate=${ate}`);
@@ -7079,9 +7102,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
         // Usa o maior dos dois — daily_totals é cumulativo do range, mas o cron
         // pode estar atrasado e ter contagem menor que a leitura ao vivo.
         const realizadas = Math.max(realizadasPersist, realizadasLive);
-        const pct = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;
         document.getElementById('m-concluidas').textContent = realizadas;
-        document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
+        if (isLiveToday) {
+          const pct = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;
+          document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
+        }
+        // Em histórico, mantém o subtítulo "em N dias" já setado acima
       } catch (err) {
         console.warn('[KPI] falha ao buscar daily_totals:', err.message);
         // mantém o valor live já renderizado
