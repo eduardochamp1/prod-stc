@@ -657,13 +657,28 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
-  // Snapshot a cada 15 min entre 06:00 e 20:00
-  snapshotJob = cron.schedule('*/15 6-20 * * *', runSnapshot, {
+  // Snapshot a cada 15 min entre 05:30 e 23:45.
+  // Janela expandida pra cobrir:
+  //   - logon antecipado de equipes 06h (com tolerância de 30min)
+  //   - logoff de plantão noturno até 23:30
+  // Antes era 06-20h, perdíamos logoffs após 20h — equipes ficavam pra sempre
+  // "em campo" no histórico mesmo tendo deslogado.
+  snapshotJob = cron.schedule('*/15 5-23 * * *', runSnapshot, {
     timezone: 'America/Sao_Paulo',
   });
 
-  // Consolidação diária às 20:30
-  consolidaJob = cron.schedule('30 20 * * *', runConsolidate, {
+  // Snapshot extra de madrugada (00:30, 02:00, 04:00) pra capturar logoffs
+  // tardios de equipes que viraram a noite. Sem isso o sessionEnd só
+  // entra no banco no primeiro snap do dia seguinte (= consolidação atrasada).
+  const madrugadaJob = cron.schedule('30 0,2,4 * * *', runSnapshot, {
+    timezone: 'America/Sao_Paulo',
+  });
+  // Guarda referência pra stopCron poder limpar
+  if (!global._extraCronJobs) global._extraCronJobs = [];
+  global._extraCronJobs.push(madrugadaJob);
+
+  // Consolidação diária às 23:50 (logo após o último snapshot do dia)
+  consolidaJob = cron.schedule('50 23 * * *', runConsolidate, {
     timezone: 'America/Sao_Paulo',
   });
 
@@ -704,6 +719,11 @@ function stopCron() {
   uuidHealthJob?.stop();
   retryOutrosJob?.stop();
   driftJob?.stop();
+  // Para jobs extras (snapshot de madrugada)
+  if (global._extraCronJobs) {
+    global._extraCronJobs.forEach(j => j?.stop?.());
+    global._extraCronJobs = [];
+  }
 }
 
 module.exports = {
