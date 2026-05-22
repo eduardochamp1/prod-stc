@@ -4511,7 +4511,7 @@
             </select>
           </div>
           <div class="filter-group">
-            <span class="filter-label">Tipo</span>
+            <span class="filter-label">Tipo Equipe</span>
             <select class="filter-select" id="graf-tipo-select" onchange="loadGraficos()">
               <option value="TODAS">Todas</option>
               <option value="COMERCIAL">Comercial (EC)</option>
@@ -4522,6 +4522,33 @@
             <span class="filter-label">Equipe</span>
             <select class="filter-select" id="graf-equipe-select" onchange="loadGraficos()" style="min-width:160px">
               <option value="ALL">Todas as equipes</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Tipo Serviço</span>
+            <select class="filter-select" id="graf-tipo-servico-select" onchange="loadGraficos()" style="min-width:140px">
+              <option value="ALL">Todos</option>
+              <option value="SF">SF (Cortes)</option>
+              <option value="DD">DD (Distribuição)</option>
+              <option value="MD">MD (Medição)</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Subcategoria</span>
+            <select class="filter-select" id="graf-subcat-select" onchange="loadGraficos()" style="min-width:160px">
+              <option value="ALL">Todas</option>
+              <optgroup label="SF (Cortes)">
+                <option value="L0">L0 — Corte Disjuntor</option>
+                <option value="L1">L1 — Corte Borne</option>
+              </optgroup>
+              <optgroup label="DD (Distribuição)">
+                <option value="C93">C93 — Subs Ramal</option>
+                <option value="BTZ013">BTZ013 — Sub CS</option>
+              </optgroup>
+              <optgroup label="MD (Medição)">
+                <option value="OBSOLETO">Subs Obsoleto</option>
+                <option value="TL11">Subs TL11</option>
+              </optgroup>
             </select>
           </div>
           <button class="btn-refresh" onclick="loadGraficos()">↻ Atualizar</button>
@@ -5249,16 +5276,26 @@
       // Sem escalonamento — gauge sempre mostra a meta mensal cheia configurada
 
       // ── Definição dos gauges ─────────────────────────────────────────────
-      // qtd:true     → usa quantidades[] em vez de totais[] (ex: C93 = ramais)
+      // qtd:true        → usa quantidades[] em vez de totais[] (ex: C93 = ramais)
       // useCsCycle:true → usa csData (ciclo 16-15) em vez do range global
-      const GAUGE_DEF = [
-        { key: 'L0',      label: 'Corte L0',        metaKey: 'L0'      },
-        { key: 'L1',      label: 'Corte L1',        metaKey: 'L1'      },
-        { key: 'C93',     label: 'Ramal',             metaKey: 'C93',     qtd: true },
-        { key: 'OBSOLETO',label: 'Obsoleto',         metaKey: 'OBSOLETO'},
-        { key: 'TL11',    label: 'TL11',             metaKey: 'TL11'    },
-        { key: 'BTZ013',  label: 'Sub CS',            metaKey: 'BTZ013',  useCsCycle: true },
+      // tipo            → tipo de serviço (SF/DD/MD) usado pelos filtros
+      const GAUGE_DEF_FULL = [
+        { key: 'L0',      label: 'Corte L0',  metaKey: 'L0',      tipo: 'SF' },
+        { key: 'L1',      label: 'Corte L1',  metaKey: 'L1',      tipo: 'SF' },
+        { key: 'C93',     label: 'Ramal',     metaKey: 'C93',     tipo: 'DD', qtd: true },
+        { key: 'OBSOLETO',label: 'Obsoleto',  metaKey: 'OBSOLETO',tipo: 'MD' },
+        { key: 'TL11',    label: 'TL11',      metaKey: 'TL11',    tipo: 'MD' },
+        { key: 'BTZ013',  label: 'Sub CS',    metaKey: 'BTZ013',  tipo: 'DD', useCsCycle: true },
       ];
+
+      // Filtros visuais: tipo serviço (SF/DD/MD) + subcategoria específica (L0/C93/etc)
+      const filtroTipo   = document.getElementById('graf-tipo-servico-select')?.value || 'ALL';
+      const filtroSubcat = document.getElementById('graf-subcat-select')?.value || 'ALL';
+      const GAUGE_DEF = GAUGE_DEF_FULL.filter(g => {
+        if (filtroTipo   !== 'ALL' && g.tipo !== filtroTipo)   return false;
+        if (filtroSubcat !== 'ALL' && g.key  !== filtroSubcat) return false;
+        return true;
+      });
 
       // Meta: se regional=ALL, somamos GUA+CAC; caso contrário usamos só a regional.
       function getMeta(metaKey) {
