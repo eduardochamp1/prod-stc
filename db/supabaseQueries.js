@@ -1023,7 +1023,7 @@ async function getPerformanceEquipes(de, ate, regional, tipo, team) {
 async function getMapaEquipe(team, date) {
   const sb = getClient();
 
-  // 1. Snapshot mais recente do dia
+  // 1. Snapshot mais recente do dia (estado final — notas, sessão atual)
   const { data: snapRows, error: snapErr } = await sb
     .from('snapshots')
     .select('data, captured_at')
@@ -1037,6 +1037,20 @@ async function getMapaEquipe(team, date) {
 
   const snap     = snapRows[0];
   const snapData = snap.data || {};
+
+  // 1b. PRIMEIRO snapshot do dia — pra capturar o sessionBegin REAL.
+  // Equipes que deslogam/relogam durante o dia (instabilidade, fim de turno
+  // intermediário etc.) têm sessionBegin diferente no último snapshot vs no
+  // primeiro. Sem isso, o card de Sessão mostra a sessão MAIS RECENTE como
+  // se fosse o início do dia, escondendo as horas trabalhadas pela manhã.
+  const { data: firstRows } = await sb
+    .from('snapshots')
+    .select('data, captured_at')
+    .eq('team_name', team)
+    .eq('date', date)
+    .order('captured_at', { ascending: true })
+    .limit(1);
+  const firstSnapData = (firstRows && firstRows[0]?.data) || null;
 
   // 2. Coletar notas de todos os status relevantes
   const STATUS_MAP = [
@@ -1057,7 +1071,7 @@ async function getMapaEquipe(team, date) {
     }
   }
 
-  if (!merged.length) return { notes: [], team, date, teamInfo: _buildTeamInfo(snapData) };
+  if (!merged.length) return { notes: [], team, date, teamInfo: _buildTeamInfo(snapData, firstSnapData) };
 
   // 3. Buscar note_details para os IDs coletados
   const ids = merged.map(n => n.id);
@@ -1099,14 +1113,24 @@ async function getMapaEquipe(team, date) {
     return new Date(depA.timestamp) - new Date(depB.timestamp);
   });
 
-  return { notes, team, date, teamInfo: _buildTeamInfo(snapData) };
+  return { notes, team, date, teamInfo: _buildTeamInfo(snapData, firstSnapData) };
 }
 
-function _buildTeamInfo(snapData) {
+function _buildTeamInfo(snapData, firstSnapData) {
+  const currentBegin = snapData.sessionBegin || snapData.session_begin || null;
+  const currentEnd   = snapData.sessionEnd   || snapData.session_end   || null;
+  // sessionBegin do PRIMEIRO snapshot do dia = início real do trabalho
+  const firstBegin = firstSnapData
+    ? (firstSnapData.sessionBegin || firstSnapData.session_begin || null)
+    : null;
+  // Houve relogin se o primeiro snapshot tem um sessionBegin diferente do atual
+  const hasRelogin = firstBegin && currentBegin && firstBegin !== currentBegin;
   return {
-    regional:     snapData.regional     || null,
-    sessionBegin: snapData.sessionBegin || snapData.session_begin || null,
-    sessionEnd:   snapData.sessionEnd   || snapData.session_end   || null,
+    regional:          snapData.regional || null,
+    sessionBegin:      firstBegin || currentBegin,       // início REAL do dia
+    sessionBeginAtual: hasRelogin ? currentBegin : null, // sessão atual (se relogou)
+    sessionEnd:        currentEnd,
+    relogou:           hasRelogin,
   };
 }
 

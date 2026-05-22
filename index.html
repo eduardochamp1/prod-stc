@@ -8827,8 +8827,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const sessionHtml = teamInfo?.sessionBegin ? (() => {
         const fmt = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        const fim = teamInfo.sessionEnd ? fmt(teamInfo.sessionEnd) : 'em campo';
+        // Se houve relogin no dia, mostra a sessão atual em uma linha extra
+        const reloginInfo = teamInfo.relogou && teamInfo.sessionBeginAtual
+          ? `<div style="margin-top:3px;color:#c49000">
+               ⚠ Relogou às <strong>${fmt(teamInfo.sessionBeginAtual)}</strong> (sessão atual)
+             </div>`
+          : '';
         return `<div style="font-size:11px;color:var(--text2);padding:8px 10px;background:#f4f4f0;border-radius:8px;margin-bottom:8px">
-          🕐 Sessão: <strong>${fmt(teamInfo.sessionBegin)}</strong>${teamInfo.sessionEnd ? ` → <strong>${fmt(teamInfo.sessionEnd)}</strong>` : ' → em campo'}
+          🕐 Início do dia: <strong>${fmt(teamInfo.sessionBegin)}</strong> → <strong>${fim}</strong>
+          ${reloginInfo}
         </div>`;
       })() : '';
 
