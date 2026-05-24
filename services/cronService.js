@@ -135,6 +135,12 @@ async function runSnapshot() {
     runCacheNotaDetails(teams).catch(err =>
       log.error('cache_note_details_failed', { msg: err.message })
     );
+
+    // Classifica motivos das notas REJEITADAS (não bloqueia o snapshot).
+    // Usa allTeams (real + ghost) pra incluir rejeições de equipes deslogadas.
+    runClassifyRejections(allTeams).catch(err =>
+      log.error('classify_rejections_failed', { msg: err.message })
+    );
   } catch (err) {
     log.error('snapshot_failed', { msg: err.message });
   } finally {
@@ -287,6 +293,222 @@ async function runClassifyNewNotes(teams) {
   } else {
     console.log(`[CRON] Subcategorias: classificador retornou vazio (em ${dt}s)`);
   }
+}
+
+// ── CLASSIFICAÇÃO DE REJEIÇÕES (motivos canônicos) ─────────────────────────────
+// Para cada nota em `notasRejeitadas[]` de um snapshot, chama o endpoint
+// específico do tipo (/api/notes/{md|sf|dd|...}) e extrai Rejection.RejectionReasons[].
+// Grava em `note_rejections`.
+//
+// Concorrência baixa (4) — cada chamada é ~2 KB mas roda em paralelo com
+// outras tarefas do snapshot. Aplica `seen` por noteId pra deduplicar.
+
+async function runClassifyRejections(teams) {
+  if (process.env.DATA_MODE === 'mock') return;
+  if (!teams || teams.length === 0) return;
+
+  const { getClient } = require('./supabaseClient');
+  const { classificarRejeicao } = require('./classifierService');
+  const sb = getClient();
+  if (!sb) return;
+
+  // 1) Coleta UUIDs únicos de rejeitadas, com contexto da equipe
+  const jobs = [];
+  const seen = new Set();
+  teams.forEach(t => {
+    if (!t.sessionBegin) return;  // sem sessão = sem data efetiva
+    const sessDate = String(t.sessionBegin).slice(0, 10);
+    (t.notasRejeitadas || []).forEach(n => {
+      if (!n.id || seen.has(n.id)) return;
+      const tipo = (n.tipoCode || '').toUpperCase();
+      if (!tipo) return;
+      seen.add(n.id);
+      jobs.push({
+        noteId:       n.id,
+        numero:       n.codigo || null,
+        tipo,
+        team_name:    t.teamName || t.sigla,
+        regional:     t.regional || null,
+        sector_id:    t.sectorId || null,
+        session_date: sessDate,
+        rejected_at:  n.conclusionDate || null,
+      });
+    });
+  });
+
+  if (jobs.length === 0) return;
+
+  // 2) Filtra UUIDs que já estão em note_rejections (paginado pra cobrir > 1000)
+  const ids = jobs.map(j => j.noteId);
+  const jaClassificados = new Set();
+  for (let i = 0; i < ids.length; i += 200) {
+    const chunk = ids.slice(i, i + 200);
+    const { data } = await sb.from('note_rejections')
+      .select('note_id').in('note_id', chunk);
+    (data || []).forEach(r => jaClassificados.add(r.note_id));
+  }
+  const todo = jobs.filter(j => !jaClassificados.has(j.noteId));
+  if (todo.length === 0) {
+    console.log(`[CRON] rejeicoes: nada novo (${jobs.length} UUIDs, todos cacheados)`);
+    return;
+  }
+
+  console.log(`[CRON] rejeicoes: ${todo.length} novas a classificar (${jobs.length - todo.length} já cacheadas)`);
+  const t0 = Date.now();
+
+  // 3) Classifica em paralelo controlado (concorrência 4)
+  const linhas = [];
+  for (let i = 0; i < todo.length; i += 4) {
+    const chunk = todo.slice(i, i + 4);
+    const results = await Promise.all(chunk.map(async j => {
+      try {
+        const r = await classificarRejeicao(j.noteId, j.tipo);
+        return {
+          note_id:       j.noteId,
+          numero:        j.numero,
+          tipo:          j.tipo,
+          team_name:     j.team_name,
+          regional:      j.regional,
+          sector_id:     j.sector_id,
+          session_date:  j.session_date,
+          reason_codes:  r.reason_codes || [],
+          reason_labels: r.reason_labels || [],
+          rejected_at:   j.rejected_at,
+          raw:           r.raw || null,
+        };
+      } catch (err) {
+        console.warn(`[CRON] rejeicoes: ${j.numero || j.noteId} falhou: ${err.message}`);
+        return null;
+      }
+    }));
+    results.forEach(r => { if (r) linhas.push(r); });
+  }
+
+  if (linhas.length === 0) return;
+
+  // 4) Insere em batch (UPSERT pra ser idempotente)
+  const { error } = await sb.from('note_rejections')
+    .upsert(linhas, { onConflict: 'note_id' });
+  if (error) {
+    console.warn(`[CRON] rejeicoes: falha ao gravar: ${error.message}`);
+    return;
+  }
+
+  const comMotivo = linhas.filter(l => l.reason_codes.length > 0).length;
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[CRON] rejeicoes: ✓ ${linhas.length} gravadas em ${dt}s (${comMotivo} com motivo, ${linhas.length - comMotivo} sem)`);
+}
+
+// ── BACKFILL HISTÓRICO DE REJEIÇÕES ────────────────────────────────────────────
+// Varre snapshots dos últimos N dias, junta UUIDs únicos de rejeitadas e
+// classifica em massa. Usado pra inicializar a tabela ou recuperar lacunas.
+
+async function runBackfillRejeicoes(daysBack) {
+  const { getClient } = require('./supabaseClient');
+  const sb = getClient();
+  if (!sb) return { error: 'supabase indisponível' };
+
+  const DAYS = Math.min(Math.max(Number(daysBack) || 30, 1), 90);
+  const cutoff = new Date(Date.now() - DAYS * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+  console.log(`[BACKFILL-REJ] varrendo snapshots desde ${cutoff} (${DAYS} dias)...`);
+
+  // Pagina snapshots e coleta UUIDs únicos de rejeitadas
+  const jobs = [];
+  const seen = new Set();
+  let page = 0;
+  let totalSnaps = 0;
+  while (true) {
+    const { data, error } = await sb.from('snapshots')
+      .select('team_name, regional, sector_id, data')
+      .gte('date', cutoff)
+      .order('captured_at', { ascending: false })
+      .range(page * 1000, (page + 1) * 1000 - 1);
+    if (error || !data || data.length === 0) break;
+    totalSnaps += data.length;
+    data.forEach(r => {
+      const t = r.data;
+      if (!t || !t.sessionBegin) return;
+      const sessDate = String(t.sessionBegin).slice(0, 10);
+      (t.notasRejeitadas || []).forEach(n => {
+        if (!n.id || seen.has(n.id)) return;
+        const tipo = (n.tipoCode || '').toUpperCase();
+        if (!tipo) return;
+        seen.add(n.id);
+        jobs.push({
+          noteId:       n.id,
+          numero:       n.codigo || null,
+          tipo,
+          team_name:    r.team_name,
+          regional:     r.regional,
+          sector_id:    r.sector_id,
+          session_date: sessDate,
+          rejected_at:  n.conclusionDate || null,
+        });
+      });
+    });
+    if (data.length < 1000) break;
+    page++;
+  }
+
+  console.log(`[BACKFILL-REJ] ${totalSnaps} snapshots varridos, ${jobs.length} UUIDs únicos`);
+  if (jobs.length === 0) return { totalSnaps, jobs: 0, gravadas: 0 };
+
+  // Filtra os que já estão no banco
+  const ids = jobs.map(j => j.noteId);
+  const jaCache = new Set();
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const { data } = await sb.from('note_rejections')
+      .select('note_id').in('note_id', chunk);
+    (data || []).forEach(r => jaCache.add(r.note_id));
+  }
+  const todo = jobs.filter(j => !jaCache.has(j.noteId));
+  console.log(`[BACKFILL-REJ] ${todo.length} novas a classificar (${jaCache.size} já cacheadas)`);
+  if (todo.length === 0) return { totalSnaps, jobs: jobs.length, gravadas: 0, jaCache: jaCache.size };
+
+  // Classifica em concorrência 4
+  const { classificarRejeicao } = require('./classifierService');
+  const linhas = [];
+  const t0 = Date.now();
+  for (let i = 0; i < todo.length; i += 4) {
+    const chunk = todo.slice(i, i + 4);
+    const results = await Promise.all(chunk.map(async j => {
+      try {
+        const r = await classificarRejeicao(j.noteId, j.tipo);
+        return {
+          note_id:       j.noteId,
+          numero:        j.numero,
+          tipo:          j.tipo,
+          team_name:     j.team_name,
+          regional:      j.regional,
+          sector_id:     j.sector_id,
+          session_date:  j.session_date,
+          reason_codes:  r.reason_codes || [],
+          reason_labels: r.reason_labels || [],
+          rejected_at:   j.rejected_at,
+          raw:           r.raw || null,
+        };
+      } catch { return null; }
+    }));
+    results.forEach(r => { if (r) linhas.push(r); });
+    if (i > 0 && i % 200 === 0) {
+      console.log(`[BACKFILL-REJ] progresso: ${i}/${todo.length}`);
+    }
+  }
+
+  // Grava em chunks de 500
+  let gravadas = 0;
+  for (let i = 0; i < linhas.length; i += 500) {
+    const chunk = linhas.slice(i, i + 500);
+    const { error } = await sb.from('note_rejections').upsert(chunk, { onConflict: 'note_id' });
+    if (!error) gravadas += chunk.length;
+  }
+
+  const comMotivo = linhas.filter(l => l.reason_codes.length > 0).length;
+  const dt = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[BACKFILL-REJ] ✓ ${gravadas} gravadas em ${dt}s (${comMotivo} com motivo, ${gravadas - comMotivo} sem)`);
+  return { totalSnaps, jobs: jobs.length, gravadas, comMotivo, semMotivo: gravadas - comMotivo };
 }
 
 // ── RETRY DE DD/OUTROS RECENTES ────────────────────────────────────────────────
@@ -821,4 +1043,5 @@ module.exports = {
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,
   runSyncLogoffs,
+  runClassifyRejections, runBackfillRejeicoes,
 };

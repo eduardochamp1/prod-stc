@@ -2055,6 +2055,25 @@ router.post('/admin/retry-outros', async (req, res) => {
   }
 });
 
+// POST /api/admin/backfill-rejeicoes?days=30
+// Varre snapshots dos últimos N dias e classifica motivos das notas
+// rejeitadas (popula `note_rejections`). Default 30 dias, máx 90.
+router.post('/admin/backfill-rejeicoes', async (req, res) => {
+  try {
+    const c = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const days = parseInt(req.query.days || '30', 10);
+    if (!Number.isFinite(days) || days < 1 || days > 90) {
+      return res.status(400).json({ error: 'Parâmetro days deve ser entre 1 e 90' });
+    }
+    const result = await c.runBackfillRejeicoes(days);
+    res.json({ ok: true, days, ...(result || {}) });
+  } catch (err) {
+    console.error('[backfill-rejeicoes]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/sync-logoffs?date=YYYY-MM-DD
 // Busca sessões finalizadas do dia via /api/Sessions/all/date e atualiza
 // sessionEnd nos snapshots correspondentes. Útil quando o cron noturno

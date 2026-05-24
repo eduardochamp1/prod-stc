@@ -280,6 +280,65 @@ function parseTotalClientes(comments) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+// ── REJEIÇÃO (motivos canônicos da WPA) ──────────────────────────────────────
+
+/**
+ * Mapa tipo → endpoint do WPA que retorna `Rejection.RejectionReasons[]`.
+ * Confirmado em prod (23/05/2026): /api/notes/md, /sfrl, /dd têm o campo.
+ */
+const REJECTION_ENDPOINT_BY_TIPO = {
+  MD: '/api/notes/md',
+  SF: '/api/notes/sfrl',   // SF remoto — fallback sfdl se necessário
+  DD: '/api/notes/dd',
+  LN: '/api/notes/ln',
+  LE: '/api/notes/le',
+  DL: '/api/notes/dl',
+  RL: '/api/notes/rl',
+};
+
+/**
+ * Classifica uma nota REJEITADA — extrai motivos canônicos do WPA.
+ *
+ * Fonte: /api/notes/{tipo}?noteId=... → Rejection.RejectionReasons[]
+ *   [{ Code, Description, EntityId, Label, ... }, ...]
+ *
+ * Uma nota pode ter VÁRIOS motivos. Retornamos arrays paralelos.
+ * Cerca de 60% das "rejeitadas" do snapshot não têm Rejection populado
+ * (são bandeiradas tipo Conta Paga) — nesses casos retorna arrays vazios
+ * e mantemos o registro pra rankear "Sem motivo registrado" no UI.
+ *
+ * @param {string} noteId   UUID
+ * @param {string} tipo     'MD' | 'SF' | 'DD' | 'LN' | 'LE' | 'DL' | 'RL'
+ * @returns {object}        { reason_codes, reason_labels, raw }
+ */
+async function classificarRejeicao(noteId, tipo) {
+  const t = String(tipo || '').toUpperCase();
+  const endpoint = REJECTION_ENDPOINT_BY_TIPO[t];
+  if (!endpoint) return { reason_codes: [], reason_labels: [], raw: null };
+
+  const j = await safeJson(`${endpoint}?noteId=${noteId}`);
+  const rej = j?.Data?.Rejection;
+  if (!rej || !Array.isArray(rej.RejectionReasons) || rej.RejectionReasons.length === 0) {
+    // SF: se sfrl veio vazio, tenta sfdl (SF local)
+    if (t === 'SF') {
+      const j2 = await safeJson(`/api/notes/sfdl?noteId=${noteId}`);
+      const rej2 = j2?.Data?.Rejection;
+      if (rej2 && Array.isArray(rej2.RejectionReasons) && rej2.RejectionReasons.length > 0) {
+        return _extrairMotivos(rej2);
+      }
+    }
+    return { reason_codes: [], reason_labels: [], raw: rej || null };
+  }
+  return _extrairMotivos(rej);
+}
+
+function _extrairMotivos(rej) {
+  const reasons = Array.isArray(rej.RejectionReasons) ? rej.RejectionReasons : [];
+  const codes  = reasons.map(r => r.Code).filter(Boolean);
+  const labels = reasons.map(r => r.Description || r.Label || r.Code).filter(Boolean);
+  return { reason_codes: codes, reason_labels: labels, raw: rej };
+}
+
 // ── API pública ──────────────────────────────────────────────────────────────
 
 /**
@@ -340,4 +399,4 @@ async function classificarBatch(jobs, concurrency = 10) {
   return [...lightOut, ...ddOut];
 }
 
-module.exports = { classificar, classificarBatch };
+module.exports = { classificar, classificarBatch, classificarRejeicao };
