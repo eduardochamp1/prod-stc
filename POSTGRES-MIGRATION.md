@@ -439,25 +439,113 @@ Compara com o que você vê hoje no Supabase Studio — devem bater.
 
 ---
 
-# Fase 3 — Shim `pg` (resumo)
+# Fase 3 — Shim `pg` (✅ implementado)
 
-O arquivo `services/supabaseClient.js` será reescrito mantendo a API
-`getClient().from(t).select().eq()...`, mas internamente emitindo SQL
-via `pg` (driver oficial Postgres do Node).
+**Status:** entregue no commit que adicionou `services/pgShim.js`,
+`services/supabaseClient.js` (reescrito) e `test/pgShim.test.js`.
 
-105 call sites no codebase **continuam funcionando sem mudança**.
+## 3.1 Arquitetura
 
-- Métodos a implementar: `select`, `insert`, `upsert`, `update`,
-  `delete`, `eq`, `gte`, `lte`, `in`, `order`, `range`, `limit`,
-  `single`, `maybeSingle`, `ilike`, `not`, `filter`.
-- `getClient()` retorna um *thenable* compatível com o padrão Supabase
-  (resolve com `{ data, error }`).
-- Pool de conexões via `pg.Pool` (10 conexões, idle 30 s).
+O cliente é dual-mode controlado por env vars:
 
-Env var nova: `DATABASE_URL=postgresql://wpa_app:SENHA@localhost:5432/wpa_monitor`.
+| Cenário                                   | Behavior                                            |
+|-------------------------------------------|------------------------------------------------------|
+| `DATABASE_URL` setado                     | Usa `pgShim` sobre `pg.Pool` → Postgres local       |
+| Só `SUPABASE_SERVICE_KEY`                 | Usa `@supabase/supabase-js` (modo legado)           |
+| Ambos setados                             | **`DATABASE_URL` tem prioridade** (shim ganha)      |
+| Nenhum                                    | Erro explícito no boot                              |
 
-A var `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` deixa de ser usada
-(podemos manter o fallback temporário pra rollback rápido).
+Vantagem: pode fazer deploy do código novo **antes** do cutover. Enquanto
+`DATABASE_URL` ainda estiver vazio, a app continua falando com Supabase
+normalmente. Cutover = setar `DATABASE_URL` e `pm2 restart`.
+
+## 3.2 O que o shim cobre
+
+Todos os métodos PostgREST builder em uso no codebase (verificado com
+grep nos 105 call sites):
+
+- **Ops:** `select`, `insert`, `upsert(rows, { onConflict })`, `update`, `delete({ count: 'exact' })`
+- **Filters:** `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `is(col, null)`, `in`, `ilike` (com `*` → `%`), `not('col', 'in', '(a,b,c)')`, `filter`
+- **Modifiers:** `order(col, { ascending })`, `range(from, to)`, `limit`
+- **Terminators:** `single()`, `maybeSingle()`, *thenable* padrão (`{ data, error, count }`)
+- **Comportamento de erro:** envelopa em `{ data: null, error: { message, code, details, hint } }` — promise **nunca rejeita** (igual ao supabase-js)
+
+**Não cobertos** (não há uso no projeto): `.or()`, `.rpc()`, RLS, auth.*, storage.
+
+## 3.3 Testes unitários
+
+20 testes em `test/pgShim.test.js` cobrem geração de SQL para todos os
+padrões usados, sem precisar de Postgres real (mock do `Pool`).
+
+```bash
+npm test
+# ou específico:
+node --test test/pgShim.test.js
+```
+
+Saída esperada: `pass 20 / fail 0`.
+
+## 3.4 Como ativar o shim (cutover suave)
+
+No `.env` do servidor novo, **adicione** (não remova `SUPABASE_SERVICE_KEY` ainda):
+
+```env
+DATABASE_URL=postgresql://wpa_app:SENHA@localhost:5432/wpa_monitor
+
+# Opcionais (defaults sensatos):
+# PG_POOL_MAX=10
+# PG_IDLE_MS=30000
+# PG_SSL=true              # se o PG estiver em outro host com TLS exigido
+```
+
+`pm2 restart wpa-monitor`. No primeiro log você verá:
+
+```
+[supabaseClient] modo=pg (Postgres local via shim)
+```
+
+(Antes era `modo=supabase`). Se ver algo errado, basta comentar
+`DATABASE_URL` e restart — volta pro Supabase imediatamente. **Rollback
+em < 30 segundos.**
+
+## 3.5 Validação pós-shim (smoke test)
+
+```bash
+# 1. Health endpoint
+curl http://localhost:3002/health
+curl http://localhost:3002/api/admin/health
+
+# 2. Login + dados do dia
+curl -X POST http://localhost:3002/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"SENHA_ADMIN"}'
+# pega o token; depois:
+TOKEN=eyJ...
+curl http://localhost:3002/api/teams -H "Authorization: Bearer $TOKEN" | jq '. | length'
+
+# 3. Cron tasks (esses tocam INSERT/UPSERT/UPDATE/DELETE no PG)
+curl -X POST http://localhost:3002/api/admin/snapshot -H "Authorization: Bearer $TOKEN"
+# olhar os logs:
+pm2 logs wpa-monitor --lines 30 | grep -i 'snapshot\|error'
+
+# 4. Aba Rejeições (lê de note_rejections com filtros e arrays)
+curl "http://localhost:3002/api/rejeicoes/totais?de=2026-05-01&ate=2026-05-25" | jq
+
+# 5. Verifica no Postgres que as escritas chegaram
+PGPASSWORD=$LOCAL_PASSWORD psql -h localhost -U wpa_app -d wpa_monitor -c "
+  SELECT max(captured_at) FROM snapshots;
+  SELECT count(*) FROM note_rejections WHERE session_date >= current_date - 7;"
+```
+
+## 3.6 Checklist Fase 3
+
+- [ ] `npm install` no servidor → `pg` instalado
+- [ ] `npm test` passa (20/20)
+- [ ] `.env` tem `DATABASE_URL`
+- [ ] Boot do PM2 imprime `[supabaseClient] modo=pg`
+- [ ] Smoke test 3.5 passa
+- [ ] `pm2 logs` sem erros de SQL nas primeiras horas
+- [ ] Snapshot dispara e grava no PG (cruza com `SELECT max(captured_at) FROM snapshots`)
 
 ---
 
