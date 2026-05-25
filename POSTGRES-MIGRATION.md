@@ -287,33 +287,155 @@ sudo -u postgres dropdb wpa_test
 
 ---
 
-# Fase 2 — Migrar dados do Supabase (resumo, detalhe quando chegar a hora)
+# Fase 2 — Migrar dados do Supabase para o Postgres local
+
+**Pré-requisitos:** Fase 1 completa (schema aplicado, Postgres rodando).
+
+Toda a Fase 2 está automatizada em **`scripts/migrate-from-supabase.sh`**.
+O script faz: sanity check de ambas as pontas → contagens da origem →
+verificação/limpeza do destino → `pg_dump` (formato custom) →
+`pg_restore` paralelo → comparação row-a-row → `ANALYZE`.
+
+## 2.1 Pegar a connection string do Supabase
+
+1. Acessa Supabase Dashboard → **Project Settings → Database**
+2. Em **Connection string** copia o "URI" (formato `postgresql://...`)
+3. **Use a connection direta** (não a "pooled") — porta `5432`, não 6543
+
+Anota:
+- `SUPABASE_HOST` = `db.iyadtjzehhebwojreudz.supabase.co`
+- `SUPABASE_USER` = `postgres`
+- `SUPABASE_DB`   = `postgres`
+- `SUPABASE_PASSWORD` = (a senha que você definiu ao criar o projeto;
+  se esqueceu, **Reset database password** na mesma página)
+
+## 2.2 Configurar `.env.migration`
+
+No servidor novo (ou no seu laptop com `postgresql-client-16` instalado e
+rede aberta pro Supabase **e** pro Postgres local):
 
 ```bash
-# 1. No seu laptop ou no servidor novo (tem net):
-export SUPABASE_HOST="aws-0-sa-east-1.pooler.supabase.com"
-export SUPABASE_PORT=5432
-export SUPABASE_USER="postgres.iyadtjzehhebwojreudz"
-export SUPABASE_DB="postgres"
-export PGPASSWORD="<senha do projeto Supabase — Settings → Database>"
-
-# 2. Dump só das tabelas usadas (~15-20 GB compactados)
-pg_dump -h $SUPABASE_HOST -p $SUPABASE_PORT -U $SUPABASE_USER -d $SUPABASE_DB \
-        --data-only --no-owner --no-privileges \
-        -t public.snapshots -t public.teams_current \
-        -t public.team_daily_totals -t public.team_daily_subcat_totals \
-        -t public.daily_totals -t public.daily_subcat_totals \
-        -t public.note_subcategorias -t public.note_details \
-        -t public.note_rejections -t public.metas \
-        -t public.wpa_token -t public.app_settings -t public.equipes_oficiais \
-        -Fc -f wpa_supabase_data.dump
-
-# 3. Restore no Postgres local
-PGPASSWORD='SENHA_LOCAL' pg_restore -h localhost -U wpa_app -d wpa_monitor \
-        --data-only --disable-triggers wpa_supabase_data.dump
+cd /home/wpa/prod-stc
+cp scripts/.env.migration.example scripts/.env.migration
+chmod 600 scripts/.env.migration
+nano scripts/.env.migration
 ```
 
-(Detalhamento e validação de contagens entra quando chegarmos na Fase 2.)
+Preenche `SUPABASE_PASSWORD` e `LOCAL_PASSWORD` (a senha que você criou
+na Fase 1.2 para o usuário `wpa_app`).
+
+## 2.3 Rodar a migração
+
+```bash
+chmod +x scripts/migrate-from-supabase.sh
+source scripts/.env.migration
+./scripts/migrate-from-supabase.sh
+```
+
+O script vai:
+1. Conectar nos dois lados e mostrar versões — falha se uma das conexões cair
+2. Verificar que as 13 tabelas existem no destino (senão, manda você rodar a Fase 1 primeiro)
+3. Imprimir **contagem de rows na origem** (baseline)
+4. Imprimir contagens no destino; se houver dados residuais, pede confirmação pra `TRUNCATE` antes de restaurar (evita conflito de PKs)
+5. `pg_dump` em formato custom (compactado) — leva 5-15 min para ~15 GB
+6. `pg_restore` com `--jobs=2` (paralelo) e `--disable-triggers`
+7. **Tabela comparativa origem × destino × delta** — abortando se algum delta ≠ 0
+8. `ANALYZE` pra atualizar estatísticas do planner
+9. Imprimir tamanho final do banco
+
+Saída de sucesso (exemplo):
+
+```
+TABELA                                  ORIGEM      DESTINO        DELTA
+------                                  ------      -------        -----
+metas                                        2            2            0  OK
+equipes_oficiais                            60           60            0  OK
+teams_current                               60           60            0  OK
+snapshots                               517824       517824            0  OK
+team_daily_totals                         1834         1834            0  OK
+team_daily_subcat_totals                  4127         4127            0  OK
+note_subcategorias                       45120        45120            0  OK
+note_details                              9821         9821            0  OK
+note_rejections                           2633         2633            0  OK
+wpa_token                                    1            1            0  OK
+app_settings                                 3            3            0  OK
+...
+  ok  MIGRACAO COMPLETA — todas as 13 tabelas batem com a origem
+```
+
+## 2.4 Resolver problemas comuns
+
+**`could not connect to server: timeout`**
+- Firewall do servidor não libera saída na 5432. Tenta `nc -zv $SUPABASE_HOST 5432` pra confirmar.
+- Em alguns ambientes, só o pooler (porta 6543) é acessível. Nesse caso use:
+  `SUPABASE_HOST=aws-0-sa-east-1.pooler.supabase.com SUPABASE_PORT=6543 SUPABASE_USER=postgres.<project-ref>`
+  Atenção: pooler tem timeout mais agressivo em dumps longos. Se cair no meio, divida por tabela.
+
+**`pg_restore: error: COPY failed: ERROR: duplicate key value`**
+- Destino não estava vazio. O script normalmente faz `TRUNCATE` antes,
+  mas se você pulou esse passo, rode manualmente:
+  ```bash
+  PGPASSWORD=$LOCAL_PASSWORD psql -h localhost -U wpa_app -d wpa_monitor -c \
+    "TRUNCATE snapshots, note_details, note_subcategorias, note_rejections,
+              team_daily_totals, team_daily_subcat_totals, teams_current,
+              equipes_oficiais, metas, wpa_token, app_settings,
+              daily_totals, daily_subcat_totals
+     RESTART IDENTITY CASCADE;"
+  ```
+
+**Delta > 0 em alguma tabela**
+- Pode acontecer se cronjobs continuaram rodando contra o Supabase durante o dump.
+- **Solução limpa:** pare o PM2 do servidor antigo ANTES de rodar o dump,
+  depois roda este script. Cron novo só liga na Fase 4 (cutover).
+
+**Erro em `wpa_token`**
+- Essa tabela tem só 1 linha (token JWT atual). Se o restore falhar
+  nela, o cron vai recriar automaticamente no próximo refresh. Tolerável.
+
+## 2.5 Validações pós-migração (manuais, extras)
+
+```bash
+PGPASSWORD=$LOCAL_PASSWORD psql -h localhost -U wpa_app -d wpa_monitor <<SQL
+-- 1) data mais recente em snapshots (esperado: hoje ou ontem)
+SELECT max(date) AS ultima_data, max(captured_at) AS ultimo_captured FROM snapshots;
+
+-- 2) total de notas concluídas no mês atual (cruza com a UI)
+SELECT regional, sum(count) AS total
+  FROM team_daily_totals
+ WHERE date >= date_trunc('month', current_date)
+ GROUP BY regional;
+
+-- 3) rejeições recentes (cruza com a aba Rejeições)
+SELECT count(*) AS total_rejeicoes_mes,
+       count(*) FILTER (WHERE motivo_codes <> '{}') AS com_motivo
+  FROM note_rejections
+ WHERE session_date >= date_trunc('month', current_date);
+
+-- 4) equipes oficiais (deve dar 60: 31 GUA + 29 CAC)
+SELECT regional, count(*) FROM equipes_oficiais WHERE ativo GROUP BY regional;
+
+-- 5) tamanhos das tabelas pesadas
+SELECT relname,
+       pg_size_pretty(pg_total_relation_size(relid)) AS size,
+       n_live_tup AS estimated_rows
+  FROM pg_stat_user_tables
+ ORDER BY pg_total_relation_size(relid) DESC LIMIT 8;
+SQL
+```
+
+Compara com o que você vê hoje no Supabase Studio — devem bater.
+
+## 2.6 Checklist Fase 2
+
+- [ ] `.env.migration` preenchido e com `chmod 600`
+- [ ] PM2 do servidor antigo **parado** (`pm2 stop wpa-monitor` no antigo)
+- [ ] Script rodou sem `DIFF` na comparação final
+- [ ] Validações 2.5 batem com o que você vê no Supabase Studio
+- [ ] Dump arquivado em local seguro (`/var/backups/postgres/migration_inicial.dump`)
+- [ ] `pg_database_size` no destino é próximo do esperado (~13-20 GB)
+
+> **Não delete o projeto do Supabase ainda** — só depois da Fase 4
+> estabilizar por ≥ 1 semana. Mantém como backup de emergência.
 
 ---
 

@@ -1,5 +1,7 @@
 node_modules/
 .env
+.env.migration
+scripts/.env.migration
 logs/
 *.log
 data/*.db
