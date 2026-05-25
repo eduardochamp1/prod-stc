@@ -42,6 +42,8 @@ const argDe  = positional[0] || null;
 const argAte = positional[1] || null;
 const DRY_RUN = args.includes('--dry-run');
 const LIMIT   = parseInt((args.find(a => a.startsWith('--limit=')) || '').slice('--limit='.length), 10) || null;
+const ONLY_TYPES = (args.find(a => a.startsWith('--types=')) || '').slice('--types='.length)
+  .split(',').map(t => t.trim().toUpperCase()).filter(Boolean);  // ex: --types=MD,LN,SF
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -179,6 +181,12 @@ async function main() {
   console.log('\n[3/5] Coletando candidatos únicos (1 entrada por note_id)...');
   let candidatos = coletarCandidatos(snaps);
   console.log(`      ${candidatos.length} note_ids rejeitados únicos`);
+
+  if (ONLY_TYPES.length > 0) {
+    const antes = candidatos.length;
+    candidatos = candidatos.filter(c => ONLY_TYPES.includes(c.tipo));
+    console.log(`      🎯 --types=${ONLY_TYPES.join(',')}: ${candidatos.length} candidatos (de ${antes})`);
+  }
 
   if (candidatos.length === 0) {
     console.log('\n✅ Nada a fazer.');
