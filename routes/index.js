@@ -22,7 +22,7 @@ function _parseYearMonth(req, res) {
   }
   return raw || new Date().toISOString().slice(0, 7);
 }
-const { login: authLogin, authMiddleware }    = require('../middleware/auth');
+const { login: authLogin, authMiddleware, requireAdmin }    = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -50,6 +50,10 @@ router.post('/auth/login', (req, res) => {
 
 // Protege TODAS as rotas abaixo com JWT
 router.use(authMiddleware);
+
+// Todas as rotas /admin/* exigem role=admin (defesa em profundidade — frontend
+// também esconde botões pra não-admin, mas a API rejeita por sua conta).
+router.use('/admin', requireAdmin);
 
 // Supabase: carregado para todos os modos que não sejam mock
 let _sbq = null;
@@ -160,8 +164,8 @@ router.get('/metas', async (req, res) => {
   }
 });
 
-// POST /api/metas
-router.post('/metas', async (req, res) => {
+// POST /api/metas — só admin pode editar metas (GET acima continua aberto)
+router.post('/metas', requireAdmin, async (req, res) => {
   try {
     const sq = sbq();
     if (sq) {

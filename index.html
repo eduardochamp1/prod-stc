@@ -4170,8 +4170,8 @@
       <div id="user-chip" onclick="logout()" title="Clique para sair">
         👤 <span id="user-chip-name"></span> &middot; Sair
       </div>
-      <button class="btn-header" onclick="openMetas()">⚙ Metas</button>
-      <button class="btn-header" onclick="openAdmin()">🔧 Admin</button>
+      <button class="btn-header" id="btn-header-metas" onclick="openMetas()" style="display:none">⚙ Metas</button>
+      <button class="btn-header" id="btn-header-admin" onclick="openAdmin()" style="display:none">🔧 Admin</button>
     </div>
   </header>
 
@@ -5062,6 +5062,20 @@
     function applyUserPermissions(sess) {
       document.getElementById('user-chip-name').textContent = sess.username;
       document.getElementById('user-chip').classList.add('show');
+
+      // Guarda role globalmente pra openMetas/openAdmin checarem
+      window.__currentUserRole = sess.role || '';
+
+      // Mostra aba Metas + botões Metas/Admin SÓ pra admin
+      const isAdmin = sess.role === 'admin';
+      const showOrHide = (id, show) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+      };
+      showOrHide('tab-btn-metas',    isAdmin);
+      showOrHide('btn-header-metas', isAdmin);
+      showOrHide('btn-header-admin', isAdmin);
+
       // Restringe regional no seletor para usuários não-admin
       if (sess.regional && sess.regional !== 'ALL') {
         ['regional-select', 'ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
@@ -7245,8 +7259,21 @@ ${equipes.length > 0 ? `<div class="perf-section">
       setTimeout(() => input?.focus(), 80);
     }
 
-    function openMetas() { _abrirSenhaModal('metas', 'Digite a senha para configurar metas'); }
-    function openAdmin() { _abrirSenhaModal('admin', 'Digite a senha para acessar o painel admin'); }
+    // Acesso role-based: só admin abre. Senão, alerta (não deveria nem ver o botão, mas é defesa em profundidade).
+    function openMetas() {
+      if (window.__currentUserRole !== 'admin') {
+        alert('Acesso negado — apenas administradores podem configurar metas.');
+        return;
+      }
+      _abrirModalMetas();
+    }
+    function openAdmin() {
+      if (window.__currentUserRole !== 'admin') {
+        alert('Acesso negado — apenas administradores podem acessar o painel.');
+        return;
+      }
+      _abrirModalAdmin();
+    }
 
     async function confirmarSenha() {
       const input = document.getElementById('senha-metas-input');

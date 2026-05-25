@@ -117,4 +117,17 @@ function authMiddleware(req, res, next) {
   next();
 }
 
-module.exports = { login, authMiddleware, verifyToken };
+// ── Middleware: exige role=admin ──────────────────────────────────────────────
+// Use DEPOIS de authMiddleware nas rotas administrativas.
+// Ex: router.post('/admin/equipes', requireAdmin, handler)
+function requireAdmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Não autenticado', code: 'NO_TOKEN' });
+  }
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Acesso restrito a administradores', code: 'FORBIDDEN' });
+  }
+  next();
+}
+
+module.exports = { login, authMiddleware, requireAdmin, verifyToken };
