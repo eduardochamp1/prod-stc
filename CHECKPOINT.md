@@ -12,10 +12,23 @@ estado das 4 fases:
 
 | Fase | Descrição                                       | Status                |
 |-----:|--------------------------------------------------|-----------------------|
-|   1  | Setup Postgres no servidor (`app-jose-zouain`)   | 🟡 quase concluída    |
-|   2  | Migrar dados do Supabase pro PG local            | ⚪ aguarda Fase 1     |
+|   1  | Setup Postgres no servidor (`app-jose-zouain`)   | ✅ concluída          |
+|   2  | Migrar dados do Supabase pro PG local            | 🟡 PRÓXIMA            |
 |   3  | Shim `pg` (substituir @supabase/supabase-js)     | ✅ entregue + testado |
 |   4  | Cutover + aposentadoria do Vercel                | ⚪ pendente           |
+
+### Fase 1 fechada — o que ficou no `wpa_monitor`:
+
+13 tabelas criadas + 75 equipes oficiais pré-carregadas:
+
+```
+ app_settings | daily_subcat_totals | daily_totals | equipes_oficiais
+ metas | note_details | note_rejections | note_subcategorias | snapshots
+ team_daily_subcat_totals | team_daily_totals | teams_current | wpa_token
+```
+
+Escalas carregadas: 31 EC (08:00-17:00) · 26 EP (14:00-23:00) ·
+14 ET (07:00-16:00) · 4 EB (07:00-16:00) = 75 equipes.
 
 ---
 
@@ -63,49 +76,53 @@ log_min_duration_statement = 500ms
 
 ---
 
-## ⏭️ Próximo comando (retomar daqui)
+## ⏭️ Próximo comando (Fase 2 — retomar daqui)
 
-**Aplicar os schemas no `wpa_monitor`.** Antes preciso mapear todos os
-`.sql` do repo pra montar a ordem certa de aplicação. Rode:
+**Migrar os dados do Supabase pro `wpa_monitor`.** Script automatizado
+em `scripts/migrate-from-supabase.sh`. Antes de rodar:
 
-```bash
-find ~/prod-stc -name "*.sql" -type f 2>/dev/null | grep -v node_modules | sort
-```
+### 2.1 Pegar a senha do Postgres do Supabase
 
-Cole o output e eu monto o loop de aplicação dos schemas + migrations
-(provavelmente: `supabase/schema.sql` → `supabase/migrations/001-007` →
-`migrations/add_*` se existirem).
+Acessa Supabase Dashboard → **Project Settings → Database** →
+**Connection string**. A senha está embutida na URI; ou clique em
+**Reset database password** se não souber.
 
-Após aplicar tudo, validar com:
-
-```bash
-psql -h localhost -U wpa_app -d wpa_monitor -c "\dt"
-# Esperado: ~13-14 tabelas (snapshots, teams_current, equipes_oficiais,
-#           team_daily_totals, team_daily_subcat_totals, daily_totals,
-#           daily_subcat_totals, note_subcategorias, note_details,
-#           note_rejections, metas, wpa_token, app_settings)
-```
-
----
-
-## Depois da Fase 1, sequência:
-
-### Fase 2 (migrar dados — script pronto)
+### 2.2 Configurar o .env.migration
 
 ```bash
 cd ~/prod-stc
 cp scripts/.env.migration.example scripts/.env.migration
 chmod 600 scripts/.env.migration
-nano scripts/.env.migration   # preenche SUPABASE_PASSWORD e LOCAL_PASSWORD
+nano scripts/.env.migration
+# Preenche:
+#   SUPABASE_PASSWORD=<senha do Supabase>
+#   LOCAL_PASSWORD=<senha do wpa_app que você criou na Fase 1>
+```
 
-# PARA O PM2 DO SERVIDOR ANTIGO antes de rodar este script
-# (pra não rodar 2 crons em paralelo durante o dump)
+### 2.3 ⚠ Parar o PM2 do servidor antigo
 
+**ANTES** de rodar o dump, para o cron do servidor antigo pra evitar que
+ele grave novos snapshots durante a janela de migração:
+
+```bash
+# No servidor ANTIGO (não o app-jose-zouain):
+pm2 stop wpa-monitor
+```
+
+### 2.4 Rodar a migração
+
+```bash
+cd ~/prod-stc
+chmod +x scripts/migrate-from-supabase.sh
 source scripts/.env.migration
 ./scripts/migrate-from-supabase.sh
 ```
 
-Detalhes: `POSTGRES-MIGRATION.md` seção Fase 2 (com troubleshoot completo).
+O script vai imprimir uma tabela comparativa origem×destino com
+todas as 13 tabelas. Sucesso = todas com delta=0.
+
+Detalhes completos: `POSTGRES-MIGRATION.md` seção Fase 2 (incluindo
+troubleshoot de pooler, timeout, PK duplicada, etc.).
 
 ### Fase 3 (já entregue — só configurar)
 
