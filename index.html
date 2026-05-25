@@ -5155,12 +5155,12 @@
     let _rejMotivoFilter = null;       // code|null
 
     async function initRejeicoes() {
-      // Default range: últimos 7 dias (ate=hoje, de=hoje-6).
+      // Default range: dia 01 do mês atual → hoje (BRT).
       const hoje = todayISO();
-      const seteAtras = new Date(Date.now() - 7 * 24 * 3600 * 1000 - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      const primeiroDia = hoje.slice(0, 8) + '01';
       const deEl  = document.getElementById('rej-de-input');
       const ateEl = document.getElementById('rej-ate-input');
-      if (deEl  && !deEl.value)  deEl.value  = seteAtras;
+      if (deEl  && !deEl.value)  deEl.value  = primeiroDia;
       if (ateEl && !ateEl.value) ateEl.value = hoje;
       if (!_rejEquipesPopuladas) {
         try {
