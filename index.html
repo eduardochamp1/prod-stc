@@ -4229,6 +4229,18 @@
               <div id="tipos-checkboxes"></div>
             </div>
           </div>
+          <div class="tipos-filter-wrap" id="subcats-filter-wrap">
+            <button class="tipos-filter-btn" id="subcats-filter-btn" onclick="toggleSubcatsPanel(event)">
+              📑 Subcategorias <span class="tipos-filter-badge" id="subcats-badge"></span>
+            </button>
+            <div class="tipos-filter-panel" id="subcats-filter-panel">
+              <div class="tipos-filter-actions">
+                <button class="tipos-filter-action" onclick="toggleAllSubcats(true)">Todas</button>
+                <button class="tipos-filter-action" onclick="toggleAllSubcats(false)">Nenhuma</button>
+              </div>
+              <div id="subcats-checkboxes"></div>
+            </div>
+          </div>
           <button class="btn-refresh" id="btn-hoje" onclick="irParaHoje()" style="display:none">↩ Hoje</button>
           <button class="btn-refresh" id="btn-warm" onclick="acordarWpa()"
             title="Força um login no WPA — útil quando o Azure App Service hiberna e clicar em OS retorna 502">⚡ Acordar
@@ -5123,6 +5135,22 @@
     let currentFilter = '';
     let currentTab = 'monitor';
     let selectedTipos = new Set(Object.keys(TIPOS_SERVICO)); // todos selecionados por padrão
+
+    // Subcategorias disponíveis para o Monitor (espelha PROD_LINHAS com subCode).
+    // Cada chave é "TIPO/SUBCODE" — tipos sem subcats (LN/LE/DL/RL/UG/II/PO/SO/RD) não entram aqui.
+    const MONITOR_SUBCATS = [
+      { tipo: 'MD', sub: 'OBSOLETO', nome: 'Subs Obsoleto' },
+      { tipo: 'MD', sub: 'TL11',     nome: 'Subs TL11' },
+      { tipo: 'MD', sub: 'OUTROS',   nome: 'MD Outros' },
+      { tipo: 'SF', sub: 'L0',       nome: 'Corte Disjuntor' },
+      { tipo: 'SF', sub: 'L1',       nome: 'Corte Borne' },
+      { tipo: 'SF', sub: 'OUTROS',   nome: 'SF Outros' },
+      { tipo: 'DD', sub: 'C93',      nome: 'Subs Ramal' },
+      { tipo: 'DD', sub: 'BTZ013',   nome: 'Substituição CS' },
+      { tipo: 'DD', sub: 'OUTROS',   nome: 'DD Outros' },
+    ];
+    // Default: todas as subcats selecionadas (aplicado só nos tipos que TÊM subcat).
+    let selectedSubcats = new Set(MONITOR_SUBCATS.map(s => `${s.tipo}/${s.sub}`));
 
     function mesAtualInput() {
       // BRT (UTC-3) — UTC puro vira o mês errado após 21h nos 3 primeiros dias do mês
@@ -6397,12 +6425,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const linhasExibir = PROD_LINHAS.filter(l => {
         const realizado = totaisReg[l.key] || 0;
         const meta = parseInt(metasReg[l.key] || 0);
-        // Filtro "Tipos" opera no nível do TIPO, não do sub_code
+        // Filtro "Tipos" opera no nível do TIPO
         const tipoSelecionado = selectedTipos.size === 0 || selectedTipos.has(l.tipo);
+        if (!tipoSelecionado) return false;
+        // Filtro "Subcategorias": só aplica em linhas que TÊM subCode.
+        // Linhas sem subCode (LN/LE/DL/RL/UG/II/PO/SO/RD) passam direto.
+        if (l.subCode) {
+          const subKey = `${l.tipo}/${l.subCode}`;
+          if (!selectedSubcats.has(subKey)) return false;
+        }
         // OUTROS sempre visíveis (mesmo com 0/0) — usuário vê a categoria
         // catch-all e sabe que zero significa "nenhuma fora da spec hoje"
         const isOutros = l.subCode === 'OUTROS';
-        return tipoSelecionado && (realizado > 0 || meta > 0 || isOutros);
+        return realizado > 0 || meta > 0 || isOutros;
       });
 
       if (linhasExibir.length === 0)
@@ -7381,7 +7416,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Debounce 300ms p/ evitar uma escrita por checkbox marcado em sequência
       clearTimeout(_saveFiltersTimer);
       _saveFiltersTimer = setTimeout(() => {
-        const body = { regional: currentRegional, tipos: [...selectedTipos] };
+        const body = { regional: currentRegional, tipos: [...selectedTipos], subcats: [...selectedSubcats] };
         fetch(`${API}/settings/${FILTERS_KEY}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -7423,6 +7458,15 @@ ${equipes.length > 0 ? `<div class="perf-section">
         });
         updateTiposBadge();
       }
+
+      // Subcategorias: valida contra o catálogo atual de MONITOR_SUBCATS
+      if (Array.isArray(saved.subcats)) {
+        const validSubKeys = new Set(MONITOR_SUBCATS.map(s => `${s.tipo}/${s.sub}`));
+        const valid = saved.subcats.filter(k => validSubKeys.has(k));
+        selectedSubcats = new Set(valid);
+        _renderSubcatsCheckboxes();
+        updateSubcatsBadge();
+      }
     }
 
     // ── FILTRO DE TIPOS ───────────────────────────────────────────────────
@@ -7442,6 +7486,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (checked) selectedTipos.add(code);
       else selectedTipos.delete(code);
       updateTiposBadge();
+      _renderSubcatsCheckboxes();   // tipos visíveis mudaram → re-render subcats
+      updateSubcatsBadge();
       saveFilters();
       renderAll();
     }
@@ -7455,6 +7501,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (chk) chk.checked = selectAll;
       });
       updateTiposBadge();
+      _renderSubcatsCheckboxes();
+      updateSubcatsBadge();
       saveFilters();
       renderAll();
     }
@@ -7479,7 +7527,101 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (wrap && !wrap.contains(e.target)) {
         document.getElementById('tipos-filter-panel')?.classList.remove('open');
       }
+      const wrap2 = document.getElementById('subcats-filter-wrap');
+      if (wrap2 && !wrap2.contains(e.target)) {
+        document.getElementById('subcats-filter-panel')?.classList.remove('open');
+      }
     });
+
+    // ── FILTRO DE SUBCATEGORIAS (Monitor) ─────────────────────────────────
+    function initSubcatsFilter() {
+      _renderSubcatsCheckboxes();
+      updateSubcatsBadge();
+    }
+
+    /** Renderiza só subcats cujo tipo-pai está selecionado em selectedTipos. */
+    function _renderSubcatsCheckboxes() {
+      const box = document.getElementById('subcats-checkboxes');
+      if (!box) return;
+      const tiposComSub = [...new Set(MONITOR_SUBCATS.map(s => s.tipo))]
+        .filter(t => selectedTipos.has(t));
+      if (tiposComSub.length === 0) {
+        box.innerHTML = '<div style="font-size:11px;color:var(--text2);padding:6px">Nenhum tipo com subcategoria selecionado</div>';
+        return;
+      }
+      box.innerHTML = tiposComSub.map(tipo => {
+        const subs = MONITOR_SUBCATS.filter(s => s.tipo === tipo);
+        const lista = subs.map(s => {
+          const key = `${s.tipo}/${s.sub}`;
+          const checked = selectedSubcats.has(key) ? 'checked' : '';
+          return `
+            <label style="display:flex;align-items:center;gap:6px;padding:3px 0;padding-left:10px;cursor:pointer">
+              <input type="checkbox" value="${key}" ${checked}
+                     onchange="onSubcatChange('${key}', this.checked)" />
+              <span style="font-size:11px">${s.nome}</span>
+              <span style="margin-left:auto;font-size:9px;color:var(--text2)">${s.sub}</span>
+            </label>`;
+        }).join('');
+        return `
+          <div style="font-size:10px;font-weight:700;color:var(--text2);margin-top:8px;padding-top:4px;border-top:1px solid var(--cinza2)">${tipo} — ${TIPOS_SERVICO[tipo] || tipo}</div>
+          ${lista}
+        `;
+      }).join('');
+    }
+
+    function onSubcatChange(key, checked) {
+      if (checked) selectedSubcats.add(key);
+      else selectedSubcats.delete(key);
+      updateSubcatsBadge();
+      saveFilters();
+      renderAll();
+    }
+
+    function toggleAllSubcats(selectAll) {
+      // Atua só nas subcats dos tipos atualmente selecionados (resto fica congelado).
+      const tiposAtivos = new Set([...selectedTipos]);
+      MONITOR_SUBCATS.forEach(s => {
+        const key = `${s.tipo}/${s.sub}`;
+        if (!tiposAtivos.has(s.tipo)) return;
+        if (selectAll) selectedSubcats.add(key);
+        else selectedSubcats.delete(key);
+      });
+      _renderSubcatsCheckboxes();
+      updateSubcatsBadge();
+      saveFilters();
+      renderAll();
+    }
+
+    function updateSubcatsBadge() {
+      const tiposAtivos = new Set([...selectedTipos]);
+      const disponiveis = MONITOR_SUBCATS.filter(s => tiposAtivos.has(s.tipo)).map(s => `${s.tipo}/${s.sub}`);
+      const total = disponiveis.length;
+      const sel = disponiveis.filter(k => selectedSubcats.has(k)).length;
+      const badge = document.getElementById('subcats-badge');
+      const btn = document.getElementById('subcats-filter-btn');
+      if (badge) badge.textContent = total === 0 ? '0' : (sel === total ? 'Todas' : `${sel}/${total}`);
+      if (btn) btn.classList.toggle('active', total > 0 && sel < total);
+    }
+
+    function toggleSubcatsPanel(e) {
+      e.stopPropagation();
+      document.getElementById('subcats-filter-panel').classList.toggle('open');
+    }
+
+    /**
+     * Decide se uma nota passa pelos filtros de Tipos + Subcategorias do Monitor.
+     * Para tipos sem subcategorias (LN/LE/DL/RL/UG/II/PO/SO/RD), só vale o filtro de Tipo.
+     * Para tipos com subcategorias, exige tipo selecionado E sub_code (do _subcatMap)
+     * presente em selectedSubcats — notas sem classificação são tratadas como OUTROS.
+     */
+    function notaPassaFiltroMonitor(n) {
+      if (selectedTipos.size > 0 && !selectedTipos.has(n.tipoCode)) return false;
+      const temSub = MONITOR_SUBCATS.some(s => s.tipo === n.tipoCode);
+      if (!temSub) return true;
+      const sc = window._subcatMap?.[n.id];
+      const subCode = sc?.sub_code || 'OUTROS';
+      return selectedSubcats.has(`${n.tipoCode}/${subCode}`);
+    }
 
     // ── FILTROS ───────────────────────────────────────────────────────────
     function selectRegional(regional) {
@@ -7737,13 +7879,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
         // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo
         const subcatCont = {};
         (t.notasConcluidas || []).forEach(n => {
-          if (selectedTipos.size === 0 || selectedTipos.has(n.tipoCode)) {
-            const sc = window._subcatMap?.[n.id];
-            const label = sc?.sub_categoria || n.tipoCode;
-            if (!subcatCont[label]) subcatCont[label] = { count: 0, qtdTotal: 0 };
-            subcatCont[label].count++;
-            if (sc?.quantidade != null) subcatCont[label].qtdTotal += sc.quantidade;
-          }
+          if (!notaPassaFiltroMonitor(n)) return;
+          const sc = window._subcatMap?.[n.id];
+          const label = sc?.sub_categoria || n.tipoCode;
+          if (!subcatCont[label]) subcatCont[label] = { count: 0, qtdTotal: 0 };
+          subcatCont[label].count++;
+          if (sc?.quantidade != null) subcatCont[label].qtdTotal += sc.quantidade;
         });
         const tiposHtml = Object.entries(subcatCont).map(([label, { count, qtdTotal }]) =>
           `<span class="tipo-chip"><span class="tipo-chip-code">${label}</span><span class="tipo-chip-num">${count}${qtdTotal > 0 ? ` · ${qtdTotal}m` : ''}</span></span>`
@@ -8188,6 +8329,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // ── INIT ──────────────────────────────────────────────────────────────
     async function init() {
       initTiposFilter();
+      initSubcatsFilter();
       await applySavedFilters();   // restaura regional + tipos compartilhados do Supabase
 
       // Inicializa campos De/Até com hoje (sem permitir datas futuras)
