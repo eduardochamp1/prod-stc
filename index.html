@@ -5600,10 +5600,11 @@
 
     async function initDeslocamentos() {
       const hoje = todayISO();
-      const seteDiasAtras = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
+      // Default: HOJE apenas — OSRM consultas demoram (1 req/s), aumentar
+      // range gradualmente após cache popular.
       const deEl  = document.getElementById('desloc-de-input');
       const ateEl = document.getElementById('desloc-ate-input');
-      if (deEl  && !deEl.value)  deEl.value  = seteDiasAtras;
+      if (deEl  && !deEl.value)  deEl.value  = hoje;
       if (ateEl && !ateEl.value) ateEl.value = hoje;
 
       if (!_deslocEquipesPopuladas) {
@@ -5638,7 +5639,7 @@
       const qs  = new URLSearchParams({ de, ate });
       if (reg && reg !== 'ALL') qs.set('regional', reg);
       if (eq) qs.set('team', eq);
-      qs.set('limit', '2000');
+      qs.set('limit', '300');   // OSRM = ~1s/par (cache hits são instantâneos)
       document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
       return qs.toString();
     }

@@ -95,72 +95,105 @@ function extrairDeslocamentos(checkpoints) {
  */
 async function listDeslocamentos(de, ate, opts = {}) {
   const pool = _getPool();
+  const t0 = Date.now();
 
-  // Note_details não tem team_name/regional/date direto — vem via JOIN com snapshots.
-  // Pra evitar JOIN pesado, cruzamos via note_id e filtramos pela presença
-  // em snapshots do período + equipe oficial.
+  // Estratégia em 2 passos (muito mais rápida que JOIN LATERAL):
   //
-  // Estratégia: pega note_details com checkpoint, filtra por período via
-  // jsonb timestamp do PRIMEIRO event=0 (que é o início do deslocamento real).
-  // Depois cruza com a equipe/regional via snapshot mais próximo.
+  // Passo 1: SELECT direto em note_details filtrando por timestamp do primeiro
+  //          event=0. Só notas com checkpoint, no período. ~ms.
+  // Passo 2: SELECT mapa note_id → {team_name, regional, sector_id} a partir
+  //          das snapshots NO PERÍODO (com filtro de regional/team se vier).
+  //          Cruza em memória.
 
   const params = [de, ate];
-  const where  = [
-    `nd.payload->'checkpoints' IS NOT NULL`,
-    `jsonb_array_length(nd.payload->'checkpoints') > 0`,
-    // Filtra pelo intervalo via timestamp do primeiro evento
-    `(nd.payload->'checkpoints'->0->>'timestamp')::timestamptz >= $1::date`,
-    `(nd.payload->'checkpoints'->0->>'timestamp')::timestamptz < ($2::date + interval '1 day')`,
-  ];
-
-  // SQL simplificado: lê notas com checkpoint, e depois cruzamos com snapshot
-  // pra pegar team_name/regional. Usamos uma LATERAL pra pegar 1 snapshot.
-  const sql = `
-    WITH notas_com_cp AS (
-      SELECT
-        nd.note_id,
-        nd.numero,
-        nd.tipo,
-        nd.payload->'checkpoints' AS checkpoints
-      FROM note_details nd
-      WHERE ${where.join(' AND ')}
-      LIMIT 5000
-    ),
-    notas_enriquecidas AS (
-      SELECT
-        n.*,
-        s.team_name,
-        s.regional,
-        s.sector_id
-      FROM notas_com_cp n
-      LEFT JOIN LATERAL (
-        SELECT s.team_name, s.regional, s.sector_id
-        FROM snapshots s,
-             LATERAL jsonb_array_elements(
-               COALESCE(s.data->'notasConcluidas',  '[]'::jsonb) ||
-               COALESCE(s.data->'notasRejeitadas',  '[]'::jsonb) ||
-               COALESCE(s.data->'notasExecutadas',  '[]'::jsonb) ||
-               COALESCE(s.data->'notasBaixadas',    '[]'::jsonb)
-             ) AS nota_item
-        WHERE nota_item->>'id' = n.note_id::text
-        LIMIT 1
-      ) s ON true
-    )
-    SELECT * FROM notas_enriquecidas
-    WHERE team_name IS NOT NULL
-      ${opts.regional && opts.regional !== 'ALL' ? `AND regional = $${params.push(opts.regional)}` : ''}
-      ${opts.team_name ? `AND team_name = $${params.push(opts.team_name)}` : ''}
-      ${opts.tipo     ? `AND tipo = $${params.push(opts.tipo)}` : ''}
+  const wherePeriodo = `
+    (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz >= $1::date
+    AND (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz < ($2::date + interval '1 day')
   `;
 
-  const { rows } = await pool.query(sql, params);
+  const sqlNotas = `
+    SELECT
+      nd.note_id,
+      nd.numero,
+      nd.tipo,
+      nd.payload->'checkpoints' AS checkpoints
+    FROM note_details nd
+    WHERE nd.payload->'checkpoints' IS NOT NULL
+      AND jsonb_array_length(nd.payload->'checkpoints') >= 2
+      AND ${wherePeriodo}
+    LIMIT 3000
+  `;
+  const { rows: rawNotas } = await pool.query(sqlNotas, params);
+  const t1 = Date.now();
+  console.log(`[deslocamentos] passo 1: ${rawNotas.length} notas com checkpoint em ${t1 - t0}ms`);
+
+  if (rawNotas.length === 0) return { total: 0, returned: 0, rows: [] };
+
+  // Passo 2: mapa note_id → equipe. Lê snapshots no período (filtros aplicados).
+  // Como pode ter 60k+ snapshots, restringimos por período pra evitar full scan.
+  const params2 = [de, ate];
+  let snapWhere = `s.date >= $1 AND s.date <= $2`;
+  if (opts.regional && opts.regional !== 'ALL') {
+    params2.push(opts.regional);
+    snapWhere += ` AND s.regional = $${params2.length}`;
+  }
+  if (opts.team_name) {
+    params2.push(opts.team_name);
+    snapWhere += ` AND s.team_name = $${params2.length}`;
+  }
+
+  // jsonb_array_elements + extração de id — restringido ao período/filtros
+  // pra não escanear 63k linhas. Custo ~ N_snapshots_no_periodo × notas_por_snap.
+  const sqlMap = `
+    SELECT DISTINCT ON (nota_item->>'id')
+      nota_item->>'id'   AS note_id,
+      s.team_name,
+      s.regional,
+      s.sector_id
+    FROM snapshots s,
+         LATERAL jsonb_array_elements(
+           COALESCE(s.data->'notasConcluidas',  '[]'::jsonb) ||
+           COALESCE(s.data->'notasRejeitadas',  '[]'::jsonb) ||
+           COALESCE(s.data->'notasExecutadas',  '[]'::jsonb) ||
+           COALESCE(s.data->'notasBaixadas',    '[]'::jsonb)
+         ) AS nota_item
+    WHERE ${snapWhere}
+      AND nota_item->>'id' IS NOT NULL
+  `;
+  const { rows: mapaRows } = await pool.query(sqlMap, params2);
+  const t2 = Date.now();
+  console.log(`[deslocamentos] passo 2: mapa note_id→equipe com ${mapaRows.length} entradas em ${t2 - t1}ms`);
+
+  const mapaTeam = new Map();
+  for (const m of mapaRows) {
+    mapaTeam.set(m.note_id, { team_name: m.team_name, regional: m.regional, sector_id: m.sector_id });
+  }
 
   // Filtra equipes oficiais (whitelist em equipes_oficiais)
-  const { rows: oficRows } = await pool.query(
-    `SELECT sigla FROM equipes_oficiais WHERE ativo = true`
-  );
+  const { rows: oficRows } = await pool.query(`SELECT sigla FROM equipes_oficiais WHERE ativo = true`);
   const oficiais = new Set(oficRows.map(r => r.sigla));
-  const filtered = oficiais.size > 0 ? rows.filter(r => oficiais.has(r.team_name)) : rows;
+
+  // Junta tudo em memória
+  const rows = [];
+  for (const n of rawNotas) {
+    const info = mapaTeam.get(n.note_id);
+    if (!info) continue;                                // não tem equipe no período → skip
+    if (oficiais.size > 0 && !oficiais.has(info.team_name)) continue;
+    if (opts.tipo && n.tipo !== opts.tipo) continue;
+    rows.push({
+      note_id:    n.note_id,
+      numero:     n.numero,
+      tipo:       n.tipo,
+      checkpoints: n.checkpoints,
+      team_name:  info.team_name,
+      regional:   info.regional,
+      sector_id:  info.sector_id,
+    });
+  }
+  const t3 = Date.now();
+  console.log(`[deslocamentos] passo 3: ${rows.length} notas finais após join+filtros em ${t3 - t2}ms`);
+
+  const filtered = rows;
 
   // Expande cada nota em N deslocamentos (N tentativas)
   const desloc = [];
@@ -186,11 +219,15 @@ async function listDeslocamentos(de, ate, opts = {}) {
   // Limite antes do OSRM pra não estourar quota
   const LIMIT = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), 5000);
   const cut = desloc.slice(0, LIMIT);
+  console.log(`[deslocamentos] passo 4: ${desloc.length} deslocamentos extraídos, processando ${cut.length} via OSRM...`);
+  const tOsrm = Date.now();
+  let osrmHits = 0, osrmMisses = 0, osrmFails = 0;
 
   // Enriquece com OSRM (cache-friendly)
   for (const d of cut) {
     const r = await getRoute(d.origem.lat, d.origem.lng, d.destino.lat, d.destino.lng);
     if (r) {
+      if (r.cached) osrmHits++; else osrmMisses++;
       d.tempo_osrm_sec = r.duration_sec;
       d.distancia_m    = r.distance_m;
       d.geometry       = r.geometry;
@@ -202,12 +239,14 @@ async function listDeslocamentos(de, ate, opts = {}) {
         d.status = (d.tempo_real_sec / d.tempo_osrm_sec) > 1.5 ? 'lento' : 'ok';
       }
     } else {
+      osrmFails++;
       d.tempo_osrm_sec = null;
       d.distancia_m    = null;
       d.desvio_pct     = null;
       d.status         = 'sem_osrm';
     }
   }
+  console.log(`[deslocamentos] passo 4: OSRM concluído em ${((Date.now() - tOsrm) / 1000).toFixed(1)}s — cache hits=${osrmHits} misses=${osrmMisses} fails=${osrmFails}`);
 
   return {
     total: desloc.length,
