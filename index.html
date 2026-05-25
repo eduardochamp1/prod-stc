@@ -5277,15 +5277,8 @@
           </div>`;
       }).join('');
 
-      // Tendência diária
-      const diaMax = Math.max(...(tot.porDia || []).map(d => d.count), 1);
-      const diaHTML = (tot.porDia || []).map(d => {
-        const h = (100 * d.count / diaMax).toFixed(1);
-        return `<div class="rej-spark-col" title="${fmtDateBR(d.date)}: ${d.count}">
-          <div class="rej-spark-bar" style="height:${h}%"></div>
-          <div class="rej-spark-lbl">${d.date.slice(8)}/${d.date.slice(5,7)}</div>
-        </div>`;
-      }).join('');
+      // Tendência diária — chart SVG com barras, média móvel 7d e labels
+      const diaChart = _renderTendenciaSVG(tot.porDia || []);
 
       // Por tipo
       const tipoEntries = Object.entries(tot.porTipo || {}).sort((a, b) => b[1] - a[1]);
@@ -5311,10 +5304,23 @@
           .rej-bar-track { background:rgba(255,255,255,.06); height:14px; border-radius:3px; overflow:hidden; }
           .rej-bar-fill { height:100%; border-radius:3px; transition:width .3s; }
           .rej-bar-count { font-size:12px; font-weight:600; text-align:right; }
-          .rej-spark { display:flex; align-items:end; gap:3px; height:80px; padding:0 4px; }
-          .rej-spark-col { flex:1; display:flex; flex-direction:column; align-items:center; min-width:0; }
-          .rej-spark-bar { width:100%; max-width:18px; background:#e74c3c; border-radius:2px 2px 0 0; min-height:2px; }
-          .rej-spark-lbl { font-size:9px; opacity:.55; margin-top:3px; }
+          .rej-trend-wrap { position:relative; }
+          .rej-trend-stats { display:flex; gap:18px; flex-wrap:wrap; padding:6px 0 10px; font-size:12px; }
+          .rej-trend-stat b { color:var(--text1); font-size:14px; }
+          .rej-trend-stat span { opacity:.65; }
+          .rej-trend-svg { width:100%; height:240px; display:block; }
+          .rej-trend-svg .bar { fill:#e74c3c; transition:fill .15s, opacity .15s; cursor:pointer; }
+          .rej-trend-svg .bar.weekend { fill:#7d8a99; opacity:.55; }
+          .rej-trend-svg .bar:hover { fill:#ff6b5a; opacity:1; }
+          .rej-trend-svg .bar-label { font-size:10px; fill:var(--text1); font-weight:600; text-anchor:middle; pointer-events:none; }
+          .rej-trend-svg .x-label { font-size:10px; fill:var(--text2); text-anchor:middle; }
+          .rej-trend-svg .x-label.weekend { fill:#7d8a99; opacity:.7; }
+          .rej-trend-svg .grid-line { stroke:rgba(255,255,255,.06); stroke-width:1; stroke-dasharray:2,3; }
+          .rej-trend-svg .y-label { font-size:10px; fill:var(--text2); text-anchor:end; }
+          .rej-trend-svg .ma-line { fill:none; stroke:#f39c12; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+          .rej-trend-svg .ma-dot { fill:#f39c12; }
+          .rej-trend-legend { display:flex; gap:14px; justify-content:flex-end; font-size:11px; opacity:.75; padding-top:6px; }
+          .rej-trend-legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:middle; }
           .rej-pill { display:inline-block; padding:3px 9px; background:rgba(255,255,255,.06); border-radius:12px; font-size:12px; margin:2px; cursor:pointer; }
           .rej-pill:hover { background:rgba(231,76,60,.2); }
           .rej-tbl { width:100%; border-collapse:collapse; font-size:12px; }
@@ -5358,7 +5364,7 @@
 
         <div class="rej-panel" style="margin-bottom:18px">
           <h3>📅 Tendência Diária</h3>
-          <div class="rej-spark">${diaHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}</div>
+          ${diaChart}
         </div>
 
         <div class="rej-grid">
@@ -5486,6 +5492,123 @@
       XLSX.utils.book_append_sheet(wb, ws, 'Rejeições');
       const { de, ate } = rejRange();
       XLSX.writeFile(wb, `rejeicoes_${de}_${ate}.xlsx`);
+    }
+
+    /**
+     * Renderiza chart SVG da tendência diária com:
+     *   - Barras por dia (fim de semana em cinza)
+     *   - Média móvel de 7 dias (linha amarela)
+     *   - Eixo Y com grid + max
+     *   - Labels de valor no topo das barras
+     *   - Estatísticas: total, média/dia, dia pico
+     */
+    function _renderTendenciaSVG(porDia) {
+      if (!porDia || porDia.length === 0) {
+        return '<div class="empty-state" style="font-size:12px">Sem dados no período.</div>';
+      }
+      const dias = porDia.slice();
+      // Garante todos os dias do range mesmo com 0 (continuidade visual)
+      const total = dias.reduce((s, d) => s + d.count, 0);
+      const media = +(total / dias.length).toFixed(1);
+      const pico  = dias.reduce((max, d) => d.count > max.count ? d : max, dias[0]);
+      const max   = Math.max(...dias.map(d => d.count), 1);
+      // "Nice" max pra ter números arredondados no eixo Y
+      const niceMax = (v => {
+        const mag = Math.pow(10, Math.floor(Math.log10(v)));
+        const r = v / mag;
+        if (r <= 1) return mag;
+        if (r <= 2) return 2 * mag;
+        if (r <= 5) return 5 * mag;
+        return 10 * mag;
+      })(max);
+
+      // SVG geometry
+      const W = 1000, H = 240;
+      const padL = 38, padR = 12, padT = 18, padB = 32;
+      const innerW = W - padL - padR;
+      const innerH = H - padT - padB;
+      const n = dias.length;
+      const slot = innerW / n;
+      const barW = Math.max(4, Math.min(slot * 0.65, 36));
+
+      const y = v => padT + innerH - (v / niceMax) * innerH;
+      const x = i => padL + slot * (i + 0.5);
+
+      // Grid horizontal (5 linhas)
+      const grid = [];
+      for (let i = 0; i <= 4; i++) {
+        const v = niceMax * i / 4;
+        const yy = y(v);
+        grid.push(`<line class="grid-line" x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" />`);
+        grid.push(`<text class="y-label" x="${padL - 5}" y="${yy + 3}">${Math.round(v)}</text>`);
+      }
+
+      // Barras
+      const bars = dias.map((d, i) => {
+        const isWeekend = (() => {
+          const dt = new Date(d.date + 'T12:00:00');
+          const dow = dt.getDay();
+          return dow === 0 || dow === 6;
+        })();
+        const cx = x(i);
+        const bx = cx - barW / 2;
+        const by = y(d.count);
+        const bh = padT + innerH - by;
+        const showLabel = d.count > 0 && (n <= 35 || d.count >= max * 0.25);
+        return `
+          <g>
+            <rect class="bar ${isWeekend ? 'weekend' : ''}" x="${bx}" y="${by}" width="${barW}" height="${bh}" rx="2">
+              <title>${fmtDateBR(d.date)} · ${d.count} rejeições${isWeekend ? ' (fim de semana)' : ''}</title>
+            </rect>
+            ${showLabel ? `<text class="bar-label" x="${cx}" y="${by - 4}">${d.count}</text>` : ''}
+          </g>`;
+      }).join('');
+
+      // Labels X — em séries longas, mostra a cada N dias pra não amontoar
+      const step = n <= 16 ? 1 : (n <= 31 ? Math.ceil(n / 16) : Math.ceil(n / 12));
+      const xLabels = dias.map((d, i) => {
+        if (i % step !== 0 && i !== n - 1) return '';
+        const dt = new Date(d.date + 'T12:00:00');
+        const dow = dt.getDay();
+        const isWeekend = dow === 0 || dow === 6;
+        const lbl = d.date.slice(8) + '/' + d.date.slice(5, 7);
+        return `<text class="x-label ${isWeekend ? 'weekend' : ''}" x="${x(i)}" y="${H - padB + 14}">${lbl}</text>`;
+      }).join('');
+
+      // Média móvel 7 dias
+      const ma = [];
+      for (let i = 0; i < n; i++) {
+        const start = Math.max(0, i - 6);
+        const slice = dias.slice(start, i + 1);
+        const avg = slice.reduce((s, d) => s + d.count, 0) / slice.length;
+        ma.push({ i, avg });
+      }
+      const maPath = ma.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.i).toFixed(1)} ${y(p.avg).toFixed(1)}`).join(' ');
+      const maDots = (n <= 31)
+        ? ma.map(p => `<circle class="ma-dot" cx="${x(p.i)}" cy="${y(p.avg)}" r="2" />`).join('')
+        : '';
+
+      return `
+        <div class="rej-trend-wrap">
+          <div class="rej-trend-stats">
+            <div class="rej-trend-stat"><span>Total no período:</span> <b>${total}</b></div>
+            <div class="rej-trend-stat"><span>Média por dia:</span> <b>${media}</b></div>
+            <div class="rej-trend-stat"><span>Dia pico:</span> <b>${fmtDateBR(pico.date)} (${pico.count})</b></div>
+            <div class="rej-trend-stat"><span>Dias analisados:</span> <b>${n}</b></div>
+          </div>
+          <svg class="rej-trend-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+            ${grid.join('')}
+            ${bars}
+            ${maPath ? `<path class="ma-line" d="${maPath}" />${maDots}` : ''}
+            ${xLabels}
+          </svg>
+          <div class="rej-trend-legend">
+            <span><span class="swatch" style="background:#e74c3c"></span>Dia útil</span>
+            <span><span class="swatch" style="background:#7d8a99;opacity:.6"></span>Fim de semana</span>
+            <span><span class="swatch" style="background:#f39c12"></span>Média móvel 7d</span>
+          </div>
+        </div>
+      `;
     }
 
     function escapeHtml(s) {
