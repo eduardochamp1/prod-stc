@@ -54,7 +54,7 @@ const TABLES = [
   { name: 'app_settings',             mode: 'truncate', order: 'key' },
   { name: 'metas',                    mode: 'truncate', order: null },
   { name: 'teams_current',            mode: 'truncate', order: null },
-  { name: 'equipes_oficiais',         mode: 'merge',    order: 'team_name' },
+  { name: 'equipes_oficiais',         mode: 'merge',    order: 'sigla' },
 ];
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
