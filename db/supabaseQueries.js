@@ -1194,6 +1194,20 @@ async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotiv
   });
 
   let filtered = _onlyOficiais(rows, 'team_name');
+
+  // Normaliza session_date e rejection_date pra strings ISO YYYY-MM-DD / ISO,
+  // porque o pg driver retorna DATE/TIMESTAMPTZ como Date objects nativos —
+  // o que quebra .localeCompare e o JSON.stringify gera "2026-05-24T03:00:00..."
+  // em vez de "2026-05-24". A UI espera strings.
+  for (const r of filtered) {
+    if (r.session_date instanceof Date) {
+      r.session_date = r.session_date.toISOString().slice(0, 10);
+    }
+    if (r.rejection_date instanceof Date) {
+      r.rejection_date = r.rejection_date.toISOString();
+    }
+  }
+
   if (somenteComMotivo) {
     filtered = filtered.filter(r => Array.isArray(r.motivo_codes) && r.motivo_codes.length > 0);
   }
