@@ -4185,6 +4185,7 @@
       <button class="tab-btn" id="tab-btn-graficos" onclick="switchTab('graficos')">📈 Gráficos</button>
       <button class="tab-btn" id="tab-btn-ranking" onclick="switchTab('ranking')">🏆 Ranking</button>
       <button class="tab-btn" id="tab-btn-mapa" onclick="switchTab('mapa')">🗺️ Mapa</button>
+      <button class="tab-btn" id="tab-btn-desloc" onclick="switchTab('desloc')">📍 Deslocamentos</button>
       <button class="tab-btn" id="tab-btn-historico" onclick="switchTab('historico')">📋 Histórico</button>
     </div>
 
@@ -4484,6 +4485,41 @@
           </div>
           <div id="mapa-leaflet"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── TAB: DESLOCAMENTOS ────────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-desloc">
+      <div class="filter-bar">
+        <div class="date-label">Deslocamentos — <strong id="desloc-periodo-label"></strong></div>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <span class="filter-label">De</span>
+            <input type="date" class="month-input" id="desloc-de-input" onchange="loadDeslocamentos()" style="width:130px" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Até</span>
+            <input type="date" class="month-input" id="desloc-ate-input" onchange="loadDeslocamentos()" style="width:130px" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Regional</span>
+            <select class="filter-select" id="desloc-regional-select" onchange="loadDeslocamentos()">
+              <option value="ALL">Todas</option>
+              <option value="GUA">GUA</option>
+              <option value="CAC">CAC</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Equipe</span>
+            <select class="filter-select" id="desloc-equipe-select" onchange="loadDeslocamentos()" style="min-width:160px">
+              <option value="">Todas</option>
+            </select>
+          </div>
+          <button class="btn-refresh" onclick="loadDeslocamentos()">↻ Atualizar</button>
+        </div>
+      </div>
+      <div id="desloc-content">
+        <div class="empty-state" style="font-size:12px">Carregando…</div>
       </div>
     </div>
 
@@ -5185,6 +5221,7 @@
       if (tab === 'graficos') loadGraficos();
       if (tab === 'mapa') initMapa();
       if (tab === 'rejeicoes') initRejeicoes();
+      if (tab === 'desloc') initDeslocamentos();
     }
 
     // ── REJEIÇÕES ─────────────────────────────────────────────────────────────
@@ -5551,6 +5588,250 @@
       XLSX.utils.book_append_sheet(wb, ws, 'Rejeições');
       const { de, ate } = rejRange();
       XLSX.writeFile(wb, `rejeicoes_${de}_${ate}.xlsx`);
+    }
+
+    // ── DESLOCAMENTOS ─────────────────────────────────────────────────────────
+    // Compara tempo real de deslocamento (event=0 → event=1 nos checkpoints)
+    // com estimativa OSRM. Threshold 1.5x = vermelho.
+    let _deslocEquipesPopuladas = false;
+    let _deslocCache = null;
+    let _deslocLeafletMap = null;
+    let _deslocRouteLayers = [];
+
+    async function initDeslocamentos() {
+      const hoje = todayISO();
+      const seteDiasAtras = new Date(Date.now() - 6 * 86400 * 1000).toISOString().slice(0, 10);
+      const deEl  = document.getElementById('desloc-de-input');
+      const ateEl = document.getElementById('desloc-ate-input');
+      if (deEl  && !deEl.value)  deEl.value  = seteDiasAtras;
+      if (ateEl && !ateEl.value) ateEl.value = hoje;
+
+      if (!_deslocEquipesPopuladas) {
+        try {
+          const res = await fetch(`${API}/admin/equipes`);
+          if (res.ok) {
+            const data = await res.json();
+            const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
+              a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla)
+            );
+            const sel = document.getElementById('desloc-equipe-select');
+            if (sel) {
+              eqs.forEach(e => {
+                const opt = document.createElement('option');
+                opt.value = e.sigla;
+                opt.textContent = `${e.sigla} (${e.regional})`;
+                sel.appendChild(opt);
+              });
+            }
+          }
+        } catch {}
+        _deslocEquipesPopuladas = true;
+      }
+      loadDeslocamentos();
+    }
+
+    function deslocFiltersQuery() {
+      const de  = document.getElementById('desloc-de-input').value;
+      const ate = document.getElementById('desloc-ate-input').value;
+      const reg = document.getElementById('desloc-regional-select').value;
+      const eq  = document.getElementById('desloc-equipe-select').value;
+      const qs  = new URLSearchParams({ de, ate });
+      if (reg && reg !== 'ALL') qs.set('regional', reg);
+      if (eq) qs.set('team', eq);
+      qs.set('limit', '2000');
+      document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
+      return qs.toString();
+    }
+
+    async function loadDeslocamentos() {
+      const content = document.getElementById('desloc-content');
+      content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Calculando deslocamentos… (consultas OSRM podem demorar no 1º acesso)</div>';
+      try {
+        const qs = deslocFiltersQuery();
+        const [listaR, rankR, trendR] = await Promise.all([
+          fetch(`${API}/deslocamentos/lista?${qs}`).then(r => r.json()),
+          fetch(`${API}/deslocamentos/ranking?${qs}`).then(r => r.json()),
+          fetch(`${API}/deslocamentos/tendencia?${qs}`).then(r => r.json()),
+        ]);
+        _deslocCache = { lista: listaR, ranking: rankR, tendencia: trendR };
+        renderDeslocamentos(_deslocCache);
+      } catch (err) {
+        content.innerHTML = `<div class="empty-state">Erro: ${err.message}</div>`;
+      }
+    }
+
+    function _fmtDur(sec) {
+      if (sec == null) return '—';
+      if (sec < 60) return `${sec}s`;
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      if (m < 60) return `${m}m${s > 0 ? ` ${s}s` : ''}`;
+      const h = Math.floor(m / 60);
+      return `${h}h ${m % 60}m`;
+    }
+    function _fmtKm(meters) {
+      if (meters == null) return '—';
+      if (meters < 1000) return `${meters}m`;
+      return `${(meters / 1000).toFixed(1)}km`;
+    }
+
+    function renderDeslocamentos(data) {
+      const { lista, ranking, tendencia } = data;
+      const content = document.getElementById('desloc-content');
+      if (!lista || !lista.rows || lista.rows.length === 0) {
+        content.innerHTML = '<div class="empty-state">Sem deslocamentos no período selecionado.</div>';
+        return;
+      }
+
+      // KPIs
+      const total = lista.rows.length;
+      const lentos = lista.rows.filter(d => d.status === 'lento').length;
+      const semOsrm = lista.rows.filter(d => d.status === 'sem_osrm').length;
+      const validos = lista.rows.filter(d => d.tempo_osrm_sec > 0 && d.status !== 'sem_osrm');
+      const realTotal = validos.reduce((a, d) => a + d.tempo_real_sec, 0);
+      const osrmTotal = validos.reduce((a, d) => a + d.tempo_osrm_sec, 0);
+      const desvioMedio = osrmTotal > 0 ? +(100 * (realTotal - osrmTotal) / osrmTotal).toFixed(1) : 0;
+
+      // Ranking top 15
+      const rankMax = Math.max(...ranking.map(r => r.desvio_medio_pct), 1);
+      const rankingHTML = (ranking || []).slice(0, 15).map(r => {
+        const pct = Math.max(0, r.desvio_medio_pct);
+        const w = (100 * pct / rankMax).toFixed(1);
+        const color = r.desvio_medio_pct > 50 ? '#e74c3c' : (r.desvio_medio_pct > 20 ? '#f39c12' : '#27ae60');
+        return `
+          <div class="desloc-bar-row" onclick="document.getElementById('desloc-equipe-select').value='${r.team_name}'; loadDeslocamentos()">
+            <div class="desloc-bar-label">${r.team_name} <span style="font-size:10px;opacity:.5">${r.regional || ''}</span></div>
+            <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${w}%;background:${color}"></div></div>
+            <div class="desloc-bar-count">${r.desvio_medio_pct}% <span style="font-size:10px;opacity:.6">(${r.lentos}/${r.total_desloc})</span></div>
+          </div>`;
+      }).join('');
+
+      // Tendência SVG simples
+      const tendW = 760, tendH = 200, tendPad = 30;
+      const tend = tendencia || [];
+      const tendMax = Math.max(...tend.flatMap(d => [d.tempo_real_avg_sec, d.tempo_osrm_avg_sec]), 1);
+      const tendSVG = tend.length === 0 ? '<div class="empty-state" style="font-size:12px">Sem dados</div>' : `
+        <svg viewBox="0 0 ${tendW} ${tendH}" class="desloc-trend-svg">
+          ${tend.map((d, i) => {
+            const x = tendPad + (i * (tendW - 2 * tendPad) / Math.max(1, tend.length - 1));
+            const yReal = tendH - tendPad - (d.tempo_real_avg_sec / tendMax) * (tendH - 2 * tendPad);
+            const yOsrm = tendH - tendPad - (d.tempo_osrm_avg_sec / tendMax) * (tendH - 2 * tendPad);
+            const next = tend[i + 1];
+            let line = '';
+            if (next) {
+              const nx = tendPad + ((i + 1) * (tendW - 2 * tendPad) / Math.max(1, tend.length - 1));
+              const nyR = tendH - tendPad - (next.tempo_real_avg_sec / tendMax) * (tendH - 2 * tendPad);
+              const nyO = tendH - tendPad - (next.tempo_osrm_avg_sec / tendMax) * (tendH - 2 * tendPad);
+              line = `
+                <line x1="${x}" y1="${yReal}" x2="${nx}" y2="${nyR}" stroke="#e74c3c" stroke-width="2"/>
+                <line x1="${x}" y1="${yOsrm}" x2="${nx}" y2="${nyO}" stroke="#3498db" stroke-width="2" stroke-dasharray="4,3"/>
+              `;
+            }
+            return `
+              ${line}
+              <circle cx="${x}" cy="${yReal}" r="3" fill="#e74c3c"/>
+              <circle cx="${x}" cy="${yOsrm}" r="3" fill="#3498db"/>
+              <text x="${x}" y="${tendH - 8}" text-anchor="middle" font-size="9" fill="var(--text2)">${d.data.slice(5)}</text>
+            `;
+          }).join('')}
+        </svg>
+      `;
+
+      // Tabela detalhada (limit 500 pra performance)
+      const tabela = lista.rows.slice(0, 500).map(d => {
+        const corStatus = d.status === 'lento' ? '#e74c3c' : (d.status === 'ok' ? '#27ae60' : '#7f8c8d');
+        const desvio = d.desvio_pct != null ? `${d.desvio_pct > 0 ? '+' : ''}${d.desvio_pct}%` : '—';
+        return `<tr>
+          <td>${fmtDateBR(d.data)}</td>
+          <td><strong>${d.team_name}</strong> <span style="font-size:10px;opacity:.5">${d.regional || ''}</span></td>
+          <td>${d.numero || ''} <span style="font-size:10px;opacity:.5">${d.tipo}</span></td>
+          <td style="text-align:center">${d.tentativa}</td>
+          <td>${_fmtDur(d.tempo_real_sec)}</td>
+          <td>${_fmtDur(d.tempo_osrm_sec)}</td>
+          <td>${_fmtKm(d.distancia_m)}</td>
+          <td style="color:${corStatus};font-weight:600">${desvio}</td>
+        </tr>`;
+      }).join('');
+
+      content.innerHTML = `
+        <style>
+          .desloc-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:18px; }
+          .desloc-kpi { background:var(--cinza1); border:1px solid var(--cinza2); border-radius:8px; padding:14px; }
+          .desloc-kpi-label { font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:.5px; }
+          .desloc-kpi-value { font-size:24px; font-weight:700; margin-top:4px; }
+          .desloc-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:18px; }
+          @media (max-width:980px) { .desloc-grid { grid-template-columns:1fr; } }
+          .desloc-panel { background:var(--cinza1); border:1px solid var(--cinza2); border-radius:8px; padding:14px; }
+          .desloc-panel h3 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); }
+          .desloc-bar-row { display:grid; grid-template-columns:1.2fr 2fr 110px; gap:8px; align-items:center; padding:5px 6px; border-radius:4px; cursor:pointer; }
+          .desloc-bar-row:hover { background:rgba(255,255,255,.04); }
+          .desloc-bar-label { font-size:12px; }
+          .desloc-bar-track { background:rgba(255,255,255,.06); height:14px; border-radius:3px; overflow:hidden; }
+          .desloc-bar-fill { height:100%; border-radius:3px; transition:width .3s; }
+          .desloc-bar-count { font-size:12px; font-weight:600; text-align:right; }
+          .desloc-trend-svg { width:100%; height:200px; }
+          .desloc-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+          .desloc-tbl th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--cinza2); font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:.5px; position:sticky; top:0; background:var(--cinza1); }
+          .desloc-tbl td { padding:6px 8px; border-bottom:1px solid rgba(255,255,255,.04); }
+          .desloc-tbl tr:hover td { background:rgba(255,255,255,.03); }
+        </style>
+
+        <div class="desloc-kpis">
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Deslocamentos</div>
+            <div class="desloc-kpi-value">${total}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">${lista.total} totais (mostrando ${total})</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Acima do limite</div>
+            <div class="desloc-kpi-value" style="color:#e74c3c">${lentos}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">> 1.5× tempo OSRM</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Desvio médio</div>
+            <div class="desloc-kpi-value" style="color:${desvioMedio > 50 ? '#e74c3c' : (desvioMedio > 20 ? '#f39c12' : '#27ae60')}">${desvioMedio > 0 ? '+' : ''}${desvioMedio}%</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">tempo real vs OSRM</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Sem estimativa</div>
+            <div class="desloc-kpi-value" style="color:#7f8c8d">${semOsrm}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">OSRM falhou</div>
+          </div>
+        </div>
+
+        <div class="desloc-grid">
+          <div class="desloc-panel">
+            <h3>Ranking equipes — desvio médio %</h3>
+            ${rankingHTML}
+          </div>
+          <div class="desloc-panel">
+            <h3>Tendência diária <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px"><span style="color:#e74c3c">━</span> real <span style="color:#3498db;margin-left:8px">- - -</span> OSRM</span></h3>
+            ${tendSVG}
+          </div>
+        </div>
+
+        <div class="desloc-panel" style="margin-top:18px">
+          <h3>Deslocamentos detalhados</h3>
+          <div style="max-height:600px;overflow:auto">
+            <table class="desloc-tbl">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Equipe</th>
+                  <th>Nota</th>
+                  <th>Tent.</th>
+                  <th>Real</th>
+                  <th>OSRM</th>
+                  <th>Dist.</th>
+                  <th>Desvio</th>
+                </tr>
+              </thead>
+              <tbody>${tabela}</tbody>
+            </table>
+            ${lista.rows.length > 500 ? `<div style="text-align:center;opacity:.6;padding:8px;font-size:11px">Mostrando 500 de ${lista.rows.length}. Refine os filtros pra ver mais.</div>` : ''}
+          </div>
+        </div>
+      `;
     }
 
     /**

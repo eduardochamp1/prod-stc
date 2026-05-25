@@ -2193,6 +2193,59 @@ router.get('/rejeicoes/motivos', async (req, res) => {
   }
 });
 
+// ── DESLOCAMENTOS ─────────────────────────────────────────────────────────────
+// Análise de tempo real vs estimativa OSRM (cliente é medido pelo Google,
+// mas usamos OSRM grátis — diferença típica < 10%, suficiente pra benchmark).
+const _deslocQ = require('../db/deslocamentosQueries');
+
+function _parseDeslocFilters(req) {
+  const de  = req.query.de  || dateBRT();
+  const ate = req.query.ate || de;
+  return {
+    de, ate,
+    regional:  req.query.regional || 'ALL',
+    team_name: req.query.team || null,
+    tipo:      req.query.tipo || null,
+    limit:     req.query.limit,
+  };
+}
+
+// GET /api/deslocamentos/lista?de=&ate=&regional=&team=&tipo=&limit=
+router.get('/deslocamentos/lista', async (req, res) => {
+  try {
+    const f = _parseDeslocFilters(req);
+    const r = await _deslocQ.listDeslocamentos(f.de, f.ate, f);
+    res.json(r);
+  } catch (err) {
+    console.error('[deslocamentos/lista]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/deslocamentos/ranking?de=&ate=&regional=
+router.get('/deslocamentos/ranking', async (req, res) => {
+  try {
+    const f = _parseDeslocFilters(req);
+    const r = await _deslocQ.rankingEquipes(f.de, f.ate, f);
+    res.json(r);
+  } catch (err) {
+    console.error('[deslocamentos/ranking]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/deslocamentos/tendencia?de=&ate=&regional=
+router.get('/deslocamentos/tendencia', async (req, res) => {
+  try {
+    const f = _parseDeslocFilters(req);
+    const r = await _deslocQ.tendenciaDiaria(f.de, f.ate, f);
+    res.json(r);
+  } catch (err) {
+    console.error('[deslocamentos/tendencia]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/mapa/equipe?team=SIGLA&date=YYYY-MM-DD
 // Retorna notas com checkpoints GPS de uma equipe no dia.
 router.get('/mapa/equipe', async (req, res) => {
