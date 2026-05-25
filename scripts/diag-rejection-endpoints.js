@@ -52,38 +52,54 @@ const supa = createClient(
   { auth: { persistSession: false } }
 );
 
-async function pickRejectedNoteIdByTipo(tipo) {
-  // Busca em snapshots recentes uma nota rejeitada do tipo desejado.
-  // Estrutura: snapshots.payload é JSONB array de equipes; cada equipe tem
-  // notas com Tipo + Status + Id (uuid).
-  // Como o schema exato pode variar, usamos JSONB path queries via RPC ou
-  // varremos os snapshots mais recentes.
-  const { data, error } = await supa
-    .from('snapshots')
-    .select('payload')
-    .order('captured_at', { ascending: false })
-    .limit(20);
-  if (error) throw error;
+// Cache de samples já coletados: { tipo: [noteId, noteId, ...] }
+let _samplesCache = null;
 
-  for (const row of data || []) {
-    const payload = row.payload;
-    // payload pode ser array de equipes, cada uma com Notas[] ou Rejected[] etc.
-    const equipes = Array.isArray(payload) ? payload : (payload?.equipes || payload?.teams || []);
-    for (const eq of equipes) {
-      const buckets = [
-        eq?.notasRejeitadas, eq?.NotasRejeitadas,
-        eq?.Rejected, eq?.RejectedNotes,
-      ].filter(Array.isArray);
-      for (const bucket of buckets) {
-        for (const n of bucket) {
-          const t = (n?.Tipo || n?.Type || n?.tipo || '').toUpperCase();
-          const id = n?.Id || n?.NoteId || n?.id || n?.noteId;
-          if (t === tipo && id) return id;
-        }
+async function loadSamples() {
+  if (_samplesCache) return _samplesCache;
+  console.log('🔎 Varrendo snapshots recentes pra coletar samples por tipo...');
+  // Cada linha de snapshots = 1 equipe; data.notasRejeitadas[] tem { id, tipoCode }
+  const PAGE = 1000;
+  const samples = {};   // { TIPO: Set<noteId> }
+  let from = 0;
+  let pulled = 0;
+  while (true) {
+    const { data, error } = await supa
+      .from('snapshots')
+      .select('data')
+      .order('captured_at', { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    pulled += data.length;
+
+    for (const row of data) {
+      const lista = row?.data?.notasRejeitadas || [];
+      for (const n of lista) {
+        const t = String(n?.tipoCode || n?.Type || n?.tipo || '').toUpperCase();
+        const id = n?.id || n?.Id || n?.noteId || n?.NoteId;
+        if (!t || !id) continue;
+        if (!samples[t]) samples[t] = new Set();
+        samples[t].add(id);
       }
     }
+    // Cobertura: se todos os tipos já têm ≥1 sample, para
+    const cobertos = TIPOS.every(t => samples[t] && samples[t].size > 0);
+    if (cobertos) { console.log(`   ✅ todos os tipos cobertos após ${pulled} snapshots`); break; }
+    if (data.length < PAGE) break;
+    from += PAGE;
+    if (from > 20000) { console.log(`   ⚠️ limite 20k snapshots atingido`); break; }
   }
-  return null;
+  console.log(`   total ${pulled} snapshots lidos`);
+  _samplesCache = samples;
+  return samples;
+}
+
+async function pickRejectedNoteIdByTipo(tipo) {
+  const samples = await loadSamples();
+  const set = samples[tipo];
+  if (!set || set.size === 0) return null;
+  return Array.from(set)[0];
 }
 
 async function tryCandidate(token, noteId, candidate) {
