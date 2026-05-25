@@ -2120,6 +2120,75 @@ router.post('/admin/revalidate-dd', async (req, res) => {
 });
 
 
+// ── REJEIÇÕES ────────────────────────────────────────────────────────────────
+
+/** Parse comum dos filtros usados nas três rotas de rejeições. */
+function _parseRejeicoesFilters(req, res) {
+  const de  = req.query.de;
+  const ate = req.query.ate;
+  if (de && !_RE_YYYYMMDD.test(de))  { res.status(400).json({ error: 'Parâmetro de inválido (YYYY-MM-DD)' });  return null; }
+  if (ate && !_RE_YYYYMMDD.test(ate)){ res.status(400).json({ error: 'Parâmetro ate inválido (YYYY-MM-DD)' }); return null; }
+  const regional = req.query.regional && req.query.regional !== 'ALL' ? String(req.query.regional).toUpperCase() : null;
+  const team     = req.query.team     && req.query.team     !== 'ALL' ? String(req.query.team) : null;
+  const tipos    = req.query.tipos
+    ? String(req.query.tipos).split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+    : null;
+  const motivos  = req.query.motivos
+    ? String(req.query.motivos).split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  const somenteComMotivo = req.query.somenteComMotivo === 'true' || req.query.somenteComMotivo === '1';
+  return { de: de || dateBRT(), ate: ate || de || dateBRT(), regional, team, tipos, motivos, somenteComMotivo };
+}
+
+// GET /api/rejeicoes/totais?de=&ate=&regional=&team=&tipos=MD,SF
+router.get('/rejeicoes/totais', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({ total: 0, comMotivo: 0, semMotivo: 0, porRegional: {GUA:0,CAC:0}, porTipo: {}, porMotivo: [], porEquipe: [], porDia: [], executadasNoPeriodo: 0, percentualGeral: null });
+    const f = _parseRejeicoesFilters(req, res);
+    if (!f) return;
+    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, tipos: f.tipos });
+    res.json(result);
+  } catch (err) {
+    console.error('[rejeicoes/totais]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rejeicoes/lista?de=&ate=&regional=&team=&tipos=&motivos=&somenteComMotivo=&limit=&offset=
+router.get('/rejeicoes/lista', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({ total: 0, limit: 500, offset: 0, rows: [] });
+    const f = _parseRejeicoesFilters(req, res);
+    if (!f) return;
+    const result = await sq.getRejeicoesLista(f.de, f.ate, f.regional, {
+      team: f.team, tipos: f.tipos, motivos: f.motivos, somenteComMotivo: f.somenteComMotivo,
+      limit: req.query.limit, offset: req.query.offset,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[rejeicoes/lista]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/rejeicoes/motivos?de=&ate=&regional=
+// Catálogo de motivos vistos no período (pra alimentar dropdown de filtro).
+router.get('/rejeicoes/motivos', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json([]);
+    const f = _parseRejeicoesFilters(req, res);
+    if (!f) return;
+    const result = await sq.getRejeicoesMotivos(f.de, f.ate, f.regional);
+    res.json(result);
+  } catch (err) {
+    console.error('[rejeicoes/motivos]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/mapa/equipe?team=SIGLA&date=YYYY-MM-DD
 // Retorna notas com checkpoints GPS de uma equipe no dia.
 router.get('/mapa/equipe', async (req, res) => {

@@ -4180,6 +4180,7 @@
     <!-- TABS -->
     <div class="tab-nav">
       <button class="tab-btn active" id="tab-btn-monitor" onclick="switchTab('monitor')">📊 Monitor</button>
+      <button class="tab-btn" id="tab-btn-rejeicoes" onclick="switchTab('rejeicoes')">🚫 Rejeições</button>
       <button class="tab-btn" id="tab-btn-metas" onclick="switchTab('metas')" style="display:none">🎯 Metas</button>
       <button class="tab-btn" id="tab-btn-graficos" onclick="switchTab('graficos')">📈 Gráficos</button>
       <button class="tab-btn" id="tab-btn-ranking" onclick="switchTab('ranking')">🏆 Ranking</button>
@@ -4296,6 +4297,56 @@
       </div>
 
       <div class="last-update" id="last-update"></div>
+    </div>
+
+    <!-- ── TAB: REJEIÇÕES ────────────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-rejeicoes">
+      <div class="filter-bar">
+        <div class="date-label">Notas Rejeitadas — <strong id="rej-periodo-label"></strong></div>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <span class="filter-label">De</span>
+            <input type="date" class="filter-select" id="rej-de-input" style="min-width:140px" onchange="onRejDateChange()" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Até</span>
+            <input type="date" class="filter-select" id="rej-ate-input" style="min-width:140px" onchange="onRejDateChange()" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Regional</span>
+            <select class="filter-select" id="rej-regional-select" onchange="loadRejeicoes()">
+              <option value="ALL">Todas as Regionais</option>
+              <option value="GUA">Guarapari</option>
+              <option value="CAC">Cachoeiro</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Equipe</span>
+            <select class="filter-select" id="rej-equipe-select" onchange="loadRejeicoes()" style="min-width:160px">
+              <option value="ALL">Todas as equipes</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Tipo</span>
+            <select class="filter-select" id="rej-tipo-select" onchange="loadRejeicoes()" style="min-width:140px">
+              <option value="ALL">Todos</option>
+              <option value="MD">MD</option>
+              <option value="SF">SF</option>
+              <option value="DD">DD</option>
+              <option value="LN">LN</option>
+              <option value="LE">LE</option>
+              <option value="DL">DL</option>
+              <option value="RL">RL</option>
+            </select>
+          </div>
+          <div style="flex:1"></div>
+          <button class="btn-refresh" onclick="loadRejeicoes()">↻ Atualizar</button>
+        </div>
+      </div>
+
+      <div id="rej-content">
+        <div class="empty-state">Carregando rejeições...</div>
+      </div>
     </div>
 
     <!-- ── TAB: METAS ────────────────────────────────────────────────────── -->
@@ -5091,6 +5142,354 @@
       if (tab === 'historico') loadHistorico();
       if (tab === 'graficos') loadGraficos();
       if (tab === 'mapa') initMapa();
+      if (tab === 'rejeicoes') initRejeicoes();
+    }
+
+    // ── REJEIÇÕES ─────────────────────────────────────────────────────────────
+
+    let _rejInitDone = false;
+    let _rejEquipesPopuladas = false;
+    let _rejFullList = null;          // último resultado /lista (pra paginação cliente)
+    let _rejTotaisCache = null;
+    let _rejShowOnlyComMotivo = false;
+    let _rejMotivoFilter = null;       // code|null
+
+    async function initRejeicoes() {
+      // Default range: últimos 7 dias (ate=hoje, de=hoje-6).
+      const hoje = todayISO();
+      const seteAtras = new Date(Date.now() - 7 * 24 * 3600 * 1000 - 3 * 3600 * 1000).toISOString().slice(0, 10);
+      const deEl  = document.getElementById('rej-de-input');
+      const ateEl = document.getElementById('rej-ate-input');
+      if (deEl  && !deEl.value)  deEl.value  = seteAtras;
+      if (ateEl && !ateEl.value) ateEl.value = hoje;
+      if (!_rejEquipesPopuladas) {
+        try {
+          const res = await fetch(`${API}/admin/equipes`);
+          if (res.ok) {
+            const data = await res.json();
+            const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
+              a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla)
+            );
+            const sel = document.getElementById('rej-equipe-select');
+            const guaOpts = eqs.filter(e => e.regional === 'GUA').map(e => `<option value="${e.sigla}">${e.sigla}</option>`).join('');
+            const cacOpts = eqs.filter(e => e.regional === 'CAC').map(e => `<option value="${e.sigla}">${e.sigla}</option>`).join('');
+            sel.innerHTML = `
+              <option value="ALL">Todas as equipes</option>
+              <optgroup label="Guarapari">${guaOpts}</optgroup>
+              <optgroup label="Cachoeiro">${cacOpts}</optgroup>`;
+            _rejEquipesPopuladas = true;
+          }
+        } catch (e) {}
+      }
+      if (!_rejInitDone) {
+        _rejInitDone = true;
+        await loadRejeicoes();
+      } else {
+        await loadRejeicoes();
+      }
+    }
+
+    function rejRange() {
+      const de  = document.getElementById('rej-de-input')?.value  || todayISO();
+      const ate = document.getElementById('rej-ate-input')?.value || todayISO();
+      return { de, ate };
+    }
+
+    function onRejDateChange() {
+      const { de, ate } = rejRange();
+      const lbl = document.getElementById('rej-periodo-label');
+      if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
+      loadRejeicoes();
+    }
+
+    function rejFiltersQuery() {
+      const { de, ate } = rejRange();
+      const regional = document.getElementById('rej-regional-select').value;
+      const team     = document.getElementById('rej-equipe-select').value;
+      const tipo     = document.getElementById('rej-tipo-select').value;
+      const qp = new URLSearchParams({ de, ate });
+      if (regional && regional !== 'ALL') qp.set('regional', regional);
+      if (team && team !== 'ALL') qp.set('team', team);
+      if (tipo && tipo !== 'ALL') qp.set('tipos', tipo);
+      return qp.toString();
+    }
+
+    async function loadRejeicoes() {
+      onRejDateChange.__inflight = true;
+      const content = document.getElementById('rej-content');
+      if (!content) return;
+      onRejDateChange();
+      content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando rejeições...</div>';
+      try {
+        const qs = rejFiltersQuery();
+        const [totaisR, listaR] = await Promise.all([
+          fetch(`${API}/rejeicoes/totais?${qs}`).then(r => r.json()),
+          fetch(`${API}/rejeicoes/lista?${qs}&limit=2000`).then(r => r.json()),
+        ]);
+        _rejTotaisCache = totaisR;
+        _rejFullList    = listaR;
+        renderRejeicoes(totaisR, listaR);
+      } catch (err) {
+        content.innerHTML = `<div class="empty-state">Erro ao carregar: ${err.message}</div>`;
+      }
+    }
+
+    function renderRejeicoes(tot, lst) {
+      const content = document.getElementById('rej-content');
+      const semDados = !tot || tot.total === 0;
+      if (semDados) {
+        content.innerHTML = '<div class="empty-state">Nenhuma rejeição no período/filtros selecionados.</div>';
+        return;
+      }
+
+      const pctGeral  = tot.percentualGeral != null ? tot.percentualGeral.toFixed(1) + '%' : '—';
+      const pctMotivo = tot.total > 0 ? ((100 * tot.comMotivo / tot.total).toFixed(0) + '%') : '—';
+      const topMotivo = (tot.porMotivo && tot.porMotivo[0]) ? tot.porMotivo[0] : null;
+      const topMotivoTxt = topMotivo
+        ? `${topMotivo.label} <span style="opacity:.6">(${topMotivo.count})</span>`
+        : '—';
+
+      // Top motivos (max 10 visíveis, com bar)
+      const maxMot = (tot.porMotivo[0]?.count) || 1;
+      const motivosHTML = (tot.porMotivo || []).slice(0, 10).map(m => {
+        const pct = (100 * m.count / maxMot).toFixed(1);
+        const isSem = m.code === '__SEM_MOTIVO__';
+        const color = isSem ? '#aaa' : '#e74c3c';
+        const isActive = _rejMotivoFilter === m.code;
+        return `
+          <div class="rej-bar-row ${isActive ? 'active' : ''}" onclick="rejFiltrarPorMotivo(${JSON.stringify(m.code).replace(/"/g, '&quot;')})" title="Clique pra filtrar a tabela">
+            <div class="rej-bar-label">${escapeHtml(m.label)} ${isSem ? '<span style="font-size:10px;opacity:.6">(sem registro)</span>' : `<span style="font-size:10px;opacity:.5">${m.code}</span>`}</div>
+            <div class="rej-bar-track"><div class="rej-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+            <div class="rej-bar-count">${m.count}</div>
+          </div>`;
+      }).join('');
+
+      // Top equipes (com % de rejeição)
+      const eqMax = Math.max(...(tot.porEquipe || []).map(e => e.count), 1);
+      const equipesHTML = (tot.porEquipe || []).slice(0, 15).map(e => {
+        const pct = (100 * e.count / eqMax).toFixed(1);
+        const pctRej = e.percentual != null ? `${e.percentual}%` : '—';
+        return `
+          <div class="rej-bar-row" onclick="rejFiltrarPorEquipe('${e.team}')" title="Clique pra filtrar">
+            <div class="rej-bar-label">${e.team} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
+            <div class="rej-bar-track"><div class="rej-bar-fill" style="width:${pct}%;background:#e67e22"></div></div>
+            <div class="rej-bar-count">${e.count} <span style="font-size:10px;opacity:.6">(${pctRej})</span></div>
+          </div>`;
+      }).join('');
+
+      // Tendência diária
+      const diaMax = Math.max(...(tot.porDia || []).map(d => d.count), 1);
+      const diaHTML = (tot.porDia || []).map(d => {
+        const h = (100 * d.count / diaMax).toFixed(1);
+        return `<div class="rej-spark-col" title="${fmtDateBR(d.date)}: ${d.count}">
+          <div class="rej-spark-bar" style="height:${h}%"></div>
+          <div class="rej-spark-lbl">${d.date.slice(8)}/${d.date.slice(5,7)}</div>
+        </div>`;
+      }).join('');
+
+      // Por tipo
+      const tipoEntries = Object.entries(tot.porTipo || {}).sort((a, b) => b[1] - a[1]);
+      const tipoHTML = tipoEntries.map(([t, n]) =>
+        `<span class="rej-pill" onclick="rejFiltrarPorTipo('${t}')">${t}: <strong>${n}</strong></span>`
+      ).join('');
+
+      content.innerHTML = `
+        <style>
+          .rej-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:18px; }
+          .rej-kpi { background:var(--cinza1); border:1px solid var(--cinza2); border-radius:8px; padding:14px; }
+          .rej-kpi-label { font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:.5px; }
+          .rej-kpi-value { font-size:24px; font-weight:700; margin-top:4px; }
+          .rej-kpi-sub { font-size:11px; color:var(--text2); margin-top:2px; }
+          .rej-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:18px; }
+          @media (max-width:980px) { .rej-grid { grid-template-columns:1fr; } }
+          .rej-panel { background:var(--cinza1); border:1px solid var(--cinza2); border-radius:8px; padding:14px; }
+          .rej-panel h3 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.5px; color:var(--text2); }
+          .rej-bar-row { display:grid; grid-template-columns:1.2fr 2fr 70px; gap:8px; align-items:center; padding:5px 6px; border-radius:4px; cursor:pointer; transition:background .12s; }
+          .rej-bar-row:hover { background:rgba(255,255,255,.04); }
+          .rej-bar-row.active { background:rgba(231,76,60,.18); outline:1px solid #e74c3c; }
+          .rej-bar-label { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .rej-bar-track { background:rgba(255,255,255,.06); height:14px; border-radius:3px; overflow:hidden; }
+          .rej-bar-fill { height:100%; border-radius:3px; transition:width .3s; }
+          .rej-bar-count { font-size:12px; font-weight:600; text-align:right; }
+          .rej-spark { display:flex; align-items:end; gap:3px; height:80px; padding:0 4px; }
+          .rej-spark-col { flex:1; display:flex; flex-direction:column; align-items:center; min-width:0; }
+          .rej-spark-bar { width:100%; max-width:18px; background:#e74c3c; border-radius:2px 2px 0 0; min-height:2px; }
+          .rej-spark-lbl { font-size:9px; opacity:.55; margin-top:3px; }
+          .rej-pill { display:inline-block; padding:3px 9px; background:rgba(255,255,255,.06); border-radius:12px; font-size:12px; margin:2px; cursor:pointer; }
+          .rej-pill:hover { background:rgba(231,76,60,.2); }
+          .rej-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+          .rej-tbl th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--cinza2); font-size:11px; color:var(--text2); text-transform:uppercase; letter-spacing:.5px; position:sticky; top:0; background:var(--cinza1); }
+          .rej-tbl td { padding:6px 8px; border-bottom:1px solid rgba(255,255,255,.04); }
+          .rej-tbl tr:hover td { background:rgba(255,255,255,.03); }
+          .rej-tbl .rej-no-motivo { opacity:.55; font-style:italic; }
+          .rej-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+        </style>
+
+        <div class="rej-kpis">
+          <div class="rej-kpi">
+            <div class="rej-kpi-label">Total Rejeitadas</div>
+            <div class="rej-kpi-value" style="color:#e74c3c">${tot.total}</div>
+            <div class="rej-kpi-sub">no período selecionado</div>
+          </div>
+          <div class="rej-kpi">
+            <div class="rej-kpi-label">% Sobre Executadas</div>
+            <div class="rej-kpi-value">${pctGeral}</div>
+            <div class="rej-kpi-sub">${tot.total} rej. / ${tot.executadasNoPeriodo + tot.total} totais</div>
+          </div>
+          <div class="rej-kpi">
+            <div class="rej-kpi-label">Com Motivo Registrado</div>
+            <div class="rej-kpi-value">${tot.comMotivo} <span style="font-size:13px;opacity:.6">(${pctMotivo})</span></div>
+            <div class="rej-kpi-sub">${tot.semMotivo} sem motivo (bandeiradas)</div>
+          </div>
+          <div class="rej-kpi">
+            <div class="rej-kpi-label">Top Motivo</div>
+            <div class="rej-kpi-value" style="font-size:15px;line-height:1.3;font-weight:600">${topMotivoTxt}</div>
+            <div class="rej-kpi-sub">motivo mais frequente</div>
+          </div>
+          <div class="rej-kpi">
+            <div class="rej-kpi-label">Por Regional</div>
+            <div class="rej-kpi-value" style="font-size:16px">
+              GUA: <strong>${tot.porRegional.GUA || 0}</strong> &nbsp;·&nbsp;
+              CAC: <strong>${tot.porRegional.CAC || 0}</strong>
+            </div>
+            <div class="rej-kpi-sub">${tipoHTML}</div>
+          </div>
+        </div>
+
+        <div class="rej-panel" style="margin-bottom:18px">
+          <h3>📅 Tendência Diária</h3>
+          <div class="rej-spark">${diaHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}</div>
+        </div>
+
+        <div class="rej-grid">
+          <div class="rej-panel">
+            <h3>🚫 Top Motivos ${_rejMotivoFilter ? '<span style="color:#e74c3c;font-size:11px">(filtro ativo — clique no motivo ativo pra limpar)</span>' : ''}</h3>
+            ${motivosHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}
+          </div>
+          <div class="rej-panel">
+            <h3>👷 Top Equipes (com % rejeição)</h3>
+            ${equipesHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}
+          </div>
+        </div>
+
+        <div class="rej-panel">
+          <div class="rej-toolbar">
+            <h3 style="margin:0">📋 Detalhe das Rejeições <span style="opacity:.6;font-weight:400" id="rej-tabela-count"></span></h3>
+            <div style="flex:1"></div>
+            <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="rej-only-com-motivo" ${_rejShowOnlyComMotivo ? 'checked' : ''} onchange="rejToggleSomenteComMotivo(this.checked)"/>
+              Somente com motivo
+            </label>
+            <button class="btn-refresh" onclick="rejExportXLSX()" style="background:var(--verde);color:#fff;font-size:11px;padding:5px 10px">⬇ XLSX</button>
+          </div>
+          <div style="max-height:520px;overflow:auto">
+            <table class="rej-tbl">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Equipe</th>
+                  <th>Reg.</th>
+                  <th>Tipo</th>
+                  <th>Nº</th>
+                  <th>Motivo(s)</th>
+                  <th>Rejeitada em</th>
+                </tr>
+              </thead>
+              <tbody id="rej-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      `;
+      renderRejTabela();
+    }
+
+    function renderRejTabela() {
+      const tbody = document.getElementById('rej-tbody');
+      const countEl = document.getElementById('rej-tabela-count');
+      if (!tbody || !_rejFullList) return;
+      let rows = (_rejFullList.rows || []).slice();
+      if (_rejShowOnlyComMotivo) rows = rows.filter(r => (r.reason_codes || []).length > 0);
+      if (_rejMotivoFilter) {
+        if (_rejMotivoFilter === '__SEM_MOTIVO__') {
+          rows = rows.filter(r => (r.reason_codes || []).length === 0);
+        } else {
+          rows = rows.filter(r => (r.reason_codes || []).includes(_rejMotivoFilter));
+        }
+      }
+      countEl.textContent = `(${rows.length})`;
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;opacity:.6;padding:20px">Nenhuma linha com os filtros atuais.</td></tr>';
+        return;
+      }
+      // Limita render a 1000 pra performance
+      const MAX = 1000;
+      const slice = rows.slice(0, MAX);
+      tbody.innerHTML = slice.map(r => {
+        const codes  = r.reason_codes  || [];
+        const labels = r.reason_labels || [];
+        const motivos = codes.length === 0
+          ? '<span class="rej-no-motivo">sem motivo registrado</span>'
+          : codes.map((c, i) => `<span title="${escapeHtml(c)}">${escapeHtml(labels[i] || c)}</span>`).join(' · ');
+        const rejAt = r.rejected_at
+          ? new Date(r.rejected_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+          : '—';
+        return `<tr>
+          <td>${fmtDateBR(r.session_date)}</td>
+          <td><strong>${r.team_name}</strong></td>
+          <td>${r.regional || ''}</td>
+          <td>${r.tipo}</td>
+          <td>${r.numero || ''}</td>
+          <td>${motivos}</td>
+          <td>${rejAt}</td>
+        </tr>`;
+      }).join('');
+      if (rows.length > MAX) {
+        tbody.innerHTML += `<tr><td colspan="7" style="text-align:center;opacity:.6;padding:8px">Mostrando ${MAX} de ${rows.length}. Refine os filtros pra ver mais.</td></tr>`;
+      }
+    }
+
+    function rejFiltrarPorMotivo(code) {
+      _rejMotivoFilter = (_rejMotivoFilter === code) ? null : code;
+      renderRejeicoes(_rejTotaisCache, _rejFullList);
+    }
+    function rejFiltrarPorTipo(tipo) {
+      document.getElementById('rej-tipo-select').value = tipo;
+      loadRejeicoes();
+    }
+    function rejFiltrarPorEquipe(team) {
+      document.getElementById('rej-equipe-select').value = team;
+      loadRejeicoes();
+    }
+    function rejToggleSomenteComMotivo(checked) {
+      _rejShowOnlyComMotivo = !!checked;
+      renderRejTabela();
+    }
+
+    function rejExportXLSX() {
+      if (!_rejFullList || !(_rejFullList.rows || []).length) {
+        alert('Sem dados pra exportar.');
+        return;
+      }
+      if (typeof XLSX === 'undefined') { alert('XLSX lib ausente.'); return; }
+      const rows = _rejFullList.rows.map(r => ({
+        Data: r.session_date,
+        Equipe: r.team_name,
+        Regional: r.regional || '',
+        Tipo: r.tipo,
+        Numero: r.numero || '',
+        Codigos_Motivo: (r.reason_codes || []).join(' | '),
+        Motivos: (r.reason_labels || []).join(' | ') || '(sem motivo)',
+        Rejeitada_em: r.rejected_at || '',
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Rejeições');
+      const { de, ate } = rejRange();
+      XLSX.writeFile(wb, `rejeicoes_${de}_${ate}.xlsx`);
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
 
     // ── GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────────────────────

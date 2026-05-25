@@ -1162,6 +1162,202 @@ async function getMapaEquipe(team, date) {
   return { notes, team, date, teamInfo: _buildTeamInfo(snapData, firstSnapData) };
 }
 
+// ── REJEIÇÕES ────────────────────────────────────────────────────────────────
+
+/**
+ * Lê linhas de `note_rejections` no intervalo [de, ate] aplicando filtros opcionais.
+ * Paginado (pode passar de 1000). Filtra whitelist de equipes oficiais.
+ *
+ * @param {object} opts
+ * @param {string} opts.de            'YYYY-MM-DD'
+ * @param {string} opts.ate           'YYYY-MM-DD'
+ * @param {string} [opts.regional]    'GUA' | 'CAC' | 'ALL'
+ * @param {string} [opts.team]        sigla específica
+ * @param {string[]} [opts.tipos]     ['MD','SF',...]
+ * @param {boolean} [opts.somenteComMotivo]  só linhas com reason_codes não vazio
+ */
+async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotivo } = {}) {
+  const sb = getClient();
+  const today = dateBRT();
+  de  = de  || today;
+  ate = ate || de;
+
+  const rows = await _selectAll(() => {
+    let q = sb.from('note_rejections')
+      .select('note_id, numero, tipo, team_name, regional, sector_id, session_date, reason_codes, reason_labels, rejected_at')
+      .gte('session_date', de)
+      .lte('session_date', ate);
+    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    if (team && team !== 'ALL') q = q.eq('team_name', team);
+    if (Array.isArray(tipos) && tipos.length > 0) q = q.in('tipo', tipos);
+    return q;
+  });
+
+  let filtered = _onlyOficiais(rows, 'team_name');
+  if (somenteComMotivo) {
+    filtered = filtered.filter(r => Array.isArray(r.reason_codes) && r.reason_codes.length > 0);
+  }
+  return filtered;
+}
+
+/**
+ * KPIs agregados de rejeições no intervalo.
+ * Retorna:
+ *   {
+ *     total, comMotivo, semMotivo,
+ *     porRegional: { GUA: n, CAC: n },
+ *     porTipo:     { MD: n, SF: n, ... },
+ *     porMotivo:   [{ code, label, count }, ...]  (top 20),
+ *     porEquipe:   [{ team, regional, count }, ...]  (top 20),
+ *     porDia:      [{ date, count }, ...],
+ *     executadasNoPeriodo  (do team_daily_totals — pra calcular % de rejeição)
+ *   }
+ */
+async function getRejeicoesTotais(de, ate, regional, opts = {}) {
+  const sb = getClient();
+  const today = dateBRT();
+  de  = de  || today;
+  ate = ate || de;
+
+  const rows = await _fetchRejeicoes({ de, ate, regional, team: opts.team, tipos: opts.tipos });
+
+  const total = rows.length;
+  let comMotivo = 0, semMotivo = 0;
+  const porRegional = { GUA: 0, CAC: 0 };
+  const porTipo     = {};
+  const motivoMap   = new Map();  // code → { code, label, count }
+  const equipeMap   = new Map();  // team → { team, regional, count }
+  const diaMap      = new Map();  // date → count
+
+  for (const r of rows) {
+    const codes  = Array.isArray(r.reason_codes)  ? r.reason_codes  : [];
+    const labels = Array.isArray(r.reason_labels) ? r.reason_labels : [];
+    if (codes.length > 0) comMotivo++; else semMotivo++;
+
+    if (r.regional && porRegional[r.regional] !== undefined) porRegional[r.regional]++;
+    if (r.tipo) porTipo[r.tipo] = (porTipo[r.tipo] || 0) + 1;
+
+    if (codes.length === 0) {
+      const k = '__SEM_MOTIVO__';
+      const cur = motivoMap.get(k) || { code: k, label: 'Sem motivo registrado', count: 0 };
+      cur.count++;
+      motivoMap.set(k, cur);
+    } else {
+      codes.forEach((c, i) => {
+        const lbl = labels[i] || c;
+        const cur = motivoMap.get(c) || { code: c, label: lbl, count: 0 };
+        cur.count++;
+        motivoMap.set(c, cur);
+      });
+    }
+
+    if (r.team_name) {
+      const cur = equipeMap.get(r.team_name) || { team: r.team_name, regional: r.regional, count: 0 };
+      cur.count++;
+      equipeMap.set(r.team_name, cur);
+    }
+
+    if (r.session_date) {
+      diaMap.set(r.session_date, (diaMap.get(r.session_date) || 0) + 1);
+    }
+  }
+
+  const porMotivo = Array.from(motivoMap.values()).sort((a, b) => b.count - a.count).slice(0, 20);
+  const porEquipe = Array.from(equipeMap.values()).sort((a, b) => b.count - a.count).slice(0, 20);
+  const porDia    = Array.from(diaMap.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+                       .map(([date, count]) => ({ date, count }));
+
+  // Executadas no período (pra %): team_daily_totals filtrado
+  const tdt = await _selectAll(() => {
+    let q = sb.from('team_daily_totals')
+      .select('team_name, regional, count')
+      .gte('date', de)
+      .lte('date', ate);
+    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    if (opts.team && opts.team !== 'ALL') q = q.eq('team_name', opts.team);
+    return q;
+  });
+  let executadas = 0;
+  _onlyOficiais(tdt, 'team_name').forEach(r => { executadas += (r.count || 0); });
+
+  // % de rejeição por equipe (top 20 já)
+  const tdtMap = new Map();
+  _onlyOficiais(tdt, 'team_name').forEach(r => {
+    tdtMap.set(r.team_name, (tdtMap.get(r.team_name) || 0) + (r.count || 0));
+  });
+  porEquipe.forEach(e => {
+    const exec = tdtMap.get(e.team) || 0;
+    e.executadas = exec;
+    const denom = exec + e.count;
+    e.percentual = denom > 0 ? +(100 * e.count / denom).toFixed(1) : null;
+  });
+
+  return {
+    total, comMotivo, semMotivo,
+    porRegional, porTipo, porMotivo, porEquipe, porDia,
+    executadasNoPeriodo: executadas,
+    percentualGeral: (executadas + total) > 0
+      ? +(100 * total / (executadas + total)).toFixed(1)
+      : null,
+  };
+}
+
+/**
+ * Lista detalhada de rejeições com paginação cliente-lado.
+ * Aplica filtros + ordena por session_date desc.
+ */
+async function getRejeicoesLista(de, ate, regional, opts = {}) {
+  const rows = await _fetchRejeicoes({
+    de, ate, regional,
+    team: opts.team,
+    tipos: opts.tipos,
+    somenteComMotivo: opts.somenteComMotivo,
+  });
+
+  // Filtro por código de motivo (após fetch porque é array)
+  let filtered = rows;
+  if (Array.isArray(opts.motivos) && opts.motivos.length > 0) {
+    const setM = new Set(opts.motivos);
+    filtered = filtered.filter(r =>
+      Array.isArray(r.reason_codes) && r.reason_codes.some(c => setM.has(c))
+    );
+  }
+
+  filtered.sort((a, b) => {
+    const da = a.session_date || ''; const db = b.session_date || '';
+    if (da !== db) return db.localeCompare(da);
+    return (b.rejected_at || '').localeCompare(a.rejected_at || '');
+  });
+
+  const limit  = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), 5000);
+  const offset = Math.max(parseInt(opts.offset || 0, 10), 0);
+
+  return {
+    total: filtered.length,
+    limit, offset,
+    rows: filtered.slice(offset, offset + limit),
+  };
+}
+
+/**
+ * Catálogo distinto de motivos vistos no período (pra alimentar dropdown de filtro).
+ */
+async function getRejeicoesMotivos(de, ate, regional) {
+  const rows = await _fetchRejeicoes({ de, ate, regional });
+  const map = new Map();
+  for (const r of rows) {
+    const codes  = Array.isArray(r.reason_codes)  ? r.reason_codes  : [];
+    const labels = Array.isArray(r.reason_labels) ? r.reason_labels : [];
+    codes.forEach((c, i) => {
+      const lbl = labels[i] || c;
+      const cur = map.get(c) || { code: c, label: lbl, count: 0 };
+      cur.count++;
+      map.set(c, cur);
+    });
+  }
+  return Array.from(map.values()).sort((a, b) => b.count - a.count);
+}
+
 function _buildTeamInfo(snapData, firstSnapData) {
   const currentBegin = snapData.sessionBegin || snapData.session_begin || null;
   const currentEnd   = snapData.sessionEnd   || snapData.session_end   || null;
@@ -1196,4 +1392,5 @@ module.exports = {
   getExportData,
   getNotasIndividuais,
   getMapaEquipe,
+  getRejeicoesTotais, getRejeicoesLista, getRejeicoesMotivos,
 };
