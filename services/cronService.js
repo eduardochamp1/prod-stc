@@ -308,30 +308,41 @@ async function runClassifyRejections(teams) {
   if (!teams || teams.length === 0) return;
 
   const { getClient } = require('./supabaseClient');
-  const { classificarRejeicao } = require('./classifierService');
+  const { fetchRejectionDetails } = require('./rejectionService');
   const sb = getClient();
   if (!sb) return;
 
-  // 1) Coleta UUIDs únicos de rejeitadas, com contexto da equipe
+  // 1) Coleta UUIDs únicos de rejeitadas, com contexto da equipe.
+  // Política B(a): todos os colaboradores da sessão recebem 1 ponto cada
+  // por rejeição. Por isso guardamos arrays codes+names.
   const jobs = [];
   const seen = new Set();
   teams.forEach(t => {
     if (!t.sessionBegin) return;  // sem sessão = sem data efetiva
     const sessDate = String(t.sessionBegin).slice(0, 10);
+
+    const collabs = (t.collaborators || []).map(c => ({
+      code: String(c?.code || c?.Code || c?.matricula || '').trim(),
+      name: String(c?.name || c?.Name || '').trim(),
+    })).filter(c => c.code);
+    const collaborator_codes = collabs.map(c => c.code);
+    const collaborator_names = collabs.map(c => c.name);
+
     (t.notasRejeitadas || []).forEach(n => {
       if (!n.id || seen.has(n.id)) return;
       const tipo = (n.tipoCode || '').toUpperCase();
       if (!tipo) return;
       seen.add(n.id);
       jobs.push({
-        noteId:       n.id,
+        note_id:      n.id,
         numero:       n.codigo || null,
         tipo,
         team_name:    t.teamName || t.sigla,
         regional:     t.regional || null,
         sector_id:    t.sectorId || null,
         session_date: sessDate,
-        rejected_at:  n.conclusionDate || null,
+        collaborator_codes,
+        collaborator_names,
       });
     });
   });
@@ -339,45 +350,51 @@ async function runClassifyRejections(teams) {
   if (jobs.length === 0) return;
 
   // 2) Filtra UUIDs que já estão em note_rejections (paginado pra cobrir > 1000)
-  const ids = jobs.map(j => j.noteId);
-  const jaClassificados = new Set();
+  const ids = jobs.map(j => j.note_id);
+  const jaCacheadas = new Set();
   for (let i = 0; i < ids.length; i += 200) {
     const chunk = ids.slice(i, i + 200);
     const { data } = await sb.from('note_rejections')
       .select('note_id').in('note_id', chunk);
-    (data || []).forEach(r => jaClassificados.add(r.note_id));
+    (data || []).forEach(r => jaCacheadas.add(r.note_id));
   }
-  const todo = jobs.filter(j => !jaClassificados.has(j.noteId));
+  const todo = jobs.filter(j => !jaCacheadas.has(j.note_id));
   if (todo.length === 0) {
     console.log(`[CRON] rejeicoes: nada novo (${jobs.length} UUIDs, todos cacheados)`);
     return;
   }
 
-  console.log(`[CRON] rejeicoes: ${todo.length} novas a classificar (${jobs.length - todo.length} já cacheadas)`);
+  console.log(`[CRON] rejeicoes: ${todo.length} novas a coletar (${jobs.length - todo.length} já cacheadas)`);
   const t0 = Date.now();
 
-  // 3) Classifica em paralelo controlado (concorrência 4)
+  // 3) Coleta detalhes em paralelo controlado (concorrência 4 — WPA-friendly).
+  // Mesmo se WPA não retornar detalhes, gravamos a rejeição (motivos vazios)
+  // pra contagem ficar correta no dashboard.
   const linhas = [];
   for (let i = 0; i < todo.length; i += 4) {
     const chunk = todo.slice(i, i + 4);
     const results = await Promise.all(chunk.map(async j => {
       try {
-        const r = await classificarRejeicao(j.noteId, j.tipo);
+        const det = await fetchRejectionDetails(j.note_id, j.tipo);
         return {
-          note_id:       j.noteId,
-          numero:        j.numero,
-          tipo:          j.tipo,
-          team_name:     j.team_name,
-          regional:      j.regional,
-          sector_id:     j.sector_id,
-          session_date:  j.session_date,
-          reason_codes:  r.reason_codes || [],
-          reason_labels: r.reason_labels || [],
-          rejected_at:   j.rejected_at,
-          raw:           r.raw || null,
+          note_id:        j.note_id,
+          numero:         j.numero,
+          tipo:           j.tipo,
+          team_name:      j.team_name,
+          regional:       j.regional,
+          sector_id:      j.sector_id,
+          rejection_date: det?.rejection_date || null,
+          session_date:   j.session_date,
+          observacao:     det?.observacao || null,
+          motivo_codes:   det?.motivo_codes  || [],
+          motivo_textos:  det?.motivo_textos || [],
+          formulario:     det?.formulario    || null,
+          collaborator_codes: j.collaborator_codes,
+          collaborator_names: j.collaborator_names,
+          raw:            det?.raw || null,
         };
       } catch (err) {
-        console.warn(`[CRON] rejeicoes: ${j.numero || j.noteId} falhou: ${err.message}`);
+        console.warn(`[CRON] rejeicoes: ${j.numero || j.note_id} falhou: ${err.message}`);
         return null;
       }
     }));
@@ -394,7 +411,7 @@ async function runClassifyRejections(teams) {
     return;
   }
 
-  const comMotivo = linhas.filter(l => l.reason_codes.length > 0).length;
+  const comMotivo = linhas.filter(l => l.motivo_codes.length > 0).length;
   const dt = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[CRON] rejeicoes: ✓ ${linhas.length} gravadas em ${dt}s (${comMotivo} com motivo, ${linhas.length - comMotivo} sem)`);
 }
@@ -405,6 +422,7 @@ async function runClassifyRejections(teams) {
 
 async function runBackfillRejeicoes(daysBack) {
   const { getClient } = require('./supabaseClient');
+  const { fetchRejectionDetails } = require('./rejectionService');
   const sb = getClient();
   if (!sb) return { error: 'supabase indisponível' };
 
@@ -413,37 +431,43 @@ async function runBackfillRejeicoes(daysBack) {
 
   console.log(`[BACKFILL-REJ] varrendo snapshots desde ${cutoff} (${DAYS} dias)...`);
 
-  // Pagina snapshots e coleta UUIDs únicos de rejeitadas
-  const jobs = [];
-  const seen = new Set();
+  // Pagina snapshots em ordem ASC (mais antigos primeiro) — pra cada note_id
+  // mantém o snapshot mais antigo, que tem os colaboradores corretos da sessão.
+  const byNoteId = new Map();
   let page = 0;
   let totalSnaps = 0;
   while (true) {
     const { data, error } = await sb.from('snapshots')
-      .select('team_name, regional, sector_id, data')
+      .select('team_name, regional, sector_id, data, date')
       .gte('date', cutoff)
-      .order('captured_at', { ascending: false })
+      .order('captured_at', { ascending: true })
       .range(page * 1000, (page + 1) * 1000 - 1);
     if (error || !data || data.length === 0) break;
     totalSnaps += data.length;
     data.forEach(r => {
       const t = r.data;
-      if (!t || !t.sessionBegin) return;
-      const sessDate = String(t.sessionBegin).slice(0, 10);
+      if (!t) return;
+      const collabs = (t.collaborators || []).map(c => ({
+        code: String(c?.code || c?.Code || c?.matricula || '').trim(),
+        name: String(c?.name || c?.Name || '').trim(),
+      })).filter(c => c.code);
+      const collaborator_codes = collabs.map(c => c.code);
+      const collaborator_names = collabs.map(c => c.name);
+
       (t.notasRejeitadas || []).forEach(n => {
-        if (!n.id || seen.has(n.id)) return;
+        if (!n.id || byNoteId.has(n.id)) return;
         const tipo = (n.tipoCode || '').toUpperCase();
         if (!tipo) return;
-        seen.add(n.id);
-        jobs.push({
-          noteId:       n.id,
+        byNoteId.set(n.id, {
+          note_id:      n.id,
           numero:       n.codigo || null,
           tipo,
           team_name:    r.team_name,
           regional:     r.regional,
           sector_id:    r.sector_id,
-          session_date: sessDate,
-          rejected_at:  n.conclusionDate || null,
+          session_date: r.date,
+          collaborator_codes,
+          collaborator_names,
         });
       });
     });
@@ -451,11 +475,12 @@ async function runBackfillRejeicoes(daysBack) {
     page++;
   }
 
+  const jobs = Array.from(byNoteId.values());
   console.log(`[BACKFILL-REJ] ${totalSnaps} snapshots varridos, ${jobs.length} UUIDs únicos`);
   if (jobs.length === 0) return { totalSnaps, jobs: 0, gravadas: 0 };
 
   // Filtra os que já estão no banco
-  const ids = jobs.map(j => j.noteId);
+  const ids = jobs.map(j => j.note_id);
   const jaCache = new Set();
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500);
@@ -463,31 +488,34 @@ async function runBackfillRejeicoes(daysBack) {
       .select('note_id').in('note_id', chunk);
     (data || []).forEach(r => jaCache.add(r.note_id));
   }
-  const todo = jobs.filter(j => !jaCache.has(j.noteId));
-  console.log(`[BACKFILL-REJ] ${todo.length} novas a classificar (${jaCache.size} já cacheadas)`);
+  const todo = jobs.filter(j => !jaCache.has(j.note_id));
+  console.log(`[BACKFILL-REJ] ${todo.length} novas a coletar (${jaCache.size} já cacheadas)`);
   if (todo.length === 0) return { totalSnaps, jobs: jobs.length, gravadas: 0, jaCache: jaCache.size };
 
-  // Classifica em concorrência 4
-  const { classificarRejeicao } = require('./classifierService');
+  // Coleta detalhes em concorrência 4
   const linhas = [];
   const t0 = Date.now();
   for (let i = 0; i < todo.length; i += 4) {
     const chunk = todo.slice(i, i + 4);
     const results = await Promise.all(chunk.map(async j => {
       try {
-        const r = await classificarRejeicao(j.noteId, j.tipo);
+        const det = await fetchRejectionDetails(j.note_id, j.tipo);
         return {
-          note_id:       j.noteId,
-          numero:        j.numero,
-          tipo:          j.tipo,
-          team_name:     j.team_name,
-          regional:      j.regional,
-          sector_id:     j.sector_id,
-          session_date:  j.session_date,
-          reason_codes:  r.reason_codes || [],
-          reason_labels: r.reason_labels || [],
-          rejected_at:   j.rejected_at,
-          raw:           r.raw || null,
+          note_id:        j.note_id,
+          numero:         j.numero,
+          tipo:           j.tipo,
+          team_name:      j.team_name,
+          regional:       j.regional,
+          sector_id:      j.sector_id,
+          rejection_date: det?.rejection_date || null,
+          session_date:   j.session_date,
+          observacao:     det?.observacao || null,
+          motivo_codes:   det?.motivo_codes  || [],
+          motivo_textos:  det?.motivo_textos || [],
+          formulario:     det?.formulario    || null,
+          collaborator_codes: j.collaborator_codes,
+          collaborator_names: j.collaborator_names,
+          raw:            det?.raw || null,
         };
       } catch { return null; }
     }));
@@ -497,15 +525,15 @@ async function runBackfillRejeicoes(daysBack) {
     }
   }
 
-  // Grava em chunks de 500
+  // Grava em chunks de 200 (arrays + JSONB = payload grande)
   let gravadas = 0;
-  for (let i = 0; i < linhas.length; i += 500) {
-    const chunk = linhas.slice(i, i + 500);
+  for (let i = 0; i < linhas.length; i += 200) {
+    const chunk = linhas.slice(i, i + 200);
     const { error } = await sb.from('note_rejections').upsert(chunk, { onConflict: 'note_id' });
     if (!error) gravadas += chunk.length;
   }
 
-  const comMotivo = linhas.filter(l => l.reason_codes.length > 0).length;
+  const comMotivo = linhas.filter(l => l.motivo_codes.length > 0).length;
   const dt = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[BACKFILL-REJ] ✓ ${gravadas} gravadas em ${dt}s (${comMotivo} com motivo, ${gravadas - comMotivo} sem)`);
   return { totalSnaps, jobs: jobs.length, gravadas, comMotivo, semMotivo: gravadas - comMotivo };

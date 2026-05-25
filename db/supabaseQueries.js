@@ -1184,7 +1184,7 @@ async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotiv
 
   const rows = await _selectAll(() => {
     let q = sb.from('note_rejections')
-      .select('note_id, numero, tipo, team_name, regional, sector_id, session_date, reason_codes, reason_labels, rejected_at')
+      .select('note_id, numero, tipo, team_name, regional, sector_id, session_date, motivo_codes, motivo_textos, rejection_date, observacao, formulario, collaborator_codes, collaborator_names')
       .gte('session_date', de)
       .lte('session_date', ate);
     if (regional && regional !== 'ALL') q = q.eq('regional', regional);
@@ -1195,7 +1195,7 @@ async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotiv
 
   let filtered = _onlyOficiais(rows, 'team_name');
   if (somenteComMotivo) {
-    filtered = filtered.filter(r => Array.isArray(r.reason_codes) && r.reason_codes.length > 0);
+    filtered = filtered.filter(r => Array.isArray(r.motivo_codes) && r.motivo_codes.length > 0);
   }
   return filtered;
 }
@@ -1230,8 +1230,8 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
   const diaMap      = new Map();  // date → count
 
   for (const r of rows) {
-    const codes  = Array.isArray(r.reason_codes)  ? r.reason_codes  : [];
-    const labels = Array.isArray(r.reason_labels) ? r.reason_labels : [];
+    const codes  = Array.isArray(r.motivo_codes)  ? r.motivo_codes  : [];
+    const labels = Array.isArray(r.motivo_textos) ? r.motivo_textos : [];
     if (codes.length > 0) comMotivo++; else semMotivo++;
 
     if (r.regional && porRegional[r.regional] !== undefined) porRegional[r.regional]++;
@@ -1319,14 +1319,14 @@ async function getRejeicoesLista(de, ate, regional, opts = {}) {
   if (Array.isArray(opts.motivos) && opts.motivos.length > 0) {
     const setM = new Set(opts.motivos);
     filtered = filtered.filter(r =>
-      Array.isArray(r.reason_codes) && r.reason_codes.some(c => setM.has(c))
+      Array.isArray(r.motivo_codes) && r.motivo_codes.some(c => setM.has(c))
     );
   }
 
   filtered.sort((a, b) => {
     const da = a.session_date || ''; const db = b.session_date || '';
     if (da !== db) return db.localeCompare(da);
-    return (b.rejected_at || '').localeCompare(a.rejected_at || '');
+    return (b.rejection_date || '').localeCompare(a.rejection_date || '');
   });
 
   const limit  = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), 5000);
@@ -1346,8 +1346,8 @@ async function getRejeicoesMotivos(de, ate, regional) {
   const rows = await _fetchRejeicoes({ de, ate, regional });
   const map = new Map();
   for (const r of rows) {
-    const codes  = Array.isArray(r.reason_codes)  ? r.reason_codes  : [];
-    const labels = Array.isArray(r.reason_labels) ? r.reason_labels : [];
+    const codes  = Array.isArray(r.motivo_codes)  ? r.motivo_codes  : [];
+    const labels = Array.isArray(r.motivo_textos) ? r.motivo_textos : [];
     codes.forEach((c, i) => {
       const lbl = labels[i] || c;
       const cur = map.get(c) || { code: c, label: lbl, count: 0 };
