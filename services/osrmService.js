@@ -28,11 +28,27 @@
  */
 
 const fetch = require('node-fetch');
+const https = require('https');
 const crypto = require('crypto');
 const { getClient } = require('./supabaseClient');
 
 const OSRM_HOST = process.env.OSRM_HOST || 'https://router.project-osrm.org';
 const MIN_INTERVAL_MS = parseInt(process.env.OSRM_MIN_INTERVAL_MS || '1100', 10);  // ~1 req/s
+
+// Agent com TLS verification desabilitada — necessario pq o servidor de
+// producao da Engelmig esta atras de Fortinet com TLS interception, e a CA
+// raiz do Fortinet nao esta acessivel no servidor (firewall esconde do
+// handshake e nao temos sudo pra instalar a CA via update-ca-certificates).
+//
+// Risco aceitavel APENAS pra OSRM porque:
+//   - payload e benigno (coords -> duracao/distancia/geometry)
+//   - nao trafega auth, token, segredo
+//   - resposta vai pra cache local (osrm_cache) e nao executa nada
+//   - trafego ja passa pelo Fortinet que controla a saida
+//
+// NAO COPIAR este pattern pra outros services sem analise — para auth,
+// dados sensiveis ou APIs com tokens isso ABRE caminho pra MITM real.
+const _insecureAgent = new https.Agent({ rejectUnauthorized: false });
 
 let _lastCall = 0;
 async function _throttle() {
@@ -91,7 +107,7 @@ async function _fetchOsrm(oLat, oLng, dLat, dLng) {
   const url = `${OSRM_HOST}/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?overview=full&geometries=geojson`;
   let res;
   try {
-    res = await fetch(url, { timeout: 15000 });
+    res = await fetch(url, { timeout: 15000, agent: _insecureAgent });
   } catch (err) {
     throw new Error(`OSRM fetch erro: ${err.message}`);
   }
