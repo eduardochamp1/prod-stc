@@ -32,19 +32,21 @@ const TIPOS = ['MD', 'LN', 'DL', 'LE', 'II', 'PO', 'RL', 'UG', 'RD', 'SO', 'SF',
 // Candidatos de path por tipo. Os já confirmados ficam primeiro.
 // Padrões observados na API: tipo direto, tipo+'rl', tipo+'dl', etc.
 const CANDIDATES = {
-  MD: ['md', 'mdrl', 'mddl'],
-  LN: ['lnrl', 'ln', 'lndl'],
-  DL: ['dl', 'dlrl', 'dldl', 'desligamento'],
+  MD: ['md', 'mdrl', 'mddl', 'medicao'],
+  LN: ['lnrl', 'ln', 'lndl', 'lndr', 'ligacaonova'],
+  DL: ['dl', 'dlrl', 'dldl', 'desligamento', 'corte'],
   LE: ['le', 'lerl', 'ledl', 'leitura'],
   II: ['ii', 'iirl', 'iidl', 'inspecao'],
   PO: ['po', 'porl', 'podl', 'poda'],
-  RL: ['rl', 'rlrl', 'religacao'],
-  UG: ['ug', 'ugrl', 'ugdl'],
+  RL: ['rl', 'rlrl', 'rldl', 'religacao'],
+  UG: ['ug', 'ugrl', 'ugdl', 'ugp'],
   RD: ['rd', 'rdrl', 'rddl', 'religamento'],
-  SO: ['so', 'sorl', 'sodl', 'servico'],
+  SO: ['so', 'sorl', 'sodl', 'servico', 'sobjetivo'],
   SF: ['sfdl', 'sfrl', 'sf'],
   DD: ['dd', 'ddrl', 'dddl'],
 };
+
+const MAX_SAMPLES_PER_TIPO = 5;  // tenta até 5 noteIds diferentes antes de desistir
 
 const supa = createClient(
   process.env.SUPABASE_URL,
@@ -95,11 +97,11 @@ async function loadSamples() {
   return samples;
 }
 
-async function pickRejectedNoteIdByTipo(tipo) {
+async function pickRejectedNoteIdsByTipo(tipo, max = MAX_SAMPLES_PER_TIPO) {
   const samples = await loadSamples();
   const set = samples[tipo];
-  if (!set || set.size === 0) return null;
-  return Array.from(set)[0];
+  if (!set || set.size === 0) return [];
+  return Array.from(set).slice(0, max);
 }
 
 async function tryCandidate(token, noteId, candidate) {
@@ -114,7 +116,11 @@ async function tryCandidate(token, noteId, candidate) {
     return { ok: false, reason: `fetch error: ${err.message}` };
   }
   if (res.status === 404) return { ok: false, reason: '404' };
-  if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
+  if (!res.ok) {
+    let body = '';
+    try { body = (await res.text()).slice(0, 200); } catch {}
+    return { ok: false, reason: `HTTP ${res.status}`, body };
+  }
 
   let json;
   try { json = await res.json(); } catch { return { ok: false, reason: 'invalid JSON' }; }
@@ -138,23 +144,40 @@ async function tryCandidate(token, noteId, candidate) {
 
   const results = {};
   for (const tipo of TIPOS) {
-    process.stdout.write(`[${tipo}] buscando noteId rejeitado... `);
-    const noteId = await pickRejectedNoteIdByTipo(tipo);
-    if (!noteId) {
-      console.log('❌ nenhuma nota rejeitada encontrada nos snapshots recentes');
-      results[tipo] = { noteId: null, endpoint: null, reason: 'no sample' };
+    process.stdout.write(`\n[${tipo}] `);
+    const noteIds = await pickRejectedNoteIdsByTipo(tipo);
+    if (noteIds.length === 0) {
+      console.log('❌ nenhuma nota rejeitada nos snapshots');
+      results[tipo] = { sampleCount: 0, endpoint: null, reason: 'no sample' };
       continue;
     }
-    console.log(noteId);
+    console.log(`${noteIds.length} sample(s) disponíveis`);
 
     let found = null;
+    // Pra cada candidato, tenta vários noteIds — se algum funcionar, vence
     for (const cand of CANDIDATES[tipo] || []) {
-      const r = await tryCandidate(token, noteId, cand);
-      const tag = r.ok ? '✅' : '  ';
-      console.log(`   ${tag} /${cand} → ${r.ok ? `${r.reasonsCount} motivos (ex: ${r.sampleCode})` : r.reason}`);
-      if (r.ok && !found) found = { candidate: cand, ...r };
+      let candResult = null;
+      const errors = [];
+      for (const nid of noteIds) {
+        const r = await tryCandidate(token, nid, cand);
+        if (r.ok) { candResult = r; break; }
+        errors.push(`${nid.slice(0, 8)}=${r.reason}`);
+      }
+      if (candResult) {
+        console.log(`   ✅ /${cand} → ${candResult.reasonsCount} motivos (ex: ${candResult.sampleCode})`);
+        if (!found) found = { candidate: cand, ...candResult };
+      } else {
+        // Se TODOS os erros foram 404, endpoint não existe; senão tem chance
+        const all404 = errors.every(e => e.includes('404'));
+        const tag = all404 ? '  ' : '⚠️';
+        console.log(`   ${tag} /${cand} → ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
+      }
     }
-    results[tipo] = { noteId, endpoint: found?.candidate || null, ...(found || {}) };
+    results[tipo] = {
+      sampleCount: noteIds.length,
+      endpoint: found?.candidate || null,
+      ...(found || {}),
+    };
   }
 
   const outPath = path.join(__dirname, 'rejection-endpoints-map.json');
