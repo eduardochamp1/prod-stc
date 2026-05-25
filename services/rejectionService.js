@@ -108,17 +108,24 @@ function normalize(json) {
   const rej    = json?.Data?.Rejection || null;
   const rejRen = json?.Data?.RejectionRen1000 || null;
 
-  // Lista de motivos: prefere RejectionRen1000 (form mais detalhado) com
-  // fallback pra Rejection plain. Dedup por Code.
-  const reasonsSrc = (rejRen?.RejectionReasons?.length ? rejRen.RejectionReasons : rej?.RejectionReasons) || [];
+  // Lista de motivos. IMPORTANTE: as duas fontes têm SCHEMAS DIFERENTES:
+  //   Rejection.RejectionReasons[]:      { Code, Description, Label, ... }
+  //   RejectionRen1000.RejectionReasons[]: { Number, Description, FormGroupsId, ... }
+  //                                        ↑ aqui é "Number", NÃO "Code"
+  // Preferimos `Rejection` porque tem Description sem prefixo "0067 - " e Code
+  // limpo. Fallback pro Ren1000 com Number→code. Dedup por código final.
+  const reasonsSrc = (rej?.RejectionReasons?.length ? rej.RejectionReasons : rejRen?.RejectionReasons) || [];
   const seen = new Set();
   const motivo_codes  = [];
   const motivo_textos = [];
   for (const r of reasonsSrc) {
-    const code = String(r?.Code || '').trim();
+    // Tenta Code (Rejection), depois Number (Ren1000), depois Codigo (legado).
+    const code = String(r?.Code || r?.Number || r?.Codigo || '').trim();
     if (!code || seen.has(code)) continue;
     seen.add(code);
     motivo_codes.push(code);
+    // Description vem limpa no Rejection ("Falta proteção") ou com prefixo
+    // no Ren1000 ("0011 - Falta proteção"). O replace tira o prefixo se houver.
     motivo_textos.push(String(r?.Description || r?.Label || '').replace(/^\d+\s*-\s*/, '').trim());
   }
 
