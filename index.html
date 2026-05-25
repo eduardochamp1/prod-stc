@@ -5456,12 +5456,12 @@
       const countEl = document.getElementById('rej-tabela-count');
       if (!tbody || !_rejFullList) return;
       let rows = (_rejFullList.rows || []).slice();
-      if (_rejShowOnlyComMotivo) rows = rows.filter(r => (r.reason_codes || []).length > 0);
+      if (_rejShowOnlyComMotivo) rows = rows.filter(r => (r.motivo_codes || []).length > 0);
       if (_rejMotivoFilter) {
         if (_rejMotivoFilter === '__SEM_MOTIVO__') {
-          rows = rows.filter(r => (r.reason_codes || []).length === 0);
+          rows = rows.filter(r => (r.motivo_codes || []).length === 0);
         } else {
-          rows = rows.filter(r => (r.reason_codes || []).includes(_rejMotivoFilter));
+          rows = rows.filter(r => (r.motivo_codes || []).includes(_rejMotivoFilter));
         }
       }
       countEl.textContent = `(${rows.length})`;
@@ -5473,21 +5473,34 @@
       const MAX = 1000;
       const slice = rows.slice(0, MAX);
       tbody.innerHTML = slice.map(r => {
-        const codes  = r.reason_codes  || [];
-        const labels = r.reason_labels || [];
+        const codes  = r.motivo_codes  || [];
+        const labels = r.motivo_textos || [];
+        // Observação aparece como tooltip no Motivo (texto livre do operador)
+        const obsTitle = r.observacao
+          ? `Observação: ${String(r.observacao).slice(0, 300).replace(/"/g, '&quot;')}`
+          : 'Sem observação';
         const motivos = codes.length === 0
-          ? '<span class="rej-no-motivo">sem motivo registrado</span>'
+          ? `<span class="rej-no-motivo" title="${escapeHtml(obsTitle)}">sem motivo registrado</span>`
           : codes.map((c, i) => `<span title="${escapeHtml(c)}">${escapeHtml(labels[i] || c)}</span>`).join(' · ');
-        const rejAt = r.rejected_at
-          ? new Date(r.rejected_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        const rejAt = r.rejection_date
+          ? new Date(r.rejection_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
           : '—';
+        // Colaboradores no tooltip da equipe (política B: todos da sessão recebem o ponto)
+        const colabs = (r.collaborator_codes || []).length > 0
+          ? `Colaboradores da sessão (${r.collaborator_codes.length}):\n` +
+            (r.collaborator_names || []).map((n, i) =>
+              `• ${n || '?'} (${r.collaborator_codes[i] || '?'})`).join('\n')
+          : 'Sem colaboradores registrados';
+        const obsIcon = r.observacao
+          ? ` <span style="opacity:.5;cursor:help" title="${escapeHtml(obsTitle)}">💬</span>`
+          : '';
         return `<tr>
           <td>${fmtDateBR(r.session_date)}</td>
-          <td><strong>${r.team_name}</strong></td>
+          <td title="${escapeHtml(colabs)}"><strong>${r.team_name}</strong></td>
           <td>${r.regional || ''}</td>
           <td>${r.tipo}</td>
           <td>${r.numero || ''}</td>
-          <td>${motivos}</td>
+          <td>${motivos}${obsIcon}</td>
           <td>${rejAt}</td>
         </tr>`;
       }).join('');
@@ -5525,9 +5538,13 @@
         Regional: r.regional || '',
         Tipo: r.tipo,
         Numero: r.numero || '',
-        Codigos_Motivo: (r.reason_codes || []).join(' | '),
-        Motivos: (r.reason_labels || []).join(' | ') || '(sem motivo)',
-        Rejeitada_em: r.rejected_at || '',
+        Codigos_Motivo: (r.motivo_codes || []).join(' | '),
+        Motivos: (r.motivo_textos || []).join(' | ') || '(sem motivo)',
+        Observacao: r.observacao || '',
+        Colaboradores: (r.collaborator_names || []).map((n, i) =>
+          `${n} (${(r.collaborator_codes || [])[i] || ''})`).join(' | '),
+        Formulario: r.formulario || '',
+        Rejeitada_em: r.rejection_date || '',
       }));
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
