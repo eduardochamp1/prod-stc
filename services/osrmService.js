@@ -1,30 +1,23 @@
 /**
  * services/osrmService.js
  *
- * Consulta tempo/distância de rota dirigindo entre 2 pontos via OSRM
- * (Open Source Routing Machine — público, gratuito, sem API key).
+ * Consulta tempo/distância de rota dirigindo entre 2 pontos.
  *
- * Endpoint público: https://router.project-osrm.org/route/v1/driving/{lng1,lat1};{lng2,lat2}
- *   Retorna: { routes: [{ duration, distance, geometry }] }
- *   - duration em segundos
- *   - distance em metros
- *   - geometry como polyline (encoded5) ou GeoJSON conforme overview
+ * PROVIDER: detectado automaticamente pelo env:
+ *   - HERE_API_KEY setado  → HERE Routing v8 (preferido, 250k req/mes free)
+ *   - senao                → OSRM publico (gratis, mas Fortinet bloqueia 403
+ *                            na producao da Engelmig — so funciona em dev)
  *
- * IMPORTANTE — política de cache:
- *   Pra cada par (origem, destino) consultamos UMA vez e gravamos em
- *   `osrm_cache`. A malha viária do OSM não muda em escalas relevantes pra
- *   nosso uso. Coords são arredondados a 5 casas (~1m) na chave pra evitar
- *   explosão de cache por jitter de GPS.
+ * Por que HERE: o servidor de producao esta atras de Fortinet que bloqueia
+ * router.project-osrm.org. HERE (dominio business-categorized) passa.
+ *
+ * Cache: mesma tabela `osrm_cache` (nome historico, agnostico a provider).
+ * Chave = md5 das coords arredondadas a 5 casas (~1m). Entries cacheados de
+ * OSRM continuam validos mesmo apos migrar pra HERE — tempos sao similares.
  *
  * RATE LIMITING:
- *   A instância pública tem "fair use". Limitamos a 1 req/s por padrão.
- *   Caches reutilizam — após backfill inicial, o tráfego cai pra ~0.
- *
- * Limitações conhecidas do OSRM público:
- *   - Sem garantia de uptime
- *   - Pode banir IPs abusivos (limit ~1 req/s recomendado)
- *   - Tempos podem ser ligeiramente diferentes do Google Maps
- *     (estimativas conservadoras, sem tráfego em tempo real)
+ *   - HERE: 100ms (10 req/s safety, free tier permite muito mais)
+ *   - OSRM: 1100ms (~1 req/s, fair-use do publico)
  */
 
 const fetch = require('node-fetch');
@@ -32,22 +25,29 @@ const https = require('https');
 const crypto = require('crypto');
 const { getClient } = require('./supabaseClient');
 
+const HERE_API_KEY = process.env.HERE_API_KEY || '';
+const PROVIDER = HERE_API_KEY ? 'here' : 'osrm';
 const OSRM_HOST = process.env.OSRM_HOST || 'https://router.project-osrm.org';
-const MIN_INTERVAL_MS = parseInt(process.env.OSRM_MIN_INTERVAL_MS || '1100', 10);  // ~1 req/s
+const MIN_INTERVAL_MS = parseInt(
+  process.env.ROUTING_MIN_INTERVAL_MS || (PROVIDER === 'here' ? '100' : '1100'),
+  10
+);
 
 // Agent com TLS verification desabilitada — necessario pq o servidor de
 // producao da Engelmig esta atras de Fortinet com TLS interception, e a CA
 // raiz do Fortinet nao esta acessivel no servidor (firewall esconde do
 // handshake e nao temos sudo pra instalar a CA via update-ca-certificates).
 //
-// Risco aceitavel APENAS pra OSRM porque:
-//   - payload e benigno (coords -> duracao/distancia/geometry)
-//   - nao trafega auth, token, segredo
-//   - resposta vai pra cache local (osrm_cache) e nao executa nada
+// Risco aceitavel pra routing API porque:
+//   - request leva so coords (publicas), NAO leva auth body
+//   - HERE_API_KEY vai na query string mas eh chave de API limitada (free
+//     tier, sem privilegio destrutivo) — perda < custo de resolver TLS
+//   - resposta vai pra cache local e nao executa nada
 //   - trafego ja passa pelo Fortinet que controla a saida
 //
-// NAO COPIAR este pattern pra outros services sem analise — para auth,
-// dados sensiveis ou APIs com tokens isso ABRE caminho pra MITM real.
+// NAO COPIAR este pattern pra outros services sem analise — para tokens
+// de usuario, dados sensiveis ou APIs com auth privilegiada isso ABRE
+// caminho pra MITM real.
 const _insecureAgent = new https.Agent({ rejectUnauthorized: false });
 
 let _lastCall = 0;
@@ -97,7 +97,7 @@ async function _writeCache(key, oLat, oLng, dLat, dLng, payload) {
     duration_sec: payload.duration_sec,
     distance_m:   payload.distance_m,
     geometry:     payload.geometry,
-    source:       'osrm_public',
+    source:       PROVIDER === 'here' ? 'here_v8' : 'osrm_public',
   }, { onConflict: 'cache_key' });
 }
 
@@ -127,6 +127,53 @@ async function _fetchOsrm(oLat, oLng, dLat, dLng) {
   };
 }
 
+/**
+ * Consulta HERE Routing v8 e retorna { duration_sec, distance_m, geometry }.
+ * Docs: https://www.here.com/docs/bundle/routing-api-v8-api-reference/page/index.html
+ *
+ * Polyline vem em "flexible polyline" (formato proprietário HERE). Salvamos
+ * como objeto { format, value } pra distinguir de GeoJSON. Pro mapa visual
+ * (futuro), decodificar com pacote @here/flexpolyline.
+ */
+async function _fetchHere(oLat, oLng, dLat, dLng) {
+  await _throttle();
+  const url = `https://router.hereapi.com/v8/routes`
+    + `?transportMode=car`
+    + `&origin=${oLat},${oLng}`
+    + `&destination=${dLat},${dLng}`
+    + `&return=summary,polyline`
+    + `&apiKey=${encodeURIComponent(HERE_API_KEY)}`;
+  let res;
+  try {
+    res = await fetch(url, { timeout: 15000, agent: _insecureAgent });
+  } catch (err) {
+    throw new Error(`HERE fetch erro: ${err.message}`);
+  }
+  if (!res.ok) {
+    let body = '';
+    try { body = (await res.text()).slice(0, 150); } catch (_) {}
+    throw new Error(`HERE HTTP ${res.status}: ${body}`);
+  }
+  const json = await res.json();
+  const section = json.routes && json.routes[0] && json.routes[0].sections && json.routes[0].sections[0];
+  if (!section || !section.summary) {
+    throw new Error(`HERE sem rota: ${JSON.stringify(json).slice(0, 100)}`);
+  }
+  return {
+    duration_sec: section.summary.duration,
+    distance_m:   section.summary.length,
+    geometry:     section.polyline ? { format: 'flexible_polyline', value: section.polyline } : null,
+    cached:       false,
+  };
+}
+
+/** Escolhe o provider baseado em env. */
+async function _fetchRoute(oLat, oLng, dLat, dLng) {
+  return PROVIDER === 'here'
+    ? _fetchHere(oLat, oLng, dLat, dLng)
+    : _fetchOsrm(oLat, oLng, dLat, dLng);
+}
+
 // ── API pública ──────────────────────────────────────────────────────────────
 
 /**
@@ -154,11 +201,11 @@ async function getRoute(oLat, oLng, dLat, dLng) {
   if (cached) return cached;
 
   try {
-    const fresh = await _fetchOsrm(oLat, oLng, dLat, dLng);
+    const fresh = await _fetchRoute(oLat, oLng, dLat, dLng);
     await _writeCache(key, oLat, oLng, dLat, dLng, fresh);
     return fresh;
   } catch (err) {
-    console.warn(`[osrm] ${err.message} (${oLat},${oLng}→${dLat},${dLng})`);
+    console.warn(`[routing:${PROVIDER}] ${err.message} (${oLat},${oLng}→${dLat},${dLng})`);
     return null;
   }
 }
