@@ -1165,8 +1165,67 @@ async function getMapaEquipe(team, date) {
 // ── REJEIÇÕES ────────────────────────────────────────────────────────────────
 
 /**
+ * Motivos que NÃO contam pros indicadores Engelmig.
+ *
+ * Regra de negócio EDP (validada com cliente 25/05/2026):
+ *   '0128' - "Baixa via Sistema" — o proprio sistema EDP faz a rejeicao
+ *   automaticamente. Nao gera multa, glosa, nem entra nos indicadores oficiais
+ *   da concessionaria. Por isso nao deve aparecer nos paineis Engelmig.
+ *
+ * Comportamento:
+ *   - Notas que tem motivo_codes = ['0128'] (so esse) -> DESCARTADAS, nao
+ *     contam como rejeitada em lugar nenhum.
+ *   - Notas que tem motivo_codes = ['0128', '0031'] (misto) -> mantidas, mas
+ *     o '0128' eh REMOVIDO do array motivo_codes/motivo_textos. Aparecem como
+ *     rejeitadas pelo motivo legitimo (0031).
+ *   - Notas sem motivo (motivo_codes = []) continuam contando como "sem motivo
+ *     registrado" (independente dessa regra).
+ *
+ * Os dados crus em `note_rejections` ficam intactos — a exclusao eh so na
+ * camada de leitura. Mudar a regra eh trivial (so editar a Set).
+ */
+const MOTIVOS_EXCLUIDOS_INDICADORES = new Set(['0128']);
+
+/**
+ * Aplica a exclusao de motivos numa lista de rejeicoes. Retorna nova lista
+ * (nao muta input). Veja regra acima.
+ */
+function _aplicarExclusaoMotivos(rows) {
+  const out = [];
+  for (const r of rows) {
+    const codes  = Array.isArray(r.motivo_codes)  ? r.motivo_codes  : [];
+    const labels = Array.isArray(r.motivo_textos) ? r.motivo_textos : [];
+
+    // Se a nota nao tinha motivo, mantem como esta (regra so mexe em
+    // notas com motivo cadastrado).
+    if (codes.length === 0) { out.push(r); continue; }
+
+    // Filtra mantendo paridade index codes/labels.
+    const newCodes  = [];
+    const newLabels = [];
+    let tinhaExcluido = false;
+    for (let i = 0; i < codes.length; i++) {
+      if (MOTIVOS_EXCLUIDOS_INDICADORES.has(codes[i])) {
+        tinhaExcluido = true;
+        continue;
+      }
+      newCodes.push(codes[i]);
+      newLabels.push(labels[i] || codes[i]);
+    }
+
+    // Se a nota tinha SO motivos excluidos -> descarta (nao conta).
+    if (tinhaExcluido && newCodes.length === 0) continue;
+
+    // Senao, mantem nota com motivos filtrados.
+    out.push({ ...r, motivo_codes: newCodes, motivo_textos: newLabels });
+  }
+  return out;
+}
+
+/**
  * Lê linhas de `note_rejections` no intervalo [de, ate] aplicando filtros opcionais.
  * Paginado (pode passar de 1000). Filtra whitelist de equipes oficiais.
+ * Aplica regra de exclusao de motivos (ver MOTIVOS_EXCLUIDOS_INDICADORES).
  *
  * @param {object} opts
  * @param {string} opts.de            'YYYY-MM-DD'
@@ -1207,6 +1266,10 @@ async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotiv
       r.rejection_date = r.rejection_date.toISOString();
     }
   }
+
+  // Aplica regra de negocio: "Baixa via Sistema" e outros nao contam.
+  // Notas com SO motivo excluido sao descartadas inteiramente.
+  filtered = _aplicarExclusaoMotivos(filtered);
 
   if (somenteComMotivo) {
     filtered = filtered.filter(r => Array.isArray(r.motivo_codes) && r.motivo_codes.length > 0);
