@@ -2493,6 +2493,7 @@ router.put('/deslocamentos/threshold', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'fator inválido (use número entre 1 e 10, ex: 1.5)' });
     }
     await sq.setSetting('desloc-threshold', { fator });
+    _deslocQ.setThresholdCache(fator);   // reflete imediato (sem esperar 60s do cache)
     res.json({ ok: true, fator });
   } catch (err) {
     console.error('[deslocamentos/threshold PUT]', err.message);

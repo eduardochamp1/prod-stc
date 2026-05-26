@@ -114,6 +114,15 @@ async function getThreshold() {
   return fator;
 }
 
+/** Atualiza o cache na hora (chamado após PUT) pra refletir imediato. */
+function setThresholdCache(fator) {
+  const f = Number(fator);
+  if (f && isFinite(f) && f > 1) {
+    _thrCache.fator = f;
+    _thrCache.ts = Date.now();
+  }
+}
+
 async function listDeslocamentos(de, ate, opts = {}) {
   const pool = _getPool();
   const t0 = Date.now();
@@ -378,4 +387,5 @@ module.exports = {
   tendenciaDiaria,
   extrairDeslocamentos,
   getThreshold,
+  setThresholdCache,
 };
