@@ -27,13 +27,18 @@
  *   node scripts/backfill-rejections.js 2026-05-01 2026-05-25 # intervalo fechado
  *   node scripts/backfill-rejections.js --dry-run             # só lista, não grava
  *   node scripts/backfill-rejections.js --limit=50            # processa só 50 (teste)
+ *   node scripts/backfill-rejections.js --types=RL,DL,LE      # filtra por tipo
+ *   node scripts/backfill-rejections.js --retry-empty         # reprocessa SÓ notas
+ *                                                               com motivo_codes vazio
+ *                                                               (útil após fix de
+ *                                                               endpoint pra DL/LE/RL)
  */
 
 require('dotenv').config();
 const { getClient } = require('../services/supabaseClient');
 const { login: wpaLogin } = require('../services/wpaService');
 const { fetchRejectionDetails, getDiscoveredPaths } = require('../services/rejectionService');
-const { getKnownRejectedIds, upsertRejections } = require('../db/rejectionsQueries');
+const { getKnownRejectedIds, getEmptyRejectedIds, upsertRejections } = require('../db/rejectionsQueries');
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -44,6 +49,7 @@ const DRY_RUN = args.includes('--dry-run');
 const LIMIT   = parseInt((args.find(a => a.startsWith('--limit=')) || '').slice('--limit='.length), 10) || null;
 const ONLY_TYPES = (args.find(a => a.startsWith('--types=')) || '').slice('--types='.length)
   .split(',').map(t => t.trim().toUpperCase()).filter(Boolean);  // ex: --types=MD,LN,SF
+const RETRY_EMPTY = args.includes('--retry-empty');                // reprocessa notas com motivo_codes vazio
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,10 +199,18 @@ async function main() {
     process.exit(0);
   }
 
-  console.log('\n[4/5] Filtrando já gravados em note_rejections...');
-  const known = await getKnownRejectedIds();
-  const todo  = candidatos.filter(c => !known.has(c.note_id));
-  console.log(`      ${todo.length} a processar (${candidatos.length - todo.length} já cacheados)`);
+  let todo;
+  if (RETRY_EMPTY) {
+    console.log('\n[4/5] Modo --retry-empty: processando SÓ notas com motivo_codes vazio...');
+    const empty = await getEmptyRejectedIds();
+    todo = candidatos.filter(c => empty.has(c.note_id));
+    console.log(`      ${empty.size} notas vazias no banco → ${todo.length} cruzam com candidatos no período`);
+  } else {
+    console.log('\n[4/5] Filtrando já gravados em note_rejections...');
+    const known = await getKnownRejectedIds();
+    todo = candidatos.filter(c => !known.has(c.note_id));
+    console.log(`      ${todo.length} a processar (${candidatos.length - todo.length} já cacheados)`);
+  }
 
   if (LIMIT && todo.length > LIMIT) {
     console.log(`      ✂  --limit=${LIMIT}: cortando pra ${LIMIT}`);

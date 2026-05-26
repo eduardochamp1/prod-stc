@@ -36,6 +36,22 @@ async function getKnownRejectedIds() {
 }
 
 /**
+ * Set de UUIDs que estão em note_rejections mas SEM motivos (motivo_codes vazio).
+ * Usado pelo backfill com --retry-empty pra re-tentar notas que falharam na
+ * descoberta de endpoint anterior (ex: RL/DL/LE antes do fix dos fallbacks).
+ */
+async function getEmptyRejectedIds() {
+  const { _getPool } = require('../services/pgShim');
+  const pool = _getPool();
+  const { rows } = await pool.query(`
+    SELECT note_id
+    FROM note_rejections
+    WHERE coalesce(array_length(motivo_codes, 1), 0) = 0
+  `);
+  return new Set(rows.map(r => r.note_id));
+}
+
+/**
  * Lista rejeições de um período com filtros opcionais.
  * @param {string} de            'YYYY-MM-DD'
  * @param {string} ate           'YYYY-MM-DD'
@@ -230,6 +246,7 @@ async function upsertRejections(rows) {
 module.exports = {
   // Leitura
   getKnownRejectedIds,
+  getEmptyRejectedIds,
   listRejectionsByPeriod,
   // Agregações
   getTopMotivos,

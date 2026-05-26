@@ -69,17 +69,26 @@ const KNOWN_PATHS = {
 };
 
 // Pra tipos sem endpoint confirmado, varremos esses candidatos.
-// Padrões observados na API: tipo direto, tipo+rl, tipo+dl, alguns sinônimos.
+// DESCOBERTA via DevTools (25/05/2026): o endpoint NAO eh por tipo da nota,
+// eh por tipo do FORMULARIO. Uma nota RL com formulario "Vistoria de Entrada
+// e Servico" (SF) responde em /api/notes/sfrl. Por isso 'rl'/'rlrl'/etc
+// sempre deram 404 — esses paths nao existem.
+//
+// Estrategia: sempre tentar os endpoints conhecidos (sfrl, sfdl, lnrl, md)
+// pra qualquer tipo nao mapeado. O auto-discovery cacheia o que funcionar
+// pra cada combinacao (tipo,formulario) no escopo do processo.
+const FALLBACK_PATHS = ['sfrl', 'sfdl', 'lnrl', 'md'];
+
 const CANDIDATE_PATHS = {
-  DL: ['dl', 'dlrl', 'dldl', 'desligamento', 'corte'],
-  LE: ['le', 'lerl', 'ledl', 'leitura'],
-  RL: ['rl', 'rlrl', 'rldl', 'religacao', 'religa'],
-  II: ['ii', 'iirl', 'iidl', 'inspecao'],
-  PO: ['po', 'porl', 'podl', 'poda'],
-  UG: ['ug', 'ugrl', 'ugdl'],
-  RD: ['rd', 'rdrl', 'rddl', 'religamento'],
-  SO: ['so', 'sorl', 'sodl', 'servico'],
-  DD: ['dd', 'ddrl', 'dddl'],
+  DL: [...FALLBACK_PATHS, 'dl', 'dlrl', 'dldl', 'desligamento', 'corte'],
+  LE: [...FALLBACK_PATHS, 'le', 'lerl', 'ledl', 'leitura'],
+  RL: [...FALLBACK_PATHS, 'rl', 'rlrl', 'rldl', 'religacao', 'religa'],
+  II: [...FALLBACK_PATHS, 'ii', 'iirl', 'iidl', 'inspecao'],
+  PO: [...FALLBACK_PATHS, 'po', 'porl', 'podl', 'poda'],
+  UG: [...FALLBACK_PATHS, 'ug', 'ugrl', 'ugdl'],
+  RD: [...FALLBACK_PATHS, 'rd', 'rdrl', 'rddl', 'religamento'],
+  SO: [...FALLBACK_PATHS, 'so', 'sorl', 'sodl', 'servico'],
+  DD: [...FALLBACK_PATHS, 'dd', 'ddrl', 'dddl'],
 };
 
 // Cache de auto-descoberta — quando um tipo desconhecido revela o path certo,
