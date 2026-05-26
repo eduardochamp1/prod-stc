@@ -6718,12 +6718,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const inicio = t.sessionBeginReal || t.sessionBegin;
       if (!inicio) return 'sem dado';
       const fmtH = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-      const inicioFmt = sessaoAnterior(inicio) ? fmtInicio(inicio) : fmtH(inicio);
+      const ehAntiga = sessaoAnterior(inicio);
+      const inicioFmt = ehAntiga ? fmtInicio(inicio) : fmtH(inicio);
       const fimFmt = t.sessionEnd ? fmtH(t.sessionEnd) : 'em campo';
 
-      // Atraso vs escala: compara só HH:mm do logon contra escala_inicio (formato 'HH:mm:ss')
+      // Atraso vs escala: SO faz sentido quando o logon eh do dia ATUAL.
+      // Pra sessao antiga (esquecida aberta de dias passados), comparar
+      // HH:MM puro vs escala dah numero absurdo (ex: logon 20:02 vs escala
+      // 14:00 = '+362min' que nao significa nada). Nesse caso, mostramos
+      // so um marcador "sessao em aberto desde dia anterior".
       let atrasoTag = '';
-      if (t.escala_inicio && inicio) {
+      if (ehAntiga) {
+        atrasoTag = `<span style="color:#c49000;font-size:10px;font-weight:600" title="Sessão aberta desde dia anterior — provavelmente equipe esqueceu de deslogar">⏱ aberta</span>`;
+      } else if (t.escala_inicio && inicio) {
         const escalaMin = _toMin(t.escala_inicio);
         const logonMin  = new Date(inicio).getHours() * 60 + new Date(inicio).getMinutes();
         const diff = logonMin - escalaMin;
@@ -8314,7 +8321,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const badgeTxt = emCampo ? '● Em campo' : (pendente ? '⚠ Sessão pendente' : '○ Encerrada');
         // Borda laranja marca qualquer sessão anômala: dia anterior aberta OU pendente hoje
         const isStale = sessaoAberta && (sessaoAnterior(t.sessionBegin) || pendente);
-        const reloginCls = t.relogins === 0 ? 'relogin-0' : t.relogins === 1 ? 'relogin-1' : 'relogin-2';
+        // Resolve a contagem de re-logins de forma consistente com o badge "⚠ relogou":
+        // - Em snapshots persistidos, t.relogins quase sempre eh 0 (nao persistimos
+        //   essa info por equipe). Mas t.relogouNoDia eh detectado pos-fato comparando
+        //   o primeiro snap do dia com o atual.
+        // - Quando relogouNoDia=true e relogins=0 (caso comum no banco), usamos 1
+        //   como minimo pra nao mostrar "0 desconexoes" enquanto o badge diz "relogou".
+        const reloginsCount = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);
+        const reloginCls = reloginsCount === 0 ? 'relogin-0' : reloginsCount === 1 ? 'relogin-1' : 'relogin-2';
         const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
         // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo
         const subcatCont = {};
@@ -8359,7 +8373,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
             : ''}
               </span>
             </div>
-            <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${t.relogins} ${t.relogins === 1 ? 'desconexão' : 'desconexões'}</span></div>
+            <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
               <div class="os-cell"><div class="os-num">${t.carteiraCount || 0}</div><div class="os-lbl">Carteira</div></div>
               <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas || []).length}</div><div class="os-lbl">Andamento</div></div>
@@ -8385,15 +8399,71 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const logonReal = t.sessionBeginReal || t.sessionBegin;
       const dur = duracao(logonReal, t.sessionEnd);
       const colabs = t.collaborators || [];
-      const sessoes = t.sessions || [];
+
+      // Histórico de sessoes (logins/relogins do dia). Fontes possíveis:
+      //  - t.sessions []: vem completo quando dados sao em tempo real (wpaService)
+      //  - Pra snapshots persistidos, t.sessions costuma estar vazio. Nesse caso,
+      //    reconstroi a partir de sessionBeginReal (1a) + sessionBegin (atual) +
+      //    sessionEnd se tiver. Sao 1 ou 2 entradas conhecidas, mas eh o que da.
+      let sessoes = Array.isArray(t.sessions) ? t.sessions.slice() : [];
+      if (sessoes.length === 0) {
+        const sb1 = t.sessionBeginReal;
+        const sbA = t.sessionBegin;
+        const se  = t.sessionEnd;
+        if (t.relogouNoDia && sb1 && sbA && sb1 !== sbA) {
+          // 1a sessao fechou no relogin (nao sabemos o end exato); 2a eh a atual.
+          sessoes.push({ begin: sb1, end: null, _inferido: true });
+          sessoes.push({ begin: sbA, end: se || null });
+        } else if (sb1 || sbA) {
+          sessoes.push({ begin: sb1 || sbA, end: se || null });
+        }
+      }
+
+      // Renderiza timeline das sessoes. Mostra ordem cronologica, duracao,
+      // gap entre sessoes (se >0, eh tempo "desconectado").
       const sesoesHtml = sessoes.length > 0
-        ? sessoes.map((s, i) => `
-          <div class="sessao-item">
-            <div class="sessao-num">${i + 1}</div>
-            <span class="sessao-time">${s.inicio} → ${s.fim}</span>
-            ${s.motivo ? `<span class="sessao-motivo">${s.motivo}</span>` : ''}
-          </div>`).join('')
-        : '<span style="color:var(--text2);font-size:13px">Sem re-logins registrados.</span>';
+        ? (() => {
+            const items = sessoes.map((s, i) => {
+              const begin = s.begin || s.inicio;
+              const end   = s.end   || s.fim;
+              const isAtual = i === sessoes.length - 1 && !end;
+              const dur = end ? duracao(begin, end) : duracao(begin, new Date().toISOString());
+              const beginTxt = sessaoAnterior(begin) ? fmtInicio(begin) : fmt(begin);
+              const endTxt   = end ? (sessaoAnterior(end) ? fmtInicio(end) : fmt(end)) : '<span style="color:var(--verde);font-weight:600">em campo</span>';
+
+              // Gap pra sessao anterior
+              let gapHtml = '';
+              if (i > 0) {
+                const prev = sessoes[i-1];
+                const prevEnd = prev.end || prev.fim;
+                if (prevEnd) {
+                  const gapMs = new Date(begin) - new Date(prevEnd);
+                  if (gapMs > 0) {
+                    const gapMin = Math.round(gapMs / 60000);
+                    gapHtml = `<div style="margin:4px 0 4px 18px;font-size:11px;color:#c49000">↳ desconectado por ${gapMin} min</div>`;
+                  }
+                } else {
+                  gapHtml = `<div style="margin:4px 0 4px 18px;font-size:11px;color:var(--text2)">↳ horário exato do logoff anterior não registrado</div>`;
+                }
+              }
+
+              const badge = isAtual
+                ? '<span style="background:var(--verde);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px">ATUAL</span>'
+                : (i === 0 ? '<span style="background:#1565c0;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px">1º LOGON</span>' : '');
+
+              return `
+                ${gapHtml}
+                <div class="sessao-item" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--cinza1);border-radius:6px;border-left:3px solid ${isAtual ? 'var(--verde)' : (i === 0 ? '#1565c0' : '#c49000')}">
+                  <div class="sessao-num" style="background:${isAtual ? 'var(--verde)' : (i === 0 ? '#1565c0' : '#c49000')};color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;flex-shrink:0">${i + 1}</div>
+                  <div style="flex:1">
+                    <div style="font-size:13px;font-weight:500">${beginTxt} → ${endTxt}${badge}</div>
+                    <div style="font-size:11px;color:var(--text2);margin-top:2px">duração: ${dur}${s._inferido ? ' · <em>horário de fim não disponível (inferido pelo próximo logon)</em>' : ''}</div>
+                  </div>
+                </div>`;
+            }).join('');
+            return items;
+          })()
+        : '<span style="color:var(--text2);font-size:13px">Sem dados de logon registrados.</span>';
       const tiposPerfil = (t.servicosPerfil || []).map(code =>
         `<span style="background:var(--verde);color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;margin-right:4px">${code}</span>`
       ).join('') || '—';
@@ -8411,7 +8481,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
           <div class="info-item"><div class="lbl">Duração</div><div class="val">${dur}</div></div>
           <div class="info-item"><div class="lbl">Placa</div><div class="val"><span class="tag-placa">${t.vehiclePlate || '—'}</span></div></div>
           <div class="info-item"><div class="lbl">Check-in GPS</div><div class="val">${fmt(t.checkinTime)}</div></div>
-          <div class="info-item"><div class="lbl">Re-logins</div><div class="val">${t.relogins} desconexão(ões)${t.relogouNoDia ? ` <span style="color:#c49000;font-size:11px">⚠ sessão atual: ${fmt(t.sessionBegin)}</span>` : ''}</div></div>
+          <div class="info-item"><div class="lbl">Re-logins</div><div class="val">${(() => {
+            // Mesma logica usada no card: se relogouNoDia=true e contador zero, mostra 1
+            const cnt = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);
+            const txt = `${cnt} desconexão${cnt === 1 ? '' : 'ões'}`;
+            const tail = t.relogouNoDia ? ` <span style="color:#c49000;font-size:11px">⚠ sessão atual: ${fmt(t.sessionBegin)}</span>` : '';
+            return txt + tail;
+          })()}</div></div>
         </div>
       </div>
       <div class="modal-section">
