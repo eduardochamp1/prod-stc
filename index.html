@@ -5453,9 +5453,9 @@
           .rej-trend-svg .grid-line { stroke:rgba(255,255,255,.06); stroke-width:1; stroke-dasharray:2,3; }
           .rej-trend-svg .y-label { font-size:10px; fill:var(--text2); text-anchor:end; }
           .rej-trend-svg .ma-line { fill:none; stroke:#f39c12; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
-          .rej-trend-svg .ma-dot { fill:#f39c12; }
-          .rej-trend-svg .ma-label { font-size:9px; fill:#f39c12; font-weight:600; text-anchor:middle; pointer-events:none; }
-          .rej-trend-svg .ma-label-bg { fill:var(--cinza1); fill-opacity:.85; }
+          .rej-trend-svg .ma-dot { fill:#f39c12; stroke:var(--cinza1); stroke-width:1.5; }
+          .rej-trend-svg .ma-label { font-size:9px; fill:#f39c12; font-weight:700; text-anchor:middle; pointer-events:none; }
+          .rej-trend-svg .ma-label-bg { fill:#1a1d22; fill-opacity:.92; stroke:#f39c12; stroke-width:.5; stroke-opacity:.6; }
           .rej-trend-legend { display:flex; gap:14px; justify-content:flex-end; font-size:11px; opacity:.75; padding-top:6px; }
           .rej-trend-legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:middle; }
           .rej-pill { display:inline-block; padding:3px 9px; background:rgba(255,255,255,.06); border-radius:12px; font-size:12px; margin:2px; cursor:pointer; }
@@ -5995,27 +5995,34 @@
         ma.push({ i, avg });
       }
       const maPath = ma.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.i).toFixed(1)} ${y(p.avg).toFixed(1)}`).join(' ');
-      const maDots = (n <= 31)
-        ? ma.map(p => {
-            const cx = x(p.i);
-            const cy = y(p.avg);
-            const valStr = p.avg.toFixed(1);
-            // Posiciona o label acima OU abaixo do ponto, escolhendo o lado
-            // com menos chance de bater no label da barra (que fica acima).
-            // Como a linha da MA fica geralmente ABAIXO do topo das barras,
-            // o label acima do ponto bate na barra; preferimos abaixo.
-            const labelY = cy + 12;
-            // Aproximacao do bounding box do texto (9px font, ~6px por digito)
-            const approxW = valStr.length * 5.5 + 4;
-            return `
-              <circle class="ma-dot" cx="${cx}" cy="${cy}" r="2.5">
-                <title>Média móvel 7d: ${valStr}</title>
-              </circle>
-              <rect class="ma-label-bg" x="${cx - approxW/2}" y="${labelY - 8}" width="${approxW}" height="11" rx="2" />
-              <text class="ma-label" x="${cx}" y="${labelY}">${valStr}</text>
-            `;
-          }).join('')
-        : '';
+
+      // Renderiza ponto + label da MA. Regras pra reduzir poluicao visual:
+      //  - Em series densas (>21 dias), mostra label so a cada 2 pontos
+      //    (mantém o ponto sempre — é o que ancora a linha)
+      //  - Omite label se MA ≈ valor da barra (delta < 8% do max) — nesse
+      //    caso o numero seria redundante e ficaria colado no label da barra
+      //  - Posiciona o label SEMPRE abaixo do ponto, com offset generoso
+      //    (16px) e badge solido pra contrastar com barras/grid
+      const maDots = ma.map(p => {
+        const cx = x(p.i);
+        const cy = y(p.avg);
+        const valStr = p.avg.toFixed(1);
+        const dot = `<circle class="ma-dot" cx="${cx}" cy="${cy}" r="3"><title>${fmtDateBR(dias[p.i].date)} · MA 7d: ${valStr}</title></circle>`;
+
+        // Skip do label em casos de poluicao
+        const skipByDensity = n > 21 && (p.i % 2 !== 0) && p.i !== n - 1;
+        const barVal = dias[p.i].count;
+        const skipByCloseness = Math.abs(p.avg - barVal) < niceMax * 0.04;
+        if (skipByDensity || skipByCloseness) return dot;
+
+        const labelY = cy + 16;
+        const approxW = valStr.length * 5.5 + 6;
+        return `
+          ${dot}
+          <rect class="ma-label-bg" x="${cx - approxW/2}" y="${labelY - 9}" width="${approxW}" height="12" rx="3" />
+          <text class="ma-label" x="${cx}" y="${labelY}">${valStr}</text>
+        `;
+      }).join('');
 
       return `
         <div class="rej-trend-wrap">
