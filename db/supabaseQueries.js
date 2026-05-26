@@ -683,20 +683,24 @@ async function getDailySubcatTotals(de, ate, regional, team) {
   de  = de  || today;
   ate = ate || de;
 
-  // Lê do nível por-equipe (paginado) e filtra pela whitelist antes de agregar.
-  // Filtro opcional por equipe específica (param team) — útil pra UI de drill-down.
+  // Multi-select: team/regional aceitam CSV ("SIG1,SIG2"). Quando há vírgula,
+  // usa IN; senão eq (mantém compat com chamadas legadas que passam string).
+  const _csv = (v) => v && v !== 'ALL' && String(v).includes(',')
+    ? String(v).split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  const teamsArr     = _csv(team);
+  const regionaisArr = _csv(regional);
+
   const data = await _selectAll(() => {
     let query = sb
       .from('team_daily_subcat_totals')
       .select('team_name, regional, tipo, sub_code, count, quantidade')
       .gte('date', de)
       .lte('date', ate);
-    if (regional && regional !== 'ALL') {
-      query = query.eq('regional', regional);
-    }
-    if (team && team !== 'ALL') {
-      query = query.eq('team_name', team);
-    }
+    if (regionaisArr)                            query = query.in('regional', regionaisArr);
+    else if (regional && regional !== 'ALL')     query = query.eq('regional', regional);
+    if (teamsArr)                                query = query.in('team_name', teamsArr);
+    else if (team && team !== 'ALL')             query = query.eq('team_name', team);
     return query;
   });
 
@@ -1002,14 +1006,23 @@ async function getNotasIndividuais(de, ate, regional) {
  */
 async function getPerformanceEquipes(de, ate, regional, tipo, team) {
   const sb = getClient();
+  // Multi-select: team/regional aceitam CSV (igual getDailySubcatTotals)
+  const _csv = (v) => v && v !== 'ALL' && String(v).includes(',')
+    ? String(v).split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  const teamsArr     = _csv(team);
+  const regionaisArr = _csv(regional);
+
   const data = await _selectAll(() => {
     let query = sb
       .from('team_daily_totals')
       .select('team_name, regional, sector_id, tipo_code, count, date');
     if (de)                                     query = query.gte('date', de);
     if (ate)                                    query = query.lte('date', ate);
-    if (regional && regional !== 'ALL')         query = query.eq('regional', regional);
-    if (team && team !== 'ALL')                 query = query.eq('team_name', team);
+    if (regionaisArr)                           query = query.in('regional', regionaisArr);
+    else if (regional && regional !== 'ALL')    query = query.eq('regional', regional);
+    if (teamsArr)                               query = query.in('team_name', teamsArr);
+    else if (team && team !== 'ALL')            query = query.eq('team_name', team);
     return query;
   });
 
@@ -1235,7 +1248,7 @@ function _aplicarExclusaoMotivos(rows) {
  * @param {string[]} [opts.tipos]     ['MD','SF',...]
  * @param {boolean} [opts.somenteComMotivo]  só linhas com reason_codes não vazio
  */
-async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotivo } = {}) {
+async function _fetchRejeicoes({ de, ate, regional, regionais, team, teams, tipos, somenteComMotivo } = {}) {
   const sb = getClient();
   const today = dateBRT();
   de  = de  || today;
@@ -1246,9 +1259,13 @@ async function _fetchRejeicoes({ de, ate, regional, team, tipos, somenteComMotiv
       .select('note_id, numero, tipo, team_name, regional, sector_id, session_date, motivo_codes, motivo_textos, rejection_date, observacao, formulario, collaborator_codes, collaborator_names')
       .gte('session_date', de)
       .lte('session_date', ate);
-    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
-    if (team && team !== 'ALL') q = q.eq('team_name', team);
-    if (Array.isArray(tipos) && tipos.length > 0) q = q.in('tipo', tipos);
+    // Aceita tanto valor único (regional/team) quanto array (regionais/teams).
+    // Quando array com 1 só, vira eq; com 2+, vira in.
+    if (Array.isArray(regionais) && regionais.length > 0)      q = q.in('regional', regionais);
+    else if (regional && regional !== 'ALL')                    q = q.eq('regional', regional);
+    if (Array.isArray(teams) && teams.length > 0)               q = q.in('team_name', teams);
+    else if (team && team !== 'ALL')                            q = q.eq('team_name', team);
+    if (Array.isArray(tipos) && tipos.length > 0)               q = q.in('tipo', tipos);
     return q;
   });
 
@@ -1296,7 +1313,11 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
   de  = de  || today;
   ate = ate || de;
 
-  let rows = await _fetchRejeicoes({ de, ate, regional, team: opts.team, tipos: opts.tipos });
+  let rows = await _fetchRejeicoes({
+    de, ate, regional, regionais: opts.regionais,
+    team: opts.team, teams: opts.teams,
+    tipos: opts.tipos,
+  });
 
   // Filtro por código de motivo (mesma logica da getRejeicoesLista — pos-fetch
   // porque motivo_codes eh TEXT[]). Quando ativo, KPIs/paineis refletem so as
@@ -1417,8 +1438,8 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
  */
 async function getRejeicoesLista(de, ate, regional, opts = {}) {
   const rows = await _fetchRejeicoes({
-    de, ate, regional,
-    team: opts.team,
+    de, ate, regional, regionais: opts.regionais,
+    team: opts.team, teams: opts.teams,
     tipos: opts.tipos,
     somenteComMotivo: opts.somenteComMotivo,
   });
@@ -1451,8 +1472,8 @@ async function getRejeicoesLista(de, ate, regional, opts = {}) {
 /**
  * Catálogo distinto de motivos vistos no período (pra alimentar dropdown de filtro).
  */
-async function getRejeicoesMotivos(de, ate, regional) {
-  const rows = await _fetchRejeicoes({ de, ate, regional });
+async function getRejeicoesMotivos(de, ate, regional, opts = {}) {
+  const rows = await _fetchRejeicoes({ de, ate, regional, regionais: opts.regionais });
   const map = new Map();
   for (const r of rows) {
     const codes  = Array.isArray(r.motivo_codes)  ? r.motivo_codes  : [];

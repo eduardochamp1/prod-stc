@@ -2126,14 +2126,22 @@ router.post('/admin/revalidate-dd', async (req, res) => {
 
 // ── REJEIÇÕES ────────────────────────────────────────────────────────────────
 
-/** Parse comum dos filtros usados nas três rotas de rejeições. */
+/** Parse comum dos filtros usados nas três rotas de rejeições.
+ *  Suporta multi-select: `team`, `regional`, `tipos`, `motivos` aceitam CSV.
+ *  Mantém `team` (string) e `regional` (string) como aliases retrocompatíveis
+ *  quando há 1 só valor — quem consome decide se usa .team ou .teams. */
 function _parseRejeicoesFilters(req, res) {
   const de  = req.query.de;
   const ate = req.query.ate;
   if (de && !_RE_YYYYMMDD.test(de))  { res.status(400).json({ error: 'Parâmetro de inválido (YYYY-MM-DD)' });  return null; }
   if (ate && !_RE_YYYYMMDD.test(ate)){ res.status(400).json({ error: 'Parâmetro ate inválido (YYYY-MM-DD)' }); return null; }
-  const regional = req.query.regional && req.query.regional !== 'ALL' ? String(req.query.regional).toUpperCase() : null;
-  const team     = req.query.team     && req.query.team     !== 'ALL' ? String(req.query.team) : null;
+
+  const _csv = (v) => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null;
+  const regionaisArr = _csv(req.query.regional);
+  const regionais = regionaisArr && !regionaisArr.includes('ALL')
+    ? regionaisArr.map(s => s.toUpperCase()) : null;
+  const teamsArr = _csv(req.query.team);
+  const teams = teamsArr && !teamsArr.includes('ALL') ? teamsArr : null;
   const tipos    = req.query.tipos
     ? String(req.query.tipos).split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
     : null;
@@ -2141,7 +2149,15 @@ function _parseRejeicoesFilters(req, res) {
     ? String(req.query.motivos).split(',').map(s => s.trim()).filter(Boolean)
     : null;
   const somenteComMotivo = req.query.somenteComMotivo === 'true' || req.query.somenteComMotivo === '1';
-  return { de: de || dateBRT(), ate: ate || de || dateBRT(), regional, team, tipos, motivos, somenteComMotivo };
+  return {
+    de: de || dateBRT(),
+    ate: ate || de || dateBRT(),
+    regional: regionais && regionais.length === 1 ? regionais[0] : null,
+    regionais,
+    team:     teams && teams.length === 1 ? teams[0] : null,
+    teams,
+    tipos, motivos, somenteComMotivo,
+  };
 }
 
 // GET /api/rejeicoes/totais?de=&ate=&regional=&team=&tipos=MD,SF
@@ -2151,7 +2167,7 @@ router.get('/rejeicoes/totais', async (req, res) => {
     if (!sq) return res.json({ total: 0, comMotivo: 0, semMotivo: 0, porRegional: {GUA:0,CAC:0}, porTipo: {}, porMotivo: [], porEquipe: [], porDia: [], executadasNoPeriodo: 0, percentualGeral: null });
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, tipos: f.tipos, motivos: f.motivos });
+    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, teams: f.teams, regionais: f.regionais, tipos: f.tipos, motivos: f.motivos });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/totais]', err.message);
@@ -2167,7 +2183,8 @@ router.get('/rejeicoes/lista', async (req, res) => {
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
     const result = await sq.getRejeicoesLista(f.de, f.ate, f.regional, {
-      team: f.team, tipos: f.tipos, motivos: f.motivos, somenteComMotivo: f.somenteComMotivo,
+      team: f.team, teams: f.teams, regionais: f.regionais,
+      tipos: f.tipos, motivos: f.motivos, somenteComMotivo: f.somenteComMotivo,
       limit: req.query.limit, offset: req.query.offset,
     });
     res.json(result);
@@ -2185,7 +2202,7 @@ router.get('/rejeicoes/motivos', async (req, res) => {
     if (!sq) return res.json([]);
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesMotivos(f.de, f.ate, f.regional);
+    const result = await sq.getRejeicoesMotivos(f.de, f.ate, f.regional, { regionais: f.regionais });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/motivos]', err.message);
@@ -2201,10 +2218,20 @@ const _deslocQ = require('../db/deslocamentosQueries');
 function _parseDeslocFilters(req) {
   const de  = req.query.de  || dateBRT();
   const ate = req.query.ate || de;
+  const _csv = (v) => v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null;
+  // Multi-select compat: aceita "team=SIG1,SIG2" e "regional=GUA,CAC"
+  const teamsArr     = _csv(req.query.team);
+  const teams        = teamsArr && !teamsArr.includes('ALL') ? teamsArr : null;
+  const regionaisArr = _csv(req.query.regional);
+  const regionais    = regionaisArr && !regionaisArr.includes('ALL')
+    ? regionaisArr.map(s => s.toUpperCase()) : null;
   return {
     de, ate,
-    regional:  req.query.regional || 'ALL',
-    team_name: req.query.team || null,
+    // Compat: regional singular se 1 só item; senão null. team_name idem.
+    regional:  regionais && regionais.length === 1 ? regionais[0] : 'ALL',
+    regionais,
+    team_name: teams && teams.length === 1 ? teams[0] : null,
+    teams,
     tipo:      req.query.tipo || null,
     limit:     req.query.limit,
     // Quando true, retorna so deslocamentos com status='lento' (>1.5x tempo Maps).

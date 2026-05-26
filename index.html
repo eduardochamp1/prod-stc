@@ -3117,6 +3117,92 @@
       font-weight: 700;
     }
 
+    /* ── MULTI-SELECT (dropdown com checkboxes) ─────────────────────────── */
+    .ms-wrap {
+      position: relative;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .ms-wrap.disabled .ms-btn {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .ms-btn {
+      background: var(--amarelo-grad);
+      border: none;
+      border-radius: 7px;
+      color: var(--preto);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 7px 32px 7px 12px;
+      cursor: pointer;
+      font-family: 'Roboto', sans-serif;
+      text-align: left;
+      width: 100%;
+      min-width: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      transition: filter 0.15s;
+    }
+    .ms-btn:hover:not(:disabled) { filter: brightness(1.05); }
+    .ms-btn .ms-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .ms-btn .ms-caret {
+      font-size: 10px;
+      opacity: 0.75;
+      transition: transform 0.15s;
+    }
+    .ms-wrap.open .ms-btn .ms-caret { transform: rotate(180deg); }
+    .ms-panel {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 100%;
+      max-width: 320px;
+      background: var(--cinza1, #1a1a1a);
+      border: 1px solid var(--cinza2, rgba(255,255,255,0.1));
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      overflow-y: auto;
+      z-index: 1000;
+      display: none;
+      padding: 4px 0;
+    }
+    .ms-wrap.open .ms-panel { display: block; }
+    .ms-item {
+      padding: 0;
+    }
+    .ms-item label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text1, #fff);
+      font-weight: 500;
+      user-select: none;
+      transition: background 0.1s;
+    }
+    .ms-item label:hover { background: rgba(255, 196, 14, 0.08); }
+    .ms-item input[type="checkbox"] {
+      accent-color: #FEC40E;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .ms-item-all label { font-weight: 700; }
+    .ms-divider {
+      height: 1px;
+      background: var(--cinza2, rgba(255,255,255,0.08));
+      margin: 4px 0;
+    }
+
     .btn-refresh {
       background: var(--amarelo-grad);
       border-radius: 10px;
@@ -5179,13 +5265,28 @@
       showOrHide('btn-header-metas', isAdmin);
       showOrHide('btn-header-admin', isAdmin);
 
-      // Restringe regional no seletor para usuários não-admin
+      // Restringe regional no seletor para usuários não-admin.
+      // Inclui IDs que viraram multi-select (rej/desloc): aplica via
+      // MultiSelect.setValues+setDisabled quando o componente já estiver
+      // inicializado; senão setamos o <select> original e o init pega
+      // depois pelo `applyUserPermissions` chamado no boot/init de aba.
       if (sess.regional && sess.regional !== 'ALL') {
-        ['regional-select', 'ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
+        const ids = [
+          'regional-select', 'ranking-regional-select', 'hist-regional-select',
+          'graf-regional-select', 'rej-regional-select', 'desloc-regional-select',
+        ];
+        ids.forEach(id => {
           const el = document.getElementById(id);
           if (!el) return;
           el.value = sess.regional;
           el.disabled = true;
+          // Se o multi-select já foi inicializado pra esse id, aplica via API
+          if (window.MultiSelect && MultiSelect.getValues) {
+            try {
+              MultiSelect.setValues(id, [sess.regional]);
+              MultiSelect.setDisabled(id, true);
+            } catch (_) { /* não inicializado ainda — ok */ }
+          }
         });
         currentRegional = sess.regional;
       }
@@ -5198,6 +5299,263 @@
       init();
     }
     // ── /AUTH ─────────────────────────────────────────────────────────────────
+
+    // ── MULTI-SELECT (vanilla, sem dependências) ──────────────────────────────
+    // Transforma um <select> simples em dropdown com checkboxes.
+    // O <select> original fica escondido (mas presente no DOM) — seu .value é
+    // sincronizado pra "ALL" ou CSV ("SIG1,SIG2,SIG3"). Quem ler .value direto
+    // continua funcionando (backwards-compat com código legado).
+    //
+    // API:
+    //   MultiSelect.init(selectId, { onChange, allLabel, scrollMaxH })
+    //   MultiSelect.getValues(selectId) → ['ALL'] | ['SIG1','SIG2']
+    //   MultiSelect.setAll(selectId)            — marca todos
+    //   MultiSelect.refresh(selectId)           — re-ler <option>s do <select>
+    //   MultiSelect.setDisabled(selectId, bool) — trava (pra restringir regional)
+    //
+    // Regra: 0 selecionados OU todos selecionados → trata como "Todas" (.value='ALL').
+    // Qualquer subconjunto → .value = CSV.
+    const MultiSelect = (function () {
+      const _instances = {};
+
+      function _isAllSelected(inst) {
+        const items = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        return items.length > 0 && items.every(o => inst.selected.has(o.value));
+      }
+
+      function _syncSelectValue(inst) {
+        const realOpts = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        const sel = realOpts.filter(o => inst.selected.has(o.value));
+        if (sel.length === 0 || sel.length === realOpts.length) {
+          inst.sel.value = 'ALL';
+        } else {
+          // Se "ALL" não é uma option, tenta usar o primeiro option como fallback,
+          // mas como armazenamos CSV no atributo data-multi, o .value não importa.
+          inst.sel.setAttribute('data-multi', sel.map(o => o.value).join(','));
+          inst.sel.value = sel.length === 1 ? sel[0].value : 'ALL';
+        }
+      }
+
+      function _renderLabel(inst) {
+        const realOpts = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        const sel = realOpts.filter(o => inst.selected.has(o.value));
+        let txt;
+        if (sel.length === 0 || sel.length === realOpts.length) {
+          txt = inst.allLabel;
+        } else if (sel.length === 1) {
+          txt = sel[0].label;
+        } else if (sel.length === 2) {
+          txt = sel.map(o => o.label).join(', ');
+        } else {
+          txt = `${sel.length} selecionados`;
+        }
+        inst.labelEl.textContent = txt;
+      }
+
+      function _renderItems(inst) {
+        const realOpts = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        const allChecked = _isAllSelected(inst);
+        let html = `
+          <div class="ms-item ms-item-all">
+            <label>
+              <input type="checkbox" class="ms-cb-all" ${allChecked ? 'checked' : ''}/>
+              <span><strong>${inst.allLabel}</strong></span>
+            </label>
+          </div>
+          <div class="ms-divider"></div>
+        `;
+        for (const o of realOpts) {
+          const checked = inst.selected.has(o.value);
+          // Suporta grupo (optgroup) — se o option pai tem data-group, agrupa
+          html += `
+            <div class="ms-item">
+              <label>
+                <input type="checkbox" class="ms-cb" data-val="${escapeHtml(o.value)}" ${checked ? 'checked' : ''}/>
+                <span>${escapeHtml(o.label)}</span>
+              </label>
+            </div>
+          `;
+        }
+        inst.listEl.innerHTML = html;
+
+        inst.listEl.querySelector('.ms-cb-all').onchange = (e) => {
+          if (e.target.checked) {
+            inst.selected = new Set(realOpts.map(o => o.value));
+          } else {
+            inst.selected = new Set();
+          }
+          _renderItems(inst);
+          _renderLabel(inst);
+          _syncSelectValue(inst);
+          _fire(inst);
+        };
+        inst.listEl.querySelectorAll('.ms-cb').forEach(cb => {
+          cb.onchange = (e) => {
+            const v = cb.getAttribute('data-val');
+            if (e.target.checked) inst.selected.add(v); else inst.selected.delete(v);
+            // 0 selecionados → volta auto pra Todas (UX decidida)
+            if (inst.selected.size === 0) {
+              inst.selected = new Set(realOpts.map(o => o.value));
+            }
+            _renderItems(inst);
+            _renderLabel(inst);
+            _syncSelectValue(inst);
+            _fire(inst);
+          };
+        });
+      }
+
+      function _fire(inst) {
+        if (inst.onChange) {
+          try { inst.onChange(); } catch (e) { console.warn('[MultiSelect] onChange:', e); }
+        }
+      }
+
+      function _bindOutsideClick(inst) {
+        const handler = (e) => {
+          if (!inst.wrap.contains(e.target)) inst.wrap.classList.remove('open');
+        };
+        document.addEventListener('click', handler);
+        inst._outsideHandler = handler;
+      }
+
+      function init(selectId, opts = {}) {
+        const sel = document.getElementById(selectId);
+        if (!sel) { console.warn('[MultiSelect] select não encontrado:', selectId); return; }
+        if (_instances[selectId]) { refresh(selectId); return; }
+
+        const allLabel = opts.allLabel || sel.querySelector('option[value="ALL"]')?.textContent?.trim()
+                       || sel.querySelector('option[value="TODAS"]')?.textContent?.trim()
+                       || 'Todas';
+
+        // Coleta options. Considera todos como "selecionados" no estado inicial
+        // (= equivalente a "ALL" no select original).
+        const items = Array.from(sel.options).map(o => ({
+          value: o.value, label: o.textContent.trim()
+        }));
+
+        const inst = {
+          sel, allLabel, items,
+          selected: new Set(items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS').map(o => o.value)),
+          onChange: opts.onChange || null,
+          scrollMaxH: opts.scrollMaxH || 280,
+        };
+
+        // Esconde o original (mantém pra compat)
+        sel.style.display = 'none';
+
+        // Cria UI
+        const wrap = document.createElement('div');
+        wrap.className = 'ms-wrap';
+        wrap.style.minWidth = sel.style.minWidth || '120px';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ms-btn filter-select';
+        btn.innerHTML = '<span class="ms-label"></span><span class="ms-caret">▾</span>';
+        const panel = document.createElement('div');
+        panel.className = 'ms-panel';
+        panel.style.maxHeight = inst.scrollMaxH + 'px';
+        wrap.appendChild(btn);
+        wrap.appendChild(panel);
+        sel.parentNode.insertBefore(wrap, sel.nextSibling);
+
+        inst.wrap = wrap;
+        inst.labelEl = btn.querySelector('.ms-label');
+        inst.listEl = panel;
+        inst.btn = btn;
+
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          // Fecha outros abertos
+          Object.values(_instances).forEach(i => { if (i !== inst) i.wrap.classList.remove('open'); });
+          wrap.classList.toggle('open');
+        };
+
+        _bindOutsideClick(inst);
+        _instances[selectId] = inst;
+        _renderItems(inst);
+        _renderLabel(inst);
+        _syncSelectValue(inst);
+      }
+
+      function refresh(selectId) {
+        const inst = _instances[selectId];
+        if (!inst) return;
+        // Re-coleta options do select original (que foi populado dinamicamente)
+        const newItems = Array.from(inst.sel.options).map(o => ({
+          value: o.value, label: o.textContent.trim()
+        }));
+        inst.items = newItems;
+        // Preserva seleção válida + adiciona novos como "selecionados" se estavam todos antes
+        const realNew = newItems.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        const prevValid = new Set(Array.from(inst.selected).filter(v => realNew.some(o => o.value === v)));
+        // Se previamente "todas estavam selecionadas" e agora novos vieram, mantém "todas"
+        const wasAll = prevValid.size === 0 || prevValid.size === inst.selected.size;
+        if (wasAll) {
+          inst.selected = new Set(realNew.map(o => o.value));
+        } else {
+          inst.selected = prevValid;
+        }
+        _renderItems(inst);
+        _renderLabel(inst);
+        _syncSelectValue(inst);
+      }
+
+      function getValues(selectId) {
+        const inst = _instances[selectId];
+        if (!inst) {
+          // Fallback: lê o select normal
+          const sel = document.getElementById(selectId);
+          if (!sel) return [];
+          return sel.value && sel.value !== 'ALL' && sel.value !== 'TODAS' ? [sel.value] : [];
+        }
+        if (_isAllSelected(inst)) return [];        // [] = "todas"
+        return Array.from(inst.selected);
+      }
+
+      function setAll(selectId) {
+        const inst = _instances[selectId];
+        if (!inst) return;
+        const realOpts = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        inst.selected = new Set(realOpts.map(o => o.value));
+        _renderItems(inst);
+        _renderLabel(inst);
+        _syncSelectValue(inst);
+      }
+
+      function setValues(selectId, values) {
+        const inst = _instances[selectId];
+        if (!inst) return;
+        const realOpts = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
+        if (!values || values.length === 0 || values.includes('ALL') || values.includes('TODAS')) {
+          inst.selected = new Set(realOpts.map(o => o.value));
+        } else {
+          inst.selected = new Set(values.filter(v => realOpts.some(o => o.value === v)));
+          if (inst.selected.size === 0) inst.selected = new Set(realOpts.map(o => o.value));
+        }
+        _renderItems(inst);
+        _renderLabel(inst);
+        _syncSelectValue(inst);
+      }
+
+      function setDisabled(selectId, disabled) {
+        const inst = _instances[selectId];
+        if (!inst) return;
+        inst.btn.disabled = !!disabled;
+        inst.wrap.classList.toggle('disabled', !!disabled);
+        if (disabled) inst.wrap.classList.remove('open');
+      }
+
+      // Helper local de escape (evita depender do escapeHtml global que pode
+      // não estar definido neste ponto do parse).
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({
+          '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        }[c]));
+      }
+
+      return { init, refresh, getValues, setAll, setValues, setDisabled };
+    })();
 
     const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
       ? `http://${window.location.hostname}:3002/api`
@@ -5295,6 +5653,7 @@
 
     let _rejInitDone = false;
     let _rejEquipesPopuladas = false;
+    let _rejMultiInited = false;
     let _rejFullList = null;          // último resultado /lista (pra paginação cliente)
     let _rejTotaisCache = null;
     let _rejShowOnlyComMotivo = false;
@@ -5327,6 +5686,24 @@
           }
         } catch (e) {}
       }
+      // Multi-select nos filtros (lazy init — só uma vez)
+      if (!_rejMultiInited) {
+        MultiSelect.init('rej-regional-select', { onChange: () => loadRejeicoes() });
+        MultiSelect.init('rej-equipe-select',   { onChange: () => loadRejeicoes() });
+        MultiSelect.init('rej-tipo-select',     { onChange: () => loadRejeicoes() });
+        // Motivos populam dinamicamente em loadRejMotivosSelect — refresh é chamado lá
+        MultiSelect.init('rej-motivo-select',   { onChange: () => loadRejeicoes(), scrollMaxH: 360 });
+        // Respeita permissão de regional (não-admin não muda)
+        const sess = getStoredSession();
+        if (sess && sess.regional && sess.regional !== 'ALL') {
+          MultiSelect.setValues('rej-regional-select', [sess.regional]);
+          MultiSelect.setDisabled('rej-regional-select', true);
+        }
+        _rejMultiInited = true;
+      } else {
+        // Equipes podem ter sido repopuladas — refresh
+        MultiSelect.refresh('rej-equipe-select');
+      }
       if (!_rejInitDone) {
         _rejInitDone = true;
         await loadRejeicoes();
@@ -5357,16 +5734,20 @@
 
     function rejFiltersQuery() {
       const { de, ate } = rejRange();
-      const regional = document.getElementById('rej-regional-select').value;
-      const team     = document.getElementById('rej-equipe-select').value;
-      const tipo     = document.getElementById('rej-tipo-select').value;
-      const motivoSel = document.getElementById('rej-motivo-select');
-      const motivo   = motivoSel ? motivoSel.value : 'ALL';
+      // Multi-select: getValues() retorna [] = "Todas", senão array de valores.
+      const regionais = MultiSelect.getValues('rej-regional-select');
+      const teams     = MultiSelect.getValues('rej-equipe-select');
+      const tipos     = MultiSelect.getValues('rej-tipo-select');
+      const motivos   = MultiSelect.getValues('rej-motivo-select');
       const qp = new URLSearchParams({ de, ate });
-      if (regional && regional !== 'ALL') qp.set('regional', regional);
-      if (team && team !== 'ALL') qp.set('team', team);
-      if (tipo && tipo !== 'ALL') qp.set('tipos', tipo);
-      if (motivo && motivo !== 'ALL') qp.set('motivos', motivo);
+      // Regional: backend hoje aceita 1 só. Se mais de 1 marcada, manda
+      // sem filtro (= todas) — o filtro fica no client se necessário.
+      // Mantém comportamento "ALL" quando vazio.
+      if (regionais.length === 1) qp.set('regional', regionais[0]);
+      else if (regionais.length > 1) qp.set('regional', regionais.join(','));
+      if (teams.length > 0)   qp.set('team',   teams.join(','));
+      if (tipos.length > 0)   qp.set('tipos',  tipos.join(','));
+      if (motivos.length > 0) qp.set('motivos', motivos.join(','));
       return qp.toString();
     }
 
@@ -5376,23 +5757,25 @@
     async function reloadRejMotivosCatalog() {
       const sel = document.getElementById('rej-motivo-select');
       if (!sel) return;
-      const prev = sel.value;
+      // Preserva seleção atual via MultiSelect (se inicializado), senão pelo .value
+      const prevSel = MultiSelect.getValues ? MultiSelect.getValues('rej-motivo-select') : [];
       try {
         const { de, ate } = rejRange();
-        const regional = document.getElementById('rej-regional-select').value;
+        const regionais = MultiSelect.getValues('rej-regional-select');
         const qp = new URLSearchParams({ de, ate });
-        if (regional && regional !== 'ALL') qp.set('regional', regional);
+        if (regionais.length === 1)      qp.set('regional', regionais[0]);
+        else if (regionais.length > 1)   qp.set('regional', regionais.join(','));
         const motivos = await fetch(`${API}/rejeicoes/motivos?${qp.toString()}`).then(r => r.json());
-        // Ordena por código ASC pra navegação previsível
         motivos.sort((a, b) => String(a.code).localeCompare(String(b.code)));
         const opts = ['<option value="ALL">Todos os motivos</option>']
           .concat(motivos.map(m =>
             `<option value="${escapeHtml(m.code)}">${escapeHtml(m.code)} — ${escapeHtml(m.label || m.texto || '')}</option>`
           ));
         sel.innerHTML = opts.join('');
-        // Restaura valor anterior se ainda for válido
-        const ok = Array.from(sel.options).some(o => o.value === prev);
-        sel.value = ok ? prev : 'ALL';
+        // Atualiza o dropdown multi-select com as novas opções
+        MultiSelect.refresh('rej-motivo-select');
+        // Restaura seleção anterior (somente as ainda válidas)
+        if (prevSel.length > 0) MultiSelect.setValues('rej-motivo-select', prevSel);
       } catch (err) {
         console.warn('[rejMotivos] falha ao popular catálogo:', err);
       }
@@ -5726,6 +6109,7 @@
     // Compara tempo real de deslocamento (event=0 → event=1 nos checkpoints)
     // com estimativa OSRM. Threshold 1.5x = vermelho.
     let _deslocEquipesPopuladas = false;
+    let _deslocMultiInited = false;
     let _deslocCache = null;
     let _deslocLeafletMap = null;
     let _deslocRouteLayers = [];
@@ -5761,18 +6145,32 @@
         } catch {}
         _deslocEquipesPopuladas = true;
       }
+      // Multi-select (lazy)
+      if (!_deslocMultiInited) {
+        MultiSelect.init('desloc-regional-select', { onChange: () => loadDeslocamentos() });
+        MultiSelect.init('desloc-equipe-select',   { onChange: () => loadDeslocamentos() });
+        const sess = getStoredSession();
+        if (sess && sess.regional && sess.regional !== 'ALL') {
+          MultiSelect.setValues('desloc-regional-select', [sess.regional]);
+          MultiSelect.setDisabled('desloc-regional-select', true);
+        }
+        _deslocMultiInited = true;
+      } else {
+        MultiSelect.refresh('desloc-equipe-select');
+      }
       loadDeslocamentos();
     }
 
     function deslocFiltersQuery() {
       const de  = document.getElementById('desloc-de-input').value;
       const ate = document.getElementById('desloc-ate-input').value;
-      const reg = document.getElementById('desloc-regional-select').value;
-      const eq  = document.getElementById('desloc-equipe-select').value;
+      const regionais = MultiSelect.getValues('desloc-regional-select');
+      const teams     = MultiSelect.getValues('desloc-equipe-select');
       const somenteLentos = document.getElementById('desloc-somente-lentos')?.checked || false;
       const qs  = new URLSearchParams({ de, ate });
-      if (reg && reg !== 'ALL') qs.set('regional', reg);
-      if (eq) qs.set('team', eq);
+      if (regionais.length === 1)    qs.set('regional', regionais[0]);
+      else if (regionais.length > 1) qs.set('regional', regionais.join(','));
+      if (teams.length > 0)          qs.set('team', teams.join(','));
       // Limite alto (5000 = max do backend). Antes era 300 como anti-quota
       // do OSRM publico (1 req/s); agora com HERE + cache local cobrindo
       // quase tudo, faz sentido carregar tudo. Periodos de mais de 1 mes com
@@ -6350,6 +6748,23 @@
       } catch (err) {
         console.warn('Falha ao popular dropdown de equipes:', err.message);
       }
+      // Após popular o <select> original, inicializa/refresca o multi-select
+      _grafEnsureMultiSelect();
+      MultiSelect.refresh('graf-equipe-select');
+    }
+
+    let _grafMultiInited = false;
+    function _grafEnsureMultiSelect() {
+      if (_grafMultiInited) return;
+      MultiSelect.init('graf-regional-select', { onChange: () => loadGraficos() });
+      MultiSelect.init('graf-tipo-select',     { onChange: () => loadGraficos() });
+      MultiSelect.init('graf-equipe-select',   { onChange: () => loadGraficos() });
+      const sess = getStoredSession();
+      if (sess && sess.regional && sess.regional !== 'ALL') {
+        MultiSelect.setValues('graf-regional-select', [sess.regional]);
+        MultiSelect.setDisabled('graf-regional-select', true);
+      }
+      _grafMultiInited = true;
     }
 
     // ── Filtros multi-select da aba Gráficos ─────────────────────────────────
@@ -6520,10 +6935,19 @@
     async function loadGraficos() {
       initGraficos();
       await _popularDropdownEquipes();
+      _grafEnsureMultiSelect();
       const { de, ate } = grafRange();
-      const regional = document.getElementById('graf-regional-select')?.value || 'ALL';
-      const tipo     = document.getElementById('graf-tipo-select')?.value    || 'TODAS';
-      const team     = document.getElementById('graf-equipe-select')?.value  || 'ALL';
+      // Multi-select: arrays vazios = "todas". Quando ≥2 itens, Gráficos
+      // hoje só consome o 1º item (limitação do backend compartilhado com
+      // outras telas). UX consistente, comportamento pragmático.
+      const regionais = MultiSelect.getValues('graf-regional-select');
+      const tipos     = MultiSelect.getValues('graf-tipo-select');
+      const teams     = MultiSelect.getValues('graf-equipe-select');
+      // Regional/team: backend aceita CSV via IN. Tipo equipe (COMERCIAL/PLANTAO/TODAS)
+      // não tem semântica multi — quando ≥2, considera TODAS (igual desmarcar tudo).
+      const regional = regionais.length === 0 ? 'ALL'   : regionais.join(',');
+      const tipo     = tipos.length !== 1     ? 'TODAS' : tipos[0];
+      const team     = teams.length === 0     ? 'ALL'   : teams.join(',');
 
       const lbl = document.getElementById('graf-periodo-label');
       if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
@@ -6532,7 +6956,9 @@
       cont.innerHTML = `<div class="empty-state"><div class="spinner"></div><br>Carregando gráficos…</div>`;
 
       try {
-        const teamQs = team && team !== 'ALL' ? `&team=${encodeURIComponent(team)}` : '';
+        // team já vem como CSV ou 'ALL' acima; backend dos Gráficos aceita
+        // CSV via IN clause (getDailySubcatTotals / getPerformanceEquipes).
+        const teamQs = team !== 'ALL' ? `&team=${encodeURIComponent(team)}` : '';
 
         // Sub CS (BTZ013) tem ciclo de competência próprio (16 mês anterior a 15 mês atual).
         // Fetch separado com range específico — outros gauges seguem range global.

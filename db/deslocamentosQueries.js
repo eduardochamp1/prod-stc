@@ -131,13 +131,20 @@ async function listDeslocamentos(de, ate, opts = {}) {
 
   // Passo 2: mapa note_id → equipe. Lê snapshots no período (filtros aplicados).
   // Como pode ter 60k+ snapshots, restringimos por período pra evitar full scan.
+  // Multi-select: aceita opts.teams[] / opts.regionais[] (com fallback singular).
   const params2 = [de, ate];
   let snapWhere = `s.date >= $1 AND s.date <= $2`;
-  if (opts.regional && opts.regional !== 'ALL') {
+  if (Array.isArray(opts.regionais) && opts.regionais.length > 0) {
+    const ph = opts.regionais.map(r => { params2.push(r); return `$${params2.length}`; });
+    snapWhere += ` AND s.regional IN (${ph.join(', ')})`;
+  } else if (opts.regional && opts.regional !== 'ALL') {
     params2.push(opts.regional);
     snapWhere += ` AND s.regional = $${params2.length}`;
   }
-  if (opts.team_name) {
+  if (Array.isArray(opts.teams) && opts.teams.length > 0) {
+    const ph = opts.teams.map(t => { params2.push(t); return `$${params2.length}`; });
+    snapWhere += ` AND s.team_name IN (${ph.join(', ')})`;
+  } else if (opts.team_name) {
     params2.push(opts.team_name);
     snapWhere += ` AND s.team_name = $${params2.length}`;
   }
