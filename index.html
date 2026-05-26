@@ -8480,7 +8480,15 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // Última escrita vence; aplica imediato no próprio cliente e propaga p/ os
     // demais na próxima vez que abrirem ou clicarem em "Atualizar".
     // (filtro de busca não é persistido — contextual.)
-    const FILTERS_KEY = 'monitor-filters';
+    // Filtros salvos POR USUÁRIO — antes era global ('monitor-filters'),
+    // o que fazia o último usuário a editar "contaminar" os outros (ex: cac
+    // travava o admin em Cachoeiro). Cada user agora tem sua própria chave.
+    function _filtersKey() {
+      const sess = getStoredSession();
+      const username = (sess && sess.username) || 'anon';
+      return `monitor-filters:${username}`;
+    }
+    const FILTERS_KEY = _filtersKey();  // mantido pra retrocompat onde for usado direto
     let _saveFiltersTimer = null;
 
     function saveFilters() {
@@ -8488,7 +8496,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       clearTimeout(_saveFiltersTimer);
       _saveFiltersTimer = setTimeout(() => {
         const body = { regional: currentRegional, tipos: [...selectedTipos], subcats: [...selectedSubcats] };
-        fetch(`${API}/settings/${FILTERS_KEY}`, {
+        fetch(`${API}/settings/${_filtersKey()}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -8499,7 +8507,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
     async function applySavedFilters() {
       let saved;
       try {
-        const r = await fetch(`${API}/settings/${FILTERS_KEY}`);
+        const r = await fetch(`${API}/settings/${_filtersKey()}`);
         const j = await r.json();
         saved = j?.data || null;
       } catch (err) {
@@ -8508,14 +8516,24 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }
       if (!saved) return;
 
-      // Regional: só aplica se o select não foi travado por permissão
+      // Regional salvo: só aplica se compatível com a permissão do user.
+      // Defesa contra contaminação por chave global antiga ou desserialização
+      // de dados de outro perfil.
+      const sess = getStoredSession();
+      const userReg = sess && sess.regional;
+      let allowedRegional = saved.regional;
+      if (userReg && userReg !== 'ALL' && allowedRegional !== userReg) {
+        // Não-admin: ignora valor salvo se não bater com sua regional
+        allowedRegional = userReg;
+      }
+
       const regSel = document.getElementById('regional-select');
-      if (saved.regional && regSel && !regSel.disabled) {
-        currentRegional = saved.regional;
-        regSel.value = saved.regional;
+      if (allowedRegional && regSel && !regSel.disabled) {
+        currentRegional = allowedRegional;
+        regSel.value = allowedRegional;
         ['ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
           const el = document.getElementById(id);
-          if (el && !el.disabled) el.value = saved.regional;
+          if (el && !el.disabled) el.value = allowedRegional;
         });
       }
 
