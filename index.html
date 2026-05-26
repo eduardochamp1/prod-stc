@@ -5454,6 +5454,8 @@
           .rej-trend-svg .y-label { font-size:10px; fill:var(--text2); text-anchor:end; }
           .rej-trend-svg .ma-line { fill:none; stroke:#f39c12; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
           .rej-trend-svg .ma-dot { fill:#f39c12; }
+          .rej-trend-svg .ma-label { font-size:9px; fill:#f39c12; font-weight:600; text-anchor:middle; pointer-events:none; }
+          .rej-trend-svg .ma-label-bg { fill:var(--cinza1); fill-opacity:.85; }
           .rej-trend-legend { display:flex; gap:14px; justify-content:flex-end; font-size:11px; opacity:.75; padding-top:6px; }
           .rej-trend-legend .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:middle; }
           .rej-pill { display:inline-block; padding:3px 9px; background:rgba(255,255,255,.06); border-radius:12px; font-size:12px; margin:2px; cursor:pointer; }
@@ -5994,7 +5996,25 @@
       }
       const maPath = ma.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(p.i).toFixed(1)} ${y(p.avg).toFixed(1)}`).join(' ');
       const maDots = (n <= 31)
-        ? ma.map(p => `<circle class="ma-dot" cx="${x(p.i)}" cy="${y(p.avg)}" r="2" />`).join('')
+        ? ma.map(p => {
+            const cx = x(p.i);
+            const cy = y(p.avg);
+            const valStr = p.avg.toFixed(1);
+            // Posiciona o label acima OU abaixo do ponto, escolhendo o lado
+            // com menos chance de bater no label da barra (que fica acima).
+            // Como a linha da MA fica geralmente ABAIXO do topo das barras,
+            // o label acima do ponto bate na barra; preferimos abaixo.
+            const labelY = cy + 12;
+            // Aproximacao do bounding box do texto (9px font, ~6px por digito)
+            const approxW = valStr.length * 5.5 + 4;
+            return `
+              <circle class="ma-dot" cx="${cx}" cy="${cy}" r="2.5">
+                <title>Média móvel 7d: ${valStr}</title>
+              </circle>
+              <rect class="ma-label-bg" x="${cx - approxW/2}" y="${labelY - 8}" width="${approxW}" height="11" rx="2" />
+              <text class="ma-label" x="${cx}" y="${labelY}">${valStr}</text>
+            `;
+          }).join('')
         : '';
 
       return `
