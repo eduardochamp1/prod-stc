@@ -141,10 +141,72 @@ async function runSnapshot() {
     runClassifyRejections(allTeams).catch(err =>
       log.error('classify_rejections_failed', { msg: err.message })
     );
+
+    // Sincroniza escala (ShiftType do WPA) → equipes_oficiais.escala_inicio.
+    // Não bloqueia o snapshot. Só grava quando o valor muda (idempotente).
+    runSyncEscalas(teams).catch(err =>
+      log.error('sync_escalas_failed', { msg: err.message })
+    );
   } catch (err) {
     log.error('snapshot_failed', { msg: err.message });
   } finally {
     isRunning = false;
+  }
+}
+
+// ── SYNC DE ESCALAS (ShiftType do WPA → equipes_oficiais) ──────────────────────
+// A EDP expõe o turno real de cada equipe no campo ShiftType do /teamsstatus/V2
+// (ex: "T15 15:00"). wpaService já extrai isso pra t.escalaInicioWPA ("HH:MM").
+// Aqui comparamos com a escala_inicio salva e atualizamos quando diverge —
+// elimina manutenção manual e mantém o indicador de atraso de logon correto.
+//
+// Só mexe em escala_inicio (o WPA não informa o fim do turno). escala_fim
+// continua editável manualmente via Admin.
+async function runSyncEscalas(teams) {
+  if (process.env.DATA_MODE === 'mock') return;
+  if (!teams || teams.length === 0) return;
+
+  const { getMeta, forceRefresh } = require('./equipesOficiais');
+  const { getClient } = require('./supabaseClient');
+  const sb = getClient();
+  if (!sb) return;
+
+  const updates = [];
+  const seen = new Set();
+  for (const t of teams) {
+    const sigla = (t.sigla || t.teamName || '').toUpperCase().trim();
+    if (!sigla || seen.has(sigla)) continue;
+    seen.add(sigla);
+
+    const novaEscala = t.escalaInicioWPA;        // "HH:MM" ou null
+    if (!novaEscala) continue;                    // WPA não informou turno
+
+    const meta = getMeta(sigla);
+    if (!meta) continue;                          // não é equipe oficial
+    const atual = meta.escala_inicio ? String(meta.escala_inicio).slice(0, 5) : null;
+
+    if (atual !== novaEscala) {
+      updates.push({ sigla, de: atual, para: novaEscala });
+    }
+  }
+
+  if (updates.length === 0) return;
+
+  let ok = 0;
+  for (const u of updates) {
+    const { error } = await sb
+      .from('equipes_oficiais')
+      .update({ escala_inicio: u.para, updated_at: new Date().toISOString() })
+      .eq('sigla', u.sigla);
+    if (!error) ok++;
+    else console.warn(`[CRON] sync-escalas: falha em ${u.sigla}: ${error.message}`);
+  }
+
+  if (ok > 0) {
+    await forceRefresh();   // invalida cache em memória pra refletir já
+    console.log(`[CRON] sync-escalas: ✓ ${ok} escala(s) atualizada(s) — ` +
+      updates.slice(0, 8).map(u => `${u.sigla} ${u.de || '∅'}→${u.para}`).join(', ') +
+      (updates.length > 8 ? ` (+${updates.length - 8})` : ''));
   }
 }
 
@@ -1072,4 +1134,5 @@ module.exports = {
   runRetryRecentOutros, runRevalidateDD,
   runSyncLogoffs,
   runClassifyRejections, runBackfillRejeicoes,
+  runSyncEscalas,
 };

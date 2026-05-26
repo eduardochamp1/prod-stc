@@ -297,6 +297,23 @@ async function wpaFetch(path, options = {}) {
 // ── ENDPOINTS ─────────────────────────────────────────────────────────────────
 
 /**
+ * Extrai o horário de início da escala a partir do ShiftType do WPA.
+ * Formato observado: "T07 07:00", "T15 15:00", "T14 14:00".
+ * Retorna "HH:MM" ou null se não conseguir parsear.
+ *
+ * Essa é a escala REAL da EDP (mesma coluna "Escala" da tela Gestão de
+ * Equipes). Usada pra sincronizar equipes_oficiais.escala_inicio e corrigir
+ * o indicador de atraso de logon no Monitor.
+ */
+function _parseShiftStart(shiftType) {
+  if (!shiftType) return null;
+  const m = String(shiftType).match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const hh = String(m[1]).padStart(2, '0');
+  return `${hh}:${m[2]}`;
+}
+
+/**
  * Retorna sessões ativas no setor.
  * Única fonte de Team.CompanyId — necessário para filtrar equipes Engelmig.
  * Também fornece Vehicle.Code (placa) que o V2 não retorna.
@@ -958,6 +975,11 @@ async function getTeamsBySector(sectorId) {
       isInLunchTime: v2?.IsInLunchTime || false,
       lastUpdate:    v2?.LastUpdate    || null,
       location:      v2?.Location      || null,
+      // ShiftType vem como "T07 07:00" / "T15 15:00" — o horário ali é a
+      // escala REAL da EDP. Guardamos cru + horário extraído (HH:MM) pra
+      // sincronizar equipes_oficiais.escala_inicio automaticamente.
+      shiftType:     v2?.ShiftType     || null,
+      escalaInicioWPA: _parseShiftStart(v2?.ShiftType),
       carteiraCount,
       servicosPerfil: [...new Set(allNotas.map(n => n.tipoCode))],
       notasBaixadas:   baixadas,
