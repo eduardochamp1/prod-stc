@@ -4733,6 +4733,16 @@
     <!-- ── TAB: GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────── -->
     <div class="tab-panel" id="tab-graficos">
 
+      <!-- ── CONTADOR: DIAS SEM TRANSGRESSÃO DE NOTA ──────────────────────── -->
+      <div id="contador-transgressao-wrap" style="margin-bottom:18px">
+        <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);margin-bottom:10px">
+          🛡️ Dias sem Transgressão de Nota
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="contador-cards">
+          <div class="empty-state" style="font-size:12px">Carregando…</div>
+        </div>
+      </div>
+
       <div class="filter-bar">
         <div class="date-label">Gráficos de Produtividade — <strong id="graf-periodo-label"></strong></div>
         <div class="filter-controls">
@@ -4876,6 +4886,30 @@
             </div>
             <div id="eq-tabela" style="display:none;max-height:340px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
             <div id="eq-form" style="display:none;margin-top:12px;padding:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px"></div>
+          </div>
+
+          <!-- Contador: dias sem transgressão -->
+          <div>
+            <div class="modal-section-title">🛡️ Contador — Dias sem Transgressão</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Define a data de início de cada regional. O contador na aba Gráficos
+              mostra os dias dessa data até ontem (hoje ainda está correndo).
+              Quando houver uma transgressão, atualize a data aqui pra reiniciar.
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+              <div class="filter-group" style="flex:1;min-width:160px">
+                <span class="filter-label">Início — Guarapari</span>
+                <input type="date" class="month-input" id="ct-gua" style="width:100%;border:none;outline:none" />
+              </div>
+              <div class="filter-group" style="flex:1;min-width:160px">
+                <span class="filter-label">Início — Cachoeiro</span>
+                <input type="date" class="month-input" id="ct-cac" style="width:100%;border:none;outline:none" />
+              </div>
+              <button class="btn-refresh" onclick="salvarContadorTransgressao()" style="height:36px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
+                💾 Salvar
+              </button>
+              <span id="ct-status" style="font-size:11px;color:var(--text2);align-self:center"></span>
+            </div>
           </div>
 
           <!-- Saúde do Sistema -->
@@ -6677,6 +6711,57 @@
       const csAteEl = document.getElementById('graf-cs-ate-input');
       if (csDeEl && !csDeEl.value)   csDeEl.value  = defaultCicloCS().de;
       if (csAteEl && !csAteEl.value) csAteEl.value = defaultCicloCS().ate;
+
+      // Contador de dias sem transgressão (independente dos filtros)
+      loadContadorTransgressao();
+    }
+
+    // ── CONTADOR DE DIAS SEM TRANSGRESSÃO ─────────────────────────────────────
+    async function loadContadorTransgressao() {
+      const cont = document.getElementById('contador-cards');
+      if (!cont) return;
+      try {
+        const data = await fetch(`${API}/contador-transgressao`).then(r => r.json());
+        renderContadorTransgressao(data);
+      } catch (err) {
+        cont.innerHTML = `<div class="empty-state" style="font-size:12px">Erro ao carregar contador: ${err.message}</div>`;
+      }
+    }
+
+    function renderContadorTransgressao(data) {
+      const cont = document.getElementById('contador-cards');
+      if (!cont) return;
+      const sess = getStoredSession();
+      const userReg = sess && sess.regional;
+      const isAdmin = sess && sess.role === 'admin';
+
+      // Define quais regionais o user vê (não-admin só a sua)
+      const regionais = (userReg && userReg !== 'ALL') ? [userReg] : ['GUA', 'CAC'];
+      const nomeReg = { GUA: 'Guarapari', CAC: 'Cachoeiro' };
+      const corReg  = { GUA: '#086738', CAC: '#0a4d8c' };
+
+      cont.style.gridTemplateColumns = regionais.length === 1 ? '1fr' : '1fr 1fr';
+
+      cont.innerHTML = regionais.map(reg => {
+        const c = data[reg] || {};
+        const dias = c.dias;
+        const inicio = c.inicio;
+        const diasTxt = (dias === null || dias === undefined) ? '—' : dias;
+        const subTxt = inicio
+          ? `desde ${fmtDateBR(inicio)} · até ${fmtDateBR(c.ate)}`
+          : 'data de início não configurada';
+        return `
+          <div style="background:var(--branco);border:1px solid var(--cinza2);border-left:5px solid ${corReg[reg]};border-radius:10px;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:${corReg[reg]};text-transform:uppercase;letter-spacing:.5px">${nomeReg[reg]}</div>
+              <div style="font-size:11px;color:var(--text2);margin-top:4px">${subTxt}</div>
+            </div>
+            <div style="text-align:right;line-height:1">
+              <div style="font-size:52px;font-weight:800;color:var(--preto)">${diasTxt}</div>
+              <div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">dias</div>
+            </div>
+          </div>`;
+      }).join('');
     }
 
     /**
@@ -9513,6 +9598,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // BRT (UTC-3) — UTC puro avança um dia após 21h
       const hoje  = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
       const ontem = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+
+      // Carrega datas do contador de transgressão pros inputs
+      loadContadorConfig();
       const bfDe = document.getElementById('bf-de');
       const bfAte = document.getElementById('bf-ate');
       if (!bfDe.value) bfDe.value = ontem;
@@ -10094,6 +10182,45 @@ ${equipes.length > 0 ? `<div class="perf-section">
         await loadEquipesOficiais();
       } catch (err) {
         alert('✗ ' + err.message);
+      }
+    }
+
+    // ── CONTADOR DE TRANSGRESSÃO (config no Admin) ────────────────────────────
+    async function loadContadorConfig() {
+      try {
+        const data = await fetch(`${API}/contador-transgressao`).then(r => r.json());
+        const gua = document.getElementById('ct-gua');
+        const cac = document.getElementById('ct-cac');
+        if (gua) gua.value = (data.GUA && data.GUA.inicio) || '';
+        if (cac) cac.value = (data.CAC && data.CAC.inicio) || '';
+      } catch (err) {
+        console.warn('[contador] falha ao carregar config:', err.message);
+      }
+    }
+
+    async function salvarContadorTransgressao() {
+      const status = document.getElementById('ct-status');
+      const body = {
+        GUA: document.getElementById('ct-gua').value || null,
+        CAC: document.getElementById('ct-cac').value || null,
+      };
+      status.textContent = '⏳ Salvando…';
+      status.style.color = 'var(--text2)';
+      try {
+        const res = await fetch(`${API}/contador-transgressao`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        status.textContent = `✓ Salvo (GUA: ${data.GUA.dias ?? '—'} dias · CAC: ${data.CAC.dias ?? '—'} dias)`;
+        status.style.color = 'var(--verde)';
+        // Atualiza o contador na aba Gráficos se já estiver carregada
+        if (typeof loadContadorTransgressao === 'function') loadContadorTransgressao();
+      } catch (err) {
+        status.textContent = '✗ ' + err.message;
+        status.style.color = 'var(--vermelho)';
       }
     }
 

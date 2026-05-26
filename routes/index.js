@@ -380,6 +380,80 @@ router.put('/settings/:key', async (req, res) => {
   }
 });
 
+// ── CONTADOR DE DIAS SEM TRANSGRESSÃO ──────────────────────────────────────────
+// "Dias sem acidentes" pra transgressões de nota. Registro manual: admin seta
+// a data de início (= última transgressão ou marco da campanha) por regional.
+// Contador = dias de (data_inicio) até ONTEM (hoje ainda está correndo).
+const _CONTADOR_KEY = 'contador-transgressao';
+
+function _ontemBRT() {
+  // dateBRT() retorna hoje em BRT 'YYYY-MM-DD'. Ontem = -1 dia.
+  const hoje = dateBRT();
+  const d = new Date(hoje + 'T12:00:00Z');  // meio-dia UTC evita edge de fuso
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function _diasEntre(inicio, fim) {
+  if (!inicio) return null;
+  const a = new Date(inicio + 'T12:00:00Z');
+  const b = new Date(fim    + 'T12:00:00Z');
+  if (isNaN(a) || isNaN(b)) return null;
+  const dias = Math.floor((b - a) / 86400000);
+  return dias >= 0 ? dias : 0;   // se início no futuro, mostra 0
+}
+
+// GET /api/contador-transgressao — público (logado). Retorna dias calculados.
+router.get('/contador-transgressao', async (req, res) => {
+  try {
+    const sq = sbq();
+    const ontem = _ontemBRT();
+    let cfg = { GUA: null, CAC: null };
+    if (sq) {
+      const row = await sq.getSetting(_CONTADOR_KEY);
+      if (row && row.data) cfg = { ...cfg, ...row.data };
+    }
+    const out = {};
+    for (const reg of ['GUA', 'CAC']) {
+      const inicio = cfg[reg] || null;
+      out[reg] = { inicio, dias: _diasEntre(inicio, ontem), ate: ontem };
+    }
+    res.json(out);
+  } catch (err) {
+    console.error('[contador-transgressao GET]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/contador-transgressao — só admin. Body: { GUA: 'YYYY-MM-DD', CAC: 'YYYY-MM-DD' }
+router.put('/contador-transgressao', requireAdmin, async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'supabase indisponível' });
+    const body = req.body || {};
+    const cfg = {};
+    for (const reg of ['GUA', 'CAC']) {
+      const v = body[reg];
+      if (v === null || v === '' || v === undefined) { cfg[reg] = null; continue; }
+      if (!_RE_YYYYMMDD.test(String(v))) {
+        return res.status(400).json({ error: `data ${reg} inválida (use YYYY-MM-DD)` });
+      }
+      cfg[reg] = String(v);
+    }
+    await sq.setSetting(_CONTADOR_KEY, cfg);
+    // Retorna já com os dias recalculados
+    const ontem = _ontemBRT();
+    const out = {};
+    for (const reg of ['GUA', 'CAC']) {
+      out[reg] = { inicio: cfg[reg], dias: _diasEntre(cfg[reg], ontem), ate: ontem };
+    }
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    console.error('[contador-transgressao PUT]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── HISTÓRICO ─────────────────────────────────────────────────────────────────
 
 // GET /api/historico/mes?m=2026-04
