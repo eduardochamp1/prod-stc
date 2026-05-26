@@ -5719,10 +5719,12 @@
       const qs  = new URLSearchParams({ de, ate });
       if (reg && reg !== 'ALL') qs.set('regional', reg);
       if (eq) qs.set('team', eq);
-      // Quando filtro de "somente acima do limite" estiver ativo, pega mais
-      // pares (5000 max) pra nao perder lentos no LIMIT pre-OSRM. Sem filtro,
-      // 300 (compromisso entre cobertura e custo).
-      qs.set('limit', somenteLentos ? '5000' : '300');
+      // Limite alto (5000 = max do backend). Antes era 300 como anti-quota
+      // do OSRM publico (1 req/s); agora com HERE + cache local cobrindo
+      // quase tudo, faz sentido carregar tudo. Periodos de mais de 1 mes com
+      // ~135 deslocamentos/dia podem encostar no teto — nesse caso, restringir
+      // por regional/equipe/data resolve.
+      qs.set('limit', '5000');
       if (somenteLentos) qs.set('somenteLentos', 'true');
       document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
       return qs.toString();
