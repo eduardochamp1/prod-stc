@@ -129,6 +129,29 @@
       text-overflow: ellipsis;
     }
 
+    /* Rodape com creditos — discreto, nao compete com o conteudo */
+    .app-footer {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 14px 20px;
+      margin-top: 24px;
+      font-size: 11px;
+      color: rgba(0, 0, 0, 0.5);
+      border-top: 1px solid rgba(0, 0, 0, 0.06);
+      background: rgba(0, 0, 0, 0.015);
+      letter-spacing: 0.02em;
+    }
+    .app-footer strong { color: rgba(0, 0, 0, 0.7); font-weight: 600; }
+    .app-footer-sep { opacity: 0.4; }
+    @media (max-width: 600px) {
+      .app-footer { font-size: 10px; padding: 10px 14px; }
+      .app-footer-sep { display: none; }
+      .app-footer { flex-direction: column; gap: 2px; }
+    }
+
     .header-right {
       display: flex;
       align-items: center;
@@ -4705,6 +4728,12 @@
     <!-- ── TAB: ADMIN ─────────────────────────────────────────────────────── -->
 
   </main>
+
+  <footer class="app-footer">
+    <span>© 2026 · <strong>WPA Monitor</strong> · Engelmig Energia</span>
+    <span class="app-footer-sep">·</span>
+    <span>Desenvolvido por <strong>José Eduardo Vilela Zouain</strong></span>
+  </footer>
 
   <!-- MODAL ADMIN -->
   <div class="modal-overlay" id="admin-overlay" onclick="closeAdminModal(event)">
