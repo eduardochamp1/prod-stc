@@ -2207,6 +2207,9 @@ function _parseDeslocFilters(req) {
     team_name: req.query.team || null,
     tipo:      req.query.tipo || null,
     limit:     req.query.limit,
+    // Quando true, retorna so deslocamentos com status='lento' (>1.5x tempo Maps).
+    // Afeta lista, ranking e tendencia consistentemente.
+    somenteLentos: req.query.somenteLentos === 'true' || req.query.somenteLentos === '1',
   };
 }
 

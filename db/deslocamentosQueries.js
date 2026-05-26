@@ -248,10 +248,20 @@ async function listDeslocamentos(de, ate, opts = {}) {
   }
   console.log(`[deslocamentos] passo 4: OSRM concluído em ${((Date.now() - tOsrm) / 1000).toFixed(1)}s — cache hits=${osrmHits} misses=${osrmMisses} fails=${osrmFails}`);
 
+  // Filtro opcional: somente deslocamentos acima do limite (status='lento',
+  // que eh real > 1.5x tempo Maps). Aplicado apos enriquecimento OSRM porque
+  // precisamos do status calculado. Quando ativo, total/returned refletem
+  // so o subconjunto filtrado — usado nos KPIs/tabela/ranking/tendencia
+  // pra apresentar visao focada nos problemas.
+  let finalRows = cut;
+  if (opts.somenteLentos) {
+    finalRows = cut.filter(d => d.status === 'lento');
+  }
+
   return {
-    total: desloc.length,
-    returned: cut.length,
-    rows: cut,
+    total: opts.somenteLentos ? finalRows.length : desloc.length,
+    returned: finalRows.length,
+    rows: finalRows,
   };
 }
 

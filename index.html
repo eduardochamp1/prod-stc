@@ -4523,6 +4523,10 @@
               <option value="">Todas</option>
             </select>
           </div>
+          <label class="filter-group" style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;background:rgba(231,76,60,.08);border:1px solid rgba(231,76,60,.3);border-radius:6px;padding:5px 10px" title="Mostrar somente deslocamentos com tempo real > 1.5× tempo Maps">
+            <input type="checkbox" id="desloc-somente-lentos" onchange="loadDeslocamentos()" style="margin:0;cursor:pointer" />
+            <span style="color:#e74c3c;font-weight:600">⚠ Somente acima do limite</span>
+          </label>
           <button class="btn-refresh" onclick="loadDeslocamentos()">↻ Atualizar</button>
         </div>
       </div>
@@ -5711,10 +5715,15 @@
       const ate = document.getElementById('desloc-ate-input').value;
       const reg = document.getElementById('desloc-regional-select').value;
       const eq  = document.getElementById('desloc-equipe-select').value;
+      const somenteLentos = document.getElementById('desloc-somente-lentos')?.checked || false;
       const qs  = new URLSearchParams({ de, ate });
       if (reg && reg !== 'ALL') qs.set('regional', reg);
       if (eq) qs.set('team', eq);
-      qs.set('limit', '300');   // OSRM = ~1s/par (cache hits são instantâneos)
+      // Quando filtro de "somente acima do limite" estiver ativo, pega mais
+      // pares (5000 max) pra nao perder lentos no LIMIT pre-OSRM. Sem filtro,
+      // 300 (compromisso entre cobertura e custo).
+      qs.set('limit', somenteLentos ? '5000' : '300');
+      if (somenteLentos) qs.set('somenteLentos', 'true');
       document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
       return qs.toString();
     }
