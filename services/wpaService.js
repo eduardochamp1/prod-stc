@@ -314,6 +314,23 @@ function _parseShiftStart(shiftType) {
 }
 
 /**
+ * Calcula o fim da escala como início + 9h (8h trabalho + 1h refeição,
+ * turno padrão Engelmig). O WPA não informa o fim do turno, só o início
+ * (ShiftType). Wrap em 24h: 15:00 + 9h → 00:00.
+ * @param {string} hhmm  "HH:MM"
+ * @returns {string|null} "HH:MM"
+ */
+function _shiftEndFromStart(hhmm, horas = 9) {
+  if (!hhmm) return null;
+  const m = String(hhmm).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const totalMin = ((parseInt(m[1], 10) + horas) * 60 + parseInt(m[2], 10)) % (24 * 60);
+  const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
+  const mm = String(totalMin % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/**
  * Retorna sessões ativas no setor.
  * Única fonte de Team.CompanyId — necessário para filtrar equipes Engelmig.
  * Também fornece Vehicle.Code (placa) que o V2 não retorna.
@@ -980,6 +997,8 @@ async function getTeamsBySector(sectorId) {
       // sincronizar equipes_oficiais.escala_inicio automaticamente.
       shiftType:     v2?.ShiftType     || null,
       escalaInicioWPA: _parseShiftStart(v2?.ShiftType),
+      // Fim inferido: início + 9h (8h trabalho + 1h refeição). WPA não dá fim.
+      escalaFimWPA:    _shiftEndFromStart(_parseShiftStart(v2?.ShiftType), 9),
       carteiraCount,
       servicosPerfil: [...new Set(allNotas.map(n => n.tipoCode))],
       notasBaixadas:   baixadas,

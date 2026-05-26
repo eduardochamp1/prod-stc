@@ -180,13 +180,15 @@ async function runSyncEscalas(teams) {
 
     const novaEscala = t.escalaInicioWPA;        // "HH:MM" ou null
     if (!novaEscala) continue;                    // WPA não informou turno
+    const novoFim = t.escalaFimWPA || null;       // início + 9h (inferido)
 
     const meta = getMeta(sigla);
     if (!meta) continue;                          // não é equipe oficial
-    const atual = meta.escala_inicio ? String(meta.escala_inicio).slice(0, 5) : null;
+    const atual    = meta.escala_inicio ? String(meta.escala_inicio).slice(0, 5) : null;
+    const atualFim = meta.escala_fim    ? String(meta.escala_fim).slice(0, 5)    : null;
 
-    if (atual !== novaEscala) {
-      updates.push({ sigla, de: atual, para: novaEscala });
+    if (atual !== novaEscala || atualFim !== novoFim) {
+      updates.push({ sigla, de: atual, para: novaEscala, deFim: atualFim, paraFim: novoFim });
     }
   }
 
@@ -196,7 +198,7 @@ async function runSyncEscalas(teams) {
   for (const u of updates) {
     const { error } = await sb
       .from('equipes_oficiais')
-      .update({ escala_inicio: u.para, updated_at: new Date().toISOString() })
+      .update({ escala_inicio: u.para, escala_fim: u.paraFim, updated_at: new Date().toISOString() })
       .eq('sigla', u.sigla);
     if (!error) ok++;
     else console.warn(`[CRON] sync-escalas: falha em ${u.sigla}: ${error.message}`);
@@ -205,7 +207,7 @@ async function runSyncEscalas(teams) {
   if (ok > 0) {
     await forceRefresh();   // invalida cache em memória pra refletir já
     console.log(`[CRON] sync-escalas: ✓ ${ok} escala(s) atualizada(s) — ` +
-      updates.slice(0, 8).map(u => `${u.sigla} ${u.de || '∅'}→${u.para}`).join(', ') +
+      updates.slice(0, 8).map(u => `${u.sigla} ${u.de || '∅'}-${u.deFim || '∅'}→${u.para}-${u.paraFim}`).join(', ') +
       (updates.length > 8 ? ` (+${updates.length - 8})` : ''));
   }
 }
