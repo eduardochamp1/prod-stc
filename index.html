@@ -117,6 +117,14 @@
       flex-shrink: 0;
     }
 
+    .header-title-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 1px;
+      min-width: 0;
+    }
     .header-title {
       font-family: Tahoma, 'Franklin Gothic Medium', Arial, sans-serif;
       font-size: 12px;
@@ -127,6 +135,19 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .header-subtitle {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 9px;
+      font-style: italic;
+      color: rgba(255, 255, 255, 0.42);
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      line-height: 1;
+      margin-top: 1px;
+    }
+    @media (max-width: 600px) {
+      .header-subtitle { display: none; }
     }
 
     /* Rodape com creditos — discreto, nao compete com o conteudo */
@@ -4183,7 +4204,10 @@
       <img src="logo.png" alt="Engelmig Energia" class="header-logo">
     <div class=" header-sep">
     </div>
-    <span class="header-title">WPA Monitor</span>
+    <div class="header-title-wrap" title="WPA Monitor · Desenvolvido por José Eduardo Vilela Zouain">
+      <span class="header-title">WPA Monitor</span>
+      <span class="header-subtitle">by José E. V. Zouain</span>
+    </div>
     </div>
     <div class="header-right">
       <div class="live-badge">
