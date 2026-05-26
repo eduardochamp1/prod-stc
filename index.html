@@ -9995,6 +9995,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
               style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px;text-transform:uppercase" />
           </div>
         </div>
+        <!-- Escala (horário de entrada/saída esperado) — usada pro indicador de atraso no Monitor -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;max-width:280px">
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Escala — início</label>
+            <input id="eq-form-escala-inicio" type="time" value="${(e.escala_inicio || '').slice(0,5)}"
+              style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px" />
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Escala — fim</label>
+            <input id="eq-form-escala-fim" type="time" value="${(e.escala_fim || '').slice(0,5)}"
+              style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px" />
+          </div>
+        </div>
         <div style="display:flex;gap:8px;margin-top:12px">
           <button onclick="salvarEquipe(${isNew})" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
             💾 Salvar
@@ -10015,12 +10028,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
     async function salvarEquipe(isNew) {
       const msg = document.getElementById('eq-form-msg');
+      // Escala: input type="time" devolve "HH:MM"; vazio = null pra limpar
+      const escIniRaw = (document.getElementById('eq-form-escala-inicio')?.value || '').trim();
+      const escFimRaw = (document.getElementById('eq-form-escala-fim')?.value    || '').trim();
       const body = {
         sigla:    document.getElementById('eq-form-sigla').value.trim().toUpperCase(),
         setor:    document.getElementById('eq-form-setor').value,
         regional: document.getElementById('eq-form-regional').value,
         tipo:     document.getElementById('eq-form-tipo').value.trim().toUpperCase(),
         placa:    (document.getElementById('eq-form-placa').value.trim().toUpperCase() || null),
+        escala_inicio: escIniRaw || null,
+        escala_fim:    escFimRaw || null,
       };
       msg.textContent = '⏳ Salvando…';
       msg.style.color = 'var(--text2)';

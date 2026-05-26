@@ -1210,6 +1210,10 @@ function _validateEquipe(body) {
   if (!_RE_TIPO.test(body.tipo || ''))        errors.push('tipo inválido (alfanumérico, máx 30)');
   // placa é opcional agora
   if (body.placa && !_RE_PLACA.test(body.placa)) errors.push('placa inválida');
+  // Escala opcional: aceita "HH:MM" ou "HH:MM:SS"
+  const _re_time = /^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
+  if (body.escala_inicio && !_re_time.test(String(body.escala_inicio))) errors.push('escala_inicio inválido (use HH:MM)');
+  if (body.escala_fim    && !_re_time.test(String(body.escala_fim)))    errors.push('escala_fim inválido (use HH:MM)');
   return errors;
 }
 
@@ -1221,10 +1225,16 @@ router.get('/admin/equipes', async (_req, res) => {
     const sb = require('../services/supabaseClient').getClient();
     const { data, error } = await sb
       .from('equipes_oficiais')
-      .select('sigla, regional, tipo, placa, ativo, created_at, updated_at')
+      .select('sigla, regional, tipo, placa, ativo, escala_inicio, escala_fim, created_at, updated_at')
       .order('regional')
       .order('sigla');
     if (error) throw error;
+    // Normaliza escala pra string "HH:MM" — pg retorna TIME como "HH:MM:SS",
+    // mas a UI espera "HH:MM" (input type="time"). Conversão consistente.
+    (data || []).forEach(e => {
+      if (e.escala_inicio) e.escala_inicio = String(e.escala_inicio).slice(0, 5);
+      if (e.escala_fim)    e.escala_fim    = String(e.escala_fim).slice(0, 5);
+    });
     res.json({ equipes: data || [], count: (data || []).length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1247,6 +1257,8 @@ router.post('/admin/equipes', async (req, res) => {
         regional: req.body.regional,
         tipo:     req.body.tipo.toUpperCase(),
         placa:    req.body.placa ? req.body.placa.toUpperCase().trim() : null,
+        escala_inicio: req.body.escala_inicio || null,
+        escala_fim:    req.body.escala_fim    || null,
         ativo:    true,
       });
     if (error) {
@@ -1293,6 +1305,28 @@ router.put('/admin/equipes/:sigla', async (req, res) => {
   if (body.ativo !== undefined) {
     if (typeof body.ativo !== 'boolean') return res.status(400).json({ error: 'ativo deve ser boolean' });
     upd.ativo = body.ativo;
+  }
+  // escala_inicio / escala_fim: aceitam "HH:MM" ou "HH:MM:SS" (TIME without TZ
+  // no Postgres). null/'' limpa a escala. Tudo que vier é validado antes de
+  // gravar — qualquer string fora do formato é rejeitada.
+  const _RE_TIME = /^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
+  if (body.escala_inicio !== undefined) {
+    if (body.escala_inicio === null || body.escala_inicio === '') {
+      upd.escala_inicio = null;
+    } else if (_RE_TIME.test(String(body.escala_inicio))) {
+      upd.escala_inicio = String(body.escala_inicio);
+    } else {
+      return res.status(400).json({ error: 'escala_inicio inválido (use HH:MM)' });
+    }
+  }
+  if (body.escala_fim !== undefined) {
+    if (body.escala_fim === null || body.escala_fim === '') {
+      upd.escala_fim = null;
+    } else if (_RE_TIME.test(String(body.escala_fim))) {
+      upd.escala_fim = String(body.escala_fim);
+    } else {
+      return res.status(400).json({ error: 'escala_fim inválido (use HH:MM)' });
+    }
   }
   if (Object.keys(upd).length === 0) return res.status(400).json({ error: 'nenhum campo para atualizar' });
   upd.updated_at = new Date().toISOString();
