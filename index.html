@@ -5717,7 +5717,7 @@
 
     async function loadDeslocamentos() {
       const content = document.getElementById('desloc-content');
-      content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Calculando deslocamentos… (consultas OSRM podem demorar no 1º acesso)</div>';
+      content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Calculando deslocamentos… (1ª consulta de um período pode demorar — busca estimativas de rota)</div>';
       try {
         const qs = deslocFiltersQuery();
         const [listaR, rankR, trendR] = await Promise.all([
@@ -5857,17 +5857,17 @@
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Acima do limite</div>
             <div class="desloc-kpi-value" style="color:#e74c3c">${lentos}</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">> 1.5× tempo OSRM</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">> 1.5× tempo estimado</div>
           </div>
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Desvio médio</div>
             <div class="desloc-kpi-value" style="color:${desvioMedio > 50 ? '#e74c3c' : (desvioMedio > 20 ? '#f39c12' : '#27ae60')}">${desvioMedio > 0 ? '+' : ''}${desvioMedio}%</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">tempo real vs OSRM</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">tempo real vs estimado</div>
           </div>
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Sem estimativa</div>
             <div class="desloc-kpi-value" style="color:#7f8c8d">${semOsrm}</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">OSRM falhou</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">sem rota disponível</div>
           </div>
         </div>
 
@@ -5877,7 +5877,7 @@
             ${rankingHTML}
           </div>
           <div class="desloc-panel">
-            <h3>Tendência diária <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px"><span style="color:#e74c3c">━</span> real <span style="color:#3498db;margin-left:8px">- - -</span> OSRM</span></h3>
+            <h3>Tendência diária <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px"><span style="color:#e74c3c">━</span> real <span style="color:#3498db;margin-left:8px">- - -</span> estimado</span></h3>
             ${tendSVG}
           </div>
         </div>
@@ -5893,7 +5893,7 @@
                   <th>Nota</th>
                   <th>Tent.</th>
                   <th>Real</th>
-                  <th>OSRM</th>
+                  <th>Estimado</th>
                   <th>Dist.</th>
                   <th>Desvio</th>
                 </tr>
