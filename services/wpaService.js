@@ -1028,6 +1028,7 @@ module.exports = {
   getSessionDetail,
   getNoteDetail,
   getTeamStatusV2,
+  getV2Cached,
   // Principal
   getTeamsBySector,
   // Histórico
