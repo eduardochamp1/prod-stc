@@ -1233,7 +1233,17 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
   de  = de  || today;
   ate = ate || de;
 
-  const rows = await _fetchRejeicoes({ de, ate, regional, team: opts.team, tipos: opts.tipos });
+  let rows = await _fetchRejeicoes({ de, ate, regional, team: opts.team, tipos: opts.tipos });
+
+  // Filtro por código de motivo (mesma logica da getRejeicoesLista — pos-fetch
+  // porque motivo_codes eh TEXT[]). Quando ativo, KPIs/paineis refletem so as
+  // notas que tiveram pelo menos um dos motivos selecionados.
+  if (Array.isArray(opts.motivos) && opts.motivos.length > 0) {
+    const setM = new Set(opts.motivos);
+    rows = rows.filter(r =>
+      Array.isArray(r.motivo_codes) && r.motivo_codes.some(c => setM.has(c))
+    );
+  }
 
   const total = rows.length;
   let comMotivo = 0, semMotivo = 0;

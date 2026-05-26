@@ -2151,7 +2151,7 @@ router.get('/rejeicoes/totais', async (req, res) => {
     if (!sq) return res.json({ total: 0, comMotivo: 0, semMotivo: 0, porRegional: {GUA:0,CAC:0}, porTipo: {}, porMotivo: [], porEquipe: [], porDia: [], executadasNoPeriodo: 0, percentualGeral: null });
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, tipos: f.tipos });
+    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, tipos: f.tipos, motivos: f.motivos });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/totais]', err.message);

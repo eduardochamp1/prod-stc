@@ -4352,6 +4352,12 @@
               <option value="RL">RL</option>
             </select>
           </div>
+          <div class="filter-group">
+            <span class="filter-label">Motivo</span>
+            <select class="filter-select" id="rej-motivo-select" onchange="loadRejeicoes()" style="min-width:260px">
+              <option value="ALL">Todos os motivos</option>
+            </select>
+          </div>
           <div style="flex:1"></div>
           <button class="btn-refresh" onclick="loadRejeicoes()">↻ Atualizar</button>
         </div>
@@ -5286,11 +5292,42 @@
       const regional = document.getElementById('rej-regional-select').value;
       const team     = document.getElementById('rej-equipe-select').value;
       const tipo     = document.getElementById('rej-tipo-select').value;
+      const motivoSel = document.getElementById('rej-motivo-select');
+      const motivo   = motivoSel ? motivoSel.value : 'ALL';
       const qp = new URLSearchParams({ de, ate });
       if (regional && regional !== 'ALL') qp.set('regional', regional);
       if (team && team !== 'ALL') qp.set('team', team);
       if (tipo && tipo !== 'ALL') qp.set('tipos', tipo);
+      if (motivo && motivo !== 'ALL') qp.set('motivos', motivo);
       return qp.toString();
+    }
+
+    // Popula o select de motivos com o catálogo do período atual (sem o filtro
+    // de motivo aplicado — senão o dropdown encolheria pra só conter o que ja
+    // ta selecionado). Mantém valor selecionado se ainda existir no catálogo.
+    async function reloadRejMotivosCatalog() {
+      const sel = document.getElementById('rej-motivo-select');
+      if (!sel) return;
+      const prev = sel.value;
+      try {
+        const { de, ate } = rejRange();
+        const regional = document.getElementById('rej-regional-select').value;
+        const qp = new URLSearchParams({ de, ate });
+        if (regional && regional !== 'ALL') qp.set('regional', regional);
+        const motivos = await fetch(`${API}/rejeicoes/motivos?${qp.toString()}`).then(r => r.json());
+        // Ordena por código ASC pra navegação previsível
+        motivos.sort((a, b) => String(a.code).localeCompare(String(b.code)));
+        const opts = ['<option value="ALL">Todos os motivos</option>']
+          .concat(motivos.map(m =>
+            `<option value="${escapeHtml(m.code)}">${escapeHtml(m.code)} — ${escapeHtml(m.label || m.texto || '')}</option>`
+          ));
+        sel.innerHTML = opts.join('');
+        // Restaura valor anterior se ainda for válido
+        const ok = Array.from(sel.options).some(o => o.value === prev);
+        sel.value = ok ? prev : 'ALL';
+      } catch (err) {
+        console.warn('[rejMotivos] falha ao popular catálogo:', err);
+      }
     }
 
     async function loadRejeicoes() {
@@ -5301,9 +5338,12 @@
       content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando rejeições...</div>';
       try {
         const qs = rejFiltersQuery();
+        // Catálogo de motivos em paralelo (pra atualizar dropdown se mudou
+        // período/regional). Falha silenciosa não bloqueia render.
         const [totaisR, listaR] = await Promise.all([
           fetch(`${API}/rejeicoes/totais?${qs}`).then(r => r.json()),
           fetch(`${API}/rejeicoes/lista?${qs}&limit=2000`).then(r => r.json()),
+          reloadRejMotivosCatalog(),
         ]);
         _rejTotaisCache = totaisR;
         _rejFullList    = listaR;
