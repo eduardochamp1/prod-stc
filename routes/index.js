@@ -137,9 +137,16 @@ async function enforceTeamRegional(req, res, team) {
   const teams = String(team).split(',').map(s => s.trim()).filter(Boolean);
   for (const t of teams) {
     const reg = await _resolveTeamRegional(t);
-    if (reg && reg !== req.user.regional) {
+    // Bloqueia em 2 casos:
+    //   1. Sigla desconhecida (não está em equipes_oficiais) — defesa contra
+    //      sigla "fantasma" ou typo intencional pra burlar o filtro
+    //   2. Sigla pertence a outra regional
+    // Admin (regional=ALL) já saiu antes do loop.
+    if (!reg || reg !== req.user.regional) {
       res.status(403).json({
-        error: `Acesso negado: equipe ${t} não pertence à sua regional (${req.user.regional}).`,
+        error: reg
+          ? `Acesso negado: equipe ${t} não pertence à sua regional (${req.user.regional}).`
+          : `Acesso negado: equipe ${t} não está cadastrada ou não pertence à sua regional.`,
         code: 'TEAM_REGIONAL_MISMATCH',
       });
       return false;
