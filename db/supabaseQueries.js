@@ -594,6 +594,16 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
     return q;
   });
 
+  // Normaliza r.date pra string ISO 'YYYY-MM-DD'. O pg driver retorna colunas
+  // DATE como Date objects, e o resto da função usa r.date como chave de obj
+  // e como string em .localeCompare(). Sem essa normalização, .localeCompare
+  // dá TypeError silencioso e a função retorna lista vazia.
+  for (const r of allRows) {
+    if (r.date instanceof Date) {
+      r.date = r.date.toISOString().slice(0, 10);
+    }
+  }
+
   // Filtra pela whitelist e mantém apenas o snapshot mais recente por (date, team_name)
   const latest = {};
   _onlyOficiais(allRows, 'team_name').forEach(r => {
