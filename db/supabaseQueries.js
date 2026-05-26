@@ -1351,8 +1351,21 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
 
   const porMotivo = Array.from(motivoMap.values()).sort((a, b) => b.count - a.count).slice(0, 20);
   const porEquipe = Array.from(equipeMap.values()).sort((a, b) => b.count - a.count).slice(0, 20);
-  const porDia    = Array.from(diaMap.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-                       .map(([date, count]) => ({ date, count }));
+
+  // porDia: garante continuidade do calendario [de, ate] preenchendo 0 em dias
+  // sem rejeicao. Sem isso, o grafico pula dias zerados (ex: depois do filtro
+  // de 'Baixa via Sistema' alguns dias zeraram) e a media movel 7d usa janela
+  // que nao corresponde a 7 dias reais de calendario.
+  const porDia = [];
+  if (de && ate) {
+    const cur = new Date(de + 'T00:00:00Z');
+    const end = new Date(ate + 'T00:00:00Z');
+    while (cur <= end) {
+      const isoDate = cur.toISOString().slice(0, 10);
+      porDia.push({ date: isoDate, count: diaMap.get(isoDate) || 0 });
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+  }
 
   // Executadas no período (pra %): team_daily_totals filtrado
   const tdt = await _selectAll(() => {
