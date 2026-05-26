@@ -5280,10 +5280,17 @@
       return { de, ate };
     }
 
-    function onRejDateChange() {
+    // Atualiza só o label do período — SEM disparar reload. Usar dentro do
+    // loadRejeicoes pra evitar loop recursivo (onRejDateChange→loadRejeicoes→
+    // onRejDateChange→...). O reload eh responsabilidade do onchange do filtro.
+    function _setRejPeriodoLabel() {
       const { de, ate } = rejRange();
       const lbl = document.getElementById('rej-periodo-label');
       if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
+    }
+
+    function onRejDateChange() {
+      _setRejPeriodoLabel();
       loadRejeicoes();
     }
 
@@ -5330,25 +5337,34 @@
       }
     }
 
+    // Versionamento contra race condition: quando user troca filtro rápido,
+    // requests anteriores ainda pendentes nao podem sobrescrever as novas.
+    // Cada chamada incrementa o counter; ao terminar, só renderiza se ainda
+    // for a chamada mais recente.
+    let _rejReloadSeq = 0;
+
     async function loadRejeicoes() {
-      onRejDateChange.__inflight = true;
+      const myCall = ++_rejReloadSeq;
       const content = document.getElementById('rej-content');
       if (!content) return;
-      onRejDateChange();
+      _setRejPeriodoLabel();
       content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando rejeições...</div>';
       try {
         const qs = rejFiltersQuery();
-        // Catálogo de motivos em paralelo (pra atualizar dropdown se mudou
+        // Catálogo de motivos em paralelo (atualiza dropdown se mudou
         // período/regional). Falha silenciosa não bloqueia render.
         const [totaisR, listaR] = await Promise.all([
           fetch(`${API}/rejeicoes/totais?${qs}`).then(r => r.json()),
           fetch(`${API}/rejeicoes/lista?${qs}&limit=2000`).then(r => r.json()),
           reloadRejMotivosCatalog(),
         ]);
+        // Se uma chamada mais recente ja foi disparada, descarta esta resposta
+        if (myCall !== _rejReloadSeq) return;
         _rejTotaisCache = totaisR;
         _rejFullList    = listaR;
         renderRejeicoes(totaisR, listaR);
       } catch (err) {
+        if (myCall !== _rejReloadSeq) return;  // ignora erro de chamada obsoleta
         content.innerHTML = `<div class="empty-state">Erro ao carregar: ${err.message}</div>`;
       }
     }
