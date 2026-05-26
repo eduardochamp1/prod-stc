@@ -6675,9 +6675,14 @@
         }
         const meta = getMeta(g.metaKey);
         const pct  = meta > 0 ? val / meta : null;
+        // Faixas (regra de negocio 26/05/2026):
+        //   >= 70%  -> verde   (incluindo passar da meta, ate 100% e alem)
+        //   50-70%  -> amarelo (atencao, perto da meta mas ainda nao bateu)
+        //   < 50%   -> vermelho (longe da meta, alerta)
+        //   sem meta configurada -> cinza
         const cor  = pct === null ? '#b0b0aa'
-                   : pct >= 1   ? '#086738'
-                   : pct >= 0.7 ? '#FEC40E'
+                   : pct >= 0.7  ? '#086738'
+                   : pct >= 0.5  ? '#FEC40E'
                    : '#ED1C24';
         const svg  = buildGaugeSVG(val, meta, cor);
 
@@ -7073,7 +7078,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const realizado = totaisReg[l.key] || 0;
         const meta = parseInt(metasReg[l.key] || 0);
         const pct = meta > 0 ? Math.min(Math.round((realizado / meta) * 100), 100) : 0;
-        const colorClass = pct >= 100 ? 'done' : pct >= 60 ? 'warn' : 'danger';
+        // Faixas alinhadas com gauges da aba Graficos (>=70 verde, >=50 amarelo, <50 vermelho)
+        const colorClass = pct >= 70 ? 'done' : pct >= 50 ? 'warn' : 'danger';
         const qtdTotal = l.qtd ? (qtdReg[l.key] || 0) : 0;
         return `<div class="prod-item">
         <div class="prod-item-top">
