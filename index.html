@@ -4656,7 +4656,7 @@
               <option value="">Todas</option>
             </select>
           </div>
-          <label class="filter-group" style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;background:rgba(231,76,60,.08);border:1px solid rgba(231,76,60,.3);border-radius:6px;padding:5px 10px" title="Mostrar somente deslocamentos com tempo real > 1.5× tempo Maps">
+          <label class="filter-group" style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;background:rgba(231,76,60,.08);border:1px solid rgba(231,76,60,.3);border-radius:6px;padding:5px 10px" title="Mostrar somente deslocamentos acima do limite configurado (× tempo Maps)">
             <input type="checkbox" id="desloc-somente-lentos" onchange="loadDeslocamentos()" style="margin:0;cursor:pointer" />
             <span style="color:#e74c3c;font-weight:600">⚠ Somente acima do limite</span>
           </label>
@@ -4909,6 +4909,28 @@
                 💾 Salvar
               </button>
               <span id="ct-status" style="font-size:11px;color:var(--text2);align-self:center"></span>
+            </div>
+          </div>
+
+          <!-- Threshold de deslocamento -->
+          <div>
+            <div class="modal-section-title">📍 Limite de Deslocamento</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Fator multiplicador sobre o tempo estimado (Maps) acima do qual um
+              deslocamento é marcado como "lento" (vermelho). Ex: 1.5 = tempo real
+              maior que 1,5× o estimado. Afeta a aba Deslocamentos (KPIs, ranking,
+              tendência, filtro "acima do limite").
+            </div>
+            <div style="display:flex;gap:12px;align-items:flex-end">
+              <div class="filter-group" style="min-width:140px">
+                <span class="filter-label">Fator (× Maps)</span>
+                <input type="number" class="month-input" id="dt-fator" step="0.1" min="1.1" max="10"
+                  style="width:100%;border:none;outline:none" />
+              </div>
+              <button class="btn-refresh" onclick="salvarDeslocThreshold()" style="height:36px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
+                💾 Salvar
+              </button>
+              <span id="dt-status" style="font-size:11px;color:var(--text2);align-self:center"></span>
             </div>
           </div>
 
@@ -6145,6 +6167,8 @@
     let _deslocEquipesPopuladas = false;
     let _deslocMultiInited = false;
     let _deslocCache = null;
+    let _deslocThreshold = 1.5;   // fator do limite (vem do backend em lista.threshold)
+    const _fmtThr = () => String(_deslocThreshold).replace('.', ',');   // 1.5 → "1,5"
     let _deslocLeafletMap = null;
     let _deslocRouteLayers = [];
 
@@ -6227,6 +6251,8 @@
           fetch(`${API}/deslocamentos/tendencia?${qs}`).then(r => r.json()),
         ]);
         _deslocCache = { lista: listaR, ranking: rankR, tendencia: trendR };
+        // Threshold dinâmico (configurável no Admin) vem em lista.threshold
+        if (listaR && Number(listaR.threshold) > 1) _deslocThreshold = Number(listaR.threshold);
         renderDeslocamentos(_deslocCache);
       } catch (err) {
         content.innerHTML = `<div class="empty-state">Erro: ${err.message}</div>`;
@@ -6330,7 +6356,7 @@
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Acima do limite</div>
             <div class="desloc-kpi-value" style="color:#e74c3c">${lentos}</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">> 1.5× tempo Maps</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">> ${_fmtThr()}× tempo Maps</div>
           </div>
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Desvio médio</div>
@@ -6555,8 +6581,8 @@
       if (comDados.length === 0) {
         return '<div class="empty-state" style="font-size:12px">Sem deslocamentos no período.</div>';
       }
-      // Threshold de 1.5× Maps por dia (limite do negócio)
-      const limiteSecs = d => Math.round((d.tempo_osrm_avg_sec || 0) * 1.5);
+      // Threshold configurável (× Maps) por dia (limite do negócio)
+      const limiteSecs = d => Math.round((d.tempo_osrm_avg_sec || 0) * _deslocThreshold);
       const maxVal = Math.max(
         ...comDados.flatMap(d => [d.tempo_real_avg_sec, d.tempo_osrm_avg_sec, limiteSecs(d)]),
         60
@@ -6683,7 +6709,7 @@
           <div style="display:flex;gap:14px;justify-content:flex-end;font-size:11px;opacity:.85;padding-top:8px;flex-wrap:wrap">
             <span><span style="${swatchStyle};background:#e74c3c"></span>Tempo real</span>
             <span><span style="${swatchStyle};background:#3498db"></span>Tempo Maps (estimativa)</span>
-            <span><span style="${swatchStyle};background:#95a5a6"></span>Limite (1,5× Maps)</span>
+            <span><span style="${swatchStyle};background:#95a5a6"></span>Limite (${_fmtThr()}× Maps)</span>
             <span style="margin-left:8px;opacity:.85"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e74c3c;vertical-align:middle;margin-right:5px"></span>ponto cheio = dia acima do limite</span>
           </div>
         </div>
@@ -9610,6 +9636,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       // Carrega datas do contador de transgressão pros inputs
       loadContadorConfig();
+      // Carrega o fator de threshold de deslocamento
+      loadDeslocThresholdConfig();
       const bfDe = document.getElementById('bf-de');
       const bfAte = document.getElementById('bf-ate');
       if (!bfDe.value) bfDe.value = ontem;
@@ -10227,6 +10255,39 @@ ${equipes.length > 0 ? `<div class="perf-section">
         status.style.color = 'var(--verde)';
         // Atualiza o contador na aba Gráficos se já estiver carregada
         if (typeof loadContadorTransgressao === 'function') loadContadorTransgressao();
+      } catch (err) {
+        status.textContent = '✗ ' + err.message;
+        status.style.color = 'var(--vermelho)';
+      }
+    }
+
+    // ── THRESHOLD DE DESLOCAMENTO (config no Admin) ───────────────────────────
+    async function loadDeslocThresholdConfig() {
+      try {
+        const data = await fetch(`${API}/deslocamentos/threshold`).then(r => r.json());
+        const el = document.getElementById('dt-fator');
+        if (el) el.value = data.fator || 1.5;
+      } catch (err) {
+        console.warn('[threshold] falha ao carregar:', err.message);
+      }
+    }
+
+    async function salvarDeslocThreshold() {
+      const status = document.getElementById('dt-status');
+      const fator = parseFloat(document.getElementById('dt-fator').value);
+      status.textContent = '⏳ Salvando…';
+      status.style.color = 'var(--text2)';
+      try {
+        const res = await fetch(`${API}/deslocamentos/threshold`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fator }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        _deslocThreshold = data.fator;
+        status.textContent = `✓ Salvo: ${String(data.fator).replace('.', ',')}× (reflete em até 60s ou ao recarregar Deslocamentos)`;
+        status.style.color = 'var(--verde)';
       } catch (err) {
         status.textContent = '✗ ' + err.message;
         status.style.color = 'var(--vermelho)';

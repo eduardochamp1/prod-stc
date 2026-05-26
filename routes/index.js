@@ -2473,6 +2473,33 @@ router.get('/deslocamentos/tendencia', async (req, res) => {
   }
 });
 
+// GET /api/deslocamentos/threshold — fator atual (logado)
+router.get('/deslocamentos/threshold', async (req, res) => {
+  try {
+    const fator = await _deslocQ.getThreshold();
+    res.json({ fator });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/deslocamentos/threshold — só admin. Body: { fator: 1.5 }
+router.put('/deslocamentos/threshold', requireAdmin, async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'supabase indisponível' });
+    const fator = Number(req.body && req.body.fator);
+    if (!isFinite(fator) || fator <= 1 || fator > 10) {
+      return res.status(400).json({ error: 'fator inválido (use número entre 1 e 10, ex: 1.5)' });
+    }
+    await sq.setSetting('desloc-threshold', { fator });
+    res.json({ ok: true, fator });
+  } catch (err) {
+    console.error('[deslocamentos/threshold PUT]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/mapa/equipe?team=SIGLA&date=YYYY-MM-DD
 // Retorna notas com checkpoints GPS de uma equipe no dia.
 router.get('/mapa/equipe', async (req, res) => {

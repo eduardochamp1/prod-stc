@@ -93,9 +93,31 @@ function extrairDeslocamentos(checkpoints) {
  *     tempo_real_sec, tempo_osrm_sec, distancia_m, desvio_pct, status }
  *   status ∈ 'ok' | 'lento' (> 1.5x) | 'sem_osrm' (consulta falhou)
  */
+// Threshold (fator multiplicador) acima do qual um deslocamento é "lento".
+// Configurável via app_settings 'desloc-threshold' = { fator: 1.5 }.
+// Default 1.5 (real > 1.5× tempo Maps → vermelho). Cache leve de 60s.
+const _thrCache = { fator: null, ts: 0 };
+async function getThreshold() {
+  if (_thrCache.fator !== null && (Date.now() - _thrCache.ts) < 60000) {
+    return _thrCache.fator;
+  }
+  let fator = 1.5;
+  try {
+    const sb = getClient();
+    const { data } = await sb.from('app_settings')
+      .select('data').eq('key', 'desloc-threshold').maybeSingle();
+    const f = data && data.data && Number(data.data.fator);
+    if (f && isFinite(f) && f > 1) fator = f;
+  } catch (_) { /* usa default */ }
+  _thrCache.fator = fator;
+  _thrCache.ts = Date.now();
+  return fator;
+}
+
 async function listDeslocamentos(de, ate, opts = {}) {
   const pool = _getPool();
   const t0 = Date.now();
+  const THRESHOLD = await getThreshold();
 
   // Estratégia em 2 passos (muito mais rápida que JOIN LATERAL):
   //
@@ -243,7 +265,7 @@ async function listDeslocamentos(de, ate, opts = {}) {
         d.status = 'origem_destino_iguais';
       } else {
         d.desvio_pct = +(100 * (d.tempo_real_sec - d.tempo_osrm_sec) / d.tempo_osrm_sec).toFixed(1);
-        d.status = (d.tempo_real_sec / d.tempo_osrm_sec) > 1.5 ? 'lento' : 'ok';
+        d.status = (d.tempo_real_sec / d.tempo_osrm_sec) > THRESHOLD ? 'lento' : 'ok';
       }
     } else {
       osrmFails++;
@@ -269,6 +291,7 @@ async function listDeslocamentos(de, ate, opts = {}) {
     total: opts.somenteLentos ? finalRows.length : desloc.length,
     returned: finalRows.length,
     rows: finalRows,
+    threshold: THRESHOLD,   // UI usa pra rotular "> N× Maps" dinamicamente
   };
 }
 
@@ -354,4 +377,5 @@ module.exports = {
   rankingEquipes,
   tendenciaDiaria,
   extrairDeslocamentos,
+  getThreshold,
 };
