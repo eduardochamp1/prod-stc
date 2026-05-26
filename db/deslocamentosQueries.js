@@ -294,7 +294,7 @@ async function rankingEquipes(de, ate, opts = {}) {
   return ranking;
 }
 
-/** Tendência diária: tempo médio real vs OSRM por dia. */
+/** Tendência diária: tempo médio real vs Maps por dia, com continuidade de calendário. */
 async function tendenciaDiaria(de, ate, opts = {}) {
   const lista = await listDeslocamentos(de, ate, { ...opts, limit: 5000 });
   const byDay = new Map();
@@ -309,14 +309,36 @@ async function tendenciaDiaria(de, ate, opts = {}) {
     acc.soma_osrm += d.tempo_osrm_sec;
     if (d.status === 'lento') acc.lentos++;
   }
-  const out = Array.from(byDay.values()).map(d => ({
-    data:           d.data,
-    total:          d.total,
-    tempo_real_avg_sec: Math.round(d.soma_real / d.total),
-    tempo_osrm_avg_sec: Math.round(d.soma_osrm / d.total),
-    pct_lentos:     +(100 * d.lentos / d.total).toFixed(1),
-  }));
-  out.sort((a, b) => a.data.localeCompare(b.data));
+
+  // Garante continuidade do calendario [de, ate] preenchendo zero em dias
+  // sem deslocamentos (mesma logica de getRejeicoesTotais.porDia).
+  const out = [];
+  if (de && ate) {
+    const cur = new Date(de + 'T00:00:00Z');
+    const end = new Date(ate + 'T00:00:00Z');
+    while (cur <= end) {
+      const isoDate = cur.toISOString().slice(0, 10);
+      const d = byDay.get(isoDate);
+      if (d && d.total > 0) {
+        out.push({
+          data:               isoDate,
+          total:              d.total,
+          tempo_real_avg_sec: Math.round(d.soma_real / d.total),
+          tempo_osrm_avg_sec: Math.round(d.soma_osrm / d.total),
+          pct_lentos:         +(100 * d.lentos / d.total).toFixed(1),
+        });
+      } else {
+        out.push({
+          data:               isoDate,
+          total:              0,
+          tempo_real_avg_sec: 0,
+          tempo_osrm_avg_sec: 0,
+          pct_lentos:         0,
+        });
+      }
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+  }
   return out;
 }
 

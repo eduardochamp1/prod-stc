@@ -5793,36 +5793,8 @@
           </div>`;
       }).join('');
 
-      // Tendência SVG simples
-      const tendW = 760, tendH = 200, tendPad = 30;
-      const tend = tendencia || [];
-      const tendMax = Math.max(...tend.flatMap(d => [d.tempo_real_avg_sec, d.tempo_osrm_avg_sec]), 1);
-      const tendSVG = tend.length === 0 ? '<div class="empty-state" style="font-size:12px">Sem dados</div>' : `
-        <svg viewBox="0 0 ${tendW} ${tendH}" class="desloc-trend-svg">
-          ${tend.map((d, i) => {
-            const x = tendPad + (i * (tendW - 2 * tendPad) / Math.max(1, tend.length - 1));
-            const yReal = tendH - tendPad - (d.tempo_real_avg_sec / tendMax) * (tendH - 2 * tendPad);
-            const yOsrm = tendH - tendPad - (d.tempo_osrm_avg_sec / tendMax) * (tendH - 2 * tendPad);
-            const next = tend[i + 1];
-            let line = '';
-            if (next) {
-              const nx = tendPad + ((i + 1) * (tendW - 2 * tendPad) / Math.max(1, tend.length - 1));
-              const nyR = tendH - tendPad - (next.tempo_real_avg_sec / tendMax) * (tendH - 2 * tendPad);
-              const nyO = tendH - tendPad - (next.tempo_osrm_avg_sec / tendMax) * (tendH - 2 * tendPad);
-              line = `
-                <line x1="${x}" y1="${yReal}" x2="${nx}" y2="${nyR}" stroke="#e74c3c" stroke-width="2"/>
-                <line x1="${x}" y1="${yOsrm}" x2="${nx}" y2="${nyO}" stroke="#3498db" stroke-width="2" stroke-dasharray="4,3"/>
-              `;
-            }
-            return `
-              ${line}
-              <circle cx="${x}" cy="${yReal}" r="3" fill="#e74c3c"/>
-              <circle cx="${x}" cy="${yOsrm}" r="3" fill="#3498db"/>
-              <text x="${x}" y="${tendH - 8}" text-anchor="middle" font-size="9" fill="var(--text2)">${d.data.slice(5)}</text>
-            `;
-          }).join('')}
-        </svg>
-      `;
+      // Tendência diária — gráfico enriquecido
+      const tendSVG = _renderDeslocTendenciaSVG(tendencia || []);
 
       // Tabela detalhada (limit 500 pra performance)
       const tabela = lista.rows.slice(0, 500).map(d => {
@@ -6072,6 +6044,161 @@
             <span><span class="swatch" style="background:#e74c3c"></span>Dia útil</span>
             <span><span class="swatch" style="background:#7d8a99;opacity:.6"></span>Fim de semana</span>
             <span><span class="swatch" style="background:#f39c12"></span>Média móvel 7d</span>
+          </div>
+        </div>
+      `;
+    }
+
+    // ── Tendência diária de deslocamentos: real vs Maps com linha de limite ──
+    // Gráfico mais informativo que o anterior:
+    //  - Eixo Y em minutos com grid
+    //  - Linha vermelha sólida = tempo real médio
+    //  - Linha azul tracejada = tempo Maps médio
+    //  - Linha cinza pontilhada = limite (1.5× Maps) — referência do negócio
+    //  - Pontos vermelhos VAZADOS quando real <= limite, PREENCHIDOS quando > limite
+    //  - Stats header (pico real, melhor dia, % dias acima)
+    //  - Dias sem dados aparecem como vão visual (sem ponto)
+    //  - Distinção fim de semana no label X
+    function _renderDeslocTendenciaSVG(tend) {
+      if (!tend || tend.length === 0) {
+        return '<div class="empty-state" style="font-size:12px">Sem dados no período.</div>';
+      }
+      const n = tend.length;
+      // Filtra dias com dados pra calcular max/stats
+      const comDados = tend.filter(d => d.total > 0);
+      if (comDados.length === 0) {
+        return '<div class="empty-state" style="font-size:12px">Sem deslocamentos no período.</div>';
+      }
+      // Threshold de 1.5× Maps por dia (limite do negócio)
+      const limiteSecs = d => Math.round((d.tempo_osrm_avg_sec || 0) * 1.5);
+      const maxVal = Math.max(
+        ...comDados.flatMap(d => [d.tempo_real_avg_sec, d.tempo_osrm_avg_sec, limiteSecs(d)]),
+        60
+      );
+      const niceMax = (v => {
+        // Arredonda em "minutos cheios" (60, 120, 180, 300, ...)
+        const minutos = Math.ceil(v / 60);
+        if (minutos <= 5)  return 5 * 60;
+        if (minutos <= 10) return 10 * 60;
+        if (minutos <= 15) return 15 * 60;
+        if (minutos <= 20) return 20 * 60;
+        if (minutos <= 30) return 30 * 60;
+        if (minutos <= 45) return 45 * 60;
+        if (minutos <= 60) return 60 * 60;
+        return Math.ceil(minutos / 30) * 30 * 60;
+      })(maxVal);
+
+      // Stats pro header
+      const picoDia = comDados.reduce((max, d) => d.tempo_real_avg_sec > max.tempo_real_avg_sec ? d : max, comDados[0]);
+      const melhorDia = comDados.reduce((min, d) => d.tempo_real_avg_sec < min.tempo_real_avg_sec ? d : min, comDados[0]);
+      const diasAcimaLimite = comDados.filter(d => d.tempo_real_avg_sec > limiteSecs(d)).length;
+      const pctDiasAcima = comDados.length > 0 ? +(100 * diasAcimaLimite / comDados.length).toFixed(0) : 0;
+
+      // SVG geometria
+      const W = 1000, H = 260;
+      const padL = 48, padR = 12, padT = 18, padB = 36;
+      const innerW = W - padL - padR;
+      const innerH = H - padT - padB;
+      const slot = innerW / Math.max(1, n - 1);
+
+      const y = v => padT + innerH - (v / niceMax) * innerH;
+      const x = i => padL + slot * i;
+      const fmtMin = sec => {
+        const m = Math.round(sec / 60);
+        if (m >= 60) return `${Math.floor(m/60)}h${String(m%60).padStart(2,'0')}`;
+        return `${m}m`;
+      };
+
+      // Grid + eixo Y (5 linhas, valores em minutos)
+      const grid = [];
+      for (let i = 0; i <= 5; i++) {
+        const v = niceMax * i / 5;
+        const yy = y(v);
+        grid.push(`<line class="grid-line" x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" />`);
+        grid.push(`<text class="y-label" x="${padL - 6}" y="${yy + 3}">${fmtMin(v)}</text>`);
+      }
+
+      // Path helper — quebra a linha quando há gap de dia sem dados
+      const buildPath = (getVal) => {
+        let d = '';
+        let lastHadData = false;
+        tend.forEach((dia, i) => {
+          if (dia.total > 0) {
+            const cmd = lastHadData ? 'L' : 'M';
+            d += `${cmd} ${x(i).toFixed(1)} ${y(getVal(dia)).toFixed(1)} `;
+            lastHadData = true;
+          } else {
+            lastHadData = false;
+          }
+        });
+        return d.trim();
+      };
+
+      const pathReal   = buildPath(d => d.tempo_real_avg_sec);
+      const pathMaps   = buildPath(d => d.tempo_osrm_avg_sec);
+      const pathLimite = buildPath(d => limiteSecs(d));
+
+      // Pontos
+      const dots = tend.map((d, i) => {
+        if (d.total === 0) return '';
+        const cx = x(i);
+        const acima = d.tempo_real_avg_sec > limiteSecs(d);
+        const fillReal = acima ? '#e74c3c' : 'var(--cinza1)';
+        const tip = `${fmtDateBR(d.data)} · Real: ${fmtMin(d.tempo_real_avg_sec)} · Maps: ${fmtMin(d.tempo_osrm_avg_sec)} · Limite: ${fmtMin(limiteSecs(d))} · ${d.total} deslocs · ${d.pct_lentos}% lentos`;
+        return `
+          <g>
+            <circle cx="${cx}" cy="${y(d.tempo_osrm_avg_sec)}" r="3" fill="#3498db">
+              <title>${tip}</title>
+            </circle>
+            <circle cx="${cx}" cy="${y(d.tempo_real_avg_sec)}" r="4" fill="${fillReal}" stroke="#e74c3c" stroke-width="2">
+              <title>${tip}</title>
+            </circle>
+          </g>
+        `;
+      }).join('');
+
+      // Labels X (dia/mes). Fim de semana em cinza.
+      const step = n <= 25 ? 1 : (n <= 35 ? 2 : Math.ceil(n / 16));
+      const xLabelClass = slot < 36 ? 'x-label x-label-sm' : 'x-label';
+      const xLabels = tend.map((d, i) => {
+        if (i % step !== 0 && i !== n - 1) return '';
+        const dt = new Date(d.data + 'T12:00:00');
+        const dow = dt.getDay();
+        const isWeekend = dow === 0 || dow === 6;
+        const lbl = d.data.slice(8) + '/' + d.data.slice(5, 7);
+        return `<text class="${xLabelClass} ${isWeekend ? 'weekend' : ''}" x="${x(i)}" y="${H - padB + 14}">${lbl}</text>`;
+      }).join('');
+
+      const statStyle = 'font-size:12px;color:var(--text2)';
+      const swatchStyle = 'display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle';
+      return `
+        <style>
+          .desloc-tend-rich .grid-line { stroke:rgba(255,255,255,.06); stroke-width:1; stroke-dasharray:2,3; }
+          .desloc-tend-rich .y-label { font-size:10px; fill:var(--text2); text-anchor:end; }
+          .desloc-tend-rich .x-label { font-size:10px; fill:var(--text2); text-anchor:middle; }
+          .desloc-tend-rich .x-label-sm { font-size:9px; fill:var(--text2); text-anchor:middle; }
+          .desloc-tend-rich .x-label.weekend, .desloc-tend-rich .x-label-sm.weekend { fill:#7d8a99; opacity:.7; }
+        </style>
+        <div>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;padding:6px 0 10px;${statStyle}">
+            <div><span style="opacity:.65">Dias com dados:</span> <b style="color:var(--text1);font-size:14px">${comDados.length}</b> de <b>${n}</b></div>
+            <div><span style="opacity:.65">Pico tempo real:</span> <b style="color:var(--text1);font-size:14px">${fmtDateBR(picoDia.data)} (${fmtMin(picoDia.tempo_real_avg_sec)})</b></div>
+            <div><span style="opacity:.65">Melhor dia:</span> <b style="color:var(--text1);font-size:14px">${fmtDateBR(melhorDia.data)} (${fmtMin(melhorDia.tempo_real_avg_sec)})</b></div>
+            <div style="color:${diasAcimaLimite > 0 ? '#e74c3c' : 'inherit'}"><span style="opacity:.65">Dias acima do limite:</span> <b style="font-size:14px">${diasAcimaLimite}</b> (${pctDiasAcima}%)</div>
+          </div>
+          <svg class="desloc-tend-rich" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
+            ${grid.join('')}
+            <path d="${pathLimite}" fill="none" stroke="#95a5a6" stroke-width="1.5" stroke-dasharray="2,3" opacity="0.7" />
+            <path d="${pathMaps}"   fill="none" stroke="#3498db" stroke-width="2" stroke-dasharray="5,4" />
+            <path d="${pathReal}"   fill="none" stroke="#e74c3c" stroke-width="2.5" />
+            ${dots}
+            ${xLabels}
+          </svg>
+          <div style="display:flex;gap:14px;justify-content:flex-end;font-size:11px;opacity:.85;padding-top:8px;flex-wrap:wrap">
+            <span><span style="${swatchStyle};background:#e74c3c"></span>Tempo real</span>
+            <span><span style="${swatchStyle};background:#3498db"></span>Tempo Maps (estimativa)</span>
+            <span><span style="${swatchStyle};background:#95a5a6"></span>Limite (1,5× Maps)</span>
+            <span style="margin-left:8px;opacity:.85"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#e74c3c;vertical-align:middle;margin-right:5px"></span>ponto cheio = dia acima do limite</span>
           </div>
         </div>
       `;
