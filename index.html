@@ -5427,6 +5427,11 @@
             <div class="rej-kpi-sub">${tot.semMotivo} sem motivo (bandeiradas)</div>
           </div>
           <div class="rej-kpi">
+            <div class="rej-kpi-label">Ocorrências de Motivos</div>
+            <div class="rej-kpi-value">${tot.totalOcorrenciasMotivo || 0}</div>
+            <div class="rej-kpi-sub">soma dos motivos (1 nota pode ter vários)</div>
+          </div>
+          <div class="rej-kpi">
             <div class="rej-kpi-label">Top Motivo</div>
             <div class="rej-kpi-value" style="font-size:15px;line-height:1.3;font-weight:600">${topMotivoTxt}</div>
             <div class="rej-kpi-sub">motivo mais frequente</div>
@@ -5449,6 +5454,13 @@
         <div class="rej-grid">
           <div class="rej-panel">
             <h3>🚫 Top Motivos ${_rejMotivoFilter ? '<span style="color:#e74c3c;font-size:11px">(filtro ativo — clique no motivo ativo pra limpar)</span>' : ''}</h3>
+            <div style="font-size:11px;color:var(--text2);margin:-6px 0 10px;line-height:1.4">
+              Contagem = nº de notas únicas com cada motivo.
+              Uma nota pode aparecer em vários motivos, por isso a soma desta lista
+              (<strong>${tot.totalOcorrenciasMotivo || 0}</strong>) é
+              ${tot.totalOcorrenciasMotivo > tot.comMotivo ? 'maior' : 'igual'}
+              ao total de notas com motivo (<strong>${tot.comMotivo}</strong>).
+            </div>
             ${motivosHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}
           </div>
           <div class="rej-panel">

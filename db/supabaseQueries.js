@@ -1306,8 +1306,17 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
     e.percentual = denom > 0 ? +(100 * e.count / denom).toFixed(1) : null;
   });
 
+  // Total de OCORRENCIAS de motivos no periodo. Diferente do `total` (notas
+  // unicas) porque uma nota com 3 motivos contribui 3x aqui. Sempre vale
+  // totalOcorrenciasMotivo >= comMotivo (igualdade quando ninguem tem >1 motivo).
+  // Exclui a categoria sintetica '__SEM_MOTIVO__'.
+  const totalOcorrenciasMotivo = Array.from(motivoMap.values())
+    .filter(m => m.code !== '__SEM_MOTIVO__')
+    .reduce((acc, m) => acc + m.count, 0);
+
   return {
     total, comMotivo, semMotivo,
+    totalOcorrenciasMotivo,
     porRegional, porTipo, porMotivo, porEquipe, porDia,
     executadasNoPeriodo: executadas,
     percentualGeral: (executadas + total) > 0
