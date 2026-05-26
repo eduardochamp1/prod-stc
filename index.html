@@ -7422,11 +7422,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
      * Usa sessionBeginReal (primeiro snapshot do dia) ao invés de sessionBegin
      * (sessão atual, que pode ser do relogin).
      */
+    // Horário de referência do logon/apresentação da equipe. presentationTime
+    // (= v2.SessionBegin / "Hr. Apresentação" da EDP) tem prioridade: reflete o
+    // checkin do dia atual mesmo quando a sessão física continua aberta de
+    // ontem. Usado tanto pra exibir o horário quanto pra decidir se a sessão é
+    // realmente de dia anterior (badge DIA ANT, alerta de sessão anômala).
+    function _refLogon(t) {
+      return t.presentationTime || t.sessionBeginReal || t.sessionBegin || null;
+    }
+
     function _horaLogon(t) {
-      // Prioridade: presentationTime (= v2.SessionBegin, "Hr. Apresentação" da
-      // EDP, reflete o checkin do dia atual mesmo se a sessão física é de ontem)
-      // → sessionBeginReal (1º snapshot do dia) → sessionBegin (sessão atual).
-      const inicio = t.presentationTime || t.sessionBeginReal || t.sessionBegin;
+      const inicio = _refLogon(t);
       if (!inicio) return 'sem dado';
       const fmtH = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       const ehAntiga = sessaoAnterior(inicio);
@@ -8881,7 +8887,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const executadas = teamsAll.reduce((s, t) => {
         let arr;
         if (isLiveToday) {
-          const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(t.sessionBegin);
+          const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(_refLogon(t));
           if (!sessaoHoje) return s;
           arr = t.notasExecutadas || [];
         } else {
@@ -9007,14 +9013,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
       //   • Dia anterior + ainda aberta (esqueceram de deslogar)
       //   • Hoje + app offline   (sessão pendente — app não responde)
       // Equipes "Em campo" normais (sessão de hoje + online) não disparam alerta.
-      const alertaTeams = teams.filter(t => !t.sessionEnd && (sessaoAnterior(t.sessionBegin) || !t.isOnline));
+      const alertaTeams = teams.filter(t => !t.sessionEnd && (sessaoAnterior(_refLogon(t)) || !t.isOnline));
       const alertEl = document.getElementById('alert-stale-sessions');
       if (alertEl) {
         if (alertaTeams.length > 0) {
           const itens = alertaTeams.map(t => {
-            const d = (t.sessionBegin || '').slice(0, 10);
+            const d = (_refLogon(t) || '').slice(0, 10);
             const dataBR = d ? d.split('-').reverse().slice(0, 2).join('/') : '';
-            const isAnt = sessaoAnterior(t.sessionBegin);
+            const isAnt = sessaoAnterior(_refLogon(t));
             const offline = !t.isOnline;
             // marcadores: 📅 = dia anterior, 🔴 = app offline
             const marca = `${isAnt ? '📅' : ''}${offline ? '🔴' : ''}`;
@@ -9050,7 +9056,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const badgeCls = emCampo ? 'status-ativa' : (pendente ? 'status-pendente' : 'status-encerrada');
         const badgeTxt = emCampo ? '● Em campo' : (pendente ? '⚠ Sessão pendente' : '○ Encerrada');
         // Borda laranja marca qualquer sessão anômala: dia anterior aberta OU pendente hoje
-        const isStale = sessaoAberta && (sessaoAnterior(t.sessionBegin) || pendente);
+        const isStale = sessaoAberta && (sessaoAnterior(_refLogon(t)) || pendente);
         // Resolve a contagem de re-logins de forma consistente com o badge "⚠ relogou":
         // - Em snapshots persistidos, t.relogins quase sempre eh 0 (nao persistimos
         //   essa info por equipe). Mas t.relogouNoDia eh detectado pos-fato comparando
@@ -9094,7 +9100,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
             <div class="team-row">
               <span class="team-row-label">${t.sessionEnd ? 'Logon → Logoff' : 'Logon'}</span>
               <span style="color:var(--text);font-size:12px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-                ${sessaoAnterior(t.sessionBeginReal || t.sessionBegin)
+                ${sessaoAnterior(_refLogon(t))
             ? `<span style="background:#f39c12;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;letter-spacing:.03em">📅 DIA ANT.</span>`
             : ''}
                 ${_horaLogon(t)}
