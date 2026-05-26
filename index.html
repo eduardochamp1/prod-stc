@@ -5679,11 +5679,12 @@
 
     async function initDeslocamentos() {
       const hoje = todayISO();
-      // Default: HOJE apenas — OSRM consultas demoram (1 req/s), aumentar
-      // range gradualmente após cache popular.
+      // Default: do dia 1 do mes corrente ate hoje (visao mensal acumulada).
+      // Com cache HERE local, ja eh rapido. Usuario pode estreitar livremente.
+      const primeiroDoMes = hoje.slice(0, 8) + '01';
       const deEl  = document.getElementById('desloc-de-input');
       const ateEl = document.getElementById('desloc-ate-input');
-      if (deEl  && !deEl.value)  deEl.value  = hoje;
+      if (deEl  && !deEl.value)  deEl.value  = primeiroDoMes;
       if (ateEl && !ateEl.value) ateEl.value = hoje;
 
       if (!_deslocEquipesPopuladas) {
