@@ -100,6 +100,83 @@ router.get('/teams', async (req, res) => {
   }
 });
 
+// Helper: bloqueia request com `team=` se a equipe não pertence à regional
+// do usuário (não-admin). Defesa pra endpoints que aceitam team direto sem
+// filtro de regional explícito (ex: /mapa/equipe). Cache em memória pra
+// não consultar a cada request.
+const _equipeRegionalCache = { map: null, fetchedAt: 0 };
+async function _resolveTeamRegional(sigla) {
+  // Cache de 60s — equipes oficiais mudam raramente
+  if (!_equipeRegionalCache.map || (Date.now() - _equipeRegionalCache.fetchedAt) > 60000) {
+    try {
+      const sb = require('../services/supabaseClient').getClient();
+      const { data } = await sb.from('equipes_oficiais').select('sigla, regional');
+      const m = new Map();
+      (data || []).forEach(e => m.set(e.sigla, e.regional));
+      _equipeRegionalCache.map = m;
+      _equipeRegionalCache.fetchedAt = Date.now();
+    } catch (e) {
+      return null;
+    }
+  }
+  return _equipeRegionalCache.map.get(sigla) || null;
+}
+
+/**
+ * Verifica se a equipe (`team`) pertence à regional do usuário logado.
+ * Retorna `true` quando ok (deixa passar), `false` quando bloqueia
+ * (e responde 403 direto).
+ *
+ * Admin (regional=ALL) sempre passa. Quando team é vazio/ALL/null, passa
+ * (não-admin já tem o filtro por regional aplicado pelo authMiddleware).
+ */
+async function enforceTeamRegional(req, res, team) {
+  if (!team || team === 'ALL') return true;
+  if (!req.user || !req.user.regional || req.user.regional === 'ALL') return true;
+  // Múltiplas siglas (CSV) — bloqueia se QUALQUER uma não for da regional
+  const teams = String(team).split(',').map(s => s.trim()).filter(Boolean);
+  for (const t of teams) {
+    const reg = await _resolveTeamRegional(t);
+    if (reg && reg !== req.user.regional) {
+      res.status(403).json({
+        error: `Acesso negado: equipe ${t} não pertence à sua regional (${req.user.regional}).`,
+        code: 'TEAM_REGIONAL_MISMATCH',
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+// GET /api/equipes
+// Lista de equipes oficiais ativas — pública pra qualquer usuário logado,
+// filtrada automaticamente pela regional do user (não-admin só vê suas).
+// Usada pra popular dropdowns de filtros nas abas de Rejeições, Deslocamentos,
+// Gráficos e Mapa. Substituiu /admin/equipes nesses pontos quando role-based
+// virou requireAdmin (admin/equipes ficou só pra CRUD).
+router.get('/equipes', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/supabaseClient').getClient();
+    let q = sb
+      .from('equipes_oficiais')
+      .select('sigla, regional, tipo, ativo')
+      .eq('ativo', true)
+      .order('regional')
+      .order('sigla');
+    // Não-admin → só sua regional (defesa em profundidade — middleware já força regional na query)
+    if (req.user && req.user.regional && req.user.regional !== 'ALL') {
+      q = q.eq('regional', req.user.regional);
+    }
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ equipes: data || [], count: (data || []).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/teams/historico?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=GUA
 // Retorna equipes de um período via snapshots (Supabase)
 router.get('/teams/historico', async (req, res) => {
@@ -196,6 +273,7 @@ router.get('/totais/subcat', async (req, res) => {
     const ate = req.query.ate || req.query.date || de;
     const regional = req.query.regional || 'ALL';
     const team     = req.query.team     || null;   // sigla específica ou null/ALL
+    if (!(await enforceTeamRegional(req, res, team))) return;
     if (!sq) return res.json({ de, ate, totais: { ALL: {}, GUA: {}, CAC: {} }, quantidades: { ALL: {}, GUA: {}, CAC: {} } });
     const result = await sq.getDailySubcatTotals(de, ate, regional, team);
     res.json({ de, ate, ...result });
@@ -258,6 +336,7 @@ router.get('/performance/equipes', async (req, res) => {
     const regional = req.query.regional || 'ALL';
     const tipo     = req.query.tipo     || 'TODAS';
     const team     = req.query.team     || null;
+    if (!(await enforceTeamRegional(req, res, team))) return;
     if (!sq) return res.json({ equipes: [], de, ate });
     const result = await sq.getPerformanceEquipes(de, ate, regional, tipo, team);
     res.json(result);
@@ -330,6 +409,7 @@ router.get('/historico/sessoes', async (req, res) => {
     }
     if (!dateRe.test(de) || !dateRe.test(ate))
       return res.status(400).json({ error: 'Formato inválido. Use YYYY-MM-DD' });
+    if (!(await enforceTeamRegional(req, res, req.query.team))) return;
     if (!sq) return res.json({ dias: [] });
     const dias = await sq.getTeamSessionHistory(de, ate, req.query.team || null, req.query.regional || null);
     res.json({ de, ate, dias });
@@ -441,6 +521,7 @@ router.get('/historico/equipes', async (req, res) => {
     const sq   = sbq();
     const ym   = _parseYearMonth(req, res); if (!ym) return;
     const team = req.query.team || null;
+    if (!(await enforceTeamRegional(req, res, team))) return;
     if (!sq) return res.json({ mes: ym, dias: [] });
     const dias = await sq.getTeamDailyHistory(ym, team);
     res.json({ mes: ym, team: team || 'ALL', dias });
@@ -962,6 +1043,7 @@ router.get('/debug/teamsstatus', async (req, res) => {
 router.get('/equipes/producao', async (req, res) => {
   try {
     const sq = sbq();
+    if (!(await enforceTeamRegional(req, res, req.query.team))) return;
     if (!sq) return res.json({ equipes: [], tipos: [] });
     const resultado = await sq.getTeamProducao(req.query);
     res.json(resultado);
@@ -2283,6 +2365,8 @@ router.get('/mapa/equipe', async (req, res) => {
     const sq   = sbq();
     const team = req.query.team;
     if (!team) return res.status(400).json({ error: 'Parâmetro team é obrigatório.' });
+    // Bloqueia se equipe é de outra regional (não-admin)
+    if (!(await enforceTeamRegional(req, res, team))) return;
     const date = req.query.date || dateBRT();
     if (!sq) return res.json({ notes: [], team, date, teamInfo: {} });
     const result = await sq.getMapaEquipe(team, date);

@@ -5669,7 +5669,7 @@
       if (ateEl && !ateEl.value) ateEl.value = hoje;
       if (!_rejEquipesPopuladas) {
         try {
-          const res = await fetch(`${API}/admin/equipes`);
+          const res = await fetch(`${API}/equipes`);
           if (res.ok) {
             const data = await res.json();
             const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
@@ -6126,7 +6126,7 @@
 
       if (!_deslocEquipesPopuladas) {
         try {
-          const res = await fetch(`${API}/admin/equipes`);
+          const res = await fetch(`${API}/equipes`);
           if (res.ok) {
             const data = await res.json();
             const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
@@ -6730,7 +6730,7 @@
       const sel = document.getElementById('graf-equipe-select');
       if (!sel) return;
       try {
-        const res = await fetch(`${API}/admin/equipes`);
+        const res = await fetch(`${API}/equipes`);
         if (!res.ok) return;
         const data = await res.json();
         const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
@@ -10379,7 +10379,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
     async function _popularMapaTeamSelect() {
       if (_mapaTeamLoaded) return;
       try {
-        const r = await fetch(`${API}/admin/equipes`);
+        const r = await fetch(`${API}/equipes`);
         if (!r.ok) return;
         const { equipes } = await r.json();
         _mapaTeamLista = (equipes || []).filter(e => e.ativo)
