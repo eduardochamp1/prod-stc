@@ -999,6 +999,12 @@ async function getTeamsBySector(sectorId) {
       escalaInicioWPA: _parseShiftStart(v2?.ShiftType),
       // Fim inferido: início + 9h (8h trabalho + 1h refeição). WPA não dá fim.
       escalaFimWPA:    _shiftEndFromStart(_parseShiftStart(v2?.ShiftType), 9),
+      // "Hr. Apresentação" da EDP — v2.SessionBegin (nível 1) reflete o checkin
+      // REAL do dia atual, diferente de Session.BeginTime/sessions.current que
+      // mantém a sessão física aberta (pode ser de dia anterior se a equipe
+      // esqueceu de deslogar). v2.SessionBegin já vem em BRT (sem sufixo TZ),
+      // então anexamos -03:00 pra new Date() interpretar certo.
+      presentationTime: v2?.SessionBegin ? `${v2.SessionBegin}-03:00` : null,
       carteiraCount,
       servicosPerfil: [...new Set(allNotas.map(n => n.tipoCode))],
       notasBaixadas:   baixadas,

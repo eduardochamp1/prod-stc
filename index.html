@@ -7423,7 +7423,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
      * (sessão atual, que pode ser do relogin).
      */
     function _horaLogon(t) {
-      const inicio = t.sessionBeginReal || t.sessionBegin;
+      // Prioridade: presentationTime (= v2.SessionBegin, "Hr. Apresentação" da
+      // EDP, reflete o checkin do dia atual mesmo se a sessão física é de ontem)
+      // → sessionBeginReal (1º snapshot do dia) → sessionBegin (sessão atual).
+      const inicio = t.presentationTime || t.sessionBeginReal || t.sessionBegin;
       if (!inicio) return 'sem dado';
       const fmtH = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       const ehAntiga = sessaoAnterior(inicio);
