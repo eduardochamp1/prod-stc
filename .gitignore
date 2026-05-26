@@ -10,3 +10,11 @@ data/*.db-wal
 
 # Documentação interna — não versionar (knowledge base do WPA, anotações, etc)
 docs/
+
+# Workspace local — SOMENTE DO DEV. Specs em andamento, checkpoints de sessão,
+# decisões de produto, prompts originais, skills/superpowers, anotações.
+# Nada aqui sobe pro git — é o "rascunho privado" do desenvolvedor.
+_local/
+.local/
+*.checkpoint.md
+SESSION-*.md
