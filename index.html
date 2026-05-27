@@ -4733,16 +4733,6 @@
     <!-- ── TAB: GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────── -->
     <div class="tab-panel" id="tab-graficos">
 
-      <!-- ── CONTADOR: DIAS SEM TRANSGRESSÃO DE NOTA ──────────────────────── -->
-      <div id="contador-transgressao-wrap" style="margin-bottom:18px">
-        <div style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);margin-bottom:10px">
-          🛡️ Dias sem Transgressão de Nota
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="contador-cards">
-          <div class="empty-state" style="font-size:12px">Carregando…</div>
-        </div>
-      </div>
-
       <div class="filter-bar">
         <div class="date-label">Gráficos de Produtividade — <strong id="graf-periodo-label"></strong></div>
         <div class="filter-controls">
@@ -6737,9 +6727,8 @@
       const csAteEl = document.getElementById('graf-cs-ate-input');
       if (csDeEl && !csDeEl.value)   csDeEl.value  = defaultCicloCS().de;
       if (csAteEl && !csAteEl.value) csAteEl.value = defaultCicloCS().ate;
-
-      // Contador de dias sem transgressão (independente dos filtros)
-      loadContadorTransgressao();
+      // O contador agora é renderizado dentro do graf-content (entre KPIs e
+      // gauges) e populado no loadGraficos após cada render — não aqui.
     }
 
     // ── CONTADOR DE DIAS SEM TRANSGRESSÃO ─────────────────────────────────────
@@ -7086,6 +7075,9 @@
 
         const metas = getMetas();
         cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, cs);
+        // O contador agora vive DENTRO do graf-content (entre KPIs e gauges),
+        // então é recriado a cada render — popula logo após.
+        loadContadorTransgressao();
       } catch (err) {
         cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
       }
@@ -7358,6 +7350,15 @@
       return `
 <div class="perf-section">
   ${kpisHTML}
+</div>
+
+<!-- Contador de dias sem transgressão (entre KPIs e gauges). Populado por
+     loadContadorTransgressao() após o render do graf-content. -->
+<div class="perf-section" id="contador-transgressao-wrap">
+  <div class="perf-section-title">🛡️ Dias sem Transgressão de Nota</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="contador-cards">
+    <div class="empty-state" style="font-size:12px">Carregando…</div>
+  </div>
 </div>
 
 <div class="perf-section">
