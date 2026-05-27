@@ -7455,6 +7455,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // ontem. Usado tanto pra exibir o horário quanto pra decidir se a sessão é
     // realmente de dia anterior (badge DIA ANT, alerta de sessão anômala).
     function _refLogon(t) {
+      // Se o PRIMEIRO login do dia (sessionBeginReal) foi HOJE, ele é a
+      // apresentação correta — mesmo que a equipe tenha relogado mais tarde.
+      // Relogin no mesmo dia (queda de conexão, troca de aparelho) NÃO deve
+      // contar como atraso. Ex: ECGPR82 logou 08:12 e relogou 15:00 → usa 08:12.
+      // Só caímos no presentationTime (= v2.SessionBegin, re-checkin) quando
+      // NÃO houve login hoje cedo — caso de sessão de dia anterior reaberta
+      // hoje (ECPIU50/EPMRT30), onde a apresentação real é o re-checkin.
+      if (t.sessionBeginReal && !sessaoAnterior(t.sessionBeginReal)) {
+        return t.sessionBeginReal;
+      }
       return t.presentationTime || t.sessionBeginReal || t.sessionBegin || null;
     }
 
