@@ -9050,7 +9050,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
       //   • Dia anterior + ainda aberta (esqueceram de deslogar)
       //   • Hoje + app offline   (sessão pendente — app não responde)
       // Equipes "Em campo" normais (sessão de hoje + online) não disparam alerta.
-      const alertaTeams = teams.filter(t => !t.sessionEnd && (sessaoAnterior(_refLogon(t)) || !t.isOnline));
+      // Equipes USO MÚTUO não operam o app no fluxo normal (nunca têm dados V2,
+      // logo isOnline=false sempre) — excluí-las do critério de "app offline"
+      // evita falso positivo recorrente (ex: ECCIT70). Continuam no alerta se
+      // for sessão de dia anterior (esqueceram de deslogar), que é real.
+      const _ehUsoMutuo = t => String(t.tipo || '').toUpperCase().includes('USO MUTUO')
+                            || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
+      const alertaTeams = teams.filter(t =>
+        !t.sessionEnd && (
+          sessaoAnterior(_refLogon(t)) ||
+          (!t.isOnline && !_ehUsoMutuo(t))
+        )
+      );
       const alertEl = document.getElementById('alert-stale-sessions');
       if (alertEl) {
         if (alertaTeams.length > 0) {

@@ -975,6 +975,9 @@ async function getTeamsBySector(sectorId) {
       teamName,
       sectorId:     teamSectorId,
       regional:     REGIONAL_MAP[teamSectorId] || 'GUA',
+      // Tipo da equipe (whitelist) — usado no front pra tratar casos especiais
+      // (ex: USO MUTUO não opera o app, então não entra no alerta de offline).
+      tipo:         (() => { try { return require('./equipesOficiais').getMeta(teamName)?.tipo || null; } catch (_) { return null; } })(),
       date:         s.BeginTime?.slice(0, 10) || new Date().toISOString().slice(0, 10),
       sessionBegin: s.BeginTime,
       sessionEnd:   s.EndTime || null,
