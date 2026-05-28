@@ -368,34 +368,41 @@ async function classificar(noteId, tipo, ctx = {}) {
 
 /**
  * Classifica várias notas em paralelo controlado.
- * Aplica concorrência menor para DD (que dispara details/optimized ~1.6 MB).
+ *
+ * Estratégia (memória):
+ *   - DD dispara /details/optimized (150 KB-1.6 MB cada). Concorrência baixa (2)
+ *     e processado SEPARADAMENTE de MD/SF — não em paralelo — pra evitar somar
+ *     payloads pesados na heap.
+ *   - Entre chunks, `await new Promise(r => setImmediate(r))` cede o event loop
+ *     pro GC liberar o JSON.parse anterior. Sem isso, V8 acumula objetos até o
+ *     pm2 matar por max_memory_restart (incidente 27/05/2026: 161 restarts).
+ *
  * @param {Array<{noteId, tipo, sectorId?, numero?}>} jobs
- * @param {number} concurrency  default p/ MD/SF (DD é forçado a 4)
+ * @param {number} concurrency  default p/ MD/SF (DD é forçado a 2)
  * @returns {Promise<Array>}  classificações (filtra nulos)
  */
-async function classificarBatch(jobs, concurrency = 10) {
-  // Separa DD (pesado) de MD/SF (leve) e processa com concorrências diferentes
+async function classificarBatch(jobs, concurrency = 6) {
   const ddJobs   = jobs.filter(j => j.tipo === 'DD');
   const lightJobs = jobs.filter(j => j.tipo !== 'DD');
 
-  async function processar(jobs, conc) {
+  async function processar(items, conc) {
     const out = [];
-    for (let i = 0; i < jobs.length; i += conc) {
-      const chunk = jobs.slice(i, i + conc);
+    for (let i = 0; i < items.length; i += conc) {
+      const chunk = items.slice(i, i + conc);
       const results = await Promise.all(chunk.map(j =>
         classificar(j.noteId, j.tipo, j).catch(() => null)
       ));
-      results.forEach(r => { if (r) out.push(r); });
+      for (const r of results) { if (r) out.push(r); }
+      // Cede o event loop entre chunks → GC pode liberar o JSON do chunk anterior
+      await new Promise(resolve => setImmediate(resolve));
     }
     return out;
   }
 
-  // MD/SF (leve, ~2 KB): concorrência alta
-  // DD (pesado, ~1.6 MB com fotos): concorrência baixa para não saturar
-  const [lightOut, ddOut] = await Promise.all([
-    processar(lightJobs, concurrency),
-    processar(ddJobs, 4),
-  ]);
+  // SEQUENCIAL (não Promise.all): evita somar MD/SF + DD em voo simultâneo.
+  // MD/SF primeiro (leves, terminam rápido), depois DD (pesados, conc 2).
+  const lightOut = await processar(lightJobs, concurrency);
+  const ddOut    = await processar(ddJobs, 2);
   return [...lightOut, ...ddOut];
 }
 

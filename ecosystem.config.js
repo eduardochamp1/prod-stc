@@ -5,7 +5,10 @@ module.exports = {
     instances:   1,
     autorestart: true,
     watch:       false,
-    max_memory_restart: '300M',
+    // 1 GB: safety net. O fix real é classifierService serializar MD/SF + DD
+    // e ceder event loop entre chunks (commit do fix definitivo, 28/05/2026).
+    // Antes era 300M e pm2 reiniciou 161x num dia processando notas DD.
+    max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
       // HERE Routing API key — pega gratis em https://platform.here.com

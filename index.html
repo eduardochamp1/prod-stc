@@ -9935,26 +9935,64 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const tipo = btn.dataset.tipo;
       if (!confirm(
         `Reclassificar TODAS as notas ${tipo} de ${date}?\n\n` +
-        `Vai apagar a classificação atual e re-buscar do WPA. Pode demorar ` +
-        `vários segundos por nota. Também re-agrega team_daily_subcat_totals.`
+        `Vai apagar a classificação atual e re-buscar do WPA. Roda em background — ` +
+        `a tela vai mostrar progresso enquanto processa.`
       )) return;
       const out = document.getElementById('subcat-result');
-      out.innerHTML = '<div style="color:var(--text2)">⏳ Reclassificando — pode demorar bastante…</div>';
+      out.innerHTML = '<div style="color:var(--text2)">⏳ Iniciando…</div>';
       btn.disabled = true;
       try {
+        // 1. Dispara job (responde 202 imediato com estado inicial)
         const res = await fetch(`${API}/admin/subcat-reclassify?date=${encodeURIComponent(date)}&tipo=${tipo}`, { method: 'POST' });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'erro');
-        out.innerHTML = `
-          <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">
-            <div style="font-weight:600;color:var(--verde);margin-bottom:6px">✓ Reclassificação concluída</div>
-            <div>Processadas: <strong>${data.processed}</strong></div>
-            <div>Apagadas: <strong>${data.deleted}</strong></div>
-            <div>Sucesso: <strong style="color:var(--verde)">${data.classified_ok}</strong></div>
-            <div>Falharam: <strong style="color:${data.classified_failed > 0 ? 'var(--vermelho)' : 'var(--text2)'}">${data.classified_failed}</strong></div>
-            <div style="margin-top:8px;font-size:11px;color:var(--text2)">Clique em 🔍 Rastrear novamente para conferir a distribuição atualizada.</div>
-          </div>`;
-        btn.style.display = 'none';
+        if (!res.ok && res.status !== 409) throw new Error(data.error || 'erro');
+        // 409 = job já rodando — usamos o estado retornado e continuamos pollando
+
+        const renderProgress = (job) => {
+          const pct = job.total > 0 ? Math.round((job.processed / job.total) * 100) : 0;
+          return `
+            <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">
+              <div style="font-weight:600;margin-bottom:6px">⏳ Reclassificando ${job.tipo} — ${job.date}</div>
+              <div style="background:var(--cinza2);border-radius:4px;height:8px;overflow:hidden;margin-bottom:6px">
+                <div style="background:var(--verde);height:100%;width:${pct}%;transition:width .3s"></div>
+              </div>
+              <div>Processadas: <strong>${job.processed}/${job.total || '?'}</strong> (${pct}%)</div>
+              <div>Apagadas: <strong>${job.deleted}</strong> · Sucesso: <strong style="color:var(--verde)">${job.classified_ok}</strong> · Falharam: <strong style="color:${job.classified_failed > 0 ? 'var(--vermelho)' : 'var(--text2)'}">${job.classified_failed}</strong></div>
+            </div>`;
+        };
+
+        // 2. Polling de status (cada 2s)
+        let job = data.job;
+        if (job) out.innerHTML = renderProgress(job);
+        while (job && job.status === 'running') {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await fetch(`${API}/admin/subcat-reclassify/status`);
+            const sd = await st.json();
+            job = sd.job;
+            if (job) out.innerHTML = renderProgress(job);
+          } catch (e) {
+            // Falha transitória de network — segue tentando
+          }
+        }
+
+        if (!job) {
+          out.innerHTML = `<div style="color:var(--vermelho)">✗ Status do job indisponível</div>`;
+        } else if (job.status === 'error') {
+          out.innerHTML = `<div style="color:var(--vermelho)">✗ ${job.error || 'erro desconhecido'}</div>`;
+        } else {
+          out.innerHTML = `
+            <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">
+              <div style="font-weight:600;color:var(--verde);margin-bottom:6px">✓ Reclassificação concluída</div>
+              <div>Processadas: <strong>${job.processed}</strong></div>
+              <div>Apagadas: <strong>${job.deleted}</strong></div>
+              <div>Sucesso: <strong style="color:var(--verde)">${job.classified_ok}</strong></div>
+              <div>Falharam: <strong style="color:${job.classified_failed > 0 ? 'var(--vermelho)' : 'var(--text2)'}">${job.classified_failed}</strong></div>
+              <div>Persistidas: <strong>${job.saved}</strong></div>
+              <div style="margin-top:8px;font-size:11px;color:var(--text2)">Clique em 🔍 Rastrear novamente para conferir a distribuição atualizada.</div>
+            </div>`;
+          btn.style.display = 'none';
+        }
       } catch (err) {
         out.innerHTML = `<div style="color:var(--vermelho)">✗ ${err.message}</div>`;
       } finally {

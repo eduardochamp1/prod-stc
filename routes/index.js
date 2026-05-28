@@ -1627,25 +1627,24 @@ router.get('/admin/subcat-trace', async (req, res) => {
 // purgando de note_subcategorias antes — força o classifier a ler de novo do
 // WPA. Em seguida, re-agrega team_daily_subcat_totals via consolidateDay.
 //
-// CUIDADO: esta operação faz N chamadas WPA (uma por nota). Use só pra
-// corrigir dados ou após mudanças no classifier.
-router.post('/admin/subcat-reclassify', async (req, res) => {
-  const date = req.query.date || dateBRT();
-  const tipoFilter = req.query.tipo ? req.query.tipo.toUpperCase() : null;
-  if (!_RE_YYYYMMDD.test(date)) {
-    return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
-  }
-  if (tipoFilter && !['MD', 'SF', 'DD'].includes(tipoFilter)) {
-    return res.status(400).json({ error: 'tipo deve ser MD, SF ou DD' });
-  }
+// ASYNC: responde 202 imediato com job_id e processa em background. Cliente
+// poll em GET /admin/subcat-reclassify/status. Antes era síncrono e o worker
+// pm2 era morto por OOM (300M) durante reclassifies grandes (notas DD baixam
+// /details/optimized de até 1.6MB cada), gerando HTTP 000 no cliente.
+//
+// Estado é mantido em memória (single job global). Se já houver um job em
+// execução, retorna 409.
+let _reclassifyJob = null; // { id, status, date, tipo, started_at, finished_at, processed, total, deleted, classified_ok, classified_failed, saved, error }
 
+async function _runReclassifyBackground(jobState) {
   try {
-    const sq = sbq();
-    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
     const sb = require('../services/supabaseClient').getClient();
     const { classificarBatch } = require('../services/classifierService');
     const { upsertSubcategorias } = require('../db/subcategoriasQueries');
     const { consolidateDay } = require('../services/supabasePush');
+
+    const date = jobState.date;
+    const tipoFilter = jobState.tipo === 'ALL' ? null : jobState.tipo;
 
     // 1. Coleta UUIDs MD/SF/DD do dia (de snapshots)
     const dPlus1 = new Date(date + 'T12:00:00Z');
@@ -1674,51 +1673,96 @@ router.post('/admin/subcat-reclassify', async (req, res) => {
       }
     }
 
+    jobState.total = jobs.length;
     if (jobs.length === 0) {
-      return res.json({ ok: true, date, tipo: tipoFilter, processed: 0, msg: 'nenhuma nota encontrada' });
+      jobState.status = 'done';
+      jobState.finished_at = new Date().toISOString();
+      return;
     }
 
     // 2. Apaga classificações existentes pra forçar reprocessamento
     const ids = jobs.map(j => j.noteId);
     const CHUNK = 100;
-    let deleted = 0;
     for (let i = 0; i < ids.length; i += CHUNK) {
       const { error: e2 } = await sb.from('note_subcategorias').delete().in('note_id', ids.slice(i, i + CHUNK));
       if (e2) throw e2;
-      deleted += Math.min(CHUNK, ids.length - i);
+      jobState.deleted += Math.min(CHUNK, ids.length - i);
     }
 
-    // 3. Reclassifica (concorrência 4 — mesma estratégia do cron)
-    //    classificarBatch já trata erros internos e retorna apenas resultados válidos.
-    const classifs = await classificarBatch(jobs, 4);
-
-    // 4. Salva resultados no Supabase (note_subcategorias).
-    //    SEM ESTE PASSO o reclassify era no-op: classificava em memória mas
-    //    não persistia, então consolidateDay encontrava cache vazio e tudo
-    //    voltava pra OUTROS.
-    let saved = 0;
-    if (classifs && classifs.length > 0) {
-      saved = await upsertSubcategorias(classifs);
+    // 3. Reclassifica em lotes pra atualizar progresso e ceder GC.
+    //    classificarBatch já serializa MD/SF + DD e dá setImmediate entre chunks.
+    const LOTE = 100;
+    const classifsAll = [];
+    for (let i = 0; i < jobs.length; i += LOTE) {
+      const slice = jobs.slice(i, i + LOTE);
+      const classifs = await classificarBatch(slice, 6);
+      if (classifs && classifs.length > 0) {
+        const saved = await upsertSubcategorias(classifs);
+        jobState.saved += saved;
+        jobState.classified_ok += classifs.length;
+      }
+      jobState.classified_failed += slice.length - (classifs ? classifs.length : 0);
+      jobState.processed += slice.length;
+      classifsAll.push(...classifs);
     }
-    const ok     = classifs ? classifs.length : 0;
-    const failed = jobs.length - ok;
 
-    // 5. Re-consolida o dia (re-aggrega team_daily_subcat_totals com novos sub_codes)
+    // 4. Re-consolida o dia
     await consolidateDay(date);
 
-    res.json({
-      ok: true,
-      date,
-      tipo: tipoFilter || 'ALL',
-      processed: jobs.length,
-      deleted,
-      classified_ok: ok,
-      classified_failed: failed,
-      saved,
-    });
+    jobState.status = 'done';
+    jobState.finished_at = new Date().toISOString();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    jobState.status = 'error';
+    jobState.error = err.message;
+    jobState.finished_at = new Date().toISOString();
   }
+}
+
+router.post('/admin/subcat-reclassify', async (req, res) => {
+  const date = req.query.date || dateBRT();
+  const tipoFilter = req.query.tipo ? req.query.tipo.toUpperCase() : null;
+  if (!_RE_YYYYMMDD.test(date)) {
+    return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
+  }
+  if (tipoFilter && !['MD', 'SF', 'DD'].includes(tipoFilter)) {
+    return res.status(400).json({ error: 'tipo deve ser MD, SF ou DD' });
+  }
+
+  const sq = sbq();
+  if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+
+  if (_reclassifyJob && _reclassifyJob.status === 'running') {
+    return res.status(409).json({
+      error: 'já existe um reclassify em execução',
+      job: _reclassifyJob,
+    });
+  }
+
+  _reclassifyJob = {
+    id: `reclass-${Date.now()}`,
+    status: 'running',
+    date,
+    tipo: tipoFilter || 'ALL',
+    started_at: new Date().toISOString(),
+    finished_at: null,
+    processed: 0,
+    total: 0,
+    deleted: 0,
+    classified_ok: 0,
+    classified_failed: 0,
+    saved: 0,
+    error: null,
+  };
+
+  // Dispara em background — não await
+  _runReclassifyBackground(_reclassifyJob);
+
+  res.status(202).json({ ok: true, job: _reclassifyJob });
+});
+
+// GET /admin/subcat-reclassify/status — retorna estado do último job (ou null)
+router.get('/admin/subcat-reclassify/status', (req, res) => {
+  res.json({ job: _reclassifyJob });
 });
 
 // GET /api/admin/note-trace?numero=035009000490 OU ?id=UUID
