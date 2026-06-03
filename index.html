@@ -6081,7 +6081,7 @@
           ? `<span class="rej-no-motivo" title="${escapeHtml(obsTitle)}">sem motivo registrado</span>`
           : codes.map((c, i) => `<span title="${escapeHtml(c)}">${escapeHtml(labels[i] || c)}</span>`).join(' · ');
         const rejAt = r.rejection_date
-          ? new Date(r.rejection_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+          ? new Date(r.rejection_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
           : '—';
         // Colaboradores no tooltip da equipe (política B: todos da sessão recebem o ponto)
         const colabs = (r.collaborator_codes || []).length > 0

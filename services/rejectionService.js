@@ -143,7 +143,15 @@ function normalize(json) {
   const observacao = (rejRen?.RejectionHeader?.Observation || rej?.Observation || '').trim() || null;
 
   // Data: usar RejectedAt do bloco Rejection (sempre presente quando há rejeição).
-  const rejection_date = rej?.RejectedAt || null;
+  // EDP retorna em UTC mas SEM marker (ex: "2026-06-03T19:28:00"). Sem o 'Z'
+  // explícito, o Postgres interpreta usando o timezone da sessão (BRT no nosso
+  // servidor), gravando o instante 3h adiantado. Concatena Z se faltar TZ.
+  // Confirmado por diagnóstico em 03/06/2026: rejeição às 17:34 BRT chegava
+  // como "20:34 BRT" no banco (= 23:34 UTC = errado).
+  let rejection_date = rej?.RejectedAt || null;
+  if (rejection_date && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(rejection_date)) {
+    rejection_date = rejection_date + 'Z';
+  }
 
   // Formulário: por ora só guardamos FormId — depois mapeamos pra nome humano se necessário.
   const formulario = rejRen?.RejectionHeader?.FormId || null;
