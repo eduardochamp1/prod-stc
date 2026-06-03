@@ -943,15 +943,48 @@ async function getTeamsBySector(sectorId) {
       const downloadedNormed = (v2.Downloaded || []).map(n => normalizarNotaV2(n));
       baixadas = downloadedNormed.filter(n => n.status === 'baixada');
 
-      // Executed[] → força 'executada' (subconjunto de Downloaded em execução ativa)
-      const execBase = (v2.Executed || []).map(n => normalizarNotaV2(n, 'executada'));
+      // ── REJEITADAS e EXECUTADAS via endpoint por sessionId ─────────────────
+      // BREAKING CHANGE EDP (30/05/2026): v2.Rejected e v2.Executed começaram
+      // a vir null/[] em 100% das equipes. Os dados migraram pra endpoints
+      // dedicados indexados por sessionId. Endpoint confirmado por intercept
+      // do browser e probe em produção (03/06/2026).
+      //
+      // Endpoints:
+      //   /api/notes/rejected/{sessionId}/session
+      //   /api/notes/executed/{sessionId}/session
+      //
+      // Shape: mesmo de v2.Rejected/Executed legado (Id, Number, Type,
+      // ExecutionStatus, ConclusionDate2) — normalizarNotaV2 funciona direto.
+      //
+      // Custo: +2 fetches por equipe (~43 equipes × 2 = 86 fetches/snapshot).
+      // Cada um leve (~1-5 KB). Tolerável dentro do ciclo de 15min.
+      const sessionId = s.Id;
+      const _safeNotes = async (status) => {
+        if (!sessionId) return [];
+        try {
+          const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
+          if (!r.ok) return [];
+          const j = await r.json();
+          const arr = Array.isArray(j) ? j : (j.Data || []);
+          return Array.isArray(arr) ? arr : [];
+        } catch (err) {
+          console.warn(`[WPA] ${sectorId}/${teamName}: notes/${status} falhou: ${err.message}`);
+          return [];
+        }
+      };
+      const [rejRaw, execRaw] = await Promise.all([
+        _safeNotes('rejected'),
+        _safeNotes('executed'),
+      ]);
+
+      // EXECUTADAS — merge endpoint novo + Downloaded com ExecutionStatus 3/6/7
+      const execBase = execRaw.map(n => normalizarNotaV2(n, 'executada'));
       const execIds  = new Set(execBase.map(n => n.codigo));
-      // Merge: Executed[] + Downloaded com ExecutionStatus 3/6/7 (sem duplicatas)
       const execFromDownloaded = downloadedNormed.filter(n => n.status === 'executada');
       executadas = [...execBase, ...execFromDownloaded.filter(n => !execIds.has(n.codigo))];
 
-      // Rejected pode ser null na API
-      rejeitadas = (v2.Rejected || []).map(n => normalizarNotaV2(n, 'rejeitada'));
+      // REJEITADAS — endpoint novo é a única fonte (v2.Rejected nunca mais popula)
+      rejeitadas = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
     } else {
       console.warn(`[WPA] ${sectorId}/${teamName}: ⚠️ sem dados V2`);
       baixadas = []; executadas = []; concluidas = []; rejeitadas = [];
