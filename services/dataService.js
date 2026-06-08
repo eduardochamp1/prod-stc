@@ -90,10 +90,14 @@ async function _enrichComEscalaELogonReal(teams) {
 }
 
 // ── SETORES POR REGIONAL ──────────────────────────────────────────────────────
+// SJC adicionado em 08/06/2026 (DSSJ = CSD São José dos Campos / EDP SP).
+// O wpaService.wpaFetch roteia automaticamente DSSJ → conta WPA 'sp' via
+// SECTOR_TO_ACCOUNT — não precisa de tratamento especial aqui.
 const SETORES = {
   GUA: ['DESG', 'DEPT'],
   CAC: ['DESC'],
-  ALL: ['DESG', 'DEPT', 'DESC'],
+  SJC: ['DSSJ'],
+  ALL: ['DESG', 'DEPT', 'DESC', 'DSSJ'],
 };
 
 // ── GET TEAMS ─────────────────────────────────────────────────────────────────

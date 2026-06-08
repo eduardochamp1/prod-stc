@@ -1070,7 +1070,7 @@ async function runSyncLogoffs(targetDate) {
   const date = targetDate || new Date(Date.now() - (3 + 24) * 3600 * 1000).toISOString().slice(0, 10);
 
   console.log(`[CRON] sync-logoffs: buscando sessões finalizadas de ${date}`);
-  const SETORES = ['DESG', 'DEPT', 'DESC'];
+  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
   const ENGELMIG_COMPANY_ID = process.env.WPA_COMPANY_ID || '92a2f98e-8877-433e-8358-173b94c13a54';
 
   let totalUpdated = 0;
