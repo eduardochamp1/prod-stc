@@ -153,6 +153,7 @@ const OFICIAIS_CAC_FALLBACK = [
 let _activeList     = null;   // populada por _rebuildFromFallback ou _doRefresh
 let _setGua         = null;
 let _setCac         = null;
+let _setSjc         = null;   // SJC adicionado 08/06/2026
 let _setAll         = null;
 let _metaBySigla    = null;
 let _lastRefreshAt  = 0;
@@ -168,12 +169,14 @@ function _norm(sigla) {
 function _rebuildIndexesFromList(rows) {
   const setGua = new Set();
   const setCac = new Set();
+  const setSjc = new Set();   // SJC adicionado 08/06/2026 (EDP SP)
   const meta   = new Map();
   for (const e of rows) {
     if (e.ativo === false) continue;  // soft delete
     const k = _norm(e.sigla);
-    if (e.regional === 'GUA') setGua.add(k);
+    if (e.regional === 'GUA')      setGua.add(k);
     else if (e.regional === 'CAC') setCac.add(k);
+    else if (e.regional === 'SJC') setSjc.add(k);
     meta.set(k, {
       sigla: e.sigla, setor: e.setor || null, tipo: e.tipo,
       placa: e.placa || null, regional: e.regional,
@@ -186,7 +189,8 @@ function _rebuildIndexesFromList(rows) {
   _activeList   = rows;
   _setGua       = setGua;
   _setCac       = setCac;
-  _setAll       = new Set([...setGua, ...setCac]);
+  _setSjc       = setSjc;
+  _setAll       = new Set([...setGua, ...setCac, ...setSjc]);
   _metaBySigla  = meta;
 }
 
@@ -274,6 +278,7 @@ function isOficial(sigla, regional) {
   if (!s) return false;
   if (regional === 'GUA') return _setGua.has(s);
   if (regional === 'CAC') return _setCac.has(s);
+  if (regional === 'SJC') return _setSjc.has(s);
   return _setAll.has(s);
 }
 
@@ -304,6 +309,7 @@ function getSiglas(regional) {
   _maybeRefresh();
   if (regional === 'GUA') return [..._setGua];
   if (regional === 'CAC') return [..._setCac];
+  if (regional === 'SJC') return [..._setSjc];
   return [..._setAll];
 }
 
@@ -349,5 +355,6 @@ module.exports = {
   // Sets diretos (legado — ainda usados em alguns testes)
   get SET_GUA() { _maybeRefresh(); return _setGua; },
   get SET_CAC() { _maybeRefresh(); return _setCac; },
+  get SET_SJC() { _maybeRefresh(); return _setSjc; },   // SJC adicionado 08/06/2026
   get SET_ALL() { _maybeRefresh(); return _setAll; },
 };
