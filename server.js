@@ -1,4 +1,8 @@
-require('dotenv').config();
+// override:true força sobrescrever vars já existentes no process.env (do pm2,
+// systemd, ou shell). Sem isso, ambiente herdado de outro projeto/sessão
+// derruba o .env corrente — visto em 08/06/2026 quando AUTH_USERS e
+// DATABASE_URL ficavam com valor antigo apesar do .env atualizado.
+require('dotenv').config({ override: true });
 
 const crypto   = require('crypto');
 const { exec } = require('child_process');
