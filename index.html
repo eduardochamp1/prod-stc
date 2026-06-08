@@ -5216,7 +5216,7 @@
         <button class="modal-close" onclick="closeMetasDirect()">×</button>
       </div>
       <div class="modal-body">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px" id="metas-colunas">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px" id="metas-colunas">
           <div id="metas-col-GUA">
             <div
               style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">
@@ -5228,6 +5228,12 @@
               style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">
               Cachoeiro</div>
             <div class="metas-grid" id="metas-grid-CAC"></div>
+          </div>
+          <div id="metas-col-SJC">
+            <div
+              style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">
+              São José dos Campos</div>
+            <div class="metas-grid" id="metas-grid-SJC"></div>
           </div>
         </div>
         <div id="metas-readonly-note" style="display:none;margin-top:16px;padding:10px 14px;background:#fec40e22;border-left:3px solid var(--amarelo);border-radius:4px;font-size:12px;color:var(--text2)">
@@ -6795,8 +6801,8 @@
 
       // Define quais regionais o user vê (não-admin só a sua)
       const regionais = (userReg && userReg !== 'ALL') ? [userReg] : REGIONAIS_ATIVAS;
-      const nomeReg = { GUA: 'Guarapari', CAC: 'Cachoeiro' };
-      const corReg  = { GUA: '#086738', CAC: '#0a4d8c' };
+      const nomeReg = { GUA: 'Guarapari', CAC: 'Cachoeiro', SJC: 'São José dos Campos' };
+      const corReg  = { GUA: '#086738', CAC: '#0a4d8c', SJC: '#c4520d' };
 
       cont.style.gridTemplateColumns = regionais.length === 1 ? '1fr' : '1fr 1fr';
 
@@ -7112,7 +7118,7 @@
           fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}${teamQs}`),
           fetch(`${API}/totais/subcat?de=${cs.de}&ate=${cs.ate}&regional=${regional}${teamQs}`),
         ]);
-        const subcatData = subcatRes.ok ? await subcatRes.json() : { totais: { ALL:{},GUA:{},CAC:{} }, quantidades:{} };
+        const subcatData = subcatRes.ok ? await subcatRes.json() : { totais: { ALL:{},GUA:{},CAC:{},SJC:{} }, quantidades:{} };
         const equipeData = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
         const csData     = csRes.ok     ? await csRes.json()     : null;
 
@@ -7422,7 +7428,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     // ── METAS (banco de dados via API) ─────────────────────────────────────
-    let _metasCache = { GUA: {}, CAC: {} };
+    let _metasCache = { GUA: {}, CAC: {}, SJC: {} };
 
     async function fetchMetas() {
       try {
@@ -7588,8 +7594,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // regional. Para tipos MD/SF/DD: usa _subcatMap para classificar em sub_code;
     // ausência → OUTROS. Retorna também `quantidades` por key (DD/C93, DD/BTZ013).
     function calcTotaisPorRegional(teams, de, ate) {
-      const totais = { GUA: {}, CAC: {}, ALL: {} };
-      const quantidades = { GUA: {}, CAC: {}, ALL: {} };
+      const totais = { GUA: {}, CAC: {}, SJC: {}, ALL: {} };
+      const quantidades = { GUA: {}, CAC: {}, SJC: {}, ALL: {} };
       const TIPOS_DESDOBRADOS = { MD: 1, SF: 1, DD: 1 };
 
       const hoje = todayISO();
@@ -7803,8 +7809,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
       </div>
     `;
 
-      const nomes = { GUA: 'Guarapari', CAC: 'Cachoeiro' };
-      document.getElementById('metas-regionais-grid').innerHTML = ['GUA', 'CAC'].map(reg => {
+      const nomes = REGIONAIS_NOMES;
+      document.getElementById('metas-regionais-grid').innerHTML = REGIONAIS_ATIVAS.map(reg => {
         const tipos = Object.entries(regionais[reg] || {});
         if (tipos.length === 0) return `
         <div class="metas-regional-block">
@@ -8562,16 +8568,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const metas = getMetas();
 
-      // Mostra/esconde colunas conforme regional do user
-      ['GUA', 'CAC'].forEach(reg => {
+      // Mostra/esconde colunas conforme regional do user (todas regionais ativas)
+      REGIONAIS_ATIVAS.forEach(reg => {
         const col = document.getElementById('metas-col-' + reg);
         if (col) col.style.display = regsVisiveis.includes(reg) ? '' : 'none';
       });
 
-      // Layout: 1 coluna quando user vê só 1 regional, 2 colunas pra admin
+      // Layout: número de colunas dinâmico conforme regionais visíveis
+      // (1 pra user regional, 3 pra admin com GUA+CAC+SJC, etc.)
       const colunas = document.getElementById('metas-colunas');
       if (colunas) {
-        colunas.style.gridTemplateColumns = regsVisiveis.length === 1 ? '1fr' : '1fr 1fr';
+        colunas.style.gridTemplateColumns = '1fr '.repeat(regsVisiveis.length).trim();
       }
 
       // Renderiza grids (só das visíveis)
@@ -8614,8 +8621,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }
       const btn = document.querySelector('#metas-overlay .btn-salvar');
       if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
-      const obj = { GUA: {}, CAC: {} };
-      ['GUA', 'CAC'].forEach(reg => {
+      // Coleta metas de todas as regionais ativas (GUA, CAC, SJC, ...)
+      const obj = {};
+      REGIONAIS_ATIVAS.forEach(reg => {
+        obj[reg] = {};
         PROD_LINHAS.forEach(l => {
           const val = parseInt(document.getElementById(`meta-${reg}-${l.key}`)?.value || '0');
           if (val > 0) obj[reg][l.key] = val;
