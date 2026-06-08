@@ -9170,6 +9170,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
         document.getElementById('teams-grid').innerHTML = `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
         return;
       }
+      // Range atual do monitor — usado pra filtrar contadores do card (Andamento,
+      // Executadas, Rejeitadas) e manter consistência com os KPIs agregados no
+      // topo. Sem isso, o card somava toda a carteira do dispositivo (inclusive
+      // notas concluídas em dias anteriores), e o usuário não conseguia bater
+      // a soma dos cards com o KPI "OS Rejeitadas".
+      const { de: _rngDe, ate: _rngAte } = currentMonitorRange();
       document.getElementById('teams-grid').innerHTML = teams.map(t => {
         // 3 estados (alinhado com WPA Gestão Online):
         //   emCampo  = sessão aberta + app online       → "● Em campo"   (cabeçalho preto/amarelo)
@@ -9238,9 +9244,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
               <div class="os-cell"><div class="os-num">${t.carteiraCount || 0}</div><div class="os-lbl">Carteira</div></div>
-              <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas || []).length}</div><div class="os-lbl">Andamento</div></div>
-              <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas || []).length}</div><div class="os-lbl">Executadas</div></div>
-              <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).length}</div><div class="os-lbl">Rejeitadas</div></div>
+              <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Andamento</div></div>
+              <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
+              <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
             ${tiposHtml ? `<div class="tipos-row">${tiposHtml}</div>` : ''}
           </div>
