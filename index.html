@@ -9115,11 +9115,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // ── RENDER CARDS ──────────────────────────────────────────────────────
     function renderAll() {
       const teamsAll = getVisible();
-      // Equipes-fantasma (_ghostFromAcc) representam equipes que deslogaram mas
-      // cujas notas devem continuar contando nos indicadores e cards de tipo.
-      // Não devem aparecer como cards no grid nem no banner de alertas.
-      const teamsVisible = teamsAll.filter(t => !t._ghostFromAcc);
-      const teams = teamsVisible;  // alias compat para o restante da função
+      // Equipes-fantasma (_ghostFromAcc) representam equipes que deslogaram durante
+      // o dia mas cujas notas (executadas/concluídas/rejeitadas) devem continuar
+      // contando. Antes eram excluídas do grid — o que gerava discrepância: KPIs
+      // somavam as rejeições/concluídas delas, mas usuário não encontrava esses
+      // números em nenhum card. Agora elas aparecem como card "○ Encerrada"
+      // (cinza, sessionEnd já vem 23:59:59 do backend), pra soma bater visualmente.
+      const teamsVisible = teamsAll;
+      const teams = teamsVisible;
+      // Excluir ghosts do banner de alerta (não faz sentido alertar equipe encerrada)
+      const teamsForAlert = teamsVisible.filter(t => !t._ghostFromAcc);
       renderMetrics(teamsAll, teamsVisible);
       renderProdutividade(teamsAll);
       document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
@@ -9134,7 +9139,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // for sessão de dia anterior (esqueceram de deslogar), que é real.
       const _ehUsoMutuo = t => String(t.tipo || '').toUpperCase().includes('USO MUTUO')
                             || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
-      const alertaTeams = teams.filter(t =>
+      const alertaTeams = teamsForAlert.filter(t =>
         !t.sessionEnd && (
           sessaoAnterior(_refLogon(t)) ||
           (!t.isOnline && !_ehUsoMutuo(t))
