@@ -9139,11 +9139,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (cardAndamento) cardAndamento.style.display = isLiveToday ? '' : 'none';
       if (cardCarteira)  cardCarteira.style.display  = isLiveToday ? '' : 'none';
 
-      // Render imediato do KPI realizadas com dado local (rápido, mas pode estar
-      // baixo se equipes deslogaram). Em paralelo busca o acumulador persistente
-      // do Supabase (daily_totals somado no range) e atualiza — esse não cai com logoff.
-      const realizadasLive = executadas + concluidasLive;
-      document.getElementById('m-concluidas').textContent = realizadasLive;
+      // KPI 'OS EXECUTADAS' = só CONCLUÍDAS no range (sem andamento).
+      // Andamento tem KPI próprio ('EM ANDAMENTO'). Antes esse KPI somava
+      // andamento + concluídas e quebrava a fórmula da carteira inicial.
+      // Em paralelo busca o acumulador persistente do Supabase (daily_totals)
+      // pra cobrir equipes deslogadas — o realizadasPersist soma andamento+
+      // concluídas, então subtraímos executadas pra ficar só concluídas.
+      document.getElementById('m-concluidas').textContent = concluidasLive;
       // Em modo histórico, carteira não faz sentido — mostra range em vez de "%"
       // % é calculada sobre a carteira INICIAL (total cumulativo do dia), não
       // sobre o atual. Atual decresce conforme equipes executam — usar atual
@@ -9151,7 +9153,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // 5/12=42% vs 5/17=29% real). Inicial é o denominador correto.
       const baseCarteira = carteiraInicial || emCarteira;
       if (isLiveToday) {
-        const pctLive = baseCarteira > 0 ? Math.round((realizadasLive / baseCarteira) * 100) : 0;
+        const pctLive = baseCarteira > 0 ? Math.round((concluidasLive / baseCarteira) * 100) : 0;
         document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
       } else {
         const dias = (() => {
@@ -9166,14 +9168,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const r = await fetch(`${API}/totais/dia?de=${de}&ate=${ate}`);
         const j = await r.json();
         const reg = currentRegional || 'ALL';
-        const realizadasPersist = (j?.totais?.[reg]) ?? (j?.totais?.ALL) ?? realizadasLive;
-        // Usa o maior dos dois — daily_totals é cumulativo do range, mas o cron
-        // pode estar atrasado e ter contagem menor que a leitura ao vivo.
-        const realizadas = Math.max(realizadasPersist, realizadasLive);
-        document.getElementById('m-concluidas').textContent = realizadas;
+        // realizadasPersist do banco soma andamento+concluídas — pra extrair só
+        // concluídas, subtrai executadas (andamento). daily_totals é cumulativo
+        // do range, então pode incluir notas de equipes deslogadas.
+        const realizadasPersist = (j?.totais?.[reg]) ?? (j?.totais?.ALL) ?? null;
+        const concluidasPersist = realizadasPersist != null
+          ? Math.max(0, realizadasPersist - executadas)
+          : concluidasLive;
+        const concluidas = Math.max(concluidasPersist, concluidasLive);
+        document.getElementById('m-concluidas').textContent = concluidas;
         if (isLiveToday) {
-          // % sobre carteira inicial (cumulativa do dia) — vide nota acima
-          const pct = baseCarteira > 0 ? Math.round((realizadas / baseCarteira) * 100) : 0;
+          // % sobre carteira inicial — fecha com a aritmética da carteira
+          const pct = baseCarteira > 0 ? Math.round((concluidas / baseCarteira) * 100) : 0;
           document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
         }
         // Em histórico, mantém o subtítulo "em N dias" já setado acima
