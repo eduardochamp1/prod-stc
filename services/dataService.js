@@ -89,6 +89,79 @@ async function _enrichComEscalaELogonReal(teams) {
   return teams;
 }
 
+/**
+ * Enriquece equipes ENCERRADAS (sessionEnd preenchido) cujo notasConcluidas
+ * está vazio. Causa: v2.Concluded só popula sessões abertas, e a EDP não
+ * expõe endpoint /api/notes/concluded/{sessionId}/session (confirmado 404
+ * em probe 08/06/2026). Solução: recuperar do último snapshot do dia que
+ * tinha notasConcluidas populado — capturado pelo cron enquanto sessão
+ * estava aberta.
+ *
+ * Sem isso, ~110 de 128 equipes (que já deslogaram às 17h) aparecem com
+ * conc=0, e o KPI "OS Executadas" do Monitor mostra valor muito abaixo
+ * do real à noite.
+ */
+async function _enrichConcluidasDeEncerradas(teams) {
+  if (!teams || teams.length === 0) return teams;
+
+  const candidatos = teams.filter(t =>
+    t.sessionEnd &&                                  // sessão encerrada
+    (t.notasConcluidas || []).length === 0           // sem dados de concluídas
+  );
+  if (candidatos.length === 0) return teams;
+
+  try {
+    const { getClient } = require('./supabaseClient');
+    const sb = getClient();
+    if (!sb) return teams;
+    const hoje = _hojeBRT();
+    const siglas = candidatos.map(t => t.teamName || t.sigla).filter(Boolean);
+    if (siglas.length === 0) return teams;
+
+    // Snapshots do dia, ordenados do MAIS RECENTE pro mais antigo.
+    // Pra cada equipe, guardamos o primeiro snapshot que tinha concluídas.
+    const concPorEquipe = {};
+    let page = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from('snapshots')
+        .select('team_name, data, captured_at')
+        .eq('date', hoje)
+        .in('team_name', siglas)
+        .order('captured_at', { ascending: false })
+        .range(page * 1000, (page + 1) * 1000 - 1);
+      if (error) break;
+      if (!data || data.length === 0) break;
+      data.forEach(r => {
+        if (concPorEquipe[r.team_name]) return;          // já temos a mais recente
+        const conc = r.data?.notasConcluidas;
+        if (Array.isArray(conc) && conc.length > 0) {
+          concPorEquipe[r.team_name] = conc;
+        }
+      });
+      if (data.length < 1000) break;
+      page++;
+    }
+
+    let restauradas = 0;
+    candidatos.forEach(t => {
+      const nome = t.teamName || t.sigla;
+      const conc = concPorEquipe[nome];
+      if (conc && conc.length > 0) {
+        t.notasConcluidas = conc;
+        restauradas++;
+      }
+    });
+    if (restauradas > 0) {
+      console.log(`[dataService] enrich concluídas: ${restauradas}/${candidatos.length} equipes encerradas restauradas via snapshot`);
+    }
+  } catch (err) {
+    console.warn('[dataService] enrich concluídas encerradas falhou:', err.message);
+  }
+
+  return teams;
+}
+
 // ── SETORES POR REGIONAL ──────────────────────────────────────────────────────
 // SJC adicionado em 08/06/2026 (DSSJ = CSD São José dos Campos / EDP SP).
 // O wpaService.wpaFetch roteia automaticamente DSSJ → conta WPA 'sp' via
@@ -124,7 +197,9 @@ async function getTeams(filters = {}) {
   const teams = _filterOficiais(resultados.flat());
 
   // Enriquecer com escala (de equipes_oficiais) e sessionBeginReal (primeiro snapshot do dia)
-  return await _enrichComEscalaELogonReal(teams);
+  const enriched = await _enrichComEscalaELogonReal(teams);
+  // Restaurar notasConcluidas de equipes encerradas (EDP não expõe pós-deslog)
+  return await _enrichConcluidasDeEncerradas(enriched);
 }
 
 // ── GET TEAM DETAIL ───────────────────────────────────────────────────────────

@@ -1103,29 +1103,29 @@ async function getTeamsBySector(sectorId) {
       rejeitadas = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
     } else if (sessaoEncerrada) {
       // Sessão JÁ ENCERRADA — V2 não traz dados de sessões fechadas.
-      // Buscamos rejected/executed/concluded via endpoints por sessionId.
+      // Buscamos rejected/executed via endpoints por sessionId (funcionam
+      // pós-deslog). Probe confirmou em 08/06/2026 que /api/notes/concluded
+      // NÃO existe (HTTP 404) — concluídas são restauradas posteriormente
+      // por _enrichConcluidasDeEncerradas (dataService) via snapshot do dia.
       const sessionId = s.Id;
       const _safeNotes = async (status) => {
-        if (!sessionId) return { arr: [], httpStatus: null, err: null };
+        if (!sessionId) return [];
         try {
           const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
-          if (!r.ok) return { arr: [], httpStatus: r.status, err: null };
+          if (!r.ok) return [];
           const j = await r.json();
           const arr = Array.isArray(j) ? j : (j.Data || []);
-          return { arr: Array.isArray(arr) ? arr : [], httpStatus: r.status, err: null };
-        } catch (e) { return { arr: [], httpStatus: null, err: e.message }; }
+          return Array.isArray(arr) ? arr : [];
+        } catch (_) { return []; }
       };
-      const [rejR, execR, concR] = await Promise.all([
+      const [rejRaw, execRaw] = await Promise.all([
         _safeNotes('rejected'),
         _safeNotes('executed'),
-        _safeNotes('concluded'),   // PROBE — descobrir se EDP expõe isso
       ]);
-      // PROBE LOG: sempre logar status do concluded pra descobrir se endpoint existe
-      console.log(`[PROBE-CONCLUDED] ${sectorId}/${teamName}: http=${concR.httpStatus} len=${concR.arr.length} err=${concR.err || '-'}`);
       baixadas    = [];
-      concluidas  = concR.arr.map(n => normalizarNotaV2(n, 'concluida'));
-      executadas  = execR.arr.map(n => normalizarNotaV2(n, 'executada'));
-      rejeitadas  = rejR.arr.map(n => normalizarNotaV2(n, 'rejeitada'));
+      concluidas  = [];   // restaurado em _enrichConcluidasDeEncerradas
+      executadas  = execRaw.map(n => normalizarNotaV2(n, 'executada'));
+      rejeitadas  = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
     } else {
       console.warn(`[WPA] ${sectorId}/${teamName}: ⚠️ sem dados V2`);
       baixadas = []; executadas = []; concluidas = []; rejeitadas = [];
