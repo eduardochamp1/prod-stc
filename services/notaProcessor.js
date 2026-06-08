@@ -231,4 +231,28 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
   return { subCategoria: null, subcatCode: 'OUTROS', quantidade: null };
 }
 
-module.exports = { processarNota, classificarSubCategoria };
+/**
+ * Aplica _normTz nos campos conhecidos de um payload JÁ processado (vindo do
+ * cache note_details). Necessário pra corrigir timestamps gravados antes do fix
+ * de TZ (08/06/2026). Mutação in-place — só usar em copia ou payload descartavel.
+ */
+function fixCachedPayloadTz(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  if (payload.datas) {
+    payload.datas.emissao    = _normTz(payload.datas.emissao);
+    payload.datas.desejada   = _normTz(payload.datas.desejada);
+    payload.datas.conclusao  = _normTz(payload.datas.conclusao);
+    payload.datas.importacao = _normTz(payload.datas.importacao);
+  }
+  if (payload.codificacao) {
+    payload.codificacao.dataCriacao = _normTz(payload.codificacao.dataCriacao);
+  }
+  if (Array.isArray(payload.checkpoints)) {
+    payload.checkpoints.forEach(cp => {
+      if (cp) cp.timestamp = _normTz(cp.timestamp);
+    });
+  }
+  return payload;
+}
+
+module.exports = { processarNota, classificarSubCategoria, fixCachedPayloadTz };

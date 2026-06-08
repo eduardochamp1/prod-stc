@@ -647,7 +647,7 @@ router.get('/wpa/token-status', (req, res) => {
  * BTZ013, ou null/code-original quando indeterminado.
  */
 // Heurística e processamento de payload da OS extraídos para services/notaProcessor.js
-const { processarNota, classificarSubCategoria } = require('../services/notaProcessor');
+const { processarNota, classificarSubCategoria, fixCachedPayloadTz } = require('../services/notaProcessor');
 
 // GET /api/wpa/nota/:noteId — detalhes completos de uma OS pelo UUID (Data.Id)
 // Endpoint WPA confirmado: GET /api/Notes/{noteId}/details/optimized?sectorId=DESG
@@ -715,7 +715,11 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
           const cached = await sq.getNoteDetailCache(noteId);
           if (cached?.payload) {
             console.log(`[wpa/nota] cache hit noteId=${noteId} fetched=${cached.fetched_at}`);
-            return res.json({ ...cached.payload, _source: 'cache', _cachedAt: cached.fetched_at });
+            // Corrige timestamps gravados antes do fix de TZ (08/06/2026) — caches
+            // antigos têm ISO sem 'Z' nos campos de data, o front interpreta como
+            // local time e mostra horários 3h adiantados.
+            const payloadFixed = fixCachedPayloadTz({ ...cached.payload });
+            return res.json({ ...payloadFixed, _source: 'cache', _cachedAt: cached.fetched_at });
           }
         }
       } catch (e) { console.warn('[wpa/nota] cache lookup falhou:', e.message); }
