@@ -9255,23 +9255,6 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const concluidasLive = teamsAll.reduce((s, t) =>
         s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
 
-      // [DEBUG TEMPORÁRIO] entender divergência entre regional ALL vs filtrado
-      try {
-        const dbg = teamsAll.reduce((acc, t) => {
-          const r = t.regional || 'NULL';
-          if (!acc[r]) acc[r] = { equipes: 0, conc_total: 0, conc_in_range: 0, exec: 0, sem_conc_date: 0 };
-          acc[r].equipes++;
-          const conc = t.notasConcluidas || [];
-          acc[r].conc_total += conc.length;
-          acc[r].conc_in_range += conc.filter(n => notaPertenceAoRange(n, de, ate)).length;
-          acc[r].sem_conc_date += conc.filter(n => !n.conclusionDate && !n.ConclusionDate && !n.ConclusionDate2).length;
-          acc[r].exec += (t.notasExecutadas || []).length;
-          return acc;
-        }, {});
-        console.log('[KPI-DEBUG] regional=', currentRegional, 'range=', de, ate, 'concluidasLive=', concluidasLive);
-        console.table(dbg);
-      } catch (e) { console.warn('debug fail', e); }
-
       // Rejeitadas: filtradas por conclusionDate dentro do range (mesma lógica
        // de executadas/concluídas). Sem isso, o card mostrava TODO o histórico
        // disponível das equipes ativas, independente do range selecionado.

@@ -1050,7 +1050,10 @@ async function getTeamsBySector(sectorId) {
         if (!sessionId) return [];
         try {
           const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
-          if (!r.ok) return [];
+          if (!r.ok) {
+            console.warn(`[WPA] ${sectorId}/${teamName}: notes/${status} HTTP ${r.status} — esvaziando bucket`);
+            return [];
+          }
           const j = await r.json();
           const arr = Array.isArray(j) ? j : (j.Data || []);
           return Array.isArray(arr) ? arr : [];

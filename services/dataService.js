@@ -110,8 +110,17 @@ async function getTeams(filters = {}) {
     ? [filters.sectorId]
     : (SETORES[regional] || SETORES.ALL);
 
-  // Busca em paralelo
-  const resultados = await Promise.all(setores.map(s => getTeamsBySector(s)));
+  // Busca SERIAL (não paralelo): cada getTeamsBySector já dispara ~60 fetches
+  // aninhados (sessões × endpoints rejected/executed). Com 4 setores em paralelo
+  // chegava-se a ~240 fetches simultâneos contra a EDP — saturando o pool de
+  // conexões HTTP do node (undici default ~6/origin) e o rate limit da EDP.
+  // Sintoma: notas vinham vazias intermitentemente em modo ALL (_safeNotes
+  // engolia timeouts com catch silencioso). Serial: ~3-5s mais lento, mas
+  // resultados consistentes. Vide investigação 08/06/2026.
+  const resultados = [];
+  for (const s of setores) {
+    resultados.push(await getTeamsBySector(s));
+  }
   const teams = _filterOficiais(resultados.flat());
 
   // Enriquecer com escala (de equipes_oficiais) e sessionBeginReal (primeiro snapshot do dia)
