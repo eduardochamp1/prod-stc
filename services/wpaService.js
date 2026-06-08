@@ -34,9 +34,44 @@ const { dateBRT } = require('./timeUtil');
 const WPA_AUTH = process.env.WPA_URL      || 'https://edp-wpa-po.azurewebsites.net';
 const WPA_API  = process.env.WPA_API_URL  || 'https://edp-wpa-web-api.azurewebsites.net';
 
-let _token        = null;
-let _expireAt     = 0;
-let _loginPromise = null;   // serializa logins concorrentes
+// ── MULTI-CONTA ─────────────────────────────────────────────────────────────
+// Suporta múltiplas contas WPA, uma por regional/empresa. Cada conta tem
+// suas próprias credenciais no .env e seu próprio token JWT.
+//
+// Adicionado em 08/06/2026 pra incluir regional SJC (EDP SP) com conta
+// separada da Clarissa (ES).
+//
+//   account='es'  → WPA_USERNAME       / WPA_PASSWORD       (Clarissa, GUA/CAC)
+//   account='sp'  → WPA_USERNAME_SP    / WPA_PASSWORD_SP    (SJC)
+//
+// SECTOR_TO_ACCOUNT mapeia sectorId → account pra roteamento automático.
+const ACCOUNTS = {
+  es: { userEnv: 'WPA_USERNAME',    passEnv: 'WPA_PASSWORD'    },
+  sp: { userEnv: 'WPA_USERNAME_SP', passEnv: 'WPA_PASSWORD_SP' },
+};
+const DEFAULT_ACCOUNT = 'es';
+
+// Mapeamento sectorId → account. Setores não mapeados caem no default.
+const SECTOR_TO_ACCOUNT = {
+  DESG: 'es', DESC: 'es', DEPT: 'es',  // ES: conta Clarissa
+  DSSJ: 'sp',                           // SJC: conta SP
+};
+
+/** Resolve account a partir de sectorId (ou default se não mapeado). */
+function _accountForSector(sectorId) {
+  if (!sectorId) return DEFAULT_ACCOUNT;
+  return SECTOR_TO_ACCOUNT[String(sectorId).toUpperCase()] || DEFAULT_ACCOUNT;
+}
+
+/** Extrai sectorId de um path (?sectorId=X) pra rotear pra conta correta. */
+function _sectorFromPath(path) {
+  const m = String(path || '').match(/[?&]sectorId=([^&]+)/);
+  return m ? m[1] : null;
+}
+
+// Estado por conta: token, expireAt, loginPromise serializada.
+const _tokens = new Map();   // accountKey → { token, expireAt }
+const _loginPromises = new Map();   // accountKey → Promise pendente (serializa concorrência)
 
 // Cache compartilhado em Supabase — opcional (lazy require pra evitar circular
 // dep e permitir rodar sem Supabase em dev/test). Carregado na primeira
@@ -63,11 +98,16 @@ function getTokenStore() {
  * exceção: timeout, DNS, conexão recusada). O `login()` externo usa essas flags
  * para decidir retry — erros legítimos (ex: 401 credencial inválida) não retry.
  */
-async function loginAttempt() {
-  const body = new URLSearchParams({
-    Username: process.env.WPA_USERNAME || '',
-    Password: process.env.WPA_PASSWORD || '',
-  });
+async function loginAttempt(accountKey = DEFAULT_ACCOUNT) {
+  const acc = ACCOUNTS[accountKey];
+  if (!acc) throw new Error(`account desconhecida: ${accountKey}`);
+  const username = process.env[acc.userEnv] || '';
+  const password = process.env[acc.passEnv] || '';
+  if (!username || !password) {
+    throw new Error(`credenciais ausentes pra account=${accountKey} (${acc.userEnv}/${acc.passEnv})`);
+  }
+
+  const body = new URLSearchParams({ Username: username, Password: password });
 
   let res;
   try {
@@ -88,7 +128,7 @@ async function loginAttempt() {
     const txt = await res.text();
     const isAzureColdStart = /Web App\s*-\s*Unavailable/i.test(txt);
     const tag = isAzureColdStart ? ' [Azure cold-start]' : '';
-    const error = new Error(`WPA login falhou (${res.status})${tag}: ${txt.slice(0, 200)}`);
+    const error = new Error(`WPA login falhou (${res.status}, account=${accountKey})${tag}: ${txt.slice(0, 200)}`);
     error.isAzureColdStart = isAzureColdStart;
     error.httpStatus       = res.status;
     throw error;
@@ -98,32 +138,33 @@ async function loginAttempt() {
 
   if (!data.Token) {
     const msg = data.Error?.Message || 'Token não retornado';
-    throw new Error(`WPA login: ${msg}`);
+    throw new Error(`WPA login (account=${accountKey}): ${msg}`);
   }
 
-  _token = data.Token;
-
+  let expireAt;
   try {
     const [, payload] = data.Token.split('.');
     const decoded = JSON.parse(Buffer.from(payload, 'base64').toString());
-    _expireAt = decoded.exp ? decoded.exp * 1000 : Date.now() + 3_600_000;
+    expireAt = decoded.exp ? decoded.exp * 1000 : Date.now() + 3_600_000;
   } catch {
-    _expireAt = Date.now() + 3_600_000;
+    expireAt = Date.now() + 3_600_000;
   }
 
+  _tokens.set(accountKey, { token: data.Token, expireAt });
+
   const userId = data.UserIdId || data.UserId || null;
-  console.log(`[WPA] Login OK — userId=${userId}  exp=${new Date(_expireAt).toISOString()}`);
+  console.log(`[WPA] Login OK (account=${accountKey}) — userId=${userId}  exp=${new Date(expireAt).toISOString()}`);
 
   // Grava no cache compartilhado (Supabase) — outros containers/processos
   // (ex: Lambdas Vercel) leem daqui antes de tentar login próprio.
   // saveToken não throws; falhas são logadas mas não quebram o login.
   const store = getTokenStore();
   if (store) {
-    store.saveToken(_token, _expireAt, userId)
-      .catch(err => console.warn('[WPA] saveToken falhou:', err && err.message ? err.message : err));
+    store.saveToken(data.Token, expireAt, userId, accountKey)
+      .catch(err => console.warn(`[WPA] saveToken falhou (account=${accountKey}):`, err && err.message ? err.message : err));
   }
 
-  return { token: _token, userId };
+  return { token: data.Token, userId };
 }
 
 /**
@@ -139,6 +180,7 @@ async function loginAttempt() {
  * Erros legítimos (401 credencial errada, etc) não fazem retry — propaga já.
  */
 async function login(opts = {}) {
+  const accountKey = opts.account || DEFAULT_ACCOUNT;
   // Backoff calibrado p/ Azure cold-start do edp-wpa-po. Em produção foi
   // observado cold-start de até 25-30s — backoff agressivo cobre isso.
   // Cliente pode pedir backoff mais longo via opts.aggressive (rota /admin/warm).
@@ -149,23 +191,24 @@ async function login(opts = {}) {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const result = await loginAttempt();
-      if (attempt > 1) console.log(`[WPA] Login OK na tentativa ${attempt}/${MAX_ATTEMPTS}`);
+      const result = await loginAttempt(accountKey);
+      if (attempt > 1) console.log(`[WPA] Login OK (account=${accountKey}) na tentativa ${attempt}/${MAX_ATTEMPTS}`);
       return result;
     } catch (err) {
       const transient = err.isAzureColdStart || err.isNetworkError;
       if (!transient || attempt === MAX_ATTEMPTS) throw err;
       const delay = BACKOFF_MS[attempt - 1];
       const reason = err.isAzureColdStart ? 'Azure cold-start' : 'erro de rede';
-      console.warn(`[WPA] Login tentativa ${attempt}/${MAX_ATTEMPTS} falhou (${reason}: ${err.message.slice(0, 80)}) — retry em ${delay}ms`);
+      console.warn(`[WPA] Login tentativa ${attempt}/${MAX_ATTEMPTS} (account=${accountKey}) falhou (${reason}: ${err.message.slice(0, 80)}) — retry em ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
 }
 
-async function getToken() {
+async function getToken(accountKey = DEFAULT_ACCOUNT) {
   // 1. Cache em memória válido → usa direto (caso normal, 0 latência adicional)
-  if (_token && Date.now() < _expireAt - 60_000) return _token;
+  const cached = _tokens.get(accountKey);
+  if (cached && Date.now() < cached.expireAt - 60_000) return cached.token;
 
   // 2. Cache compartilhado (Supabase) — evita login redundante entre containers.
   //    Em Lambdas Vercel cold-start, o token gravado pelo cron rpa1 (que mantém
@@ -173,58 +216,62 @@ async function getToken() {
   const store = getTokenStore();
   if (store) {
     try {
-      const cached = await store.loadToken();
-      if (cached?.token && Date.now() < cached.expiresAt - 60_000) {
-        _token    = cached.token;
-        _expireAt = cached.expiresAt;
-        console.log(`[WPA] Token carregado do cache Supabase — exp=${new Date(_expireAt).toISOString()}`);
-        return _token;
+      const fromStore = await store.loadToken(accountKey);
+      if (fromStore?.token && Date.now() < fromStore.expiresAt - 60_000) {
+        _tokens.set(accountKey, { token: fromStore.token, expireAt: fromStore.expiresAt });
+        console.log(`[WPA] Token (account=${accountKey}) carregado do cache Supabase — exp=${new Date(fromStore.expiresAt).toISOString()}`);
+        return fromStore.token;
       }
     } catch { /* fallthrough p/ login */ }
   }
 
   // 3. Login fresco — serializa logins concorrentes dentro do mesmo processo
-  //    via _loginPromise (evita race onde WPA invalida o token do primeiro
-  //    login ao receber o segundo). Login bem-sucedido grava no Supabase.
+  //    via _loginPromises (Map por account) — evita race onde WPA invalida
+  //    o token do primeiro login ao receber o segundo. Login bem-sucedido
+  //    grava no Supabase.
   //
   //    Cross-process: aplicamos double-check antes do login real — outro
-  //    container pode ter terminado de gravar o token enquanto chegávamos
-  //    aqui. Reduz a janela de race de ~3-5s (login completo) para ~50ms
-  //    (uma leitura extra do Supabase).
-  if (!_loginPromise) {
-    _loginPromise = (async () => {
+  //    container pode ter terminado de gravar o token enquanto chegávamos aqui.
+  if (!_loginPromises.has(accountKey)) {
+    const p = (async () => {
       // Double-check: outro processo pode ter completado o login por nós
       if (store) {
         try {
-          const cached = await store.loadToken();
-          if (cached?.token && Date.now() < cached.expiresAt - 60_000) {
-            _token    = cached.token;
-            _expireAt = cached.expiresAt;
-            console.log(`[WPA] Token via double-check (outro container ganhou a corrida)`);
+          const fromStore = await store.loadToken(accountKey);
+          if (fromStore?.token && Date.now() < fromStore.expiresAt - 60_000) {
+            _tokens.set(accountKey, { token: fromStore.token, expireAt: fromStore.expiresAt });
+            console.log(`[WPA] Token (account=${accountKey}) via double-check (outro container ganhou a corrida)`);
             return;
           }
         } catch { /* fallthrough — tenta login real */ }
       }
-      await login();
-    })().finally(() => { _loginPromise = null; });
+      await login({ account: accountKey });
+    })().finally(() => { _loginPromises.delete(accountKey); });
+    _loginPromises.set(accountKey, p);
   }
-  await _loginPromise;
-  return _token;
+  await _loginPromises.get(accountKey);
+  return _tokens.get(accountKey)?.token;
 }
 
 /** Força novo login independente do TTL atual.
- *  opts.aggressive=true → backoff longo (até ~48s); usado pelo /admin/warm. */
+ *  opts.aggressive=true → backoff longo (até ~48s); usado pelo /admin/warm.
+ *  opts.account → conta específica ('es' default ou 'sp'). */
 async function forceRefresh(opts = {}) {
   return login(opts);
 }
 
-/** Retorna o estado atual do token sem fazer nenhuma chamada de rede. */
-function getTokenStatus() {
+/**
+ * Retorna o estado atual do token sem fazer nenhuma chamada de rede.
+ * Sem argumento → estado da conta default (ES, retrocompat).
+ * Com accountKey → estado dessa conta.
+ */
+function getTokenStatus(accountKey = DEFAULT_ACCOUNT) {
   const now = Date.now();
-  if (!_token) return { valid: false, reason: 'sem token', expiresAt: null, expiresIn: null };
-  if (now >= _expireAt) return { valid: false, reason: 'expirado', expiresAt: new Date(_expireAt).toISOString(), expiresIn: '0s' };
-  const secsLeft = Math.round((_expireAt - now) / 1000);
-  return { valid: true, reason: 'ok', expiresAt: new Date(_expireAt).toISOString(), expiresIn: `${secsLeft}s` };
+  const cached = _tokens.get(accountKey);
+  if (!cached?.token) return { valid: false, reason: 'sem token', expiresAt: null, expiresIn: null, account: accountKey };
+  if (now >= cached.expireAt) return { valid: false, reason: 'expirado', expiresAt: new Date(cached.expireAt).toISOString(), expiresIn: '0s', account: accountKey };
+  const secsLeft = Math.round((cached.expireAt - now) / 1000);
+  return { valid: true, reason: 'ok', expiresAt: new Date(cached.expireAt).toISOString(), expiresIn: `${secsLeft}s`, account: accountKey };
 }
 
 // ── FETCH HELPER ──────────────────────────────────────────────────────────────
@@ -253,13 +300,21 @@ async function _isAzureColdStartResponse(res) {
  * direto sem retry, pra não esconder problemas reais.
  */
 async function wpaFetch(path, options = {}) {
+  // Resolve qual conta usar pra essa requisição:
+  //   1. options.account explícito (chamadas internas sabem qual conta)
+  //   2. Inferir do sectorId no path (?sectorId=DSSJ → 'sp')
+  //   3. Default: 'es' (Clarissa)
+  const accountKey = options.account
+    || _accountForSector(_sectorFromPath(path))
+    || DEFAULT_ACCOUNT;
+
   // Backoff mais curto que o do login: a Web API costuma estar quente quando
   // o auth está; só protege contra cold-start ocasional. Total ~9s.
   const BACKOFF_MS = [3000, 6000];
   const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const token = await getToken();
+    const token = await getToken(accountKey);
     let res;
     try {
       res = await fetch(`${WPA_API}${path}`, {
@@ -388,7 +443,7 @@ async function getTeamStatusV2(sectorId) {
 
 // Todos os setores conhecidos — usados no fallback cross-setor do V2.
 // Se novos setores forem adicionados ao WPA, incluir aqui.
-const ALL_SECTORS = ['DESG', 'DEPT', 'DESC'];
+const ALL_SECTORS = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
 
 // Cache de V2 por setor — evita chamadas duplicadas quando equipes visitantes
 // precisam buscar V2 em outros setores na mesma rodada de coleta.
@@ -822,6 +877,7 @@ const REGIONAL_MAP = {
   DESG: 'GUA',
   DEPT: 'GUA',
   DESC: 'CAC',
+  DSSJ: 'SJC',   // CSD São José dos Campos — EDP SP (conta WPA separada)
 };
 
 // CompanyId Engelmig na WPA — usado para filtrar sessões/equipes da empresa.
