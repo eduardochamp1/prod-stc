@@ -7504,11 +7504,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Pra sessao antiga (esquecida aberta de dias passados), comparar
       // HH:MM puro vs escala dah numero absurdo (ex: logon 20:02 vs escala
       // 14:00 = '+362min' que nao significa nada). Nesse caso, mostramos
-      // so um marcador "sessao em aberto desde dia anterior".
+      // so um marcador "sessao em aberto desde dia anterior" — mas APENAS
+      // se a sessao ainda esta ABERTA (sem sessionEnd). Se ja encerrou, o
+      // badge DIA ANT. ja sinaliza a virada e nao tem porque dizer "aberta".
       let atrasoTag = '';
-      if (ehAntiga) {
+      if (ehAntiga && !t.sessionEnd) {
         atrasoTag = `<span style="color:#c49000;font-size:10px;font-weight:600" title="Sessão aberta desde dia anterior — provavelmente equipe esqueceu de deslogar">⏱ aberta</span>`;
-      } else if (t.escala_inicio && inicio) {
+      } else if (!ehAntiga && t.escala_inicio && inicio) {
         const escalaMin = _toMin(t.escala_inicio);
         const logonMin  = new Date(inicio).getHours() * 60 + new Date(inicio).getMinutes();
         const diff = logonMin - escalaMin;
