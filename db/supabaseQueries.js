@@ -113,7 +113,7 @@ async function getMetas() {
   const sb = getClient();
   const { data, error } = await sb.from('metas').select('regional, data');
   if (error) throw error;
-  const result = { GUA: {}, CAC: {} };
+  const result = { GUA: {}, CAC: {}, SJC: {} };
   (data || []).forEach(row => { result[row.regional] = row.data || {}; });
   return result;
 }
@@ -357,7 +357,7 @@ async function getMonthTotals(yearMonth) {
     yearMonth
   ));
 
-  const totais = { GUA: {}, CAC: {} };
+  const totais = { GUA: {}, CAC: {}, SJC: {} };
   _onlyOficiais(data, 'team_name').forEach(row => {
     if (!totais[row.regional]) totais[row.regional] = {};
     totais[row.regional][row.tipo_code] =
@@ -376,7 +376,7 @@ async function getDailyHistory(yearMonth) {
   const byDate = {};
   _onlyOficiais(data, 'team_name').forEach(row => {
     const d = row.date;
-    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {} };
+    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {}, SJC: {} };
     if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
     byDate[d][row.regional][row.tipo_code] =
       (byDate[d][row.regional][row.tipo_code] || 0) + row.count;
@@ -403,7 +403,7 @@ async function getSubcatMonthTotals(yearMonth, regional) {
     return q;
   });
 
-  const totais = { GUA: {}, CAC: {} };
+  const totais = { GUA: {}, CAC: {}, SJC: {} };
   _onlyOficiais(data, 'team_name').forEach(row => {
     if (!totais[row.regional]) totais[row.regional] = {};
     const key = `${row.tipo}/${row.sub_code}`;
@@ -433,7 +433,7 @@ async function getSubcatDailyHistory(yearMonth, regional) {
   const byDate = {};
   _onlyOficiais(data, 'team_name').forEach(row => {
     const d = row.date;
-    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {} };
+    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {}, SJC: {} };
     if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
     const key = `${row.tipo}/${row.sub_code}`;
     if (!byDate[d][row.regional][key]) {
@@ -727,8 +727,8 @@ async function getDailySubcatTotals(de, ate, regional, team) {
     return query;
   });
 
-  const totais = { ALL: {}, GUA: {}, CAC: {} };
-  const quantidades = { ALL: {}, GUA: {}, CAC: {} };
+  const totais = { ALL: {}, GUA: {}, CAC: {}, SJC: {} };
+  const quantidades = { ALL: {}, GUA: {}, CAC: {}, SJC: {} };
   _onlyOficiais(data, 'team_name').forEach(r => {
     const key = r.sub_code === 'OUTROS' ? `${r.tipo}_OUTROS` : r.sub_code;
     const reg = r.regional;
@@ -1354,7 +1354,7 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
 
   const total = rows.length;
   let comMotivo = 0, semMotivo = 0;
-  const porRegional = { GUA: 0, CAC: 0 };
+  const porRegional = { GUA: 0, CAC: 0, SJC: 0 };
   const porTipo     = {};
   const motivoMap   = new Map();  // code → { code, label, count }
   const equipeMap   = new Map();  // team → { team, regional, count }

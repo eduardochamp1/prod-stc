@@ -7682,7 +7682,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
     function metasAcumuladas(metas) {
       const acc = {};
-      ['GUA', 'CAC'].forEach(reg => {
+      REGIONAIS_ATIVAS.forEach(reg => {
         Object.entries(metas[reg] || {}).forEach(([code, val]) => { acc[code] = (acc[code] || 0) + val; });
       });
       return acc;
@@ -8140,7 +8140,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
             const v = d[regional]?.[key];
             if (v) { count = v.count || 0; qtd = Number(v.quantidade || 0); }
           } else {
-            ['GUA', 'CAC'].forEach(r => {
+            REGIONAIS_ATIVAS.forEach(r => {
               const v = d[r]?.[key];
               if (v) { count += v.count || 0; qtd += Number(v.quantidade || 0); }
             });
@@ -8168,7 +8168,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const totalGeral = dentroDoRange.reduce((sum, d) => {
         let s = 0;
-        ['GUA','CAC'].forEach(r => {
+        REGIONAIS_ATIVAS.forEach(r => {
           if (regional !== 'ALL' && r !== regional) return;
           Object.values(d[r] || {}).forEach(v => { s += v.count || 0; });
         });
