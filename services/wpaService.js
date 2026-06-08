@@ -676,6 +676,12 @@ async function getTeamsByDate(sectorId, isoDate) {
 const _acc = {
   date:  '',
   notes: new Map(),    // chave (id||codigo) → { id, codigo, tipoCode, tipoNome, teamName, regional, status, conclusionDate }
+  // Carteira inicial: conjunto cumulativo de noteIds que passaram pela carteira
+  // de cada equipe no dia (baixadas + executadas + concluídas). Permite calcular
+  // carteiraInicialCount = total de notas DISTINTAS que a equipe teve hoje, vs
+  // carteiraCount = só as pendentes no dispositivo agora.
+  // Ex: logou com 15, executou 3, recebeu 2 → inicial=17, atual=14.
+  carteiras: new Map(), // teamName → Set<noteId>
 };
 
 function _accReset() {
@@ -684,6 +690,7 @@ function _accReset() {
   if (_acc.date !== today) {
     _acc.date = today;
     _acc.notes.clear();
+    _acc.carteiras.clear();
     console.log('[WPA] Acumulador diário resetado para', today, '(BRT)');
   }
 }
@@ -714,12 +721,30 @@ function _accRecord(teams) {
         });
       }
     });
+
+    // Acumula carteira inicial: TODA nota que apareceu na carteira da equipe hoje
+    // (baixadas pendentes + executadas em andamento + concluidas que já saíram).
+    // Set deduplica por noteId — uma nota só conta uma vez, mesmo se atravessou
+    // múltiplos estados durante o dia.
+    const carteiraSet = _acc.carteiras.get(t.teamName) || new Set();
+    const todasNaCarteira = [
+      ...(t.notasBaixadas    || []),
+      ...(t.notasExecutadas  || []),
+      ...(t.notasConcluidas  || []),
+    ];
+    todasNaCarteira.forEach(n => {
+      const id = n.id || n.codigo;
+      if (id) carteiraSet.add(id);
+    });
+    if (carteiraSet.size > 0) _acc.carteiras.set(t.teamName, carteiraSet);
   });
 }
 
 function _accApply(teams) {
   _accReset();
-  if (_acc.notes.size === 0) return teams;
+  // NÃO retorna cedo aqui (mesmo com _acc.notes vazio) — precisamos injetar
+  // carteiraInicialCount em TODAS as equipes (logo cedo do dia, sem notas
+  // executadas/rejeitadas ainda, mas baixadas já contam pra carteira inicial).
 
   // Agrupa as notas acumuladas por equipe e por status (3 buckets agora: exec, conc, rej)
   const extrasExec = {};
@@ -755,12 +780,18 @@ function _accApply(teams) {
     const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
     const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
     const novasRej  = (extrasRej[t.teamName]  || []).filter(n => !existentes.has(n.id || n.codigo));
-    if (novasExec.length === 0 && novasConc.length === 0 && novasRej.length === 0) return t;
+    // Carteira inicial: total cumulativo de notas distintas que passaram pela
+    // carteira da equipe no dia. Lê do _acc.carteiras (alimentado em _accRecord).
+    const carteiraInicialCount = _acc.carteiras.get(t.teamName)?.size || 0;
+    if (novasExec.length === 0 && novasConc.length === 0 && novasRej.length === 0) {
+      return { ...t, carteiraInicialCount };
+    }
     return {
       ...t,
       notasExecutadas: [...(t.notasExecutadas || []), ...novasExec],
       notasConcluidas: [...(t.notasConcluidas || []), ...novasConc],
       notasRejeitadas: [...(t.notasRejeitadas || []), ...novasRej],
+      carteiraInicialCount,
     };
   });
 

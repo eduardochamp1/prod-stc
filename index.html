@@ -9006,6 +9006,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (t.sessionEnd) return s;
         return s + (t.carteiraCount || 0);
       }, 0);
+      // Carteira inicial: total cumulativo do dia (inclui notas concluídas que
+      // saíram da carteira + equipes encerradas que tiveram carteira durante o dia).
+      const carteiraInicial = teamsVisible.reduce((s, t) =>
+        s + (t.carteiraInicialCount || 0), 0);
 
       // Em andamento: notas com status 'executada' (sendo trabalhadas AGORA).
       // - Em modo "hoje" ao vivo: aplica filtro sessaoHoje pra evitar contar
@@ -9055,7 +9059,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       document.getElementById('m-ativas').textContent = `${ativas} em campo`;
       document.getElementById('m-executadas').textContent = executadas;
       document.getElementById('m-rejeitadas').textContent = rejeitadas;
-      document.getElementById('m-baixadas').textContent = emCarteira;
+      // OS em carteira: mostra atual / inicial (ex: "143 / 167")
+      document.getElementById('m-baixadas').innerHTML = carteiraInicial > 0
+        ? `${emCarteira}<span style="font-size:16px;color:var(--text2);font-weight:400"> / ${carteiraInicial}</span>`
+        : emCarteira;
       document.getElementById('m-relogins').textContent = relogins;
 
       // ── Modo histórico: oculta cards de estado atual ─────────────────────
@@ -9306,7 +9313,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
             </div>
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
-              <div class="os-cell"><div class="os-num">${sessaoAberta ? (t.carteiraCount || 0) : 0}</div><div class="os-lbl">Carteira</div></div>
+              <div class="os-cell">
+                <div class="os-num" title="Atual / Inicial — Atual: notas pendentes no dispositivo agora. Inicial: total cumulativo de notas que passaram pela carteira hoje.">
+                  ${sessaoAberta ? (t.carteiraCount || 0) : 0}
+                  ${t.carteiraInicialCount > 0 ? `<span style="font-size:11px;color:var(--text2);font-weight:400"> / ${t.carteiraInicialCount}</span>` : ''}
+                </div>
+                <div class="os-lbl">Carteira</div>
+              </div>
               <div class="os-cell"><div class="os-num executada">${sessaoAberta ? (t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length : 0}</div><div class="os-lbl">Andamento</div></div>
               <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Rejeitadas</div></div>
