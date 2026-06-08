@@ -666,8 +666,8 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     return res.status(400).json({ error: 'noteId inválido. Use UUID ou número de OS.' });
   }
 
-  // Validação de sectorId (só aceita os 3 conhecidos)
-  if (!['DESG', 'DEPT', 'DESC'].includes(sectorId)) {
+  // Validação de sectorId. DSSJ adicionado 08/06/2026 (regional SJC / EDP SP).
+  if (!['DESG', 'DEPT', 'DESC', 'DSSJ'].includes(sectorId)) {
     return res.status(400).json({ error: `sectorId inválido: ${sectorId}` });
   }
 
@@ -1276,15 +1276,15 @@ router.get('/admin/health', async (_req, res) => {
 const _RE_SIGLA  = /^[A-Z0-9]{4,12}$/i;
 const _RE_TIPO   = /^[A-Z0-9 ÁÉÍÓÚÃÕÇ-]{1,30}$/i;  // tipo é livre (operacional)
 const _RE_PLACA  = /^[A-Z0-9 -]{4,16}$/i;
-const _RE_REG    = /^(GUA|CAC)$/;
-const _RE_SETOR  = /^(DESG|DEPT|DESC)$/;
+const _RE_REG    = /^(GUA|CAC|SJC)$/;                // SJC adicionado 08/06/2026
+const _RE_SETOR  = /^(DESG|DEPT|DESC|DSSJ)$/;        // DSSJ = CSD São José
 
 function _validateEquipe(body) {
   const errors = [];
   if (!body || typeof body !== 'object') return ['body inválido'];
   if (!_RE_SIGLA.test(body.sigla || ''))      errors.push('sigla inválida (4-12 alfanuméricos)');
-  if (!_RE_SETOR.test(body.setor || ''))      errors.push('setor deve ser DESG, DEPT ou DESC');
-  if (!_RE_REG.test(body.regional || ''))     errors.push('regional deve ser GUA ou CAC');
+  if (!_RE_SETOR.test(body.setor || ''))      errors.push('setor deve ser DESG, DEPT, DESC ou DSSJ');
+  if (!_RE_REG.test(body.regional || ''))     errors.push('regional deve ser GUA, CAC ou SJC');
   if (!_RE_TIPO.test(body.tipo || ''))        errors.push('tipo inválido (alfanumérico, máx 30)');
   // placa é opcional agora
   if (body.placa && !_RE_PLACA.test(body.placa)) errors.push('placa inválida');
@@ -2150,7 +2150,7 @@ router.post('/admin/backfill', async (req, res) => {
     const { getTeamsByDate }                                          = require('../services/wpaService');
     const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/supabasePush');
 
-    const SETORES = ['DESG', 'DEPT', 'DESC'];
+    const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
     console.log(`[BACKFILL] Iniciando para ${date}...`);
 
     const resultados = await Promise.all(
@@ -2223,7 +2223,7 @@ router.post('/admin/backfill/range', async (req, res) => {
 
   const { getTeamsByDate }                                          = require('../services/wpaService');
   const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/supabasePush');
-  const SETORES = ['DESG', 'DEPT', 'DESC'];
+  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
 
   const resultados = [];
   console.log(`[BACKFILL-RANGE] Iniciando ${datas.length} dias: ${de} → ${ate}`);
