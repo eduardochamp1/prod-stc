@@ -7736,7 +7736,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const grid = document.getElementById('prod-grid');
       const title = document.getElementById('prod-title');
-      const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : regionalNome(currentRegional);
+      // Suporta CSV de regionais (multi-select). Ex: 'GUA,SJC' → "Guarapari + São José dos Campos"
+      const labelRegional = (() => {
+        if (!currentRegional || currentRegional === 'ALL') return 'Todas as Regionais';
+        const list = String(currentRegional).split(',').map(s => s.trim()).filter(Boolean);
+        if (list.length === 0 || list.includes('ALL')) return 'Todas as Regionais';
+        if (list.length === 1) return regionalNome(list[0]);
+        return list.map(regionalNome).join(' + ');
+      })();
       // Título depende do range: dia único = "do Dia", range = "do Período"
       const { de: deTitle, ate: ateTitle, isLiveToday: liveToday } = currentMonitorRange();
       const tituloPrefixo = (deTitle === ateTitle && liveToday)
@@ -8687,8 +8694,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
       document.getElementById('date-display').textContent = label;
 
       try {
+        // Histórico: se for multi-regional (CSV) ou 'ALL', manda regional vazio
+        // e filtra client-side via _regionalMatch. Backend só aceita 1 valor.
+        const _isSingleReg = currentRegional && currentRegional !== 'ALL' && !String(currentRegional).includes(',');
         const url = hist
-          ? `${API}/teams/historico?de=${de}&ate=${ate}&regional=${currentRegional === 'ALL' ? '' : currentRegional}`
+          ? `${API}/teams/historico?de=${de}&ate=${ate}&regional=${_isSingleReg ? currentRegional : ''}`
           : `${API}/teams`;
 
         const [res] = await Promise.all([
@@ -8960,6 +8970,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
     // ── FILTROS ───────────────────────────────────────────────────────────
     function selectRegional(regional) {
+      // Aceita 'ALL', 'GUA', 'CAC', 'SJC' (single) ou CSV ('GUA,SJC') do multi-select.
       currentRegional = regional;
       const sel = document.getElementById('regional-select');
       if (sel && sel.value !== regional) sel.value = regional;
@@ -8969,9 +8980,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
     function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
 
+    // Helper: testa se uma regional está no filtro (suporta ALL, single, CSV multi).
+    function _regionalMatch(reg) {
+      if (!currentRegional || currentRegional === 'ALL') return true;
+      const list = String(currentRegional).split(',').map(s => s.trim()).filter(Boolean);
+      if (list.length === 0 || list.includes('ALL')) return true;
+      return list.includes(reg);
+    }
+
     function getVisible() {
       return allTeams.filter(t => {
-        const regionalOk = currentRegional === 'ALL' || t.regional === currentRegional;
+        const regionalOk = _regionalMatch(t.regional);
         const filterOk = !currentFilter ||
           (t.sigla || t.teamName || '').toLowerCase().includes(currentFilter) ||
           (t.collaborators || []).some(c => c.nome.toLowerCase().includes(currentFilter));
@@ -9141,6 +9160,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // entre estados). Busca a contagem REAL via /api/rejeicoes/totais que lê de
       // note_rejections (tabela dedicada, mesma fonte da aba Rejeições).
       if (!isLiveToday) {
+        // /rejeicoes/totais aceita CSV em regional (já suporta multi-select em outras telas)
         const reg = currentRegional && currentRegional !== 'ALL' ? `&regional=${currentRegional}` : '';
         fetch(`${API}/rejeicoes/totais?de=${de}&ate=${ate}${reg}`)
           .then(r => r.json())
@@ -9918,6 +9938,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
       initTiposFilter();
       initSubcatsFilter();
       await applySavedFilters();   // restaura regional + tipos compartilhados do Supabase
+
+      // Multi-select no filtro Regional (mesmo componente das outras abas).
+      // currentRegional pode virar CSV tipo 'GUA,SJC' ou 'ALL' (todas).
+      if (window.MultiSelect && document.getElementById('regional-select')) {
+        MultiSelect.init('regional-select', {
+          onChange: () => {
+            const sel = document.getElementById('regional-select');
+            selectRegional(sel.value);
+          },
+          allLabel: 'Todas as Regionais',
+        });
+      }
 
       // Inicializa campos De/Até com hoje (sem permitir datas futuras)
       const _t = todayISO();
