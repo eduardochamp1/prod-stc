@@ -764,50 +764,24 @@ function _accApply(teams) {
     };
   });
 
-  // Equipes que estavam presentes mais cedo no dia mas deslogaram: cria card
-  // sintético invisível (sessionEnd preenchido) só com as notas acumuladas,
-  // garantindo que entrem nos somatórios mesmo sem aparecer como ativas.
-  const nomesAtivos = new Set(teams.map(t => t.teamName));
-  const fantasmas = new Set([
-    ...Object.keys(extrasExec),
-    ...Object.keys(extrasConc),
-    ...Object.keys(extrasRej),
-  ]);
-  fantasmas.forEach(nome => {
-    if (nomesAtivos.has(nome)) return;
-    // Resolve regional procurando qualquer nota acumulada desta equipe
-    let regional = 'GUA';
-    for (const v of _acc.notes.values()) {
-      if (v.teamName === nome) { regional = v.regional || 'GUA'; break; }
-    }
-    result.push({
-      id:           `_acc:${nome}`,
-      sigla:        nome,
-      teamName:     nome,
-      sectorId:     null,
-      regional,
-      date:         _acc.date,
-      sessionBegin: null,
-      sessionEnd:   `${_acc.date}T23:59:59Z`,  // marca como sessão encerrada
-      vehiclePlate: '—',
-      collaborators: [],
-      relogins:    0,
-      sessions:    [],
-      teamStatus:  null,
-      isOnline:    false,
-      isInLunchTime: false,
-      lastUpdate:  null,
-      location:    null,
-      carteiraCount:    0,
-      servicosPerfil:   [],
-      notasBaixadas:    [],
-      notasExecutadas:  extrasExec[nome] || [],
-      notasConcluidas:  extrasConc[nome] || [],
-      notasRejeitadas:  extrasRej[nome]  || [],
-      _ghostFromAcc:    true,   // sinaliza ao front: equipe acumulada do dia
-    });
-  });
-
+  // ── FANTASMAS SINTÉTICOS — DESATIVADO ────────────────────────────────────
+  // Antes criávamos cards sintéticos com sessionEnd="${_acc.date}T23:59:59Z"
+  // (que virava "08/06 20:59 BRT" no front, confundindo o usuario: "como as
+  // equipes ficaram ate 20:59 se agora sao 09:26?").
+  //
+  // Desde 08/06/2026 usamos /api/Sessions/today que retorna TODAS as sessoes
+  // do dia (abertas + encerradas) com BeginTime+EndTime reais. Ghosts ficaram
+  // redundantes — toda equipe que operou hoje ja vem na resposta da API.
+  //
+  // Mantemos o enriquecimento das equipes EXISTENTES com notas acumuladas
+  // (loop acima, linhas ~737-765) — pra cobrir cases onde uma equipe que
+  // estava ativa em snapshot anterior teve notas que nao aparecem no V2 atual.
+  // Mas a CRIAÇÃO de cards sintéticos foi removida.
+  //
+  // Se uma equipe acumulou notas no _acc mas nao aparece em /Sessions/today
+  // (raro), as notas dela ficam orfas — nao entram em nenhum card nem KPI.
+  // Esse trade-off e aceitavel: melhor uma equipe ausente do que um card
+  // com horario fake confundindo o operador.
   return result;
 }
 
