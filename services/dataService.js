@@ -100,6 +100,12 @@ async function _enrichComEscalaELogonReal(teams) {
  * Sem isso, ~110 de 128 equipes (que já deslogaram às 17h) aparecem com
  * conc=0, e o KPI "OS Executadas" do Monitor mostra valor muito abaixo
  * do real à noite.
+ *
+ * Usa SQL DISTINCT ON pra pegar de uma vez o último snapshot por equipe
+ * que tinha concluídas — versão paginada anterior pegava só os 1000
+ * snapshots mais recentes do dia, deixando equipes sem snapshot recente
+ * com versão antiga/vazia (sintoma: em modo ALL, 119 equipes × 12 snaps
+ * estouravam 1000, ~30 equipes ficavam com dados incompletos).
  */
 async function _enrichConcluidasDeEncerradas(teams) {
   if (!teams || teams.length === 0) return teams;
@@ -111,49 +117,49 @@ async function _enrichConcluidasDeEncerradas(teams) {
   if (candidatos.length === 0) return teams;
 
   try {
-    const { getClient } = require('./supabaseClient');
-    const sb = getClient();
-    if (!sb) return teams;
+    const { _getPool } = require('./pgShim');
+    const pool = _getPool();
+    if (!pool) return teams;
     const hoje = _hojeBRT();
     const siglas = candidatos.map(t => t.teamName || t.sigla).filter(Boolean);
     if (siglas.length === 0) return teams;
 
-    // Snapshots do dia, ordenados do MAIS RECENTE pro mais antigo.
-    // Pra cada equipe, guardamos o primeiro snapshot que tinha concluídas.
+    // DISTINCT ON (team_name) com ORDER BY team_name, captured_at DESC
+    // → pra cada equipe, o LINHA do snapshot MAIS RECENTE que tinha concluídas.
+    // Uma query só, índice em (date, team_name, captured_at) torna isso barato.
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (team_name)
+              team_name,
+              data->'notasConcluidas' AS conc
+       FROM snapshots
+       WHERE date = $1
+         AND team_name = ANY($2::text[])
+         AND jsonb_typeof(data->'notasConcluidas') = 'array'
+         AND jsonb_array_length(data->'notasConcluidas') > 0
+       ORDER BY team_name, captured_at DESC`,
+      [hoje, siglas]
+    );
+
     const concPorEquipe = {};
-    let page = 0;
-    while (true) {
-      const { data, error } = await sb
-        .from('snapshots')
-        .select('team_name, data, captured_at')
-        .eq('date', hoje)
-        .in('team_name', siglas)
-        .order('captured_at', { ascending: false })
-        .range(page * 1000, (page + 1) * 1000 - 1);
-      if (error) break;
-      if (!data || data.length === 0) break;
-      data.forEach(r => {
-        if (concPorEquipe[r.team_name]) return;          // já temos a mais recente
-        const conc = r.data?.notasConcluidas;
-        if (Array.isArray(conc) && conc.length > 0) {
-          concPorEquipe[r.team_name] = conc;
-        }
-      });
-      if (data.length < 1000) break;
-      page++;
-    }
+    rows.forEach(r => {
+      if (Array.isArray(r.conc) && r.conc.length > 0) {
+        concPorEquipe[r.team_name] = r.conc;
+      }
+    });
 
     let restauradas = 0;
+    let totalNotas = 0;
     candidatos.forEach(t => {
       const nome = t.teamName || t.sigla;
       const conc = concPorEquipe[nome];
       if (conc && conc.length > 0) {
         t.notasConcluidas = conc;
         restauradas++;
+        totalNotas += conc.length;
       }
     });
     if (restauradas > 0) {
-      console.log(`[dataService] enrich concluídas: ${restauradas}/${candidatos.length} equipes encerradas restauradas via snapshot`);
+      console.log(`[dataService] enrich concluídas: ${restauradas}/${candidatos.length} equipes restauradas (${totalNotas} notas) via snapshot`);
     }
   } catch (err) {
     console.warn('[dataService] enrich concluídas encerradas falhou:', err.message);
