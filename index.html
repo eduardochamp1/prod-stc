@@ -9224,24 +9224,37 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const tiposHtml = Object.entries(subcatCont).map(([label, { count, qtdTotal }]) =>
           `<span class="tipo-chip"><span class="tipo-chip-code">${label}</span><span class="tipo-chip-num">${count}${qtdTotal > 0 ? ` · ${qtdTotal}m` : ''}</span></span>`
         ).join('');
+        // Ghost: equipe que operou no dia, acumulou notas e ja deslogou.
+        // sessionEnd é um placeholder (23:59:59 UTC), sectorId/placa nulls,
+        // sessionBegin null. Renderizamos sem dados artificiais — não temos
+        // horário real, então mostramos só a data e o aviso.
+        const isGhost = !!t._ghostFromAcc;
+        const metaRight = isGhost
+          ? `${regionalNome} <span style="opacity:.6">·</span> <span style="font-size:11px;opacity:.7">notas acumuladas no dia</span>`
+          : `${regionalNome} · ${t.sectorId || '—'}`;
         return `
         <div class="team-card${isStale ? ' stale' : ''}" onclick="openModal('${t.id}')">
           <div class="team-card-header ${headerCls}">
             <div>
               <div class="team-card-sigla">${t.sigla || t.teamName}</div>
-              <div class="team-card-meta">${regionalNome} · ${t.sectorId}</div>
+              <div class="team-card-meta">${metaRight}</div>
             </div>
             <span class="team-status-badge ${badgeCls}">${badgeTxt}</span>
           </div>
           <div class="team-card-body">
-            <div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>
-            ${(t.escala_inicio || t.escala_fim) ? `
+            ${isGhost ? '' : `<div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>`}
+            ${!isGhost && (t.escala_inicio || t.escala_fim) ? `
             <div class="team-row">
               <span class="team-row-label">Escala</span>
               <span style="color:var(--text);font-size:12px">
                 ${(t.escala_inicio || '').slice(0,5)} – ${(t.escala_fim || '').slice(0,5)}
               </span>
             </div>` : ''}
+            ${isGhost ? `
+            <div class="team-row">
+              <span class="team-row-label">Sessão</span>
+              <span style="color:var(--text2);font-size:12px;font-style:italic">encerrada hoje — sem horário detalhado</span>
+            </div>` : `
             <div class="team-row">
               <span class="team-row-label">${t.sessionEnd ? 'Logon → Logoff' : 'Logon'}</span>
               <span style="color:var(--text);font-size:12px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
@@ -9253,8 +9266,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
             ? `<span title="A equipe relogou durante o dia (sessão atual começou às ${fmt(t.sessionBegin)})" style="background:#fff8e1;color:#c49000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;border:1px solid #ffe082">⚠ relogou</span>`
             : ''}
               </span>
-            </div>
-            <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
+            </div>`}
+            ${isGhost ? '' : `<div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>`}
             <div class="os-row">
               <div class="os-cell"><div class="os-num">${t.carteiraCount || 0}</div><div class="os-lbl">Carteira</div></div>
               <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Andamento</div></div>
