@@ -9112,10 +9112,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Andamento tem coluna própria — então NÃO entra em 'atual'.
       // Equipes encerradas: 0 (dispositivo deslogou).
       const emCarteira = teamsVisible.reduce((s, t) => s + _carteiraPendentes(t), 0);
-      // Carteira INICIAL = atual + andamento + executadas + rejeitadas.
-      // Aritmética fecha: inicial - atual = andamento + executadas + rejeitadas.
-      const carteiraInicial = teamsVisible.reduce((s, t) =>
-        s + carteiraInicialDe(t, de, ate), 0);
+      // Carteira INICIAL (Total Dia) = soma direta dos 4 KPIs.
+      // Antes era reduce per-team (subestimava quando equipes deslogavam — as
+      // concluídas continuavam em daily_totals mas o team sumia de teamsVisible).
+      // Agora soma global: Atual + Andamento + Executadas + Rejeitadas, garantindo
+      // que a aritmética fecha por construção.
+      //
+      // Importante: `executadas` aqui é o KPI 'EM ANDAMENTO' (notasExecutadas).
+      // O KPI 'OS EXECUTADAS' (concluídas) é calculado depois via concluidasLive
+      // e atualizado mais abaixo após buscar daily_totals — o carteiraInicial
+      // também é recalculado nesse momento (vide bloco try/catch adiante).
+      const carteiraInicial = emCarteira + executadas + concluidasLive + rejeitadas;
 
       // Em andamento: notas com status 'executada' (sendo trabalhadas AGORA).
       // - Em modo "hoje" ao vivo: aplica filtro sessaoHoje pra evitar contar
@@ -9239,9 +9246,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
           : concluidasLive;
         const concluidas = Math.max(concluidasPersist, concluidasLive);
         document.getElementById('m-concluidas').textContent = concluidas;
+
+        // Recalcula Total Dia com concluidas final (inclui equipes deslogadas
+        // via daily_totals). Garante aritmética fechando: total = atual+and+exec+rej.
+        const carteiraInicialFinal = emCarteira + executadas + concluidas + rejeitadas;
+        if (mBaixIni && carteiraInicialFinal > 0 && carteiraInicialFinal !== emCarteira) {
+          mBaixIni.textContent = carteiraInicialFinal;
+          if (mBaixIniWrap) mBaixIniWrap.style.display = 'flex';
+        }
+        // Atualiza baseCarteira pra cálculo do % abaixo
+        const baseFinal = carteiraInicialFinal || emCarteira;
         if (isLiveToday) {
           // % sobre carteira inicial — fecha com a aritmética da carteira
-          const pct = baseCarteira > 0 ? Math.round((concluidas / baseCarteira) * 100) : 0;
+          const pct = baseFinal > 0 ? Math.round((concluidas / baseFinal) * 100) : 0;
           document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
         }
         // Em histórico, mantém o subtítulo "em N dias" já setado acima
