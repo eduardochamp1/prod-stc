@@ -25,6 +25,12 @@ ALTER TABLE equipes_oficiais DROP CONSTRAINT IF EXISTS equipes_oficiais_regional
 ALTER TABLE equipes_oficiais ADD CONSTRAINT equipes_oficiais_regional_check
   CHECK (regional IN ('GUA', 'CAC', 'SJC'));
 
+-- ── Estende CHECK de setor pra incluir DSSJ (CSD São José) ──────────────────
+-- O CHECK antigo aceitava apenas DESG/DEPT/DESC (setores ES).
+ALTER TABLE equipes_oficiais DROP CONSTRAINT IF EXISTS equipes_oficiais_setor_check;
+ALTER TABLE equipes_oficiais ADD CONSTRAINT equipes_oficiais_setor_check
+  CHECK (setor IN ('DESG', 'DEPT', 'DESC', 'DSSJ'));
+
 -- ── Seed das 58 equipes SJC ──────────────────────────────────────────────────
 INSERT INTO equipes_oficiais (sigla, setor, regional, tipo, placa, ativo) VALUES
   -- ECTSJ (Corte/Religa Disjuntor) — 14 equipes — tipo L0
