@@ -231,6 +231,16 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
   // Aplica whitelist: só equipes oficiais entram no histórico
   const rows0Filt = _onlyOficiais(rows0, 'team_name');
 
+  // Normaliza r.date pra string YYYY-MM-DD. O pg shim retorna coluna DATE como
+  // objeto Date (ex: 2026-06-08T00:00:00.000Z) — comparações com strings via
+  // >= / <= faziam coerção esquisita (Date.toString() = "Mon Jun 08 2026..." vs
+  // string "2026-06-08") e zeravam o resultado. Bug descoberto em 08/06/2026
+  // quando histórico retornava 0 teams apesar de 17k snapshots no range.
+  rows0Filt.forEach(r => {
+    if (r.date instanceof Date) r.date = r.date.toISOString().slice(0, 10);
+    else if (typeof r.date === 'string') r.date = r.date.slice(0, 10);
+  });
+
   if (!rows0Filt || rows0Filt.length === 0) return [];
 
   const isSingleDay = de === ate;
