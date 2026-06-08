@@ -243,12 +243,33 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
  * cache note_details). Necessário pra corrigir timestamps gravados antes do fix
  * de TZ (08/06/2026). Mutação in-place — só usar em copia ou payload descartavel.
  */
+/**
+ * conclusao em caches antigos foi gravado a partir de ConclusionDate2 que vinha
+ * CORROMPIDO da EDP (string UTC + "-03:00" falso colado). O _normTz normal não
+ * detecta — vê o offset e assume que está OK.
+ *
+ * Aqui detectamos o padrão "...HH:MM:SS-03:00" e substituímos por "...HH:MM:SSZ"
+ * — assumindo que o valor original era UTC e o offset foi colado por engano.
+ * Caches gravados a partir do commit 0781f49 (08/06/2026) já vêm com Z, então
+ * essa transformação é noop pra eles.
+ */
+function _fixConclusaoCorrompida(s) {
+  if (!s || typeof s !== 'string') return s;
+  // ISO com offset -03:00 → assumir corrompido, trocar por Z (UTC)
+  if (/^\d{4}-\d{2}-\d{2}T[\d:.]+-03:00$/.test(s)) {
+    return s.replace(/-03:00$/, 'Z');
+  }
+  return _normTz(s);
+}
+
 function fixCachedPayloadTz(payload) {
   if (!payload || typeof payload !== 'object') return payload;
   if (payload.datas) {
     payload.datas.emissao    = _normTz(payload.datas.emissao);
     payload.datas.desejada   = _normTz(payload.datas.desejada);
-    payload.datas.conclusao  = _normTz(payload.datas.conclusao);
+    // conclusao precisa do tratamento especial — caches antigos tinham
+    // ConclusionDate2 (offset -03:00 corrompido) gravado.
+    payload.datas.conclusao  = _fixConclusaoCorrompida(payload.datas.conclusao);
     payload.datas.importacao = _normTz(payload.datas.importacao);
   }
   if (payload.codificacao) {
