@@ -4360,6 +4360,7 @@
               <option value="ALL">Todas as Regionais</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
           <div class="tipos-filter-wrap" id="tipos-filter-wrap">
@@ -4497,6 +4498,7 @@
               <option value="ALL">Todas as Regionais</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
           <div class="filter-group">
@@ -4575,6 +4577,7 @@
               <option value="ALL">Todas</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
           <button class="btn-refresh" onclick="loadRanking()">↻ Atualizar</button>
@@ -4604,6 +4607,7 @@
               <option value="ALL">Todas</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
 
@@ -4719,6 +4723,7 @@
               <option value="ALL">Todas</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
           <div class="filter-group">
@@ -4783,6 +4788,7 @@
               <option value="ALL">Todas as Regionais</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
           <div class="filter-group">
@@ -6788,7 +6794,7 @@
       const isAdmin = sess && sess.role === 'admin';
 
       // Define quais regionais o user vê (não-admin só a sua)
-      const regionais = (userReg && userReg !== 'ALL') ? [userReg] : ['GUA', 'CAC'];
+      const regionais = (userReg && userReg !== 'ALL') ? [userReg] : REGIONAIS_ATIVAS;
       const nomeReg = { GUA: 'Guarapari', CAC: 'Cachoeiro' };
       const corReg  = { GUA: '#086738', CAC: '#0a4d8c' };
 
@@ -7730,7 +7736,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const grid = document.getElementById('prod-grid');
       const title = document.getElementById('prod-title');
-      const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : (currentRegional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
+      const labelRegional = currentRegional === 'ALL' ? 'Todas as Regionais' : regionalNome(currentRegional);
       // Título depende do range: dia único = "do Dia", range = "do Período"
       const { de: deTitle, ate: ateTitle, isLiveToday: liveToday } = currentMonitorRange();
       const tituloPrefixo = (deTitle === ateTitle && liveToday)
@@ -8019,7 +8025,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Calculado a partir de dentroDoRange (mesmos dados da matriz abaixo),
       // garantindo que cards e totais de linha sempre batem com o período selecionado.
       const consolidaTotais = {};
-      const regsVisiveis = (regional && regional !== 'ALL') ? [regional] : ['GUA', 'CAC'];
+      const regsVisiveis = (regional && regional !== 'ALL') ? [regional] : REGIONAIS_ATIVAS;
       dentroDoRange.forEach(d => {
         regsVisiveis.forEach(r => {
           Object.entries(d[r] || {}).forEach(([key, v]) => {
@@ -8106,7 +8112,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         return sum + s;
       }, 0);
 
-      const labelRegional = regional === 'ALL' ? 'Todas regionais' : (regional === 'GUA' ? 'Guarapari' : 'Cachoeiro');
+      const labelRegional = regional === 'ALL' ? 'Todas regionais' : regionalNome(regional);
       const labelPeriodo  = `${fmtData(de)} a ${fmtData(ate)}`;
 
       // Salva contexto pra re-renderização do ranking quando user clica num card
@@ -8539,8 +8545,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       // Define quais regionais o usuário pode ver
       const regsVisiveis = isAdmin
-        ? ['GUA', 'CAC']
-        : (userRegional === 'GUA' || userRegional === 'CAC' ? [userRegional] : []);
+        ? REGIONAIS_ATIVAS.slice()
+        : (REGIONAIS_ATIVAS.includes(userRegional) ? [userRegional] : []);
 
       if (regsVisiveis.length === 0) {
         alert('Sua conta não está vinculada a uma regional válida.');
@@ -8617,6 +8623,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
     function closeMetasModal(e) { if (e.target === document.getElementById('metas-overlay')) closeMetasDirect(); }
     function closeMetasDirect() { document.getElementById('metas-overlay').classList.remove('open'); }
+
+    // ── REGIONAIS ─────────────────────────────────────────────────────────
+    // Lista de regionais ativas + helper de nome. Centralizado pra facilitar
+    // adicionar novas (ex: SJC adicionado em 08/06/2026).
+    const REGIONAIS_ATIVAS = ['GUA', 'CAC', 'SJC'];
+    const REGIONAIS_NOMES  = {
+      GUA: 'Guarapari',
+      CAC: 'Cachoeiro',
+      SJC: 'São José dos Campos',
+    };
+    function regionalNome(sigla) {
+      return REGIONAIS_NOMES[sigla] || sigla || '—';
+    }
 
     // ── CARREGA DADOS ─────────────────────────────────────────────────────
     function todayISO() {
@@ -9358,7 +9377,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         //   como minimo pra nao mostrar "0 desconexoes" enquanto o badge diz "relogou".
         const reloginsCount = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);
         const reloginCls = reloginsCount === 0 ? 'relogin-0' : reloginsCount === 1 ? 'relogin-1' : 'relogin-2';
-        const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
+        const regionalNome = REGIONAIS_NOMES[t.regional] || t.regional || '—';
         // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo.
         // - notaPertenceAoRange: chips só do range atual (alinhado com contador)
         // - filtro de TIPO selecionado: respeita (usuário pode esconder tipos)
