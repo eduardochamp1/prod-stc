@@ -334,13 +334,25 @@ function _shiftEndFromStart(hhmm, horas = 9) {
  * Retorna sessões ativas no setor.
  * Única fonte de Team.CompanyId — necessário para filtrar equipes Engelmig.
  * Também fornece Vehicle.Code (placa) que o V2 não retorna.
- * GET /api/sessions/current?sectorId={sectorId}
+ *
+ * GET /api/Sessions/today?sectorId={sectorId}
+ *
+ * IMPORTANTE: /api/Sessions/today retorna TODAS as sessões do dia (abertas
+ * E encerradas com BeginTime + EndTime reais). Antes usávamos
+ * /api/sessions/current que só retornava as ativas — equipes que
+ * deslogavam durante o dia sumiam do payload e o sistema criava "ghosts"
+ * com horários artificiais (sessionEnd = 23:59:59 UTC fake). Descobrimos
+ * o endpoint correto via probe em 08/06/2026.
+ *
+ * Sessões ENCERRADAS têm EndTime preenchido (ex: "2026-06-08T06:39:03").
+ * Sessões ABERTAS têm EndTime null/ausente.
+ * Sessões que ATRAVESSARAM a virada têm BeginTime de ontem + EndTime de hoje.
  */
 async function getSessions(sectorId) {
-  const res  = await wpaFetch(`/api/sessions/current?sectorId=${sectorId}`);
-  if (!res.ok) throw new Error(`WPA sessions ${res.status}`);
+  const res = await wpaFetch(`/api/Sessions/today?sectorId=${sectorId}`);
+  if (!res.ok) throw new Error(`WPA Sessions/today ${res.status}`);
   const data = await res.json();
-  return data.Data || [];
+  return Array.isArray(data) ? data : (data.Data || []);
 }
 
 // getNotesExecution e getPreroute foram removidos (dead code).
@@ -914,7 +926,11 @@ async function getTeamsBySector(sectorId) {
     // tenta todos os outros setores conhecidos.
     // Ocorre quando o "setor de exibição" configurado no WPA difere do setor de login,
     // fazendo a equipe sumir do V2 com filterByExhibitionSector=true.
-    if (!v2) {
+    //
+    // Skip pra sessões já ENCERRADAS — V2 só retorna sessões ativas, fallback
+    // cross-setor seria infrutífero (e custaria N fetches por equipe encerrada).
+    const sessaoEncerrada = !!s.EndTime;
+    if (!v2 && !sessaoEncerrada) {
       for (const altSector of ALL_SECTORS) {
         if (altSector === sectorId) continue; // já tentamos este
         try {
@@ -985,6 +1001,31 @@ async function getTeamsBySector(sectorId) {
 
       // REJEITADAS — endpoint novo é a única fonte (v2.Rejected nunca mais popula)
       rejeitadas = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
+    } else if (sessaoEncerrada) {
+      // Sessão JÁ ENCERRADA — V2 não traz dados de sessões fechadas, é esperado.
+      // Não loga warning. Busca executadas/rejeitadas via endpoints por sessionId
+      // (funcionam mesmo pós-deslog). Concluídas são preenchidas pelo _accApply
+      // a partir do acumulador (notas vistas enquanto a sessão estava aberta).
+      // Carteira/baixadas obviamente zera (dispositivo deslogou).
+      const sessionId = s.Id;
+      const _safeNotes = async (status) => {
+        if (!sessionId) return [];
+        try {
+          const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
+          if (!r.ok) return [];
+          const j = await r.json();
+          const arr = Array.isArray(j) ? j : (j.Data || []);
+          return Array.isArray(arr) ? arr : [];
+        } catch (_) { return []; }
+      };
+      const [rejRaw, execRaw] = await Promise.all([
+        _safeNotes('rejected'),
+        _safeNotes('executed'),
+      ]);
+      baixadas    = [];
+      concluidas  = [];   // preenchido pelo _accApply via teamName match
+      executadas  = execRaw.map(n => normalizarNotaV2(n, 'executada'));
+      rejeitadas  = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
     } else {
       console.warn(`[WPA] ${sectorId}/${teamName}: ⚠️ sem dados V2`);
       baixadas = []; executadas = []; concluidas = []; rejeitadas = [];
@@ -994,12 +1035,14 @@ async function getTeamsBySector(sectorId) {
     const carteiraCount = baixadas.length + executadas.length;
     const allNotas      = [...baixadas, ...executadas, ...concluidas, ...rejeitadas];
 
+    const _statusTag = v2 ? '' : (sessaoEncerrada ? ' [ENCERRADA]' : ' [SEM V2]');
     console.log(
       `[WPA]   ${sectorId}/${teamName}: ` +
       `início=${s.BeginTime?.slice(0, 16) || '?'} ` +
+      `${s.EndTime ? `fim=${s.EndTime.slice(0, 16)} ` : ''}` +
       `baixadas=${baixadas.length} exec=${executadas.length} ` +
       `conc=${concluidas.length} rej=${rejeitadas.length} ` +
-      `carteira=${carteiraCount}${v2 ? '' : ' [SEM V2]'}`
+      `carteira=${carteiraCount}${_statusTag}`
     );
 
     return {
