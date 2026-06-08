@@ -9941,11 +9941,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       // Multi-select no filtro Regional (mesmo componente das outras abas).
       // currentRegional pode virar CSV tipo 'GUA,SJC' ou 'ALL' (todas).
-      if (window.MultiSelect && document.getElementById('regional-select')) {
+      // Após init, lê o valor via getValues() (CSV ou 'ALL') e propaga via selectRegional.
+      if (typeof MultiSelect !== 'undefined' && document.getElementById('regional-select')) {
         MultiSelect.init('regional-select', {
           onChange: () => {
-            const sel = document.getElementById('regional-select');
-            selectRegional(sel.value);
+            const vals = MultiSelect.getValues('regional-select');
+            // getValues retorna ['ALL'] ou array de valores selecionados
+            const csv = (vals[0] === 'ALL') ? 'ALL' : vals.join(',');
+            selectRegional(csv);
           },
           allLabel: 'Todas as Regionais',
         });
