@@ -9282,7 +9282,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // O KPI 'OS EXECUTADAS' (concluídas) é calculado depois via concluidasLive
       // e atualizado mais abaixo após buscar daily_totals — o carteiraInicial
       // também é recalculado nesse momento (vide bloco try/catch adiante).
-      const carteiraInicial = emCarteira + executadas + concluidasLive + rejeitadas;
+      // Carteira Inicial REAL: vem do primeiro snapshot do dia de cada equipe
+      // (backend popula t.carteiraInicialReal em /api/teams). Equipes sem snapshot
+      // (não logaram hoje) ficam com null e são ignoradas da soma — comportamento
+      // confirmado com usuário 08/06/2026.
+      // Mantemos a soma derivada como fallback (carteiraInicialDerivada) pra
+      // modo histórico ou quando o snapshot ainda não foi capturado.
+      const carteiraInicialDerivada = emCarteira + executadas + concluidasLive + rejeitadas;
+      const somaInicialReal = teamsVisible.reduce((s, t) =>
+        s + (typeof t.carteiraInicialReal === 'number' ? t.carteiraInicialReal : 0), 0);
+      const equipesComInicial = teamsVisible.filter(t => typeof t.carteiraInicialReal === 'number').length;
+      // Se há equipes com snapshot, usa o valor real. Senão (ex: muito cedo no
+      // dia, antes do primeiro snapshot) fallback pra soma derivada.
+      const carteiraInicial = (isLiveToday && equipesComInicial > 0) ? somaInicialReal : carteiraInicialDerivada;
 
       document.getElementById('m-total').textContent = teamsVisible.length;
       // Layout novo (total / em campo lado a lado). Mantemos m-ativas pra
@@ -9367,9 +9379,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const concluidas = Math.max(concluidasPersist, concluidasLive);
         document.getElementById('m-concluidas').textContent = concluidas;
 
-        // Recalcula Total Dia com concluidas final (inclui equipes deslogadas
-        // via daily_totals). Garante aritmética fechando: total = atual+and+exec+rej.
-        const carteiraInicialFinal = emCarteira + executadas + concluidas + rejeitadas;
+        // Total Dia: usa carteira inicial REAL (snapshot do logon) quando temos
+        // dados; senão fallback pra soma derivada (atual+and+exec+rej). Em
+        // histórico, sempre usa derivada porque o snapshot do dia já passou.
+        const carteiraInicialDerivadaFinal = emCarteira + executadas + concluidas + rejeitadas;
+        const carteiraInicialFinal = (isLiveToday && equipesComInicial > 0)
+          ? somaInicialReal
+          : carteiraInicialDerivadaFinal;
         if (mBaixIni && carteiraInicialFinal > 0 && carteiraInicialFinal !== emCarteira) {
           mBaixIni.textContent = carteiraInicialFinal;
           if (mBaixIniWrap) mBaixIniWrap.style.display = 'flex';

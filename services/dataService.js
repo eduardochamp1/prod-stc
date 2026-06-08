@@ -90,6 +90,69 @@ async function _enrichComEscalaELogonReal(teams) {
 }
 
 /**
+ * Carteira Inicial REAL de cada equipe: total de notas que a equipe tinha
+ * quando iniciou a escala do dia. Lida do PRIMEIRO snapshot do dia de cada
+ * equipe (cron grava a cada ~5 min). Conceito definido pelo usuário em
+ * 08/06/2026: "total que a equipe iniciou a escala" — vai diminuindo ao
+ * longo do dia conforme notas são concluídas, rejeitadas, ou transferidas.
+ *
+ * Decisões (confirmadas com usuário):
+ *  - Equipe que relogou no dia: usa a PRIMEIRA sessão (primeiro snapshot).
+ *  - Equipe que ainda não logou: ignora (carteiraInicialReal = null).
+ *
+ * Implementação: SQL DISTINCT ON com ORDER BY captured_at ASC → primeiro
+ * snapshot. Soma length dos 4 buckets do snapshot. Não filtra por estado
+ * porque no primeiro snapshot concluídas/rejeitadas costumam estar zeradas
+ * (equipe acabou de logar) e o resultado se reduz a baixadas+andamento ≈
+ * carteira inicial real.
+ */
+async function _enrichCarteiraInicial(teams) {
+  if (!teams || teams.length === 0) return teams;
+
+  try {
+    const { _getPool } = require('./pgShim');
+    const pool = _getPool();
+    if (!pool) return teams;
+    const hoje = _hojeBRT();
+    const siglas = teams.map(t => t.teamName || t.sigla).filter(Boolean);
+    if (siglas.length === 0) return teams;
+
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (team_name)
+              team_name,
+              coalesce(jsonb_array_length(data->'notasBaixadas'),   0) AS bx,
+              coalesce(jsonb_array_length(data->'notasExecutadas'), 0) AS ex,
+              coalesce(jsonb_array_length(data->'notasConcluidas'), 0) AS co,
+              coalesce(jsonb_array_length(data->'notasRejeitadas'), 0) AS rj
+       FROM snapshots
+       WHERE date = $1
+         AND team_name = ANY($2::text[])
+       ORDER BY team_name, captured_at ASC`,
+      [hoje, siglas]
+    );
+
+    const inicialPorEquipe = {};
+    rows.forEach(r => {
+      inicialPorEquipe[r.team_name] = (r.bx || 0) + (r.ex || 0) + (r.co || 0) + (r.rj || 0);
+    });
+
+    let comDados = 0;
+    teams.forEach(t => {
+      const nome = t.teamName || t.sigla;
+      const v = inicialPorEquipe[nome];
+      // null pra equipes sem snapshot (não logaram hoje) — frontend ignora da soma
+      t.carteiraInicialReal = (typeof v === 'number') ? v : null;
+      if (t.carteiraInicialReal != null) comDados++;
+    });
+    console.log(`[dataService] carteira inicial: ${comDados}/${teams.length} equipes com primeiro snapshot do dia`);
+  } catch (err) {
+    console.warn('[dataService] enrich carteira inicial falhou:', err.message);
+  }
+
+  return teams;
+}
+
+/**
  * Enriquece equipes ENCERRADAS (sessionEnd preenchido) cujo notasConcluidas
  * está vazio. Causa: v2.Concluded só popula sessões abertas, e a EDP não
  * expõe endpoint /api/notes/concluded/{sessionId}/session (confirmado 404
@@ -205,7 +268,9 @@ async function getTeams(filters = {}) {
   // Enriquecer com escala (de equipes_oficiais) e sessionBeginReal (primeiro snapshot do dia)
   const enriched = await _enrichComEscalaELogonReal(teams);
   // Restaurar notasConcluidas de equipes encerradas (EDP não expõe pós-deslog)
-  return await _enrichConcluidasDeEncerradas(enriched);
+  const comConcluidas = await _enrichConcluidasDeEncerradas(enriched);
+  // Carteira Inicial REAL do primeiro snapshot do dia (cada equipe individualmente)
+  return await _enrichCarteiraInicial(comConcluidas);
 }
 
 // ── GET TEAM DETAIL ───────────────────────────────────────────────────────────
