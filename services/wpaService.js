@@ -58,6 +58,26 @@ const SECTOR_TO_ACCOUNT = {
 };
 
 /** Resolve account a partir de sectorId (ou default se não mapeado). */
+/**
+ * Map paralelo com cap de concorrência. Substitui `Promise.all(arr.map(...))`
+ * quando cada item dispara fetches pesados — evita saturar o pool de
+ * conexões HTTP (undici default = 6/origin) e o rate limit da EDP.
+ * Mantém a ordem do array original.
+ */
+async function _mapConcurrent(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const i = cursor++;
+      results[i] = await mapper(items[i], i);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 function _accountForSector(sectorId) {
   if (!sectorId) return DEFAULT_ACCOUNT;
   return SECTOR_TO_ACCOUNT[String(sectorId).toUpperCase()] || DEFAULT_ACCOUNT;
@@ -984,8 +1004,14 @@ async function getTeamsBySector(sectorId) {
     ` | ${statusList.length} entradas V2`
   );
 
-  // Processamento assíncrono para suportar fallback de V2 entre setores
-  const result = await Promise.all(engelmigSessions.map(async s => {
+  // Concurrency cap pra não saturar a EDP. Cada sessão dispara 2 fetches
+  // (notes/rejected + notes/executed). Antes era Promise.all puro → em DSSJ
+  // com 52 sessões viravam 104 fetches simultâneos contra 1 conta. Combinado
+  // com os outros 3 setores em paralelo, chegava-se a ~300 sockets. Undici
+  // default = 6 connections/origin → fila gigante → timeouts → _safeNotes
+  // engolia silenciosamente → cards vinham vazios em ALL.
+  // Limite de 8: cap em 16 fetches simultâneos por setor.
+  const result = await _mapConcurrent(engelmigSessions, 8, async s => {
     const teamName     = (s.Team?.Name || '').trim();
     const teamId       = s.Team?.Id;
     const teamSectorId = s.SectorId || s.Sector?.Code || sectorId;
@@ -1165,7 +1191,7 @@ async function getTeamsBySector(sectorId) {
       notasConcluidas: concluidas,
       notasRejeitadas: rejeitadas,
     };
-  }));
+  });
 
   _accRecord(result);
   const augmented = _accApply(result);
