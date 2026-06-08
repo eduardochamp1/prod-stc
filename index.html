@@ -9118,6 +9118,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
       document.getElementById('m-ativas').textContent = `${ativas} em campo`;
       document.getElementById('m-executadas').textContent = executadas;
       document.getElementById('m-rejeitadas').textContent = rejeitadas;
+      // Em modo histórico, o reduce acima subestima (snapshots agregados deduplicam
+      // entre estados). Busca a contagem REAL via /api/rejeicoes/totais que lê de
+      // note_rejections (tabela dedicada, mesma fonte da aba Rejeições).
+      if (!isLiveToday) {
+        const reg = currentRegional && currentRegional !== 'ALL' ? `&regional=${currentRegional}` : '';
+        fetch(`${API}/rejeicoes/totais?de=${de}&ate=${ate}${reg}`)
+          .then(r => r.json())
+          .then(j => {
+            if (typeof j?.total === 'number') {
+              document.getElementById('m-rejeitadas').textContent = j.total;
+            }
+          })
+          .catch(() => { /* mantém o valor live calculado */ });
+      }
       // OS em carteira: layout 'ATUAL / TOTAL DIA' (estilo do card Total equipes)
       // Atual: pendentes no dispositivo agora. Total dia: cumulativo do dia (deduplicado).
       document.getElementById('m-baixadas').textContent = emCarteira;
