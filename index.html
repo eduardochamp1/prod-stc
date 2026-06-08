@@ -5180,20 +5180,23 @@
       </div>
       <div class="modal-body">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px" id="metas-colunas">
-          <div>
+          <div id="metas-col-GUA">
             <div
               style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">
               Guarapari</div>
             <div class="metas-grid" id="metas-grid-GUA"></div>
           </div>
-          <div>
+          <div id="metas-col-CAC">
             <div
               style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">
               Cachoeiro</div>
             <div class="metas-grid" id="metas-grid-CAC"></div>
           </div>
         </div>
-        <button class="btn-salvar" onclick="salvarMetas()">Salvar Metas</button>
+        <div id="metas-readonly-note" style="display:none;margin-top:16px;padding:10px 14px;background:#fec40e22;border-left:3px solid var(--amarelo);border-radius:4px;font-size:12px;color:var(--text2)">
+          🔒 Modo somente leitura. Para editar metas, contate um administrador.
+        </div>
+        <button class="btn-salvar" id="metas-btn-salvar" onclick="salvarMetas()">Salvar Metas</button>
       </div>
     </div>
   </div>
@@ -5296,19 +5299,22 @@
       document.getElementById('user-chip-name').textContent = sess.username;
       document.getElementById('user-chip').classList.add('show');
 
-      // Guarda role globalmente pra openMetas/openAdmin checarem
-      window.__currentUserRole = sess.role || '';
+      // Guarda role + regional globalmente pra openMetas/openAdmin checarem
+      window.__currentUserRole     = sess.role || '';
+      window.__currentUserRegional = sess.regional || 'ALL';
 
-      // Mostra botões Metas/Admin SÓ pra admin. (Aba Metas tambem ficaria
-      // visivel pra admin, mas a feature foi oculta — ver comentario na barra
-      // de tabs. Mantemos showOrHide pros botoes do header.)
+      // Botão Metas: visível pra todos os roles autenticados.
+      //   - admin: edita metas das 2 regionais (GUA + CAC).
+      //   - gua/cac: vê apenas a sua regional em modo read-only (defesa em
+      //     profundidade — backend já bloqueia POST via requireAdmin).
+      // Botão Admin: só admin.
       const isAdmin = sess.role === 'admin';
       const showOrHide = (id, show) => {
         const el = document.getElementById(id);
         if (el) el.style.display = show ? '' : 'none';
       };
       // showOrHide('tab-btn-metas', isAdmin);  // desativado — aba oculta permanente
-      showOrHide('btn-header-metas', isAdmin);
+      showOrHide('btn-header-metas', true);       // todos os roles podem abrir
       showOrHide('btn-header-admin', isAdmin);
 
       // Restringe regional no seletor para usuários não-admin.
@@ -8434,10 +8440,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       setTimeout(() => input?.focus(), 80);
     }
 
-    // Acesso role-based: só admin abre. Senão, alerta (não deveria nem ver o botão, mas é defesa em profundidade).
+    // Acesso role-based: todos os roles autenticados podem abrir o modal.
+    // - admin: GUA + CAC editáveis
+    // - gua/cac: só a sua regional em read-only (vide _abrirModalMetas)
     function openMetas() {
-      if (window.__currentUserRole !== 'admin') {
-        alert('Acesso negado — apenas administradores podem configurar metas.');
+      if (!window.__currentUserRole) {
+        alert('Acesso negado — faça login.');
         return;
       }
       _abrirModalMetas();
@@ -8478,9 +8486,42 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // ── MODAL METAS ───────────────────────────────────────────────────────
     // Inputs construídos a partir de PROD_LINHAS — uma linha por card de produtividade.
     // Ex.: em vez de input "MD", há inputs separados para Subs Obsoleto, Subs TL11, MD Outros.
+    //
+    // Modos:
+    //   - admin: vê GUA + CAC, inputs editáveis, botão Salvar visível
+    //   - gua/cac: vê apenas a sua regional, inputs disabled, botão Salvar oculto,
+    //     aviso de read-only mostrado, layout passa pra 1 coluna
     function _abrirModalMetas() {
+      const role = window.__currentUserRole || '';
+      const isAdmin = role === 'admin';
+      const userRegional = (window.__currentUserRegional || 'ALL').toUpperCase();
+
+      // Define quais regionais o usuário pode ver
+      const regsVisiveis = isAdmin
+        ? ['GUA', 'CAC']
+        : (userRegional === 'GUA' || userRegional === 'CAC' ? [userRegional] : []);
+
+      if (regsVisiveis.length === 0) {
+        alert('Sua conta não está vinculada a uma regional válida.');
+        return;
+      }
+
       const metas = getMetas();
+
+      // Mostra/esconde colunas conforme regional do user
       ['GUA', 'CAC'].forEach(reg => {
+        const col = document.getElementById('metas-col-' + reg);
+        if (col) col.style.display = regsVisiveis.includes(reg) ? '' : 'none';
+      });
+
+      // Layout: 1 coluna quando user vê só 1 regional, 2 colunas pra admin
+      const colunas = document.getElementById('metas-colunas');
+      if (colunas) {
+        colunas.style.gridTemplateColumns = regsVisiveis.length === 1 ? '1fr' : '1fr 1fr';
+      }
+
+      // Renderiza grids (só das visíveis)
+      regsVisiveis.forEach(reg => {
         const grid = document.getElementById('metas-grid-' + reg);
         if (!grid) return;
         const metasReg = metas[reg] || {};
@@ -8488,21 +8529,35 @@ ${equipes.length > 0 ? `<div class="perf-section">
           const val = metasReg[l.key] || '';
           const dia = val ? (val / 22).toFixed(1) : '—';
           const sem = val ? ((val / 22) * 5).toFixed(1) : '—';
+          const disabled = isAdmin ? '' : 'disabled';
           return `
         <div class="meta-item">
           <label><span class="meta-badge">${l.tipo}</span>${l.nome}</label>
           <input class="meta-input" type="number" min="0"
                  id="meta-${reg}-${l.key}"
                  value="${val}"
-                 placeholder="0 = sem meta" />
+                 placeholder="0 = sem meta" ${disabled} />
           <span class="meta-hint">Diária: ${dia} | Semanal: ${sem}</span>
         </div>`;
         }).join('');
       });
+
+      // Botão Salvar e aviso read-only conforme role
+      const btnSalvar = document.getElementById('metas-btn-salvar');
+      const readonlyNote = document.getElementById('metas-readonly-note');
+      if (btnSalvar)     btnSalvar.style.display     = isAdmin ? '' : 'none';
+      if (readonlyNote)  readonlyNote.style.display  = isAdmin ? 'none' : '';
+
       document.getElementById('metas-overlay').classList.add('open');
     }
 
     async function salvarMetas() {
+      // Defesa em profundidade: backend já bloqueia POST /api/metas via requireAdmin,
+      // mas evitamos a chamada se o usuario nao for admin (UI consistente).
+      if (window.__currentUserRole !== 'admin') {
+        alert('Acesso negado — apenas administradores podem salvar metas.');
+        return;
+      }
       const btn = document.querySelector('#metas-overlay .btn-salvar');
       if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
       const obj = { GUA: {}, CAC: {} };
