@@ -8998,6 +8998,25 @@ ${equipes.length > 0 ? `<div class="perf-section">
       return false;
     }
 
+    /**
+     * Calcula a carteira INICIAL de uma equipe pra ser visualmente coerente:
+     *   inicial = atual + executadas (concluídas) no range + rejeitadas no range
+     *
+     * Garante que a aritmética sempre fecha: "X de Y feitas" onde X=feitas, Y=inicial.
+     * Antes usávamos um acumulador deduplicado por noteId, que incluía notas
+     * transferidas/canceladas (saíram da carteira sem deixar rastro), gerando
+     * inconsistência (ex: inicial=14, atual=10, conc=0, rej=0 → cadê as 4?).
+     *
+     * Pra equipes encerradas (sessionEnd preenchido), atual=0 — o inicial mostra
+     * o total que ela finalizou no dia.
+     */
+    function carteiraInicialDe(t, de, ate) {
+      const atual = !t.sessionEnd ? (t.carteiraCount || 0) : 0;
+      const conc  = (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
+      const rej   = (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
+      return atual + conc + rej;
+    }
+
     /** Lê o range DE/ATÉ atual do monitor (default: hoje/hoje). */
     function currentMonitorRange() {
       const hoje = todayISO();
@@ -9018,10 +9037,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (t.sessionEnd) return s;
         return s + (t.carteiraCount || 0);
       }, 0);
-      // Carteira inicial: total cumulativo do dia (inclui notas concluídas que
-      // saíram da carteira + equipes encerradas que tiveram carteira durante o dia).
+      // Carteira inicial: derivada da fórmula 'atual + concluídas + rejeitadas'.
+      // Aritmética sempre fecha (X feitas de Y inicial). Pra equipes encerradas,
+      // atual=0 e a soma reflete o trabalho finalizado.
       const carteiraInicial = teamsVisible.reduce((s, t) =>
-        s + (t.carteiraInicialCount || 0), 0);
+        s + carteiraInicialDe(t, de, ate), 0);
 
       // Em andamento: notas com status 'executada' (sendo trabalhadas AGORA).
       // - Em modo "hoje" ao vivo: aplica filtro sessaoHoje pra evitar contar
@@ -9339,10 +9359,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
               <div class="os-cell">
-                <div class="os-num" title="Atual / Inicial — Atual: notas pendentes no dispositivo agora. Inicial: total cumulativo de notas que passaram pela carteira hoje.">
-                  ${sessaoAberta ? (t.carteiraCount || 0) : 0}
-                  ${t.carteiraInicialCount > 0 ? `<span style="font-size:11px;color:var(--text2);font-weight:400"> / ${t.carteiraInicialCount}</span>` : ''}
-                </div>
+                ${(() => {
+                  const _atu = sessaoAberta ? (t.carteiraCount || 0) : 0;
+                  const _ini = carteiraInicialDe(t, _rngDe, _rngAte);
+                  return `<div class="os-num" title="Atual / Inicial — Atual: notas pendentes no dispositivo. Inicial: Atual + Executadas + Rejeitadas (aritmética sempre fecha).">
+                    ${_atu}
+                    ${_ini > _atu ? `<span style="font-size:11px;color:var(--text2);font-weight:400"> / ${_ini}</span>` : ''}
+                  </div>`;
+                })()}
                 <div class="os-lbl">Carteira</div>
               </div>
               <div class="os-cell"><div class="os-num executada">${sessaoAberta ? (t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length : 0}</div><div class="os-lbl">Andamento</div></div>
