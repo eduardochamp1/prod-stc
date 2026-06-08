@@ -110,12 +110,19 @@ function processarNota(nota, opts = {}) {
       longitude:  nota.Longitude,
     },
     datas: {
-      // *Date2 (BR DD/MM/YYYY HH:MM:SS) é preferido — já vem em fuso BR.
-      // *Date (ISO UTC sem marker Z) é fallback — concatena Z pra JS interpretar
-      // corretamente como UTC e converter pro fuso do display.
+      // EDP é INCONSISTENTE no formato das datas:
+      //   - Campos GERADOS PELA EDP (Issue, Desired, Import, Creation):
+      //     a versão 2 (com offset -03:00) está corretamente convertida → preferimos.
+      //   - Campos VINDOS DO APP MÓVEL (Conclusion, Timestamp, cp.TimeStamp):
+      //     a versão 2 está CORROMPIDA — a EDP cola "-03:00" no fim da string UTC
+      //     sem converter o valor, fazendo o instante ficar 3h adiantado.
+      // Probe confirmou em 08/06/2026: ConclusionDate=14:27 (UTC, real 11:27 BRT)
+      // mas ConclusionDate2=14:27-03:00 (= 14:27 BRT, errado por 3h).
+      // Solução: usa SÓ a versão UTC (sem 2) pros campos do app + _normTz pra
+      // marcar com Z, e mantém a versão 2 pros campos da EDP que estão corretos.
       emissao:         nota.IssueDate2             || _normTz(nota.IssueDate),
       desejada:        nota.DesiredConclusionDate2 || _normTz(nota.DesiredConclusionDate),
-      conclusao:       nota.ConclusionDate2        || _normTz(nota.ConclusionDate),
+      conclusao:       _normTz(nota.ConclusionDate),  // NUNCA usar ConclusionDate2 — corrompido
       statusConclusao: nota.ConclusionStatus,
       importacao:      nota.ImportDate2            || _normTz(nota.ImportDate),
     },
