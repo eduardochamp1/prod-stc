@@ -1103,39 +1103,29 @@ async function getTeamsBySector(sectorId) {
       rejeitadas = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
     } else if (sessaoEncerrada) {
       // Sessão JÁ ENCERRADA — V2 não traz dados de sessões fechadas.
-      // Buscamos rejected/executed/concluded via endpoints por sessionId
-      // (rejected e executed sabidamente funcionam pós-deslog; concluded
-      // é experimental — se EDP responder 404, _safeNotes devolve [] e
-      // loga warning sem quebrar nada).
+      // Buscamos rejected/executed/concluded via endpoints por sessionId.
       const sessionId = s.Id;
       const _safeNotes = async (status) => {
-        if (!sessionId) return [];
+        if (!sessionId) return { arr: [], httpStatus: null, err: null };
         try {
           const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
-          if (!r.ok) {
-            // 404 esperado pra concluded se endpoint não existir — log low-key.
-            if (r.status !== 404 || status !== 'concluded') {
-              console.warn(`[WPA] ${sectorId}/${teamName}: notes/${status} HTTP ${r.status} (encerrada)`);
-            }
-            return [];
-          }
+          if (!r.ok) return { arr: [], httpStatus: r.status, err: null };
           const j = await r.json();
           const arr = Array.isArray(j) ? j : (j.Data || []);
-          return Array.isArray(arr) ? arr : [];
-        } catch (_) { return []; }
+          return { arr: Array.isArray(arr) ? arr : [], httpStatus: r.status, err: null };
+        } catch (e) { return { arr: [], httpStatus: null, err: e.message }; }
       };
-      const [rejRaw, execRaw, concRaw] = await Promise.all([
+      const [rejR, execR, concR] = await Promise.all([
         _safeNotes('rejected'),
         _safeNotes('executed'),
         _safeNotes('concluded'),   // PROBE — descobrir se EDP expõe isso
       ]);
+      // PROBE LOG: sempre logar status do concluded pra descobrir se endpoint existe
+      console.log(`[PROBE-CONCLUDED] ${sectorId}/${teamName}: http=${concR.httpStatus} len=${concR.arr.length} err=${concR.err || '-'}`);
       baixadas    = [];
-      concluidas  = concRaw.map(n => normalizarNotaV2(n, 'concluida'));
-      executadas  = execRaw.map(n => normalizarNotaV2(n, 'executada'));
-      rejeitadas  = rejRaw.map(n => normalizarNotaV2(n, 'rejeitada'));
-      if (concRaw.length > 0) {
-        console.log(`[WPA] ${sectorId}/${teamName}: ✓ /notes/concluded retornou ${concRaw.length} notas (encerrada)`);
-      }
+      concluidas  = concR.arr.map(n => normalizarNotaV2(n, 'concluida'));
+      executadas  = execR.arr.map(n => normalizarNotaV2(n, 'executada'));
+      rejeitadas  = rejR.arr.map(n => normalizarNotaV2(n, 'rejeitada'));
     } else {
       console.warn(`[WPA] ${sectorId}/${teamName}: ⚠️ sem dados V2`);
       baixadas = []; executadas = []; concluidas = []; rejeitadas = [];
