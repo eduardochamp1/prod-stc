@@ -849,17 +849,27 @@ function normalizarNotaV2(n, statusForcado) {
     5: 'concluida',   // exportada variante
     9: 'concluida',   // mobile pendente sync
   };
+  // ConclusionDate2 (DD/MM/YYYY HH:MM:SS BR) preferido por já vir em BRT;
+  // ConclusionDate (ISO UTC) é fallback — porém vem SEM marker Z. JS interpreta
+  // como local time se faltar Z, mostrando horário 3h adiantado (ex: 20:00 em
+  // vez de 17:00 BRT). Concatena 'Z' se não tiver TZ marker explícito, alinhando
+  // com o fix do RejectedAt em rejectionService.js (07/06/2026).
+  let conclusionDate = n.ConclusionDate2 || n.ConclusionDate || null;
+  if (
+    conclusionDate &&
+    typeof conclusionDate === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T/.test(conclusionDate) &&        // formato ISO (não DD/MM)
+    !/[Zz]|[+-]\d{2}:?\d{2}$/.test(conclusionDate)       // sem TZ marker
+  ) {
+    conclusionDate = conclusionDate + 'Z';
+  }
   return {
     id:             n.Id   || null,                    // UUID — necessário para /details/optimized
     codigo:         String(n.Number || n.Id || ''),
     tipoCode:       n.Type || '??',
     tipoNome:       n.Type || '??',
     status:         statusForcado || STATUS_V2[n.ExecutionStatus] || 'baixada',
-    // ConclusionDate2 (DD/MM/YYYY HH:MM:SS BR) preferido por já vir no fuso BRT;
-    // ConclusionDate (ISO UTC) fallback. Necessário para filtrar contadores
-    // diários — equipes com sessão de dia anterior ainda aberta carregam notas
-    // velhas no payload, e não podem inflar o contador de hoje.
-    conclusionDate: n.ConclusionDate2 || n.ConclusionDate || null,
+    conclusionDate,
   };
 }
 

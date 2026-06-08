@@ -8983,19 +8983,32 @@ ${equipes.length > 0 ? `<div class="perf-section">
      * (sem conclusionDate) só conta se HOJE estiver dentro do intervalo — caso
      * contrário (range puramente histórico) executadas sem data não fazem sentido.
      */
+    // Extrai data BRT (YYYY-MM-DD) de uma string conclusionDate.
+    // Aceita ISO UTC ("...Z" ou com offset), ISO sem TZ (que o backend
+    // garante via concat 'Z'), ou DD/MM/YYYY já em BRT. Importante converter
+    // pra BRT antes de comparar, senão notas concluídas no fim do dia (23h BRT
+    // = 02h UTC do dia seguinte) caem em data errada.
+    function _conclusionDateBRT(iso) {
+      if (!iso) return null;
+      const s = String(iso);
+      // DD/MM/YYYY já BRT
+      const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+      // ISO — calcula data em BRT (UTC-3)
+      const d = new Date(s);
+      if (isNaN(d.getTime())) return null;
+      const brt = new Date(d.getTime() - 3 * 3600 * 1000);
+      return brt.toISOString().slice(0, 10);
+    }
+
     function notaPertenceAoRange(n, de, ate) {
       if (!n.conclusionDate) {
         const hoje = todayISO();
         return de <= hoje && hoje <= ate;
       }
-      const cd = String(n.conclusionDate).slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}/.test(cd)) return cd >= de && cd <= ate;
-      const m = n.conclusionDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-      if (m) {
-        const iso = `${m[3]}-${m[2]}-${m[1]}`;
-        return iso >= de && iso <= ate;
-      }
-      return false;
+      const cd = _conclusionDateBRT(n.conclusionDate);
+      if (!cd) return false;
+      return cd >= de && cd <= ate;
     }
 
     /**
@@ -9327,9 +9340,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const reloginsCount = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);
         const reloginCls = reloginsCount === 0 ? 'relogin-0' : reloginsCount === 1 ? 'relogin-1' : 'relogin-2';
         const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
-        // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo
+        // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo.
+        // Aplica notaPertenceAoRange — antes os chips contavam notas fora do
+        // range selecionado, gerando inconsistência (ex: 'PO 6' aparecendo mesmo
+        // com EXECUTADAS=0). Agora chips refletem só o range atual.
         const subcatCont = {};
         (t.notasConcluidas || []).forEach(n => {
+          if (!notaPertenceAoRange(n, _rngDe, _rngAte)) return;
           if (!notaPassaFiltroMonitor(n)) return;
           const sc = window._subcatMap?.[n.id];
           const label = sc?.sub_categoria || n.tipoCode;
@@ -9573,7 +9590,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (!iso) return '—';
       try {
         const d = new Date(iso);
-        return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        // Força timeZone BRT — algumas datas vinham UTC sem marker Z e renderizavam
+        // 3h adiantadas. Defesa em profundidade (backend já concatena Z).
+        return d.toLocaleString('pt-BR', {
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+          timeZone: 'America/Sao_Paulo'
+        });
       } catch { return iso; }
     }
 
