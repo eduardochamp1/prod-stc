@@ -9112,17 +9112,6 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Andamento tem coluna própria — então NÃO entra em 'atual'.
       // Equipes encerradas: 0 (dispositivo deslogou).
       const emCarteira = teamsVisible.reduce((s, t) => s + _carteiraPendentes(t), 0);
-      // Carteira INICIAL (Total Dia) = soma direta dos 4 KPIs.
-      // Antes era reduce per-team (subestimava quando equipes deslogavam — as
-      // concluídas continuavam em daily_totals mas o team sumia de teamsVisible).
-      // Agora soma global: Atual + Andamento + Executadas + Rejeitadas, garantindo
-      // que a aritmética fecha por construção.
-      //
-      // Importante: `executadas` aqui é o KPI 'EM ANDAMENTO' (notasExecutadas).
-      // O KPI 'OS EXECUTADAS' (concluídas) é calculado depois via concluidasLive
-      // e atualizado mais abaixo após buscar daily_totals — o carteiraInicial
-      // também é recalculado nesse momento (vide bloco try/catch adiante).
-      const carteiraInicial = emCarteira + executadas + concluidasLive + rejeitadas;
 
       // Em andamento: notas com status 'executada' (sendo trabalhadas AGORA).
       // - Em modo "hoje" ao vivo: aplica filtro sessaoHoje pra evitar contar
@@ -9163,6 +9152,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
         return s + cnt;
       }, 0);
       const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline).length;
+
+      // Carteira INICIAL (Total Dia) = soma direta dos 4 KPIs.
+      // Antes era reduce per-team (subestimava quando equipes deslogavam — as
+      // concluídas continuavam em daily_totals mas o team sumia de teamsVisible).
+      // Agora soma global: Atual + Andamento + Executadas + Rejeitadas, garantindo
+      // que a aritmética fecha por construção.
+      //
+      // Importante: `executadas` aqui é o KPI 'EM ANDAMENTO' (notasExecutadas).
+      // O KPI 'OS EXECUTADAS' (concluídas) é calculado depois via concluidasLive
+      // e atualizado mais abaixo após buscar daily_totals — o carteiraInicial
+      // também é recalculado nesse momento (vide bloco try/catch adiante).
+      const carteiraInicial = emCarteira + executadas + concluidasLive + rejeitadas;
 
       document.getElementById('m-total').textContent = teamsVisible.length;
       // Layout novo (total / em campo lado a lado). Mantemos m-ativas pra
