@@ -9341,13 +9341,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const reloginCls = reloginsCount === 0 ? 'relogin-0' : reloginsCount === 1 ? 'relogin-1' : 'relogin-2';
         const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
         // Agrupa por subcategoria (quando disponível no _subcatMap) ou por tipo.
-        // Aplica notaPertenceAoRange — antes os chips contavam notas fora do
-        // range selecionado, gerando inconsistência (ex: 'PO 6' aparecendo mesmo
-        // com EXECUTADAS=0). Agora chips refletem só o range atual.
+        // - notaPertenceAoRange: chips só do range atual (alinhado com contador)
+        // - filtro de TIPO selecionado: respeita (usuário pode esconder tipos)
+        // - filtro de SUBCATEGORIA: NÃO aplica aqui — chips devem somar tudo que
+        //   o contador EXECUTADAS conta. Notas ainda não classificadas (sub=OUTROS)
+        //   apareciam fora do chip enquanto EXECUTADAS continuava contando, gerando
+        //   discrepância. Chips agora batem por construção.
         const subcatCont = {};
         (t.notasConcluidas || []).forEach(n => {
           if (!notaPertenceAoRange(n, _rngDe, _rngAte)) return;
-          if (!notaPassaFiltroMonitor(n)) return;
+          if (selectedTipos.size > 0 && !selectedTipos.has(n.tipoCode)) return;
           const sc = window._subcatMap?.[n.id];
           const label = sc?.sub_categoria || n.tipoCode;
           if (!subcatCont[label]) subcatCont[label] = { count: 0, qtdTotal: 0 };
