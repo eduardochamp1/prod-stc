@@ -248,17 +248,44 @@ router.get('/metas', async (req, res) => {
   }
 });
 
-// POST /api/metas — só admin pode editar metas (GET acima continua aberto)
-router.post('/metas', requireAdmin, async (req, res) => {
+// POST /api/metas — admin edita todas; gua/cac/sjc só editam a sua regional.
+// Authorização: authMiddleware ja garante login. Aqui filtramos por role/regional.
+router.post('/metas', async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Não autenticado', code: 'NO_TOKEN' });
+    }
+
+    const isAdmin = req.user.role === 'admin';
+    const userReg = req.user.regional; // 'ALL' (admin), 'GUA', 'CAC', 'SJC'
+    const incoming = req.body || {};
+
+    // Filtragem por role:
+    //   - admin: aceita o body inteiro (todas regionais)
+    //   - gua/cac/sjc: só aceita o slot da SUA regional, descarta o resto
+    let payload;
+    if (isAdmin) {
+      payload = incoming;
+    } else {
+      if (!userReg || userReg === 'ALL') {
+        return res.status(403).json({ error: 'Conta sem regional vinculada', code: 'NO_REGIONAL' });
+      }
+      if (!incoming[userReg]) {
+        return res.status(400).json({ error: `Body deve conter o slot ${userReg} pra atualizar metas dessa regional` });
+      }
+      // Mantém só a regional do user — outras regionais ficam intactas no banco
+      payload = { [userReg]: incoming[userReg] };
+    }
+
     const sq = sbq();
     if (sq) {
-      await sq.setMetas(req.body);
+      await sq.setMetas(payload);
       const metas = await sq.getMetas();
-      res.json({ ok: true, metas });
+      res.json({ ok: true, metas, updated: Object.keys(payload) });
     } else {
-      _metasMemory = req.body;
-      res.json({ ok: true, metas: _metasMemory });
+      // Modo mock: mescla pra não apagar outras regionais
+      _metasMemory = { ..._metasMemory, ...payload };
+      res.json({ ok: true, metas: _metasMemory, updated: Object.keys(payload) });
     }
   } catch (err) {
     console.error('[API] setMetas:', err.message);

@@ -8582,6 +8582,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }
 
       // Renderiza grids (só das visíveis)
+      // Pode editar: admin OU usuário regional autenticado (edita SÓ sua regional).
+      // Read-only só pra perfis estranhos (sem regional vinculada, sem role).
+      const podeEditar = isAdmin
+        || (userRegional && REGIONAIS_ATIVAS.includes(userRegional));
+
       regsVisiveis.forEach(reg => {
         const grid = document.getElementById('metas-grid-' + reg);
         if (!grid) return;
@@ -8590,7 +8595,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
           const val = metasReg[l.key] || '';
           const dia = val ? (val / 22).toFixed(1) : '—';
           const sem = val ? ((val / 22) * 5).toFixed(1) : '—';
-          const disabled = isAdmin ? '' : 'disabled';
+          // Edita só a regional do user (se não admin) — outras ficariam visíveis
+          // no admin, então pra user regional só há 1 regional na tela (a sua).
+          const disabled = podeEditar ? '' : 'disabled';
           return `
         <div class="meta-item">
           <label><span class="meta-badge">${l.tipo}</span>${l.nome}</label>
@@ -8603,27 +8610,34 @@ ${equipes.length > 0 ? `<div class="perf-section">
         }).join('');
       });
 
-      // Botão Salvar e aviso read-only conforme role
+      // Botão Salvar e aviso read-only conforme permissão
       const btnSalvar = document.getElementById('metas-btn-salvar');
       const readonlyNote = document.getElementById('metas-readonly-note');
-      if (btnSalvar)     btnSalvar.style.display     = isAdmin ? '' : 'none';
-      if (readonlyNote)  readonlyNote.style.display  = isAdmin ? 'none' : '';
+      if (btnSalvar)     btnSalvar.style.display     = podeEditar ? '' : 'none';
+      if (readonlyNote)  readonlyNote.style.display  = podeEditar ? 'none' : '';
 
       document.getElementById('metas-overlay').classList.add('open');
     }
 
     async function salvarMetas() {
-      // Defesa em profundidade: backend já bloqueia POST /api/metas via requireAdmin,
-      // mas evitamos a chamada se o usuario nao for admin (UI consistente).
-      if (window.__currentUserRole !== 'admin') {
-        alert('Acesso negado — apenas administradores podem salvar metas.');
+      const role = window.__currentUserRole || '';
+      const userReg = (window.__currentUserRegional || '').toUpperCase();
+      const isAdmin = role === 'admin';
+
+      // Não-admin precisa ter regional válida
+      if (!isAdmin && !REGIONAIS_ATIVAS.includes(userReg)) {
+        alert('Sua conta não está vinculada a uma regional válida.');
         return;
       }
+
       const btn = document.querySelector('#metas-overlay .btn-salvar');
       if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
-      // Coleta metas de todas as regionais ativas (GUA, CAC, SJC, ...)
+
+      // Admin envia todas regionais; user regional envia só a sua.
+      // Backend valida e descarta slots não autorizados (defesa em camadas).
+      const regsParaSalvar = isAdmin ? REGIONAIS_ATIVAS : [userReg];
       const obj = {};
-      REGIONAIS_ATIVAS.forEach(reg => {
+      regsParaSalvar.forEach(reg => {
         obj[reg] = {};
         PROD_LINHAS.forEach(l => {
           const val = parseInt(document.getElementById(`meta-${reg}-${l.key}`)?.value || '0');
