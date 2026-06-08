@@ -9098,8 +9098,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const realizadasLive = executadas + concluidasLive;
       document.getElementById('m-concluidas').textContent = realizadasLive;
       // Em modo histórico, carteira não faz sentido — mostra range em vez de "%"
+      // % é calculada sobre a carteira INICIAL (total cumulativo do dia), não
+      // sobre o atual. Atual decresce conforme equipes executam — usar atual
+      // como base inflaria artificialmente a % (ex: executou 5 de 17, atual=12,
+      // 5/12=42% vs 5/17=29% real). Inicial é o denominador correto.
+      const baseCarteira = carteiraInicial || emCarteira;
       if (isLiveToday) {
-        const pctLive = emCarteira > 0 ? Math.round((realizadasLive / emCarteira) * 100) : 0;
+        const pctLive = baseCarteira > 0 ? Math.round((realizadasLive / baseCarteira) * 100) : 0;
         document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
       } else {
         const dias = (() => {
@@ -9120,7 +9125,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const realizadas = Math.max(realizadasPersist, realizadasLive);
         document.getElementById('m-concluidas').textContent = realizadas;
         if (isLiveToday) {
-          const pct = emCarteira > 0 ? Math.round((realizadas / emCarteira) * 100) : 0;
+          // % sobre carteira inicial (cumulativa do dia) — vide nota acima
+          const pct = baseCarteira > 0 ? Math.round((realizadas / baseCarteira) * 100) : 0;
           document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
         }
         // Em histórico, mantém o subtítulo "em N dias" já setado acima
