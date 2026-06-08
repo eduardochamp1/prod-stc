@@ -142,7 +142,7 @@ async function getMetasCalculadas(yearMonth) {
   const [metas, totais] = await Promise.all([getMetas(), getMonthTotals(yearMonth)]);
 
   const regionais = {};
-  for (const regional of ['GUA', 'CAC']) {
+  for (const regional of ['GUA', 'CAC', 'SJC']) {
     regionais[regional] = {};
     const metasReg  = metas[regional]  || {};
     const totaisReg = totais[regional] || {};
@@ -684,7 +684,10 @@ async function getRealizadasDoDia(de, ate) {
     .lte('date', ate)
   );
 
-  const acc = { ALL: 0, GUA: 0, CAC: 0 };
+  // SJC adicionado em 08/06/2026. Sem essa chave, frontend filtrando SJC fazia
+  // fallback pra acc.ALL e exibia o total geral como se fosse só de SJC —
+  // bug visível como "% executado da carteira = 135%".
+  const acc = { ALL: 0, GUA: 0, CAC: 0, SJC: 0 };
   _onlyOficiais(data, 'team_name').forEach(r => {
     if (acc[r.regional] !== undefined) acc[r.regional] += r.count;
     acc.ALL += r.count;

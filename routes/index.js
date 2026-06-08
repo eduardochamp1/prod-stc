@@ -325,7 +325,7 @@ router.get('/totais/dia', async (req, res) => {
     const today = dateBRT();
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
-    if (!sq) return res.json({ de, ate, totais: { ALL: 0, GUA: 0, CAC: 0 } });
+    if (!sq) return res.json({ de, ate, totais: { ALL: 0, GUA: 0, CAC: 0, SJC: 0 } });
     const totais = await sq.getRealizadasDoDia(de, ate);
     res.json({ de, ate, totais });
   } catch (err) {
@@ -435,13 +435,13 @@ router.get('/contador-transgressao', async (req, res) => {
   try {
     const sq = sbq();
     const ontem = _ontemBRT();
-    let cfg = { GUA: null, CAC: null };
+    let cfg = { GUA: null, CAC: null, SJC: null };
     if (sq) {
       const row = await sq.getSetting(_CONTADOR_KEY);
       if (row && row.data) cfg = { ...cfg, ...row.data };
     }
     const out = {};
-    for (const reg of ['GUA', 'CAC']) {
+    for (const reg of ['GUA', 'CAC', 'SJC']) {
       const inicio = cfg[reg] || null;
       out[reg] = { inicio, dias: _diasEntre(inicio, ontem), ate: ontem };
     }
@@ -459,7 +459,7 @@ router.put('/contador-transgressao', requireAdmin, async (req, res) => {
     if (!sq) return res.status(503).json({ error: 'supabase indisponível' });
     const body = req.body || {};
     const cfg = {};
-    for (const reg of ['GUA', 'CAC']) {
+    for (const reg of ['GUA', 'CAC', 'SJC']) {
       const v = body[reg];
       if (v === null || v === '' || v === undefined) { cfg[reg] = null; continue; }
       if (!_RE_YYYYMMDD.test(String(v))) {
@@ -471,7 +471,7 @@ router.put('/contador-transgressao', requireAdmin, async (req, res) => {
     // Retorna já com os dias recalculados
     const ontem = _ontemBRT();
     const out = {};
-    for (const reg of ['GUA', 'CAC']) {
+    for (const reg of ['GUA', 'CAC', 'SJC']) {
       out[reg] = { inicio: cfg[reg], dias: _diasEntre(cfg[reg], ontem), ate: ontem };
     }
     res.json({ ok: true, ...out });
