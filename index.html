@@ -8999,13 +8999,22 @@ ${equipes.length > 0 ? `<div class="perf-section">
       teamsVisible = teamsVisible || teamsAll;
       const { de, ate, isLiveToday } = currentMonitorRange();
 
-      // Carteira é estado AGORA — só equipes ativas têm `carteiraCount`
-      const emCarteira = teamsVisible.reduce((s, t) => s + (t.carteiraCount || 0), 0);
+      // Carteira é estado AGORA do dispositivo. Equipes ENCERRADAS já deslogaram
+      // o dispositivo — carteira delas é zero (mesmo que sobrem notas executadas
+      // no payload do endpoint, elas não estão fisicamente na carteira).
+      const emCarteira = teamsVisible.reduce((s, t) => {
+        if (t.sessionEnd) return s;
+        return s + (t.carteiraCount || 0);
+      }, 0);
 
-      // Executadas (em andamento): em modo "hoje" ao vivo, aplica filtro sessaoHoje
-      // pra evitar contar executadas de sessões abertas desde ontem. Em histórico,
-      // os dados já vêm escopados pelos snapshots da rota /historico.
+      // Em andamento: notas com status 'executada' (sendo trabalhadas AGORA).
+      // - Em modo "hoje" ao vivo: aplica filtro sessaoHoje pra evitar contar
+      //   notas de sessões abertas desde ontem.
+      // - Equipes JÁ ENCERRADAS (t.sessionEnd preenchido) NUNCA contam — ninguém
+      //   está trabalhando nas notas delas; o que sobrou é trabalho abandonado/
+      //   pendente de redistribuição, não 'em andamento'.
       const executadas = teamsAll.reduce((s, t) => {
+        if (t.sessionEnd) return s;   // encerrada — não conta
         let arr;
         if (isLiveToday) {
           const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(_refLogon(t));
@@ -9297,8 +9306,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
             </div>
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
-              <div class="os-cell"><div class="os-num">${t.carteiraCount || 0}</div><div class="os-lbl">Carteira</div></div>
-              <div class="os-cell"><div class="os-num executada">${(t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Andamento</div></div>
+              <div class="os-cell"><div class="os-num">${sessaoAberta ? (t.carteiraCount || 0) : 0}</div><div class="os-lbl">Carteira</div></div>
+              <div class="os-cell"><div class="os-num executada">${sessaoAberta ? (t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length : 0}</div><div class="os-lbl">Andamento</div></div>
               <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
