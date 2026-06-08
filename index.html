@@ -5938,16 +5938,38 @@
           </div>`;
       }).join('');
 
-      // Top equipes (com % de rejeição)
-      const eqMax = Math.max(...(tot.porEquipe || []).map(e => e.count), 1);
-      const equipesHTML = (tot.porEquipe || []).slice(0, 15).map(e => {
+      // Top equipes (com % de rejeição).
+      // Se há filtro de motivo ativo, recalcula o ranking a partir das rows
+      // filtradas (lst.rows) — assim usuário vê as equipes que mais ofendem
+      // NESSE motivo específico. Sem filtro, usa o ranking agregado do backend.
+      let porEquipeRanking = tot.porEquipe || [];
+      if (_rejMotivoFilter && lst && Array.isArray(lst.rows)) {
+        const rowsFiltradas = (_rejMotivoFilter === '__SEM_MOTIVO__')
+          ? lst.rows.filter(r => (r.motivo_codes || []).length === 0)
+          : lst.rows.filter(r => (r.motivo_codes || []).includes(_rejMotivoFilter));
+        const porEq = {};
+        rowsFiltradas.forEach(r => {
+          const t = r.team_name || r.team;
+          if (!t) return;
+          if (!porEq[t]) porEq[t] = { team: t, regional: r.regional || '', count: 0 };
+          porEq[t].count++;
+        });
+        porEquipeRanking = Object.values(porEq).sort((a, b) => b.count - a.count);
+      }
+
+      const eqMax = Math.max(...porEquipeRanking.map(e => e.count), 1);
+      const motivoFiltradoLabel = _rejMotivoFilter
+        ? (tot.porMotivo || []).find(m => m.code === _rejMotivoFilter)?.label
+        : null;
+      const equipesHTML = porEquipeRanking.slice(0, 15).map(e => {
         const pct = (100 * e.count / eqMax).toFixed(1);
-        const pctRej = e.percentual != null ? `${e.percentual}%` : '—';
+        // Quando filtrando por motivo, percentual geral da equipe não faz mais sentido — esconde.
+        const pctRej = (!_rejMotivoFilter && e.percentual != null) ? ` <span style="font-size:10px;opacity:.6">(${e.percentual}%)</span>` : '';
         return `
-          <div class="rej-bar-row" onclick="rejFiltrarPorEquipe('${e.team}')" title="Clique pra filtrar">
+          <div class="rej-bar-row" onclick="rejFiltrarPorEquipe('${e.team}')" title="Clique pra filtrar pela equipe">
             <div class="rej-bar-label">${e.team} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
             <div class="rej-bar-track"><div class="rej-bar-fill" style="width:${pct}%;background:#e67e22"></div></div>
-            <div class="rej-bar-count">${e.count} <span style="font-size:10px;opacity:.6">(${pctRej})</span></div>
+            <div class="rej-bar-count">${e.count}${pctRej}</div>
           </div>`;
       }).join('');
 
@@ -6062,7 +6084,9 @@
             ${motivosHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}
           </div>
           <div class="rej-panel">
-            <h3>👷 Top Equipes (com % rejeição)</h3>
+            <h3>👷 Top Equipes ${motivoFiltradoLabel
+              ? `<span style="color:#e74c3c;font-size:11px">— ofensoras de: ${escapeHtml(motivoFiltradoLabel)}</span>`
+              : '<span style="font-size:11px;opacity:.6">(com % rejeição)</span>'}</h3>
             ${equipesHTML || '<div class="empty-state" style="font-size:12px">Sem dados</div>'}
           </div>
         </div>
