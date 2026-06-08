@@ -4437,7 +4437,19 @@
         </div>
         <div class="metric-card accent-preto" id="card-carteira">
           <div class="metric-label">OS em Carteira</div>
-          <div class="metric-value" id="m-baixadas">—</div>
+          <div style="display:flex;align-items:baseline;gap:14px;margin-top:2px">
+            <div style="display:flex;flex-direction:column;align-items:flex-start">
+              <div class="metric-value" id="m-baixadas" style="line-height:1">—</div>
+              <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-top:2px">atual</div>
+            </div>
+            <div id="m-baixadas-inicial-wrap" style="display:none;align-items:baseline;gap:14px">
+              <div style="font-size:28px;color:var(--text2);font-weight:300;line-height:1">/</div>
+              <div style="display:flex;flex-direction:column;align-items:flex-start">
+                <div class="metric-value" id="m-baixadas-inicial" style="line-height:1;color:var(--text2)">—</div>
+                <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-top:2px">total dia</div>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="metric-card accent-verde">
           <div class="metric-label">Re-logins</div>
@@ -9059,10 +9071,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
       document.getElementById('m-ativas').textContent = `${ativas} em campo`;
       document.getElementById('m-executadas').textContent = executadas;
       document.getElementById('m-rejeitadas').textContent = rejeitadas;
-      // OS em carteira: mostra atual / inicial (ex: "143 / 167")
-      document.getElementById('m-baixadas').innerHTML = carteiraInicial > 0
-        ? `${emCarteira}<span style="font-size:16px;color:var(--text2);font-weight:400"> / ${carteiraInicial}</span>`
-        : emCarteira;
+      // OS em carteira: layout 'ATUAL / TOTAL DIA' (estilo do card Total equipes)
+      // Atual: pendentes no dispositivo agora. Total dia: cumulativo do dia (deduplicado).
+      document.getElementById('m-baixadas').textContent = emCarteira;
+      const mBaixIniWrap = document.getElementById('m-baixadas-inicial-wrap');
+      const mBaixIni     = document.getElementById('m-baixadas-inicial');
+      if (carteiraInicial > 0 && carteiraInicial !== emCarteira) {
+        if (mBaixIni)     mBaixIni.textContent = carteiraInicial;
+        if (mBaixIniWrap) mBaixIniWrap.style.display = 'flex';
+      } else {
+        if (mBaixIniWrap) mBaixIniWrap.style.display = 'none';
+      }
       document.getElementById('m-relogins').textContent = relogins;
 
       // ── Modo histórico: oculta cards de estado atual ─────────────────────
