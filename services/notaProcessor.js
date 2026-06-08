@@ -10,6 +10,21 @@
  */
 
 /**
+ * Concatena 'Z' em timestamps ISO sem TZ marker. EDP retorna timestamps em UTC
+ * mas sem 'Z' (ex: "2026-06-08T14:31:00"), o que faz o JS interpretar como
+ * local time, mostrando horários 3h adiantados. Mesmo fix aplicado em
+ * wpaService.normalizarNotaV2 (08/06/2026) e rejectionService (07/06).
+ *
+ * Note: campos '*Date2' geralmente vêm em DD/MM/YYYY (BR) — não tocamos.
+ */
+function _normTz(s) {
+  if (!s || typeof s !== 'string') return s;
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(s)) return s;          // não é ISO
+  if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) return s;        // já tem TZ
+  return s + 'Z';
+}
+
+/**
  * @param {object} nota   Payload bruto vindo de getNoteDetail()
  * @param {object} opts   { incluirFotos?: boolean, subcat?: object }
  * @returns {object}      Resposta normalizada para o front
@@ -30,7 +45,7 @@ function processarNota(nota, opts = {}) {
       return {
         id:          cp.Id,
         event:       cp.Event,
-        timestamp:   cp.RegisteredAt2 || cp.TimeStamp,
+        timestamp:   cp.RegisteredAt2 || _normTz(cp.TimeStamp),
         mileage:     cp.Mileage,
         latitude:    cp.Latitude,
         longitude:   cp.Longitude,
@@ -95,11 +110,14 @@ function processarNota(nota, opts = {}) {
       longitude:  nota.Longitude,
     },
     datas: {
-      emissao:         nota.IssueDate2      || nota.IssueDate,
-      desejada:        nota.DesiredConclusionDate2 || nota.DesiredConclusionDate,
-      conclusao:       nota.ConclusionDate2 || nota.ConclusionDate,
+      // *Date2 (BR DD/MM/YYYY HH:MM:SS) é preferido — já vem em fuso BR.
+      // *Date (ISO UTC sem marker Z) é fallback — concatena Z pra JS interpretar
+      // corretamente como UTC e converter pro fuso do display.
+      emissao:         nota.IssueDate2             || _normTz(nota.IssueDate),
+      desejada:        nota.DesiredConclusionDate2 || _normTz(nota.DesiredConclusionDate),
+      conclusao:       nota.ConclusionDate2        || _normTz(nota.ConclusionDate),
       statusConclusao: nota.ConclusionStatus,
-      importacao:      nota.ImportDate2     || nota.ImportDate,
+      importacao:      nota.ImportDate2            || _normTz(nota.ImportDate),
     },
     operacional: {
       workCenter:     nota.WorkCenter,
@@ -115,7 +133,7 @@ function processarNota(nota, opts = {}) {
       codigoMedidas:    nota.NoteMeasurementType,
       unidadeLeitura:   nota.ReadUnit,
       instalacao:       nota.InstallationId,
-      dataCriacao:      nota.CreationDate2 || nota.CreationDate,
+      dataCriacao:      nota.CreationDate2 || _normTz(nota.CreationDate),
       statusSurvey:     nota.StatusSurvey  || null,
     },
     texto:       nota.Text,
