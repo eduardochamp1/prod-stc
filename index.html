@@ -8999,22 +8999,40 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     /**
+     * Notas PENDENTES na carteira (atual sem andamento).
+     *   notasBaixadas.length se sessão aberta, 0 se encerrada.
+     * Por que separar de carteiraCount: o backend define
+     * carteiraCount = baixadas + executadas (= tudo no dispositivo).
+     * Mas conceitualmente "Andamento" merece coluna própria, então
+     * Atual = só baixadas (pendentes não iniciadas).
+     */
+    function _carteiraPendentes(t) {
+      if (t.sessionEnd) return 0;
+      return (t.notasBaixadas || []).length;
+    }
+
+    /**
      * Calcula a carteira INICIAL de uma equipe pra ser visualmente coerente:
-     *   inicial = atual + executadas (concluídas) no range + rejeitadas no range
+     *   inicial = pendentes + andamento + executadas + rejeitadas
      *
-     * Garante que a aritmética sempre fecha: "X de Y feitas" onde X=feitas, Y=inicial.
+     * Garante que a aritmética sempre fecha:
+     *   inicial - atual = andamento + executadas + rejeitadas
+     *
      * Antes usávamos um acumulador deduplicado por noteId, que incluía notas
-     * transferidas/canceladas (saíram da carteira sem deixar rastro), gerando
-     * inconsistência (ex: inicial=14, atual=10, conc=0, rej=0 → cadê as 4?).
+     * transferidas/canceladas (saíram da carteira sem rastro), gerando
+     * inconsistência. Versão anterior também esquecia 'andamento' na soma.
      *
-     * Pra equipes encerradas (sessionEnd preenchido), atual=0 — o inicial mostra
-     * o total que ela finalizou no dia.
+     * Pra equipes encerradas, atual=0 e andamento=0 — inicial reflete só o
+     * trabalho finalizado.
      */
     function carteiraInicialDe(t, de, ate) {
-      const atual = !t.sessionEnd ? (t.carteiraCount || 0) : 0;
+      const atual = _carteiraPendentes(t);
+      const and   = !t.sessionEnd
+        ? (t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length
+        : 0;
       const conc  = (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
       const rej   = (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
-      return atual + conc + rej;
+      return atual + and + conc + rej;
     }
 
     /** Lê o range DE/ATÉ atual do monitor (default: hoje/hoje). */
@@ -9030,16 +9048,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       teamsVisible = teamsVisible || teamsAll;
       const { de, ate, isLiveToday } = currentMonitorRange();
 
-      // Carteira é estado AGORA do dispositivo. Equipes ENCERRADAS já deslogaram
-      // o dispositivo — carteira delas é zero (mesmo que sobrem notas executadas
-      // no payload do endpoint, elas não estão fisicamente na carteira).
-      const emCarteira = teamsVisible.reduce((s, t) => {
-        if (t.sessionEnd) return s;
-        return s + (t.carteiraCount || 0);
-      }, 0);
-      // Carteira inicial: derivada da fórmula 'atual + concluídas + rejeitadas'.
-      // Aritmética sempre fecha (X feitas de Y inicial). Pra equipes encerradas,
-      // atual=0 e a soma reflete o trabalho finalizado.
+      // Carteira ATUAL = soma de pendentes (notas baixadas não iniciadas).
+      // Andamento tem coluna própria — então NÃO entra em 'atual'.
+      // Equipes encerradas: 0 (dispositivo deslogou).
+      const emCarteira = teamsVisible.reduce((s, t) => s + _carteiraPendentes(t), 0);
+      // Carteira INICIAL = atual + andamento + executadas + rejeitadas.
+      // Aritmética fecha: inicial - atual = andamento + executadas + rejeitadas.
       const carteiraInicial = teamsVisible.reduce((s, t) =>
         s + carteiraInicialDe(t, de, ate), 0);
 
@@ -9360,9 +9374,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
             <div class="os-row">
               <div class="os-cell">
                 ${(() => {
-                  const _atu = sessaoAberta ? (t.carteiraCount || 0) : 0;
+                  const _atu = _carteiraPendentes(t);
                   const _ini = carteiraInicialDe(t, _rngDe, _rngAte);
-                  return `<div class="os-num" title="Atual / Inicial — Atual: notas pendentes no dispositivo. Inicial: Atual + Executadas + Rejeitadas (aritmética sempre fecha).">
+                  return `<div class="os-num" title="Atual / Inicial — Atual: notas pendentes (sem contar andamento). Inicial: Atual + Andamento + Executadas + Rejeitadas. Aritmética sempre fecha.">
                     ${_atu}
                     ${_ini > _atu ? `<span style="font-size:11px;color:var(--text2);font-weight:400"> / ${_ini}</span>` : ''}
                   </div>`;
