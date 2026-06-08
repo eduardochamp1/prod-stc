@@ -7897,19 +7897,40 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     // ── RANKING ───────────────────────────────────────────────────────────
+    let _rankingMultiInited = false;
     async function loadRanking() {
+      // Lazy init do multi-select de regional (igual outras abas)
+      if (!_rankingMultiInited && typeof MultiSelect !== 'undefined'
+          && document.getElementById('ranking-regional-select')) {
+        MultiSelect.init('ranking-regional-select', {
+          onChange: () => loadRanking(),
+          allLabel: 'Todas as Regionais',
+        });
+        _rankingMultiInited = true;
+        // Re-aplica restrição de regional se o usuário tem perfil regional
+        if (currentRegional && currentRegional !== 'ALL' && !String(currentRegional).includes(',')) {
+          try {
+            MultiSelect.setValues('ranking-regional-select', [currentRegional]);
+            MultiSelect.setDisabled('ranking-regional-select', true);
+          } catch (_) { /* ok */ }
+        }
+      }
+
       const input = document.getElementById('ranking-mes-input');
       const ym = input?.value || mesAtualInput();
       if (input && !input.value) input.value = ym;
-      const regional = document.getElementById('ranking-regional-select')?.value || 'ALL';
+      const { backendValue, clientFilter } = _readMultiRegional('ranking-regional-select');
       document.getElementById('ranking-mes-label').textContent = fmtMes(ym);
       document.getElementById('ranking-content').innerHTML =
         '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
 
       try {
-        const url = `${API}/ranking/equipes?m=${ym}${regional !== 'ALL' ? '&regional=' + regional : ''}`;
+        const url = `${API}/ranking/equipes?m=${ym}${backendValue !== 'ALL' ? '&regional=' + backendValue : ''}`;
         const data = await fetch(url).then(r => r.json());
-        renderRanking(data.ranking || []);
+        let ranking = data.ranking || [];
+        // Multi-regional (2 de 3): backend trouxe tudo, filtra aqui
+        if (clientFilter) ranking = ranking.filter(r => clientFilter.has(_regOfRow(r)));
+        renderRanking(ranking);
       } catch (err) {
         document.getElementById('ranking-content').innerHTML =
           `<div class="empty-state">Erro: ${err.message}</div>`;
@@ -7995,7 +8016,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const firstOfMonth = today.slice(0, 7) + '-01';
       const de  = document.getElementById('hist-de-input')?.value  || firstOfMonth;
       const ate = document.getElementById('hist-ate-input')?.value || today;
-      const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
+      // Subcats: backend só aceita single. Multi (CSV) ⇒ envia ALL e perfil regional
+      // continua restrito porque o usuário só consegue selecionar a sua. Caso 2 de 3
+      // pra admin: backend retorna agregado de todas → não tem regional por linha pra
+      // filtrar com precisão aqui, então usamos backendValue direto.
+      const { backendValue } = _readMultiRegional('hist-regional-select');
+      const regional = backendValue;
 
       // Mês "principal" = mês do início do range (endpoint subcats agrega por mês inteiro)
       const ym = de.slice(0, 7);
@@ -8328,7 +8354,25 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (cont) cont.innerHTML = '';
     }
 
+    let _histMultiInited = false;
+    let _histRegionalClientFilter = null;  // Set<string>|null aplicado em applyHistoricoFilters
     async function loadHistorico() {
+      // Lazy init do multi-select (uma vez)
+      if (!_histMultiInited && typeof MultiSelect !== 'undefined'
+          && document.getElementById('hist-regional-select')) {
+        MultiSelect.init('hist-regional-select', {
+          onChange: () => loadHistorico(),
+          allLabel: 'Todas as Regionais',
+        });
+        _histMultiInited = true;
+        if (currentRegional && currentRegional !== 'ALL' && !String(currentRegional).includes(',')) {
+          try {
+            MultiSelect.setValues('hist-regional-select', [currentRegional]);
+            MultiSelect.setDisabled('hist-regional-select', true);
+          } catch (_) { /* ok */ }
+        }
+      }
+
       // BRT (UTC-3) — UTC puro daria "amanhã" após 21h, quebrando o range padrão
       const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
       const firstOfMonth = today.slice(0, 7) + '-01';
@@ -8338,7 +8382,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (ateInput && !ateInput.value) ateInput.value = today;
       const de = deInput?.value || firstOfMonth;
       const ate = ateInput?.value || today;
-      const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
+      const { backendValue, clientFilter } = _readMultiRegional('hist-regional-select');
+      _histRegionalClientFilter = clientFilter;
 
       document.getElementById('hist-periodo-label').textContent = `${fmtData(de)} a ${fmtData(ate)}`;
 
@@ -8352,7 +8397,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       try {
         const params = new URLSearchParams({ de, ate });
-        if (regional !== 'ALL') params.set('regional', regional);
+        if (backendValue !== 'ALL') params.set('regional', backendValue);
         const data = await fetch(`${API}/historico/sessoes?${params}`).then(r => r.json());
         _histDias = data.dias || [];
         popularHistTeamSelect(_histDias);
@@ -8364,7 +8409,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     function popularHistTeamSelect(dias) {
-      const teams = [...new Set(dias.flatMap(d => (d.equipes || []).map(e => e.team_name)))].sort();
+      // Respeita filtro multi-regional: não inclui equipes de regionais não selecionadas
+      const teams = [...new Set(dias.flatMap(d => (d.equipes || [])
+        .filter(e => !_histRegionalClientFilter || _histRegionalClientFilter.has(_regOfRow(e)))
+        .map(e => e.team_name)))].sort();
       const sel = document.getElementById('hist-team-select');
       if (!sel) return;
       const prev = sel.value;
@@ -8381,6 +8429,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const rows = [];
       _histDias.forEach(d => {
         (d.equipes || []).forEach(e => {
+          if (_histRegionalClientFilter && !_histRegionalClientFilter.has(_regOfRow(e))) return;
           if (teamFilter !== 'ALL' && e.team_name !== teamFilter) return;
           if (colabFilter) {
             const match = (e.collaborators || []).some(c =>
@@ -9035,6 +9084,38 @@ ${equipes.length > 0 ? `<div class="perf-section">
       return list.includes(reg);
     }
 
+    // Mapping setor → regional (usado pra inferir regional quando payload não traz)
+    const _SETOR_REGIONAL = { DESG: 'GUA', DEPT: 'GUA', DESC: 'CAC', DSSJ: 'SJC' };
+
+    /**
+     * Lê o estado de um filtro MultiSelect de regional e devolve a estratégia:
+     *   { backendValue: 'ALL'|'GUA'|... , clientFilter: Set<string>|null }
+     * - `backendValue` é o que enviar ao backend (que só aceita single ou ALL).
+     * - `clientFilter` é não-nulo quando há 2 regionais selecionadas (de 3 ativas),
+     *   indicando que o caller precisa filtrar o payload no client.
+     * Total de regionais ativas = REGIONAIS_ATIVAS.length (3: GUA, CAC, SJC).
+     */
+    function _readMultiRegional(id) {
+      let vals = null;
+      if (typeof MultiSelect !== 'undefined' && MultiSelect.getValues) {
+        try { vals = MultiSelect.getValues(id); } catch (_) { vals = null; }
+      }
+      if (!vals || !vals.length) {
+        const v = document.getElementById(id)?.value || 'ALL';
+        vals = [v];
+      }
+      const total = (typeof REGIONAIS_ATIVAS !== 'undefined' && REGIONAIS_ATIVAS.length) || 3;
+      const isAll = vals[0] === 'ALL' || vals.length >= total;
+      if (isAll) return { backendValue: 'ALL', clientFilter: null };
+      if (vals.length === 1) return { backendValue: vals[0], clientFilter: null };
+      return { backendValue: 'ALL', clientFilter: new Set(vals) };
+    }
+
+    // Resolve regional de um registro do histórico/ranking (payload ou fallback por setor)
+    function _regOfRow(r) {
+      return r.regional || _SETOR_REGIONAL[r.setor] || _SETOR_REGIONAL[r.sectorId] || null;
+    }
+
     function getVisible() {
       return allTeams.filter(t => {
         const regionalOk = _regionalMatch(t.regional);
@@ -9173,6 +9254,23 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Concluídas: filtradas por conclusionDate dentro do range
       const concluidasLive = teamsAll.reduce((s, t) =>
         s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
+
+      // [DEBUG TEMPORÁRIO] entender divergência entre regional ALL vs filtrado
+      try {
+        const dbg = teamsAll.reduce((acc, t) => {
+          const r = t.regional || 'NULL';
+          if (!acc[r]) acc[r] = { equipes: 0, conc_total: 0, conc_in_range: 0, exec: 0, sem_conc_date: 0 };
+          acc[r].equipes++;
+          const conc = t.notasConcluidas || [];
+          acc[r].conc_total += conc.length;
+          acc[r].conc_in_range += conc.filter(n => notaPertenceAoRange(n, de, ate)).length;
+          acc[r].sem_conc_date += conc.filter(n => !n.conclusionDate && !n.ConclusionDate && !n.ConclusionDate2).length;
+          acc[r].exec += (t.notasExecutadas || []).length;
+          return acc;
+        }, {});
+        console.log('[KPI-DEBUG] regional=', currentRegional, 'range=', de, ate, 'concluidasLive=', concluidasLive);
+        console.table(dbg);
+      } catch (e) { console.warn('debug fail', e); }
 
       // Rejeitadas: filtradas por conclusionDate dentro do range (mesma lógica
        // de executadas/concluídas). Sem isso, o card mostrava TODO o histórico
@@ -10872,7 +10970,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     async function downloadHistoricoXLSX() {
       const de  = document.getElementById('hist-de-input')?.value;
       const ate = document.getElementById('hist-ate-input')?.value;
-      const regional = document.getElementById('hist-regional-select')?.value || 'ALL';
+      // XLSX: backend só aceita single. Em multi (CSV), exporta agregado completo
+      // (ALL) — usuário pode filtrar no Excel. Single ⇒ filtra no backend.
+      const { backendValue } = _readMultiRegional('hist-regional-select');
+      const regional = backendValue;
       if (!de || !ate) { alert('Selecione o período DE e ATÉ antes de exportar.'); return; }
       const btn = document.getElementById('btn-export-xlsx');
       await _doExportXLSX(de, ate, regional, btn);
