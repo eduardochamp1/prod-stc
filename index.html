@@ -8997,7 +8997,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
        // disponível das equipes ativas, independente do range selecionado.
       const rejeitadas = teamsAll.reduce((s, t) =>
         s + (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
-      const relogins = teamsVisible.reduce((s, t) => s + (t.relogins || 0), 0);
+      // Re-logins: usa a mesma lógica do card individual (linha ~9169).
+      // t.relogins quase sempre é 0 nos snapshots — relogouNoDia (detectado
+      // pós-fato comparando sessionBegin com sessionBeginReal) é o indicador
+      // de verdade. Sem este fallback, o KPI ficava sempre "0".
+      const relogins = teamsVisible.reduce((s, t) => {
+        const cnt = t.relogouNoDia && (!t.relogins || t.relogins === 0)
+          ? 1
+          : (t.relogins || 0);
+        return s + cnt;
+      }, 0);
       const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline).length;
 
       document.getElementById('m-total').textContent = teamsVisible.length;
