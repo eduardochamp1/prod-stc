@@ -7488,9 +7488,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const inicio = _refLogon(t);
       if (!inicio) return 'sem dado';
       const fmtH = ts => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      // Sempre exibe DD/MM HH:mm em logon e logout — algumas sessões cruzam
+      // a virada de dia (equipe esquece de deslogar) e o card precisa deixar
+      // explícito qual data se refere cada lado da seta.
+      const fmtDH = ts => {
+        const d = new Date(ts);
+        const dia = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+        return `${dia} ${fmtH(ts)}`;
+      };
       const ehAntiga = sessaoAnterior(inicio);
-      const inicioFmt = ehAntiga ? fmtInicio(inicio) : fmtH(inicio);
-      const fimFmt = t.sessionEnd ? fmtH(t.sessionEnd) : 'em campo';
+      const inicioFmt = fmtDH(inicio);
+      const fimFmt = t.sessionEnd ? fmtDH(t.sessionEnd) : 'em campo';
 
       // Atraso vs escala: SO faz sentido quando o logon eh do dia ATUAL.
       // Pra sessao antiga (esquecida aberta de dias passados), comparar
