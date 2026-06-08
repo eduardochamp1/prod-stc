@@ -770,6 +770,15 @@
       color: rgba(255, 255, 255, 0.75);
     }
 
+    /* Uso mútuo: equipe que compartilha o app/recursos com outra. Nunca tem
+       dados V2 do WPA (não opera o app no fluxo padrão), então fica sempre
+       offline. NÃO é alerta — é estado normal pra esse tipo de equipe. */
+    .status-uso-mutuo {
+      background: rgba(254, 196, 14, 0.22);
+      color: var(--amarelo);
+      border: 1px solid rgba(254, 196, 14, 0.5);
+    }
+
     .team-card-body {
       padding: 12px 14px;
     }
@@ -9206,18 +9215,34 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // a soma dos cards com o KPI "OS Rejeitadas".
       const { de: _rngDe, ate: _rngAte } = currentMonitorRange();
       document.getElementById('teams-grid').innerHTML = teams.map(t => {
-        // 3 estados (alinhado com WPA Gestão Online):
-        //   emCampo  = sessão aberta + app online       → "● Em campo"   (cabeçalho preto/amarelo)
-        //   pendente = sessão aberta + app offline      → "⚠ Sessão pendente" (cabeçalho laranja escuro)
-        //   encerrada = sessionEnd preenchido           → "○ Encerrada"  (cabeçalho cinza)
+        // 4 estados (alinhado com WPA Gestão Online + tipo da equipe):
+        //   emCampo  = sessão aberta + app online       → "● Em campo"      (cabeçalho preto/amarelo)
+        //   usoMutuo = sessão aberta + USO MÚTUO        → "● Uso mútuo"     (cabeçalho preto/amarelo, info)
+        //   pendente = sessão aberta + offline (não-mútuo) → "⚠ Sessão pendente" (cabeçalho laranja escuro)
+        //   encerrada = sessionEnd preenchido           → "○ Encerrada"     (cabeçalho cinza)
+        //
+        // Por que USO MÚTUO é estado separado: equipes desse tipo (ex: ECCIT70)
+        // compartilham o app/recursos com outra e NUNCA têm dados V2 — sempre
+        // isOnline=false. Antes caíam no 'pendente' (laranja, alerta), confundindo
+        // o operador. Agora ficam com badge info (amarelo claro) — comportamento
+        // esperado, não é problema.
         const sessaoAberta = !t.sessionEnd;
-        const emCampo = sessaoAberta && t.isOnline;
-        const pendente = sessaoAberta && !t.isOnline;
-        const headerCls = pendente ? 'pendente' : (emCampo ? '' : 'inativa');
-        const badgeCls = emCampo ? 'status-ativa' : (pendente ? 'status-pendente' : 'status-encerrada');
-        const badgeTxt = emCampo ? '● Em campo' : (pendente ? '⚠ Sessão pendente' : '○ Encerrada');
-        // Borda laranja marca qualquer sessão anômala: dia anterior aberta OU pendente hoje
-        const isStale = sessaoAberta && (sessaoAnterior(_refLogon(t)) || pendente);
+        const ehUsoMutuo = String(t.tipo || '').toUpperCase().includes('USO MUTUO')
+                       || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
+        const emCampo  = sessaoAberta && t.isOnline && !ehUsoMutuo;
+        const usoMutuo = sessaoAberta && ehUsoMutuo;
+        const pendente = sessaoAberta && !t.isOnline && !ehUsoMutuo;
+        const headerCls = pendente ? 'pendente' : ((emCampo || usoMutuo) ? '' : 'inativa');
+        const badgeCls = emCampo  ? 'status-ativa'
+                       : usoMutuo ? 'status-uso-mutuo'
+                       : pendente ? 'status-pendente'
+                       : 'status-encerrada';
+        const badgeTxt = emCampo  ? '● Em campo'
+                       : usoMutuo ? '● Uso mútuo'
+                       : pendente ? '⚠ Sessão pendente'
+                       : '○ Encerrada';
+        // Borda laranja marca sessão anômala — uso mútuo NÃO é anômalo
+        const isStale = sessaoAberta && !ehUsoMutuo && (sessaoAnterior(_refLogon(t)) || pendente);
         // Resolve a contagem de re-logins de forma consistente com o badge "⚠ relogou":
         // - Em snapshots persistidos, t.relogins quase sempre eh 0 (nao persistimos
         //   essa info por equipe). Mas t.relogouNoDia eh detectado pos-fato comparando
