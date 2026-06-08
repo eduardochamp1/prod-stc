@@ -9228,26 +9228,25 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // ── RENDER CARDS ──────────────────────────────────────────────────────
     function renderAll() {
       const _rawTeams = getVisible();
-      // Filtra equipes cuja sessão TOCOU o dia atual:
-      //   - sessionBegin de hoje (caso normal: equipe que entrou hoje)
-      //   - sessionEnd de hoje (cruzou a virada: entrou ontem, deslogou hoje)
-      //   - ainda ativa hoje (sem sessionEnd, com sessionBegin <= hoje)
-      //   - ghosts (_ghostFromAcc): notas acumuladas hoje, sempre considerar do dia
-      // Equipes com sessão totalmente em outro dia ficam ocultas e seus contadores
-      // não entram nos KPIs (não contam pro dia de hoje).
-      const _hoje = todayISO();
-      const _tocaHoje = t => {
+      // Filtra equipes cuja sessão TOCOU o range selecionado:
+      //   - sessionBegin dentro do range (entrou em algum dia)
+      //   - sessionEnd dentro do range (deslogou em algum dia)
+      //   - sessão ativa que começou antes/no range e ainda não fechou
+      //   - ghosts (_ghostFromAcc): sempre considerar
+      // Em modo live (de=ate=hoje), só passa quem toca hoje. Em histórico,
+      // passa quem teve qualquer atividade dentro do range.
+      const { de: _rangeDe, ate: _rangeAte } = currentMonitorRange();
+      const _tocaPeriodo = t => {
         if (t._ghostFromAcc) return true;
         const beg = (t.sessionBegin || '').slice(0, 10);
         const end = (t.sessionEnd   || '').slice(0, 10);
-        if (beg === _hoje) return true;
-        if (end === _hoje) return true;
-        // Ativa ainda (sem fim) e começou em data válida — inclui sessões antigas
-        // que ainda estão abertas (equipe esqueceu de deslogar)
-        if (!t.sessionEnd && beg && beg <= _hoje) return true;
+        if (beg && beg >= _rangeDe && beg <= _rangeAte) return true;
+        if (end && end >= _rangeDe && end <= _rangeAte) return true;
+        // Sessão ainda aberta que começou antes do range — atravessa o range
+        if (!t.sessionEnd && beg && beg <= _rangeAte) return true;
         return false;
       };
-      const teamsAll     = _rawTeams.filter(_tocaHoje);
+      const teamsAll     = _rawTeams.filter(_tocaPeriodo);
       const teamsVisible = teamsAll;
       const teams        = teamsVisible;
       // Excluir ghosts do banner de alerta (não faz sentido alertar equipe encerrada)
