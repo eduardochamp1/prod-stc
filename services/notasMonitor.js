@@ -212,17 +212,37 @@ async function updateDailyAgg(data) {
  *   4. Atualiza agregado do dia
  *   5. Limpa snapshots > 30 dias
  */
+// Setores que cobrem todas as equipes Engelmig (DESG/DEPT = Guarapari, DESC = Cachoeiro;
+// DSSJ é regional terceiro mas vai entrar — o filtro por CompanyId já exclui o que não é nosso).
+const SECTORS = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
+
 async function collectSnapshot() {
   const t0 = Date.now();
-  const [teams, notas] = await Promise.all([getTeamsSimple(), getNotasDevolvidas()]);
-  const eng       = filterEngelmig(notas, buildTeamCompanyMap(teams));
+  // Busca paralelo: teams (1x por setor) + notas (1x por setor).
+  const teamsBySector = await Promise.all(SECTORS.map(s =>
+    getTeamsSimple(s).catch(e => { log.warn('teams_simple_fail', { sector: s, msg: e.message }); return []; })
+  ));
+  const notasBySector = await Promise.all(SECTORS.map(s =>
+    getNotasDevolvidas(s).catch(e => { log.warn('notas_fail', { sector: s, msg: e.message }); return []; })
+  ));
+  // Junta dropdown de equipes (Name → CompanyId) — uma equipe pode aparecer
+  // em mais de um setor, mas o CompanyId é o mesmo.
+  const mapa = new Map();
+  for (const teams of teamsBySector) {
+    for (const [name, cid] of buildTeamCompanyMap(teams)) mapa.set(name, cid);
+  }
+  // Dedup de notas por Number (mesma nota pode aparecer em setores diferentes)
+  const seen = new Map();
+  for (const arr of notasBySector) for (const n of arr) if (n?.Number) seen.set(n.Number, n);
+  const todasNotas = [...seen.values()];
+  const eng       = filterEngelmig(todasNotas, mapa);
   const ts        = new Date().toISOString();
   const inserted  = await saveSnapshot(eng, ts);
   const today     = ts.slice(0, 10);
   await updateDailyAgg(today);
   const deleted   = await _cleanupOld();
   const ms        = Date.now() - t0;
-  const stats     = { total: notas.length, engelmig: eng.length, inserted, deleted, ms };
+  const stats     = { total: todasNotas.length, engelmig: eng.length, inserted, deleted, ms };
   log.info('collect_done', stats);
   return stats;
 }
