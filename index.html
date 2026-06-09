@@ -10118,8 +10118,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
         MultiSelect.init('regional-select', {
           onChange: () => {
             const vals = MultiSelect.getValues('regional-select');
-            // getValues retorna ['ALL'] ou array de valores selecionados
-            const csv = (vals[0] === 'ALL') ? 'ALL' : vals.join(',');
+            // getValues retorna ['ALL'] ou array de valores selecionados.
+            // Vazio = usuário desmarcou tudo → equivale a 'ALL' (sem filtro).
+            // Sem isso, currentRegional ficava '' e o título exibia o último
+            // valor antes da desmarcação (bug visto em 09/06/2026 madrugada).
+            const csv = (!vals.length || vals[0] === 'ALL') ? 'ALL' : vals.join(',');
             selectRegional(csv);
           },
           allLabel: 'Todas as Regionais',
