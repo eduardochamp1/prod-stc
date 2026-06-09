@@ -5771,12 +5771,9 @@
               a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla)
             );
             const sel = document.getElementById('rej-equipe-select');
-            const guaOpts = eqs.filter(e => e.regional === 'GUA').map(e => `<option value="${e.sigla}">${e.sigla}</option>`).join('');
-            const cacOpts = eqs.filter(e => e.regional === 'CAC').map(e => `<option value="${e.sigla}">${e.sigla}</option>`).join('');
             sel.innerHTML = `
               <option value="ALL">Todas as equipes</option>
-              <optgroup label="Guarapari">${guaOpts}</optgroup>
-              <optgroup label="Cachoeiro">${cacOpts}</optgroup>`;
+              ${regionalOptgroups(eqs, e => `<option value="${e.sigla}">${e.sigla}</option>`)}`;
             _rejEquipesPopuladas = true;
           }
         } catch (e) {}
@@ -6909,13 +6906,10 @@
         const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
           a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla)
         );
-        // Agrupa por regional via optgroup pra ficar mais legível
-        const guaOpts = eqs.filter(e => e.regional === 'GUA').map(e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`).join('');
-        const cacOpts = eqs.filter(e => e.regional === 'CAC').map(e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`).join('');
+        // Agrupa por regional via optgroup pra ficar mais legível (todas as 3 regionais)
         sel.innerHTML = `
           <option value="ALL">Todas as equipes</option>
-          <optgroup label="Guarapari (${eqs.filter(e => e.regional === 'GUA').length})">${guaOpts}</optgroup>
-          <optgroup label="Cachoeiro (${eqs.filter(e => e.regional === 'CAC').length})">${cacOpts}</optgroup>
+          ${regionalOptgroups(eqs, e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`, true)}
         `;
         _grafEquipesPopuladas = true;
       } catch (err) {
@@ -8740,6 +8734,22 @@ ${equipes.length > 0 ? `<div class="perf-section">
       return REGIONAIS_NOMES[sigla] || sigla || '—';
     }
 
+    /**
+     * Gera <optgroup>s agrupados por regional pra dropdowns de equipes.
+     * Itera REGIONAIS_ATIVAS pra incluir todas (GUA/CAC/SJC) automaticamente.
+     * @param eqs array de equipes (cada uma com .regional)
+     * @param optBuilder fn(equipe) → string HTML do <option>
+     * @param showCount se true, inclui "(N)" no label do optgroup
+     */
+    function regionalOptgroups(eqs, optBuilder, showCount = false) {
+      return REGIONAIS_ATIVAS.map(reg => {
+        const arr = eqs.filter(e => e.regional === reg);
+        if (arr.length === 0) return '';
+        const label = showCount ? `${regionalNome(reg)} (${arr.length})` : regionalNome(reg);
+        return `<optgroup label="${label}">${arr.map(optBuilder).join('')}</optgroup>`;
+      }).join('');
+    }
+
     // ── CARREGA DADOS ─────────────────────────────────────────────────────
     function todayISO() {
       // Data BRT (UTC-3). toISOString() puro daria UTC, que após 21:00 BRT já
@@ -9639,9 +9649,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
     function openModal(teamId) {
       const t = allTeams.find(x => x.id === teamId);
       if (!t) return;
-      const regionalNome = t.regional === 'GUA' ? 'Guarapari' : 'Cachoeiro';
+      const nomeRegional = REGIONAIS_NOMES[t.regional] || t.regional || '—';
       document.getElementById('modal-title').textContent = t.sigla || t.teamName;
-      document.getElementById('modal-sub').textContent = `${regionalNome} · ${t.sectorId} · ${t.date}`;
+      document.getElementById('modal-sub').textContent = `${nomeRegional} · ${t.sectorId} · ${t.date}`;
       // Logon REAL (primeiro snapshot do dia). Pra retroativo, usa o que veio do backend.
       const logonReal = t.sessionBeginReal || t.sessionBegin;
       const dur = duracao(logonReal, t.sessionEnd);
@@ -11189,10 +11199,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         return;
       }
 
-      // Agrupa por regional (só os grupos relevantes pro filtro atual)
-      const gua = filtrados.filter(e => e.regional === 'GUA');
-      const cac = filtrados.filter(e => e.regional === 'CAC');
-
+      // Agrupa por regional dinamicamente (REGIONAIS_ATIVAS — GUA/CAC/SJC)
       const renderGrupo = (titulo, list, baseIdx) => list.length === 0 ? '' : `
         <div class="mapa-team-group">${titulo} (${list.length})</div>
         ${list.map((e, i) => `
@@ -11205,7 +11212,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
         `).join('')}
       `;
 
-      box.innerHTML = renderGrupo('Guarapari', gua, 0) + renderGrupo('Cachoeiro', cac, gua.length);
+      let acumulado = 0;
+      box.innerHTML = REGIONAIS_ATIVAS.map(reg => {
+        const list = filtrados.filter(e => e.regional === reg);
+        const html = renderGrupo(regionalNome(reg), list, acumulado);
+        acumulado += list.length;
+        return html;
+      }).join('');
     }
 
     /**

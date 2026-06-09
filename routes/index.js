@@ -1185,6 +1185,7 @@ router.get('/admin/health', async (_req, res) => {
     const today    = dateBRT();
     const oficGua  = getOficiais('GUA');
     const oficCac  = getOficiais('CAC');
+    const oficSjc  = getOficiais('SJC');
 
     // Estado base — sempre respondido mesmo se Supabase off
     const out = {
@@ -1192,9 +1193,10 @@ router.get('/admin/health', async (_req, res) => {
       ts:    new Date().toISOString(),
       today,
       whitelist: {
-        total:  oficGua.length + oficCac.length,
+        total:  oficGua.length + oficCac.length + oficSjc.length,
         gua:    oficGua.length,
         cac:    oficCac.length,
+        sjc:    oficSjc.length,
         source: isFromSupabase() ? 'supabase' : 'fallback',
       },
       teams_logged_today:  null,
@@ -1225,7 +1227,7 @@ router.get('/admin/health', async (_req, res) => {
           .filter(s => s && isOficial(s))
       );
 
-      const byRegional = { GUA: 0, CAC: 0 };
+      const byRegional = { GUA: 0, CAC: 0, SJC: 0 };
       for (const t of teams) {
         const s = (t.sigla || t.teamName || '').toUpperCase().trim();
         if (!isOficial(s)) continue;

@@ -328,8 +328,11 @@ function getMeta(sigla) {
 function getOficiais(regional) {
   _maybeRefresh();
   const all = (_activeList || []).filter(e => e.ativo !== false);
-  if (regional === 'GUA') return all.filter(e => e.regional === 'GUA').map(e => ({ ...e }));
-  if (regional === 'CAC') return all.filter(e => e.regional === 'CAC').map(e => ({ ...e }));
+  // Regionais válidas atualmente: GUA, CAC, SJC. Qualquer outro valor (ALL/null)
+  // retorna a lista completa.
+  if (regional === 'GUA' || regional === 'CAC' || regional === 'SJC') {
+    return all.filter(e => e.regional === regional).map(e => ({ ...e }));
+  }
   return all.map(e => ({ ...e }));
 }
 
