@@ -5875,8 +5875,8 @@
             <tr style="border-bottom:1px solid #f3f4f6;cursor:pointer" onclick="openNotasDrilldown('${r.equipe}')">
               <td style="padding:8px">${r.equipe}${tagNova}</td>
               <td style="padding:8px;text-align:right;font-weight:600">${r.pendentes}</td>
-              <td style="padding:8px;text-align:right;color:#dc2626">+${r.entraram_hoje}</td>
-              <td style="padding:8px;text-align:right;color:#16a34a">-${r.sairam_hoje}</td>
+              <td style="padding:8px;text-align:right;color:#dc2626">${r.entraram_hoje > 0 ? '+' + r.entraram_hoje : 0}</td>
+              <td style="padding:8px;text-align:right;color:#16a34a">${r.sairam_hoje > 0 ? '-' + r.sairam_hoje : 0}</td>
               <td style="padding:8px;text-align:right;font-weight:600;color:${saldoColor}">${r.saldo_dia > 0 ? '+' : ''}${r.saldo_dia}</td>
               <td style="padding:8px;text-align:right">${r.nota_mais_antiga_dias}</td>
             </tr>`;
