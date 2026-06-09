@@ -6588,6 +6588,10 @@
       const tabela = lista.rows.slice(0, 500).map(d => {
         const corStatus = d.status === 'lento' ? '#e74c3c' : (d.status === 'ok' ? '#27ae60' : '#7f8c8d');
         const desvio = d.desvio_pct != null ? `${d.desvio_pct > 0 ? '+' : ''}${d.desvio_pct}%` : '—';
+        // excedente_sec = real - osrm. Mostra em min (negativo se foi mais rápido que o Maps).
+        const exced = (d.excedente_sec != null)
+          ? `${d.excedente_sec > 0 ? '+' : ''}${Math.round(d.excedente_sec / 60)} min`
+          : '—';
         return `<tr>
           <td>${fmtDateBR(d.data)}</td>
           <td><strong>${d.team_name}</strong> <span style="font-size:10px;opacity:.5">${d.regional || ''}</span></td>
@@ -6596,6 +6600,7 @@
           <td>${_fmtDur(d.tempo_real_sec)}</td>
           <td>${_fmtDur(d.tempo_osrm_sec)}</td>
           <td>${_fmtKm(d.distancia_m)}</td>
+          <td style="color:${corStatus};font-weight:600">${exced}</td>
           <td style="color:${corStatus};font-weight:600">${desvio}</td>
         </tr>`;
       }).join('');
@@ -6670,6 +6675,7 @@
                   <th>Real</th>
                   <th>Tempo Maps</th>
                   <th>Dist.</th>
+                  <th>Excedente</th>
                   <th>Desvio</th>
                 </tr>
               </thead>
