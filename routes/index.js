@@ -2423,6 +2423,9 @@ function _parseRejeicoesFilters(req, res) {
     ? String(req.query.motivos).split(',').map(s => s.trim()).filter(Boolean)
     : null;
   const somenteComMotivo = req.query.somenteComMotivo === 'true' || req.query.somenteComMotivo === '1';
+  // Por padrão excluímos rejeições "legítimas" (Pix no WPA, conta paga etc.) —
+  // cliente já fez o acerto, não conta como desvio. Toggle pra auditoria.
+  const incluirContaPaga = req.query.incluirContaPaga === 'true' || req.query.incluirContaPaga === '1';
   return {
     de: de || dateBRT(),
     ate: ate || de || dateBRT(),
@@ -2430,7 +2433,7 @@ function _parseRejeicoesFilters(req, res) {
     regionais,
     team:     teams && teams.length === 1 ? teams[0] : null,
     teams,
-    tipos, motivos, somenteComMotivo,
+    tipos, motivos, somenteComMotivo, incluirContaPaga,
   };
 }
 
@@ -2441,7 +2444,7 @@ router.get('/rejeicoes/totais', async (req, res) => {
     if (!sq) return res.json({ total: 0, comMotivo: 0, semMotivo: 0, porRegional: {GUA:0,CAC:0}, porTipo: {}, porMotivo: [], porEquipe: [], porDia: [], executadasNoPeriodo: 0, percentualGeral: null });
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, teams: f.teams, regionais: f.regionais, tipos: f.tipos, motivos: f.motivos });
+    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, teams: f.teams, regionais: f.regionais, tipos: f.tipos, motivos: f.motivos, incluirContaPaga: f.incluirContaPaga });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/totais]', err.message);
@@ -2459,6 +2462,7 @@ router.get('/rejeicoes/lista', async (req, res) => {
     const result = await sq.getRejeicoesLista(f.de, f.ate, f.regional, {
       team: f.team, teams: f.teams, regionais: f.regionais,
       tipos: f.tipos, motivos: f.motivos, somenteComMotivo: f.somenteComMotivo,
+      incluirContaPaga: f.incluirContaPaga,
       limit: req.query.limit, offset: req.query.offset,
     });
     res.json(result);
@@ -2476,7 +2480,7 @@ router.get('/rejeicoes/motivos', async (req, res) => {
     if (!sq) return res.json([]);
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesMotivos(f.de, f.ate, f.regional, { regionais: f.regionais });
+    const result = await sq.getRejeicoesMotivos(f.de, f.ate, f.regional, { regionais: f.regionais, incluirContaPaga: f.incluirContaPaga });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/motivos]', err.message);

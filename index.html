@@ -4527,6 +4527,10 @@
               <option value="ALL">Todos os motivos</option>
             </select>
           </div>
+          <label class="filter-group" style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;background:rgba(125,125,125,.08);border:1px solid rgba(125,125,125,.3);border-radius:6px;padding:5px 10px" title="Por padrão excluímos rejeições onde o cliente já fez o acerto (Pix no WPA, conta paga apresentada, conta paga no momento do corte). Marque pra incluí-las.">
+            <input type="checkbox" id="rej-incluir-conta-paga" onchange="loadRejeicoes()" style="margin:0;cursor:pointer" />
+            <span>Incluir conta paga</span>
+          </label>
           <div style="flex:1"></div>
           <button class="btn-refresh" onclick="loadRejeicoes()">↻ Atualizar</button>
         </div>
@@ -6060,6 +6064,9 @@
       if (teams.length > 0)   qp.set('team',   teams.join(','));
       if (tipos.length > 0)   qp.set('tipos',  tipos.join(','));
       if (motivos.length > 0) qp.set('motivos', motivos.join(','));
+      if (document.getElementById('rej-incluir-conta-paga')?.checked) {
+        qp.set('incluirContaPaga', 'true');
+      }
       return qp.toString();
     }
 

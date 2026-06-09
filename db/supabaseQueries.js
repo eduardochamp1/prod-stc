@@ -1330,6 +1330,26 @@ async function _fetchRejeicoes({ de, ate, regional, regionais, team, teams, tipo
  *     executadasNoPeriodo  (do team_daily_totals — pra calcular % de rejeição)
  *   }
  */
+// Motivos considerados "legítimos" — cliente já fez o acerto (Pix/conta paga),
+// não conta como desvio operacional da equipe. Excluídos por padrão de todas
+// as queries de rejeição. Use opts.incluirContaPaga=true pra incluir (auditoria).
+// Match case-insensitive sobre motivo_textos (códigos podem variar).
+const MOTIVOS_LEGITIMOS = new Set([
+  'pix no wpa',
+  'cliente apresentou conta paga',
+  'conta paga no momento do corte',
+]);
+
+function _ehLegitima(row) {
+  const textos = Array.isArray(row?.motivo_textos) ? row.motivo_textos : [];
+  return textos.some(t => t && MOTIVOS_LEGITIMOS.has(String(t).trim().toLowerCase()));
+}
+
+function _aplicarFiltroLegitimas(rows, opts) {
+  if (opts && opts.incluirContaPaga) return rows;
+  return rows.filter(r => !_ehLegitima(r));
+}
+
 async function getRejeicoesTotais(de, ate, regional, opts = {}) {
   const sb = getClient();
   const today = dateBRT();
@@ -1341,6 +1361,9 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
     team: opts.team, teams: opts.teams,
     tipos: opts.tipos,
   });
+
+  // Por padrão exclui rejeições "legítimas" (cliente já fez o acerto).
+  rows = _aplicarFiltroLegitimas(rows, opts);
 
   // Filtro por código de motivo (mesma logica da getRejeicoesLista — pos-fetch
   // porque motivo_codes eh TEXT[]). Quando ativo, KPIs/paineis refletem so as
@@ -1460,12 +1483,15 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
  * Aplica filtros + ordena por session_date desc.
  */
 async function getRejeicoesLista(de, ate, regional, opts = {}) {
-  const rows = await _fetchRejeicoes({
+  const rowsRaw = await _fetchRejeicoes({
     de, ate, regional, regionais: opts.regionais,
     team: opts.team, teams: opts.teams,
     tipos: opts.tipos,
     somenteComMotivo: opts.somenteComMotivo,
   });
+
+  // Por padrão exclui rejeições "legítimas" (cliente já fez o acerto).
+  const rows = _aplicarFiltroLegitimas(rowsRaw, opts);
 
   // Filtro por código de motivo (após fetch porque é array)
   let filtered = rows;
@@ -1496,7 +1522,9 @@ async function getRejeicoesLista(de, ate, regional, opts = {}) {
  * Catálogo distinto de motivos vistos no período (pra alimentar dropdown de filtro).
  */
 async function getRejeicoesMotivos(de, ate, regional, opts = {}) {
-  const rows = await _fetchRejeicoes({ de, ate, regional, regionais: opts.regionais });
+  const rowsRaw = await _fetchRejeicoes({ de, ate, regional, regionais: opts.regionais });
+  // Por padrão exclui rejeições "legítimas" (cliente já fez o acerto).
+  const rows = _aplicarFiltroLegitimas(rowsRaw, opts);
   const map = new Map();
   for (const r of rows) {
     const codes  = Array.isArray(r.motivo_codes)  ? r.motivo_codes  : [];
