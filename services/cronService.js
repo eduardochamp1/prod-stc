@@ -10,6 +10,7 @@
 
 const cron                    = require('node-cron');
 const { getTeams }            = require('./dataService');
+const { collectSnapshot: collectNotas } = require('./notasMonitor');
 const { forceRefresh }        = require('./wpaService');
 const { dateBRT, hourBRT }    = require('./timeUtil');
 const log                     = require('./logger').forModule('cron');
@@ -20,6 +21,7 @@ let consolidaJob    = null;
 let uuidHealthJob   = null;
 let retryOutrosJob  = null;
 let driftJob        = null;
+let notasJob        = null;
 let isRunning       = false;
 let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
 const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se travar
@@ -57,6 +59,17 @@ async function runTokenRefresh() {
     log.info('token_refreshed', { exp });
   } catch (err) {
     log.error('token_refresh_failed', { msg: err.message });
+  }
+}
+
+// ── NOTAS DEVOLVIDAS (monitor de tratamento backoffice) ─────────────────────
+
+async function runNotasCollect() {
+  try {
+    const r = await collectNotas();
+    log.info('notas_collect_ok', r);
+  } catch (err) {
+    log.error('notas_collect_failed', { msg: err.message });
   }
 }
 
@@ -1022,7 +1035,12 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
-  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health/retry-outros 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00');
+  // Notas devolvidas: a cada hora no minuto 5 (offset para não colidir com outros jobs)
+  notasJob = cron.schedule('5 * * * *', runNotasCollect, {
+    timezone: 'America/Sao_Paulo',
+  });
+
+  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health/retry-outros 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00, notas-devolvidas xx:05');
 
   // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
   setTimeout(runTokenRefresh, 2000);
@@ -1041,6 +1059,7 @@ function stopCron() {
   uuidHealthJob?.stop();
   retryOutrosJob?.stop();
   driftJob?.stop();
+  notasJob?.stop();
   // Para jobs extras (snapshot de madrugada)
   if (global._extraCronJobs) {
     global._extraCronJobs.forEach(j => j?.stop?.());
