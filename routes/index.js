@@ -2608,20 +2608,28 @@ function _classif(req) {
   return ['todas', 'oficial', 'nova'].includes(c) ? c : 'todas';
 }
 
+const _REG_VALIDAS = new Set(['GUA', 'CAC', 'SJC']);
+function _regionais(req) {
+  const raw = (req.query.regionais || '').trim();
+  if (!raw) return null;
+  const arr = raw.split(',').map(s => s.trim().toUpperCase()).filter(s => _REG_VALIDAS.has(s));
+  return arr.length ? arr : null;
+}
+
 router.get('/notas/kpis', async (req, res) => {
-  try { res.json(await notasQueries.getKpis(_classif(req))); }
+  try { res.json(await notasQueries.getKpis(_classif(req), _regionais(req))); }
   catch (err) { console.error('[notas/kpis]', err.message); res.status(500).json({ error: err.message }); }
 });
 
 router.get('/notas/serie', async (req, res) => {
   try {
     const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 30, 1), 365);
-    res.json(await notasQueries.getSerie(dias, _classif(req)));
+    res.json(await notasQueries.getSerie(dias, _classif(req), _regionais(req)));
   } catch (err) { console.error('[notas/serie]', err.message); res.status(500).json({ error: err.message }); }
 });
 
 router.get('/notas/por-equipe', async (req, res) => {
-  try { res.json(await notasQueries.getPorEquipe(_classif(req))); }
+  try { res.json(await notasQueries.getPorEquipe(_classif(req), _regionais(req))); }
   catch (err) { console.error('[notas/por-equipe]', err.message); res.status(500).json({ error: err.message }); }
 });
 

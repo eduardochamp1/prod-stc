@@ -2,10 +2,9 @@
  * db/notasQueries.js
  * Queries de leitura para a aba Notas.
  *
- * Filtros por classificação:
- *   classificacao = 'todas'    → tudo (default)
- *                   'oficial'  → só equipes do whitelist
- *                   'nova'     → só equipes Engelmig fora do whitelist
+ * Filtros:
+ *   classificacao = 'todas' | 'oficial' | 'nova'
+ *   regionais     = array de regionais (['GUA','CAC','SJC']) — vazio/null = todas
  */
 const { _getPool } = require('../services/pgShim');
 
@@ -15,19 +14,23 @@ function _classifClause(classificacao) {
   return '';
 }
 
-/**
- * KPIs do topo da aba.
- */
-async function getKpis(classificacao = 'todas') {
-  const pool   = _getPool();
-  const filtro = _classifClause(classificacao);
+/** Recebe array de regionais, retorna { clause, param } onde clause é tipo `AND regional = ANY($N)` */
+function _regionalParam(regionais, startIdx) {
+  if (!regionais || !regionais.length) return { clause: '', param: null };
+  return { clause: `AND regional = ANY($${startIdx})`, param: regionais };
+}
+
+async function getKpis(classificacao = 'todas', regionais = null) {
+  const pool = _getPool();
+  const cf   = _classifClause(classificacao);
+  const r1   = _regionalParam(regionais, 1);
+  const params = r1.param ? [r1.param] : [];
+  const rg   = r1.clause;
   const sql = `
-    WITH ult_ts AS (
-      SELECT max(snapshot_ts) AS ts FROM notas_snapshots
-    ),
+    WITH ult_ts AS (SELECT max(snapshot_ts) AS ts FROM notas_snapshots),
     ult AS (
       SELECT * FROM notas_snapshots
-       WHERE snapshot_ts = (SELECT ts FROM ult_ts) ${filtro}
+       WHERE snapshot_ts = (SELECT ts FROM ult_ts) ${cf} ${rg}
     ),
     ts24 AS (
       SELECT max(snapshot_ts) AS ts FROM notas_snapshots
@@ -35,7 +38,7 @@ async function getKpis(classificacao = 'todas') {
     ),
     h24 AS (
       SELECT * FROM notas_snapshots
-       WHERE snapshot_ts = (SELECT ts FROM ts24) ${filtro}
+       WHERE snapshot_ts = (SELECT ts FROM ts24) ${cf} ${rg}
     ),
     ts_inicio_dia AS (
       SELECT min(snapshot_ts) AS ts FROM notas_snapshots
@@ -43,7 +46,7 @@ async function getKpis(classificacao = 'todas') {
     ),
     inicio_dia AS (
       SELECT * FROM notas_snapshots
-       WHERE snapshot_ts = (SELECT ts FROM ts_inicio_dia) ${filtro}
+       WHERE snapshot_ts = (SELECT ts FROM ts_inicio_dia) ${cf} ${rg}
     )
     SELECT
       (SELECT count(*)::int FROM ult)                                AS pendentes_agora,
@@ -54,18 +57,14 @@ async function getKpis(classificacao = 'todas') {
       (SELECT count(*)::int FROM ult
         WHERE nota_number NOT IN (SELECT nota_number FROM inicio_dia)) AS entraram_hoje
   `;
-  const r = await pool.query(sql);
+  const r = await pool.query(sql, params);
   return r.rows[0];
 }
 
-/**
- * Série temporal: total pendente por dia, últimos N dias.
- */
-async function getSerie(dias = 30, classificacao = 'todas') {
+async function getSerie(dias = 30, classificacao = 'todas', regionais = null) {
   const pool = _getPool();
-  // notas_daily_agg não tem coluna oficial — para 'oficial'/'nova', reconstrói via snapshots.
-  // Para 'todas' usa o agregado (rápido).
-  if (classificacao === 'todas') {
+  // Para 'todas' sem filtro regional usa notas_daily_agg (rápido).
+  if (classificacao === 'todas' && (!regionais || !regionais.length)) {
     const r = await pool.query(`
       SELECT data, sum(pendentes_fim_dia)::int AS pendentes
         FROM notas_daily_agg
@@ -75,7 +74,10 @@ async function getSerie(dias = 30, classificacao = 'todas') {
     `, [dias]);
     return r.rows;
   }
-  const filtro = _classifClause(classificacao);
+  // Caso geral: reconstrói via snapshots
+  const cf = _classifClause(classificacao);
+  const r1 = _regionalParam(regionais, 2);
+  const params = r1.param ? [dias, r1.param] : [dias];
   const r = await pool.query(`
     WITH ult_por_dia AS (
       SELECT date_trunc('day', snapshot_ts AT TIME ZONE 'America/Sao_Paulo')::date AS data,
@@ -86,38 +88,38 @@ async function getSerie(dias = 30, classificacao = 'todas') {
     )
     SELECT u.data, count(s.*)::int AS pendentes
       FROM ult_por_dia u
-      JOIN notas_snapshots s ON s.snapshot_ts = u.ts ${filtro}
+      JOIN notas_snapshots s ON s.snapshot_ts = u.ts ${cf} ${r1.clause}
      GROUP BY u.data
      ORDER BY u.data
-  `, [dias]);
+  `, params);
   return r.rows;
 }
 
-/**
- * Tabela do meio: linhas por equipe baseadas no snapshot mais recente +
- * agregado de hoje.
- */
-async function getPorEquipe(classificacao = 'todas') {
-  const pool   = _getPool();
-  const filtro = _classifClause(classificacao);
+async function getPorEquipe(classificacao = 'todas', regionais = null) {
+  const pool = _getPool();
+  const cf   = _classifClause(classificacao);
+  const r1   = _regionalParam(regionais, 1);
+  const params = r1.param ? [r1.param] : [];
   const sql = `
     WITH ts_ult AS (SELECT max(snapshot_ts) AS ts FROM notas_snapshots),
     ult AS (
       SELECT equipe,
+             regional,
              bool_or(equipe_oficial) AS equipe_oficial,
              count(*)::int           AS pendentes,
              coalesce(max(EXTRACT(EPOCH FROM (now() - conclusion_date))/86400),0)::int AS idade_max
         FROM notas_snapshots
-       WHERE snapshot_ts = (SELECT ts FROM ts_ult) ${filtro}
-       GROUP BY equipe
+       WHERE snapshot_ts = (SELECT ts FROM ts_ult) ${cf} ${r1.clause}
+       GROUP BY equipe, regional
     ),
     hoje AS (
-      SELECT equipe, entraram_no_dia, sairam_no_dia
+      SELECT equipe, regional, entraram_no_dia, sairam_no_dia
         FROM notas_daily_agg
        WHERE data = current_date
     )
     SELECT
       u.equipe,
+      u.regional,
       u.equipe_oficial,
       u.pendentes,
       coalesce(h.entraram_no_dia, 0)::int                           AS entraram_hoje,
@@ -125,20 +127,17 @@ async function getPorEquipe(classificacao = 'todas') {
       (coalesce(h.entraram_no_dia, 0) - coalesce(h.sairam_no_dia, 0))::int AS saldo_dia,
       u.idade_max                                                    AS nota_mais_antiga_dias
     FROM ult u
-    LEFT JOIN hoje h ON h.equipe = u.equipe
+    LEFT JOIN hoje h ON h.equipe = u.equipe AND h.regional = u.regional
     ORDER BY u.pendentes DESC
   `;
-  const r = await pool.query(sql);
+  const r = await pool.query(sql, params);
   return r.rows;
 }
 
-/**
- * Notas pendentes de uma equipe específica (drill-down).
- */
 async function getNotasDeEquipe(equipe) {
   const pool = _getPool();
   const sql = `
-    SELECT nota_number, tipo, conclusion_date, conclusion_status,
+    SELECT nota_number, tipo, conclusion_date, conclusion_status, regional,
            EXTRACT(EPOCH FROM (now() - conclusion_date))/86400 AS dias_parada
       FROM notas_snapshots
      WHERE snapshot_ts = (SELECT max(snapshot_ts) FROM notas_snapshots)

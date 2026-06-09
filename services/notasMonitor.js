@@ -91,8 +91,8 @@ async function saveSnapshot(notas, snapshotTs) {
     const values = [];
     const params = [];
     slice.forEach((n, idx) => {
-      const base = idx * 10;
-      values.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10})`);
+      const base = idx * 11;
+      values.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11})`);
       const conclusionDate = n.ConclusionDate && n.ConclusionDate !== '0001-01-01T00:00:00'
         ? n.ConclusionDate : null;
       params.push(
@@ -105,13 +105,14 @@ async function saveSnapshot(notas, snapshotTs) {
         conclusionDate,
         n.ConclusionStatus || null,
         null,                                      // sap_message — v2
-        n._equipe_oficial === false ? false : true // default true se não taggeado
+        n._equipe_oficial === false ? false : true, // default true se não taggeado
+        n._regional || null,
       );
     });
     const sql = `
       INSERT INTO notas_snapshots
         (snapshot_ts, nota_number, nota_id, tipo, equipe, status, conclusion_date,
-         conclusion_status, sap_message, equipe_oficial)
+         conclusion_status, sap_message, equipe_oficial, regional)
       VALUES ${values.join(',')}
       ON CONFLICT (snapshot_ts, nota_number) DO NOTHING
     `;
@@ -157,43 +158,45 @@ async function updateDailyAgg(data) {
        WHERE snapshot_ts >= $1::date AND snapshot_ts < ($1::date + interval '1 day')
     ),
     pend AS (
-      SELECT equipe,
+      SELECT equipe, coalesce(regional,'?') AS regional,
              count(*)                                                            AS pendentes_fim_dia,
              coalesce(max(EXTRACT(EPOCH FROM (now() - conclusion_date))/86400),0)::int AS idade_max
         FROM ult_dia
-       GROUP BY equipe
+       GROUP BY equipe, coalesce(regional,'?')
     ),
     entr AS (
-      SELECT equipe, count(*) AS entraram_no_dia
-        FROM todas_dia td
+      SELECT td.equipe, coalesce(td.regional,'?') AS regional, count(*) AS entraram_no_dia
+        FROM (SELECT DISTINCT nota_number, equipe, regional FROM notas_snapshots
+               WHERE snapshot_ts >= $1::date AND snapshot_ts < ($1::date + interval '1 day')) td
        WHERE NOT EXISTS (SELECT 1 FROM ult_anterior ua WHERE ua.nota_number = td.nota_number)
-       GROUP BY equipe
+       GROUP BY td.equipe, coalesce(td.regional,'?')
     ),
     sai AS (
-      SELECT equipe, count(*) AS sairam_no_dia
+      SELECT equipe, coalesce(regional,'?') AS regional, count(*) AS sairam_no_dia
         FROM ult_anterior ua
        WHERE NOT EXISTS (SELECT 1 FROM ult_dia ud WHERE ud.nota_number = ua.nota_number)
-       GROUP BY equipe
+       GROUP BY equipe, coalesce(regional,'?')
     ),
     todas_equipes AS (
-      SELECT equipe FROM pend
-      UNION SELECT equipe FROM entr
-      UNION SELECT equipe FROM sai
+      SELECT equipe, regional FROM pend
+      UNION SELECT equipe, regional FROM entr
+      UNION SELECT equipe, regional FROM sai
     )
     INSERT INTO notas_daily_agg
-      (data, equipe, pendentes_fim_dia, entraram_no_dia, sairam_no_dia, idade_mais_antiga_dias)
+      (data, equipe, regional, pendentes_fim_dia, entraram_no_dia, sairam_no_dia, idade_mais_antiga_dias)
     SELECT
       $1::date,
       te.equipe,
+      te.regional,
       coalesce(p.pendentes_fim_dia, 0),
       coalesce(e.entraram_no_dia, 0),
       coalesce(s.sairam_no_dia, 0),
       coalesce(p.idade_max, 0)
     FROM todas_equipes te
-    LEFT JOIN pend p ON p.equipe = te.equipe
-    LEFT JOIN entr e ON e.equipe = te.equipe
-    LEFT JOIN sai  s ON s.equipe = te.equipe
-    ON CONFLICT (data, equipe) DO UPDATE SET
+    LEFT JOIN pend p ON p.equipe = te.equipe AND p.regional = te.regional
+    LEFT JOIN entr e ON e.equipe = te.equipe AND e.regional = te.regional
+    LEFT JOIN sai  s ON s.equipe = te.equipe AND s.regional = te.regional
+    ON CONFLICT (data, equipe, regional) DO UPDATE SET
       pendentes_fim_dia      = EXCLUDED.pendentes_fim_dia,
       entraram_no_dia        = EXCLUDED.entraram_no_dia,
       sairam_no_dia          = EXCLUDED.sairam_no_dia,
@@ -212,9 +215,9 @@ async function updateDailyAgg(data) {
  *   4. Atualiza agregado do dia
  *   5. Limpa snapshots > 30 dias
  */
-// Setores que cobrem todas as equipes Engelmig (DESG/DEPT = Guarapari, DESC = Cachoeiro;
-// DSSJ é regional terceiro mas vai entrar — o filtro por CompanyId já exclui o que não é nosso).
+// Setores cobertos. Mapping setor → regional alinhado com services/wpaService.js REGIONAL_MAP.
 const SECTORS = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
+const SECTOR_TO_REGIONAL = { DESG: 'GUA', DEPT: 'GUA', DESC: 'CAC', DSSJ: 'SJC' };
 
 async function collectSnapshot() {
   const t0 = Date.now();
@@ -231,9 +234,18 @@ async function collectSnapshot() {
   for (const teams of teamsBySector) {
     for (const [name, cid] of buildTeamCompanyMap(teams)) mapa.set(name, cid);
   }
-  // Dedup de notas por Number (mesma nota pode aparecer em setores diferentes)
+  // Dedup de notas por Number (mesma nota pode aparecer em setores diferentes).
+  // Tagueia cada nota com a regional do setor onde apareceu pela primeira vez.
   const seen = new Map();
-  for (const arr of notasBySector) for (const n of arr) if (n?.Number) seen.set(n.Number, n);
+  notasBySector.forEach((arr, idx) => {
+    const regional = SECTOR_TO_REGIONAL[SECTORS[idx]] || null;
+    for (const n of arr) {
+      if (n?.Number && !seen.has(n.Number)) {
+        n._regional = regional;
+        seen.set(n.Number, n);
+      }
+    }
+  });
   const todasNotas = [...seen.values()];
   const eng       = filterEngelmig(todasNotas, mapa);
   const ts        = new Date().toISOString();

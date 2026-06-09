@@ -4706,13 +4706,22 @@
 
     <!-- ── TAB: NOTAS DEVOLVIDAS ─────────────────────────────────────────── -->
     <div class="tab-panel" id="tab-notas">
-      <div class="filter-bar" style="display:flex;justify-content:space-between;align-items:center">
+      <div class="filter-bar" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
         <div class="date-label">Notas devolvidas — atualizado a cada hora (xx:05)</div>
-        <select id="notas-classif" class="filter-select" onchange="loadNotasAll()" style="min-width:200px">
-          <option value="todas" selected>Todas Engelmig</option>
-          <option value="oficial">Só equipes oficiais</option>
-          <option value="nova">Só novas (revisar whitelist)</option>
-        </select>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="filter-label" style="font-size:12px">Regional</span>
+          <select class="filter-select" id="notas-regional-select" style="min-width:180px">
+            <option value="ALL">Todas as Regionais</option>
+            <option value="GUA">Guarapari</option>
+            <option value="CAC">Cachoeiro</option>
+            <option value="SJC">São José dos Campos</option>
+          </select>
+          <select id="notas-classif" class="filter-select" onchange="loadNotasAll()" style="min-width:200px">
+            <option value="todas" selected>Todas Engelmig</option>
+            <option value="oficial">Só equipes oficiais</option>
+            <option value="nova">Só novas (revisar whitelist)</option>
+          </select>
+        </div>
       </div>
 
       <!-- KPI cards -->
@@ -5794,7 +5803,14 @@
     }
 
     // ── NOTAS DEVOLVIDAS ──────────────────────────────────────────────────────
-    function initNotas() { loadNotasAll(); }
+    let _notasMultiSelectInited = false;
+    function initNotas() {
+      if (!_notasMultiSelectInited && window.MultiSelect) {
+        MultiSelect.init('notas-regional-select', { onChange: () => loadNotasAll() });
+        _notasMultiSelectInited = true;
+      }
+      loadNotasAll();
+    }
 
     async function loadNotasAll() {
       await Promise.all([loadNotasKpis(), loadNotasSerie(), loadNotasPorEquipe()]);
@@ -5804,9 +5820,19 @@
       return document.getElementById('notas-classif').value;
     }
 
+    function _notasRegionaisQS() {
+      try {
+        const vals = (window.MultiSelect && MultiSelect.getValues)
+          ? MultiSelect.getValues('notas-regional-select')
+          : ['ALL'];
+        if (!vals || !vals.length || vals.includes('ALL')) return '';
+        return '&regionais=' + encodeURIComponent(vals.join(','));
+      } catch { return ''; }
+    }
+
     async function loadNotasKpis() {
       try {
-        const r = await fetch(`/api/notas/kpis?classificacao=${_notasClassif()}`);
+        const r = await fetch(`/api/notas/kpis?classificacao=${_notasClassif()}${_notasRegionaisQS()}`);
         const k = await r.json();
         const delta = k.delta_24h ?? 0;
         const cards = [
@@ -5828,7 +5854,7 @@
     async function loadNotasSerie() {
       try {
         const dias = document.getElementById('notas-serie-dias').value;
-        const r = await fetch(`/api/notas/serie?dias=${dias}&classificacao=${_notasClassif()}`);
+        const r = await fetch(`/api/notas/serie?dias=${dias}&classificacao=${_notasClassif()}${_notasRegionaisQS()}`);
         const data = await r.json();
         const host = document.getElementById('notas-chart');
         if (!data.length) { host.innerHTML = '<div style="padding:24px;color:#9ca3af;text-align:center">Sem dados históricos ainda — o gráfico vai crescer a cada snapshot horário.</div>'; return; }
@@ -5859,7 +5885,7 @@
 
     async function loadNotasPorEquipe() {
       try {
-        const r = await fetch(`/api/notas/por-equipe?classificacao=${_notasClassif()}`);
+        const r = await fetch(`/api/notas/por-equipe?classificacao=${_notasClassif()}${_notasRegionaisQS()}`);
         const rows = await r.json();
         if (!rows.length) {
           document.getElementById('notas-tabela-body').innerHTML =
