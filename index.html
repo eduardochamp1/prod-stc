@@ -5805,7 +5805,7 @@
     // ── NOTAS DEVOLVIDAS ──────────────────────────────────────────────────────
     let _notasMultiSelectInited = false;
     function initNotas() {
-      if (!_notasMultiSelectInited && window.MultiSelect) {
+      if (!_notasMultiSelectInited && typeof MultiSelect !== 'undefined') {
         MultiSelect.init('notas-regional-select', { onChange: () => loadNotasAll() });
         _notasMultiSelectInited = true;
       }
@@ -5822,7 +5822,7 @@
 
     function _notasRegionaisQS() {
       try {
-        const vals = (window.MultiSelect && MultiSelect.getValues)
+        const vals = (typeof MultiSelect !== 'undefined' && MultiSelect.getValues)
           ? MultiSelect.getValues('notas-regional-select')
           : ['ALL'];
         if (!vals || !vals.length || vals.includes('ALL')) return '';
