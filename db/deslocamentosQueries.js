@@ -274,7 +274,15 @@ async function listDeslocamentos(de, ate, opts = {}) {
         d.status = 'origem_destino_iguais';
       } else {
         d.desvio_pct = +(100 * (d.tempo_real_sec - d.tempo_osrm_sec) / d.tempo_osrm_sec).toFixed(1);
-        d.status = (d.tempo_real_sec / d.tempo_osrm_sec) > THRESHOLD ? 'lento' : 'ok';
+        // Excedente em segundos (real - osrm). 'lento' exige AMBOS:
+        //   desvio > 50% (fator > THRESHOLD)  E  excedente > 15min de tolerância.
+        // Isso evita marcar como lento deslocamentos curtos (ex: 2min real vs 1min osrm).
+        const excedenteSec    = d.tempo_real_sec - d.tempo_osrm_sec;
+        const TOLERANCIA_SEC  = 15 * 60;   // 15 min
+        const fatorAcima      = (d.tempo_real_sec / d.tempo_osrm_sec) > THRESHOLD;
+        const excedenteAcima  = excedenteSec > TOLERANCIA_SEC;
+        d.excedente_sec = excedenteSec;    // exposto pra UI mostrar "16 min de desvio"
+        d.status = (fatorAcima && excedenteAcima) ? 'lento' : 'ok';
       }
     } else {
       osrmFails++;
