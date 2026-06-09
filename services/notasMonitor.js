@@ -122,4 +122,88 @@ async function saveSnapshot(notas, snapshotTs) {
   return total;
 }
 
-module.exports = { filterEngelmig, buildTeamCompanyMap, saveSnapshot, ENGELMIG_COMPANY_IDS };
+/**
+ * Atualiza notas_daily_agg para o dia informado, baseado em todos os
+ * snapshots já gravados naquele dia + último snapshot do dia anterior.
+ * Idempotente — recalcula tudo via UPSERT (data, equipe).
+ *
+ * Definições por (data, equipe):
+ *   pendentes_fim_dia       = qtd no último snapshot do dia
+ *   entraram_no_dia         = notas que apareceram no dia e não estavam no
+ *                             último snapshot do dia anterior
+ *   sairam_no_dia           = notas que estavam no último snapshot do dia
+ *                             anterior e não no último snapshot do dia
+ *   idade_mais_antiga_dias  = max(now - conclusion_date) no último snapshot
+ */
+async function updateDailyAgg(data) {
+  const pool = _getPool();
+  const sql = `
+    WITH ts_ult AS (
+      SELECT max(snapshot_ts) AS ts FROM notas_snapshots
+       WHERE snapshot_ts >= $1::date AND snapshot_ts < ($1::date + interval '1 day')
+    ),
+    ts_anterior AS (
+      SELECT max(snapshot_ts) AS ts FROM notas_snapshots
+       WHERE snapshot_ts < $1::date
+    ),
+    ult_dia AS (
+      SELECT * FROM notas_snapshots WHERE snapshot_ts = (SELECT ts FROM ts_ult)
+    ),
+    ult_anterior AS (
+      SELECT * FROM notas_snapshots WHERE snapshot_ts = (SELECT ts FROM ts_anterior)
+    ),
+    todas_dia AS (
+      SELECT DISTINCT nota_number, equipe FROM notas_snapshots
+       WHERE snapshot_ts >= $1::date AND snapshot_ts < ($1::date + interval '1 day')
+    ),
+    pend AS (
+      SELECT equipe,
+             count(*)                                                            AS pendentes_fim_dia,
+             coalesce(max(EXTRACT(EPOCH FROM (now() - conclusion_date))/86400),0)::int AS idade_max
+        FROM ult_dia
+       GROUP BY equipe
+    ),
+    entr AS (
+      SELECT equipe, count(*) AS entraram_no_dia
+        FROM todas_dia td
+       WHERE NOT EXISTS (SELECT 1 FROM ult_anterior ua WHERE ua.nota_number = td.nota_number)
+       GROUP BY equipe
+    ),
+    sai AS (
+      SELECT equipe, count(*) AS sairam_no_dia
+        FROM ult_anterior ua
+       WHERE NOT EXISTS (SELECT 1 FROM ult_dia ud WHERE ud.nota_number = ua.nota_number)
+       GROUP BY equipe
+    ),
+    todas_equipes AS (
+      SELECT equipe FROM pend
+      UNION SELECT equipe FROM entr
+      UNION SELECT equipe FROM sai
+    )
+    INSERT INTO notas_daily_agg
+      (data, equipe, pendentes_fim_dia, entraram_no_dia, sairam_no_dia, idade_mais_antiga_dias)
+    SELECT
+      $1::date,
+      te.equipe,
+      coalesce(p.pendentes_fim_dia, 0),
+      coalesce(e.entraram_no_dia, 0),
+      coalesce(s.sairam_no_dia, 0),
+      coalesce(p.idade_max, 0)
+    FROM todas_equipes te
+    LEFT JOIN pend p ON p.equipe = te.equipe
+    LEFT JOIN entr e ON e.equipe = te.equipe
+    LEFT JOIN sai  s ON s.equipe = te.equipe
+    ON CONFLICT (data, equipe) DO UPDATE SET
+      pendentes_fim_dia      = EXCLUDED.pendentes_fim_dia,
+      entraram_no_dia        = EXCLUDED.entraram_no_dia,
+      sairam_no_dia          = EXCLUDED.sairam_no_dia,
+      idade_mais_antiga_dias = EXCLUDED.idade_mais_antiga_dias
+  `;
+  const r = await pool.query(sql, [data]);
+  log.info('daily_agg_updated', { data, equipes: r.rowCount });
+  return r.rowCount;
+}
+
+module.exports = {
+  filterEngelmig, buildTeamCompanyMap, saveSnapshot, updateDailyAgg, ENGELMIG_COMPANY_IDS,
+};
