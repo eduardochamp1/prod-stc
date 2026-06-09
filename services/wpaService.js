@@ -1218,13 +1218,16 @@ async function getTeamsBySector(sectorId) {
  *
  * @returns {Promise<Array>} array de notas devolvidas.
  */
-async function getNotasDevolvidas() {
-  const res = await wpaFetch('/api/Notes/NotesStatusFilterBySector', {
+async function getNotasDevolvidas(sectorId = 'DESC') {
+  const res = await wpaFetch(`/api/Notes/NotesStatusFilterBySector?sectorId=${encodeURIComponent(sectorId)}`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({}),   // payload vazio — backend usa contexto da sessão
+    body:    JSON.stringify({}),
   });
-  if (!res.ok) throw new Error(`WPA NotesStatusFilterBySector ${res.status}`);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`WPA NotesStatusFilterBySector ${res.status}: ${txt.slice(0, 300)}`);
+  }
   const data = await res.json();
   return data?.Data || [];
 }
