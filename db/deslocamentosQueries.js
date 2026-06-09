@@ -381,11 +381,48 @@ async function tendenciaDiaria(de, ate, opts = {}) {
   return out;
 }
 
+// ── Cache de resultado: TTL 5min + single-flight ─────────────────────────────
+// Snapshots atualizam a cada 15min (cronService). TTL de 5min mantém os dados
+// "frescos o suficiente" e reduz drasticamente o re-trabalho quando o front
+// dispara lista/ranking/tendência em paralelo com mesmos filtros.
+const _memo = require('../services/memoCache').create({
+  ttlMs: 5 * 60 * 1000,
+  name:  'deslocamentos',
+});
+
+function _key(prefix, de, ate, opts) {
+  // Normaliza: aceita teams/regionais como array (multi) ou singular.
+  const o = opts || {};
+  return JSON.stringify({
+    fn:        prefix,
+    de, ate,
+    teams:     Array.isArray(o.teams)     ? [...o.teams].sort()     : o.team_name || null,
+    regionais: Array.isArray(o.regionais) ? [...o.regionais].sort() : o.regional  || null,
+    tipo:      o.tipo  || null,
+    limit:     o.limit || null,
+    somenteLentos: !!o.somenteLentos,
+  });
+}
+
+const listDeslocamentosCached = _memo.wrap(listDeslocamentos,
+  (de, ate, opts) => _key('list', de, ate, opts));
+const rankingEquipesCached    = _memo.wrap(rankingEquipes,
+  (de, ate, opts) => _key('rank', de, ate, opts));
+const tendenciaDiariaCached   = _memo.wrap(tendenciaDiaria,
+  (de, ate, opts) => _key('tend', de, ate, opts));
+
 module.exports = {
-  listDeslocamentos,
-  rankingEquipes,
-  tendenciaDiaria,
+  // Versões cacheadas (uso normal — usado pelos endpoints HTTP)
+  listDeslocamentos: listDeslocamentosCached,
+  rankingEquipes:    rankingEquipesCached,
+  tendenciaDiaria:   tendenciaDiariaCached,
+  // Versões cruas (mantidas pra eventual uso direto sem cache)
+  _listDeslocamentosRaw: listDeslocamentos,
+  _rankingEquipesRaw:    rankingEquipes,
+  _tendenciaDiariaRaw:   tendenciaDiaria,
+  // Resto
   extrairDeslocamentos,
   getThreshold,
   setThresholdCache,
+  _memo,   // exposto pra debug/invalidate manual via rota admin se quiser
 };
