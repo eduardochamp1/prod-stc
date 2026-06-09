@@ -2596,4 +2596,38 @@ router.get('/mapa/equipe', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ── NOTAS DEVOLVIDAS ────────────────────────────────────────────────────────
+// Monitor das notas devolvidas pelo SAP (a serem tratadas pelo backoffice).
+// Snapshot horário via cronService.runNotasCollect → tabelas notas_snapshots
+// + notas_daily_agg. Implementação em db/notasQueries.js.
+
+const notasQueries = require('../db/notasQueries');
+
+function _classif(req) {
+  const c = (req.query.classificacao || 'todas').toLowerCase();
+  return ['todas', 'oficial', 'nova'].includes(c) ? c : 'todas';
+}
+
+router.get('/notas/kpis', async (req, res) => {
+  try { res.json(await notasQueries.getKpis(_classif(req))); }
+  catch (err) { console.error('[notas/kpis]', err.message); res.status(500).json({ error: err.message }); }
+});
+
+router.get('/notas/serie', async (req, res) => {
+  try {
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 30, 1), 365);
+    res.json(await notasQueries.getSerie(dias, _classif(req)));
+  } catch (err) { console.error('[notas/serie]', err.message); res.status(500).json({ error: err.message }); }
+});
+
+router.get('/notas/por-equipe', async (req, res) => {
+  try { res.json(await notasQueries.getPorEquipe(_classif(req))); }
+  catch (err) { console.error('[notas/por-equipe]', err.message); res.status(500).json({ error: err.message }); }
+});
+
+router.get('/notas/equipe/:nome', async (req, res) => {
+  try { res.json(await notasQueries.getNotasDeEquipe(req.params.nome)); }
+  catch (err) { console.error('[notas/equipe]', err.message); res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
