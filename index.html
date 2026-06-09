@@ -4716,11 +4716,6 @@
             <option value="CAC">Cachoeiro</option>
             <option value="SJC">São José dos Campos</option>
           </select>
-          <select id="notas-classif" class="filter-select" onchange="loadNotasAll()" style="min-width:200px">
-            <option value="todas" selected>Todas Engelmig</option>
-            <option value="oficial">Só equipes oficiais</option>
-            <option value="nova">Só novas (revisar whitelist)</option>
-          </select>
         </div>
       </div>
 
@@ -5816,9 +5811,7 @@
       await Promise.all([loadNotasKpis(), loadNotasSerie(), loadNotasPorEquipe()]);
     }
 
-    function _notasClassif() {
-      return document.getElementById('notas-classif').value;
-    }
+    function _notasClassif() { return 'oficial'; }  // único modo agora — só equipes do whitelist
 
     function _notasRegionaisQS() {
       try {
@@ -5894,12 +5887,9 @@
         }
         document.getElementById('notas-tabela-body').innerHTML = rows.map(r => {
           const saldoColor = r.saldo_dia > 0 ? '#dc2626' : (r.saldo_dia < 0 ? '#16a34a' : '#6b7280');
-          const tagNova = r.equipe_oficial === false
-            ? ' <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:3px;margin-left:4px">nova</span>'
-            : '';
           return `
             <tr style="border-bottom:1px solid #f3f4f6;cursor:pointer" onclick="openNotasDrilldown('${r.equipe}')">
-              <td style="padding:8px">${r.equipe}${tagNova}</td>
+              <td style="padding:8px">${r.equipe}</td>
               <td style="padding:8px;text-align:right;font-weight:600">${r.pendentes}</td>
               <td style="padding:8px;text-align:right;color:#dc2626">${r.entraram_hoje > 0 ? '+' + r.entraram_hoje : 0}</td>
               <td style="padding:8px;text-align:right;color:#16a34a">${r.sairam_hoje > 0 ? '-' + r.sairam_hoje : 0}</td>

@@ -33,32 +33,31 @@ const ENGELMIG_COMPANY_IDS = new Set([
  * @param {Map}   teamCompanyId mapa Name → CompanyId vindo de getTeamsSimple
  * @returns {Array} notas filtradas, cada uma com campo extra `_equipe_oficial`
  */
+/**
+ * Mantém só notas de equipes oficiais Engelmig (whitelist `equipesOficiais`).
+ * Notas de equipes Engelmig por CompanyId mas fora do whitelist são descartadas
+ * (logadas como warning pra eventual cadastro futuro).
+ */
 function filterEngelmig(notas, teamCompanyId) {
-  const naoEngelmig = new Map();  // sigla → count (não-Engelmig — só pra observabilidade)
-  const novasNaoOficiais = new Map();  // sigla → count (Engelmig fora do whitelist)
+  const novasDescartadas = new Map();   // sigla → count
   const out = [];
   for (const n of notas) {
     const sigla = n?.Team?.Name;
     if (!sigla) continue;
-    const cid = teamCompanyId.get(sigla);
-    if (!cid || !ENGELMIG_COMPANY_IDS.has(cid)) {
-      naoEngelmig.set(sigla, (naoEngelmig.get(sigla) || 0) + 1);
+    if (!equipesOficiais.isOficial(sigla)) {
+      // Só registra como "candidata a cadastro" se for Engelmig por CompanyId
+      const cid = teamCompanyId.get(sigla);
+      if (cid && ENGELMIG_COMPANY_IDS.has(cid)) {
+        novasDescartadas.set(sigla, (novasDescartadas.get(sigla) || 0) + 1);
+      }
       continue;
     }
-    const oficial = equipesOficiais.isOficial(sigla);
-    if (!oficial) novasNaoOficiais.set(sigla, (novasNaoOficiais.get(sigla) || 0) + 1);
-    n._equipe_oficial = oficial;
+    n._equipe_oficial = true;
     out.push(n);
   }
-  log.info('filter_engelmig', {
-    total_in: notas.length,
-    engelmig_out: out.length,
-    oficiais: out.filter(n => n._equipe_oficial).length,
-    novas: out.filter(n => !n._equipe_oficial).length,
-  });
-  if (novasNaoOficiais.size) {
-    log.warn('equipes_engelmig_fora_do_whitelist',
-      { equipes: Object.fromEntries(novasNaoOficiais) });
+  log.info('filter_engelmig', { total_in: notas.length, oficiais_out: out.length });
+  if (novasDescartadas.size) {
+    log.warn('equipes_candidatas_cadastro', { equipes: Object.fromEntries(novasDescartadas) });
   }
   return out;
 }
