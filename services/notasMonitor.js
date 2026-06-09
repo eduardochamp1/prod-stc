@@ -204,6 +204,38 @@ async function updateDailyAgg(data) {
   return r.rowCount;
 }
 
+/**
+ * Pipeline completo do snapshot:
+ *   1. Busca lista de equipes (com CompanyId) + notas devolvidas em paralelo
+ *   2. Filtra para Engelmig (taggeia oficial/nova)
+ *   3. Grava snapshot
+ *   4. Atualiza agregado do dia
+ *   5. Limpa snapshots > 30 dias
+ */
+async function collectSnapshot() {
+  const t0 = Date.now();
+  const [teams, notas] = await Promise.all([getTeamsSimple(), getNotasDevolvidas()]);
+  const eng       = filterEngelmig(notas, buildTeamCompanyMap(teams));
+  const ts        = new Date().toISOString();
+  const inserted  = await saveSnapshot(eng, ts);
+  const today     = ts.slice(0, 10);
+  await updateDailyAgg(today);
+  const deleted   = await _cleanupOld();
+  const ms        = Date.now() - t0;
+  const stats     = { total: notas.length, engelmig: eng.length, inserted, deleted, ms };
+  log.info('collect_done', stats);
+  return stats;
+}
+
+async function _cleanupOld() {
+  const pool = _getPool();
+  const r = await pool.query(
+    `DELETE FROM notas_snapshots WHERE snapshot_ts < now() - interval '30 days'`
+  );
+  return r.rowCount;
+}
+
 module.exports = {
-  filterEngelmig, buildTeamCompanyMap, saveSnapshot, updateDailyAgg, ENGELMIG_COMPANY_IDS,
+  filterEngelmig, buildTeamCompanyMap, saveSnapshot, updateDailyAgg,
+  collectSnapshot, ENGELMIG_COMPANY_IDS,
 };
