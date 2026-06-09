@@ -1219,10 +1219,14 @@ async function getTeamsBySector(sectorId) {
  * @returns {Promise<Array>} array de notas devolvidas.
  */
 async function getNotasDevolvidas(sectorId = 'DESC') {
-  const res = await wpaFetch(`/api/Notes/NotesStatusFilterBySector?sectorId=${encodeURIComponent(sectorId)}`, {
+  const res = await wpaFetch('/api/Notes/NotesStatusFilterBySector', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({}),
+    headers: {
+      'Content-Type':     'application/x-www-form-urlencoded; charset=UTF-8',
+      'Wpa-Data-Context': 'default',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+    body: `sectorId=${encodeURIComponent(sectorId)}`,
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
