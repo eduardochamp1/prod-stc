@@ -1218,6 +1218,30 @@ async function getTeamsBySector(sectorId) {
  *
  * @returns {Promise<Array>} array de notas devolvidas.
  */
+/**
+ * Lista "leve" de equipes do setor — endpoint usado pelo dropdown de filtros
+ * em /Notes/StatusNotes. Diferente do array em getNotasDevolvidas, este
+ * carrega CompanyId/CompanyName preenchidos, o que permite identificar
+ * a empresa (Engelmig vs EDP própria vs outras terceiras) por equipe.
+ *
+ * @returns {Promise<Array>} cada item tem Name, CompanyId, TeamType, etc.
+ */
+async function getTeamsSimple(sectorId = 'DESC', statusId = 1) {
+  const path = `/api/Teams/Simple?sectorId=${encodeURIComponent(sectorId)}&statusId=${statusId}`;
+  const res  = await wpaFetch(path, {
+    headers: {
+      'Wpa-Data-Context': 'default',
+      'X-Requested-With': 'XMLHttpRequest',
+    },
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`WPA Teams/Simple ${res.status}: ${txt.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  return data?.Data || [];
+}
+
 async function getNotasDevolvidas(sectorId = 'DESC') {
   const res = await wpaFetch('/api/Notes/NotesStatusFilterBySector', {
     method:  'POST',
@@ -1247,6 +1271,7 @@ module.exports = {
   getSessionDetail,
   getNoteDetail,
   getNotasDevolvidas,
+  getTeamsSimple,
   getTeamStatusV2,
   getV2Cached,
   // Principal
