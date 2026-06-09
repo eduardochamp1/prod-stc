@@ -4692,10 +4692,14 @@
               <option value="">Todas</option>
             </select>
           </div>
-          <label class="filter-group" style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;background:rgba(231,76,60,.08);border:1px solid rgba(231,76,60,.3);border-radius:6px;padding:5px 10px" title="Mostrar somente deslocamentos acima do limite configurado (× tempo Maps)">
-            <input type="checkbox" id="desloc-somente-lentos" onchange="loadDeslocamentos()" style="margin:0;cursor:pointer" />
-            <span style="color:#e74c3c;font-weight:600">⚠ Somente acima do limite</span>
-          </label>
+          <div class="filter-group">
+            <span class="filter-label">Acima</span>
+            <select class="filter-select" id="desloc-acima-select" onchange="loadDeslocamentos()" style="min-width:170px">
+              <option value="">Todos</option>
+              <option value="50">⚠ > 50% (e 15min)</option>
+              <option value="100">⚠ > 100% (e 15min)</option>
+            </select>
+          </div>
           <button class="btn-refresh" onclick="loadDeslocamentos()">↻ Atualizar</button>
         </div>
       </div>
@@ -6500,7 +6504,7 @@
       const ate = document.getElementById('desloc-ate-input').value;
       const regionais = MultiSelect.getValues('desloc-regional-select');
       const teams     = MultiSelect.getValues('desloc-equipe-select');
-      const somenteLentos = document.getElementById('desloc-somente-lentos')?.checked || false;
+      const acimaVal = document.getElementById('desloc-acima-select')?.value || '';
       const qs  = new URLSearchParams({ de, ate });
       if (regionais.length === 1)    qs.set('regional', regionais[0]);
       else if (regionais.length > 1) qs.set('regional', regionais.join(','));
@@ -6511,7 +6515,7 @@
       // ~135 deslocamentos/dia podem encostar no teto — nesse caso, restringir
       // por regional/equipe/data resolve.
       qs.set('limit', '5000');
-      if (somenteLentos) qs.set('somenteLentos', 'true');
+      if (acimaVal === '50' || acimaVal === '100') qs.set('acima', acimaVal);
       document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
       return qs.toString();
     }
@@ -6675,8 +6679,8 @@
                   <th>Real</th>
                   <th>Tempo Maps</th>
                   <th>Dist.</th>
-                  <th>Excedente</th>
-                  <th>Desvio</th>
+                  <th>Desvio (min)</th>
+                  <th>Desvio (%)</th>
                 </tr>
               </thead>
               <tbody>${tabela}</tbody>

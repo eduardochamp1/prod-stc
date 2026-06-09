@@ -2511,6 +2511,10 @@ function _parseDeslocFilters(req) {
     // Quando true, retorna so deslocamentos com status='lento' (>1.5x tempo Maps).
     // Afeta lista, ranking e tendencia consistentemente.
     somenteLentos: req.query.somenteLentos === 'true' || req.query.somenteLentos === '1',
+    // 'acima' filtra deslocamentos com desvio>X% E excedente>15min.
+    // Valores aceitos: 50, 100. Null/ausente = sem filtro (todos).
+    acimaPct: (req.query.acima === '50' || req.query.acima === '100')
+      ? Number(req.query.acima) : null,
   };
 }
 

@@ -299,8 +299,21 @@ async function listDeslocamentos(de, ate, opts = {}) {
   // precisamos do status calculado. Quando ativo, total/returned refletem
   // so o subconjunto filtrado — usado nos KPIs/tabela/ranking/tendencia
   // pra apresentar visao focada nos problemas.
+  // Filtro de "acima": null/todos | 50 | 100 (percentual mínimo de desvio).
+  // Sempre exige excedente > 15min (regra de tolerância).
   let finalRows = cut;
-  if (opts.somenteLentos) {
+  if (opts.acimaPct != null) {
+    const pct = Number(opts.acimaPct);
+    const TOL = 15 * 60;
+    finalRows = cut.filter(d =>
+      d.status !== 'sem_osrm'
+      && d.tempo_osrm_sec > 0
+      && d.desvio_pct != null
+      && d.desvio_pct > pct
+      && (d.excedente_sec || 0) > TOL
+    );
+  } else if (opts.somenteLentos) {
+    // backward compat — checkbox antigo
     finalRows = cut.filter(d => d.status === 'lento');
   }
 
@@ -409,6 +422,7 @@ function _key(prefix, de, ate, opts) {
     tipo:      o.tipo  || null,
     limit:     o.limit || null,
     somenteLentos: !!o.somenteLentos,
+    acimaPct:      o.acimaPct != null ? Number(o.acimaPct) : null,
   });
 }
 
