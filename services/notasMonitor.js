@@ -11,6 +11,7 @@
 
 const { getNotasDevolvidas, getTeamsSimple } = require('./wpaService');
 const equipesOficiais                          = require('./equipesOficiais');
+const { _getPool }                             = require('./pgShim');
 const log                                      = require('./logger').forModule('notas');
 
 // CompanyIds que pertencem à Engelmig (descobertos no payload do dropdown
@@ -73,4 +74,52 @@ function buildTeamCompanyMap(teams) {
   return m;
 }
 
-module.exports = { filterEngelmig, buildTeamCompanyMap, ENGELMIG_COMPANY_IDS };
+/**
+ * Persiste o snapshot no banco em batches. Idempotente por PK — re-rodar
+ * com mesmo snapshot_ts não duplica linhas.
+ */
+async function saveSnapshot(notas, snapshotTs) {
+  if (!notas.length) {
+    log.info('snapshot_vazio', { ts: snapshotTs });
+    return 0;
+  }
+  const pool = _getPool();
+  const BATCH = 500;
+  let total = 0;
+  for (let i = 0; i < notas.length; i += BATCH) {
+    const slice  = notas.slice(i, i + BATCH);
+    const values = [];
+    const params = [];
+    slice.forEach((n, idx) => {
+      const base = idx * 10;
+      values.push(`($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10})`);
+      const conclusionDate = n.ConclusionDate && n.ConclusionDate !== '0001-01-01T00:00:00'
+        ? n.ConclusionDate : null;
+      params.push(
+        snapshotTs,
+        n.Number,
+        n.Id || null,
+        n.Type || null,
+        n.Team?.Name || null,
+        n.Status ?? null,
+        conclusionDate,
+        n.ConclusionStatus || null,
+        null,                                      // sap_message — v2
+        n._equipe_oficial === false ? false : true // default true se não taggeado
+      );
+    });
+    const sql = `
+      INSERT INTO notas_snapshots
+        (snapshot_ts, nota_number, nota_id, tipo, equipe, status, conclusion_date,
+         conclusion_status, sap_message, equipe_oficial)
+      VALUES ${values.join(',')}
+      ON CONFLICT (snapshot_ts, nota_number) DO NOTHING
+    `;
+    const r = await pool.query(sql, params);
+    total += r.rowCount;
+  }
+  log.info('snapshot_saved', { ts: snapshotTs, rows: total });
+  return total;
+}
+
+module.exports = { filterEngelmig, buildTeamCompanyMap, saveSnapshot, ENGELMIG_COMPANY_IDS };
