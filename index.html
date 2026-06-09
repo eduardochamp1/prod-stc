@@ -5502,7 +5502,16 @@
       function _renderItems(inst) {
         const realOpts = inst.items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
         const allChecked = _isAllSelected(inst);
+        const searchVal = inst._search || '';
+        const searchLc  = searchVal.trim().toLowerCase();
+        const filtered  = searchLc
+          ? realOpts.filter(o => o.label.toLowerCase().includes(searchLc) || o.value.toLowerCase().includes(searchLc))
+          : realOpts;
         let html = `
+          <div class="ms-search-wrap" style="padding:6px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb;position:sticky;top:0;z-index:1">
+            <input type="text" class="ms-search" placeholder="🔍 Buscar…" value="${escapeHtml(searchVal)}"
+              style="width:100%;padding:4px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;box-sizing:border-box" />
+          </div>
           <div class="ms-item ms-item-all">
             <label>
               <input type="checkbox" class="ms-cb-all" ${allChecked ? 'checked' : ''}/>
@@ -5511,9 +5520,11 @@
           </div>
           <div class="ms-divider"></div>
         `;
-        for (const o of realOpts) {
+        if (filtered.length === 0) {
+          html += `<div style="padding:12px;color:#9ca3af;font-size:12px;text-align:center">nenhum resultado</div>`;
+        }
+        for (const o of filtered) {
           const checked = inst.selected.has(o.value);
-          // Suporta grupo (optgroup) — se o option pai tem data-group, agrupa
           html += `
             <div class="ms-item">
               <label>
@@ -5524,6 +5535,21 @@
           `;
         }
         inst.listEl.innerHTML = html;
+
+        const searchInput = inst.listEl.querySelector('.ms-search');
+        if (searchInput) {
+          searchInput.oninput = (e) => {
+            inst._search = e.target.value;
+            _renderItems(inst);
+            // mantém foco no input após re-render
+            const newInput = inst.listEl.querySelector('.ms-search');
+            if (newInput) {
+              newInput.focus();
+              newInput.setSelectionRange(newInput.value.length, newInput.value.length);
+            }
+          };
+          searchInput.onclick = (e) => e.stopPropagation();
+        }
 
         inst.listEl.querySelector('.ms-cb-all').onchange = (e) => {
           if (e.target.checked) {
@@ -6548,7 +6574,7 @@
         const w = (100 * pct / rankMax).toFixed(1);
         const color = r.desvio_medio_pct > 50 ? '#e74c3c' : (r.desvio_medio_pct > 20 ? '#f39c12' : '#27ae60');
         return `
-          <div class="desloc-bar-row" onclick="document.getElementById('desloc-equipe-select').value='${r.team_name}'; loadDeslocamentos()">
+          <div class="desloc-bar-row" onclick="MultiSelect.setValues('desloc-equipe-select', ['${r.team_name}']); loadDeslocamentos()">
             <div class="desloc-bar-label">${r.team_name} <span style="font-size:10px;opacity:.5">${r.regional || ''}</span></div>
             <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${w}%;background:${color}"></div></div>
             <div class="desloc-bar-count">${r.desvio_medio_pct}% <span style="font-size:10px;opacity:.6">(${r.lentos}/${r.total_desloc})</span></div>
