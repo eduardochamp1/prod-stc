@@ -4324,6 +4324,7 @@
       <button class="tab-btn active" id="tab-btn-monitor" onclick="switchTab('monitor')">📊 Monitor</button>
       <button class="tab-btn" id="tab-btn-rejeicoes" onclick="switchTab('rejeicoes')">🚫 Rejeições</button>
       <button class="tab-btn" id="tab-btn-desloc" onclick="switchTab('desloc')">📍 Deslocamentos</button>
+      <button class="tab-btn" id="tab-btn-notas" onclick="switchTab('notas')">📝 Notas</button>
       <button class="tab-btn" id="tab-btn-graficos" onclick="switchTab('graficos')">📈 Gráficos</button>
       <button class="tab-btn" id="tab-btn-ranking" onclick="switchTab('ranking')">🏆 Ranking</button>
       <button class="tab-btn" id="tab-btn-mapa" onclick="switchTab('mapa')">🗺️ Mapa</button>
@@ -4700,6 +4701,53 @@
       </div>
       <div id="desloc-content">
         <div class="empty-state" style="font-size:12px">Carregando…</div>
+      </div>
+    </div>
+
+    <!-- ── TAB: NOTAS DEVOLVIDAS ─────────────────────────────────────────── -->
+    <div class="tab-panel" id="tab-notas">
+      <div class="filter-bar" style="display:flex;justify-content:space-between;align-items:center">
+        <div class="date-label">Notas devolvidas — atualizado a cada hora (xx:05)</div>
+        <select id="notas-classif" class="filter-select" onchange="loadNotasAll()" style="min-width:200px">
+          <option value="todas" selected>Todas Engelmig</option>
+          <option value="oficial">Só equipes oficiais</option>
+          <option value="nova">Só novas (revisar whitelist)</option>
+        </select>
+      </div>
+
+      <!-- KPI cards -->
+      <div id="notas-kpis" style="display:flex;gap:12px;margin:16px 0;flex-wrap:wrap"></div>
+
+      <!-- Gráfico -->
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <strong>Evolução do backlog</strong>
+          <select id="notas-serie-dias" onchange="loadNotasSerie()" class="filter-select" style="width:120px">
+            <option value="7">7 dias</option>
+            <option value="30" selected>30 dias</option>
+            <option value="90">90 dias</option>
+          </select>
+        </div>
+        <canvas id="notas-chart" height="80"></canvas>
+      </div>
+
+      <!-- Tabela por equipe -->
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
+        <strong>Por equipe</strong>
+        <div style="font-size:12px;color:#6b7280;margin-top:4px">Clique numa linha pra ver as notas pendentes daquela equipe.</div>
+        <table id="notas-tabela" style="width:100%;margin-top:12px;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="text-align:left;border-bottom:2px solid #e5e7eb;background:#f9fafb">
+              <th style="padding:8px">Equipe</th>
+              <th style="padding:8px;text-align:right">Pendentes</th>
+              <th style="padding:8px;text-align:right">Entraram hoje</th>
+              <th style="padding:8px;text-align:right">Saíram hoje</th>
+              <th style="padding:8px;text-align:right">Saldo dia</th>
+              <th style="padding:8px;text-align:right">Mais antiga (dias)</th>
+            </tr>
+          </thead>
+          <tbody id="notas-tabela-body"><tr><td colspan="6" style="padding:16px;color:#9ca3af">Carregando…</td></tr></tbody>
+        </table>
       </div>
     </div>
 
@@ -5742,6 +5790,126 @@
       if (tab === 'mapa') initMapa();
       if (tab === 'rejeicoes') initRejeicoes();
       if (tab === 'desloc') initDeslocamentos();
+      if (tab === 'notas') initNotas();
+    }
+
+    // ── NOTAS DEVOLVIDAS ──────────────────────────────────────────────────────
+    let notasChart = null;
+
+    function initNotas() { loadNotasAll(); }
+
+    async function loadNotasAll() {
+      await Promise.all([loadNotasKpis(), loadNotasSerie(), loadNotasPorEquipe()]);
+    }
+
+    function _notasClassif() {
+      return document.getElementById('notas-classif').value;
+    }
+
+    async function loadNotasKpis() {
+      try {
+        const r = await fetch(`/api/notas/kpis?classificacao=${_notasClassif()}`);
+        const k = await r.json();
+        const delta = k.delta_24h ?? 0;
+        const cards = [
+          { label: 'Pendentes agora', val: k.pendentes_agora ?? 0, sub: `${k.equipes_afetadas ?? 0} equipes` },
+          { label: 'Δ últimas 24h', val: (delta > 0 ? '+' : '') + delta,
+            color: delta > 0 ? '#dc2626' : (delta < 0 ? '#16a34a' : '#111') },
+          { label: 'Tratadas hoje', val: k.tratadas_hoje ?? 0, color: '#16a34a' },
+          { label: 'Entraram hoje', val: k.entraram_hoje ?? 0, color: '#dc2626' },
+        ];
+        document.getElementById('notas-kpis').innerHTML = cards.map(c => `
+          <div style="flex:1;min-width:160px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
+            <div style="font-size:12px;color:#6b7280">${c.label}</div>
+            <div style="font-size:28px;font-weight:700;color:${c.color || '#111'};margin-top:4px">${c.val}</div>
+            ${c.sub ? `<div style="font-size:11px;color:#9ca3af;margin-top:2px">${c.sub}</div>` : ''}
+          </div>`).join('');
+      } catch (e) { console.error('loadNotasKpis', e); }
+    }
+
+    async function loadNotasSerie() {
+      try {
+        const dias = document.getElementById('notas-serie-dias').value;
+        const r = await fetch(`/api/notas/serie?dias=${dias}&classificacao=${_notasClassif()}`);
+        const data = await r.json();
+        const ctx = document.getElementById('notas-chart').getContext('2d');
+        if (notasChart) notasChart.destroy();
+        notasChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: data.map(d => (d.data || '').slice(0, 10)),
+            datasets: [{
+              label: 'Pendentes',
+              data: data.map(d => d.pendentes),
+              borderColor: '#2563eb',
+              backgroundColor: 'rgba(37,99,235,.1)',
+              fill: true, tension: 0.2,
+            }],
+          },
+          options: { responsive: true, plugins: { legend: { display: false } } },
+        });
+      } catch (e) { console.error('loadNotasSerie', e); }
+    }
+
+    async function loadNotasPorEquipe() {
+      try {
+        const r = await fetch(`/api/notas/por-equipe?classificacao=${_notasClassif()}`);
+        const rows = await r.json();
+        if (!rows.length) {
+          document.getElementById('notas-tabela-body').innerHTML =
+            '<tr><td colspan="6" style="padding:16px;color:#9ca3af">Sem dados.</td></tr>';
+          return;
+        }
+        document.getElementById('notas-tabela-body').innerHTML = rows.map(r => {
+          const saldoColor = r.saldo_dia > 0 ? '#dc2626' : (r.saldo_dia < 0 ? '#16a34a' : '#6b7280');
+          const tagNova = r.equipe_oficial === false
+            ? ' <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:3px;margin-left:4px">nova</span>'
+            : '';
+          return `
+            <tr style="border-bottom:1px solid #f3f4f6;cursor:pointer" onclick="openNotasDrilldown('${r.equipe}')">
+              <td style="padding:8px">${r.equipe}${tagNova}</td>
+              <td style="padding:8px;text-align:right;font-weight:600">${r.pendentes}</td>
+              <td style="padding:8px;text-align:right;color:#dc2626">+${r.entraram_hoje}</td>
+              <td style="padding:8px;text-align:right;color:#16a34a">-${r.sairam_hoje}</td>
+              <td style="padding:8px;text-align:right;font-weight:600;color:${saldoColor}">${r.saldo_dia > 0 ? '+' : ''}${r.saldo_dia}</td>
+              <td style="padding:8px;text-align:right">${r.nota_mais_antiga_dias}</td>
+            </tr>`;
+        }).join('');
+      } catch (e) { console.error('loadNotasPorEquipe', e); }
+    }
+
+    async function openNotasDrilldown(equipe) {
+      try {
+        const r = await fetch(`/api/notas/equipe/${encodeURIComponent(equipe)}`);
+        const notas = await r.json();
+        const win = window.open('', '_blank', 'width=900,height=700');
+        win.document.write(`
+          <html><head><title>${equipe} — ${notas.length} notas pendentes</title>
+          <style>
+            body{font-family:system-ui,-apple-system,sans-serif;padding:20px;color:#111}
+            h2{margin-top:0}
+            table{width:100%;border-collapse:collapse;font-size:13px}
+            th,td{padding:8px;border-bottom:1px solid #e5e7eb;text-align:left}
+            th{background:#f9fafb}
+            .num{text-align:right;font-variant-numeric:tabular-nums}
+          </style></head><body>
+          <h2>${equipe} — ${notas.length} notas pendentes</h2>
+          <table>
+            <thead><tr>
+              <th>Número</th><th>Tipo</th><th>Concluída em</th><th>Status</th><th class="num">Dias parada</th>
+            </tr></thead>
+            <tbody>
+              ${notas.map(n => `<tr>
+                <td>${n.nota_number}</td>
+                <td>${n.tipo || ''}</td>
+                <td>${n.conclusion_date ? new Date(n.conclusion_date).toLocaleString('pt-BR') : '—'}</td>
+                <td>${n.conclusion_status || ''}</td>
+                <td class="num">${Math.round(parseFloat(n.dias_parada) || 0)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table></body></html>
+        `);
+      } catch (e) { console.error('openNotasDrilldown', e); }
     }
 
     // ── REJEIÇÕES ─────────────────────────────────────────────────────────────
