@@ -1207,6 +1207,28 @@ async function getTeamsBySector(sectorId) {
   return augmented;
 }
 
+/**
+ * Busca todas as notas atualmente em "Tratar Notas" (devolvidas/pendentes de
+ * tratamento pelo backoffice). Endpoint descoberto via DevTools em
+ * edp-wpa-po.azurewebsites.net/Notes/StatusNotes.
+ *
+ * Retorna o array bruto de `Data` — o caller é responsável por filtrar equipes.
+ * Cada item tem Number, Type, Team.Name, Status, ConclusionDate,
+ * ConclusionStatus, Id, e dezenas de outros campos (muitos null na listagem).
+ *
+ * @returns {Promise<Array>} array de notas devolvidas.
+ */
+async function getNotasDevolvidas() {
+  const res = await wpaFetch('/api/Notes/NotesStatusFilterBySector', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({}),   // payload vazio — backend usa contexto da sessão
+  });
+  if (!res.ok) throw new Error(`WPA NotesStatusFilterBySector ${res.status}`);
+  const data = await res.json();
+  return data?.Data || [];
+}
+
 module.exports = {
   login,
   getToken,
@@ -1217,6 +1239,7 @@ module.exports = {
   getSessions,
   getSessionDetail,
   getNoteDetail,
+  getNotasDevolvidas,
   getTeamStatusV2,
   getV2Cached,
   // Principal
