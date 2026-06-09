@@ -4728,7 +4728,7 @@
             <option value="90">90 dias</option>
           </select>
         </div>
-        <canvas id="notas-chart" height="80"></canvas>
+        <div id="notas-chart" style="width:100%;min-height:180px"></div>
       </div>
 
       <!-- Tabela por equipe -->
@@ -5794,8 +5794,6 @@
     }
 
     // ── NOTAS DEVOLVIDAS ──────────────────────────────────────────────────────
-    let notasChart = null;
-
     function initNotas() { loadNotasAll(); }
 
     async function loadNotasAll() {
@@ -5832,22 +5830,30 @@
         const dias = document.getElementById('notas-serie-dias').value;
         const r = await fetch(`/api/notas/serie?dias=${dias}&classificacao=${_notasClassif()}`);
         const data = await r.json();
-        const ctx = document.getElementById('notas-chart').getContext('2d');
-        if (notasChart) notasChart.destroy();
-        notasChart = new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: data.map(d => (d.data || '').slice(0, 10)),
-            datasets: [{
-              label: 'Pendentes',
-              data: data.map(d => d.pendentes),
-              borderColor: '#2563eb',
-              backgroundColor: 'rgba(37,99,235,.1)',
-              fill: true, tension: 0.2,
-            }],
-          },
-          options: { responsive: true, plugins: { legend: { display: false } } },
-        });
+        const host = document.getElementById('notas-chart');
+        if (!data.length) { host.innerHTML = '<div style="padding:24px;color:#9ca3af;text-align:center">Sem dados históricos ainda — o gráfico vai crescer a cada snapshot horário.</div>'; return; }
+        const W = 1000, H = 200, PAD = 32;
+        const max = Math.max(...data.map(d => d.pendentes), 1);
+        const xs = (i) => PAD + (i * (W - 2*PAD)) / Math.max(data.length - 1, 1);
+        const ys = (v) => H - PAD - (v * (H - 2*PAD)) / max;
+        const pts = data.map((d, i) => `${xs(i)},${ys(d.pendentes)}`).join(' ');
+        const area = `${PAD},${H-PAD} ${pts} ${xs(data.length-1)},${H-PAD}`;
+        const labels = data.map((d, i) => {
+          if (data.length > 1 && (i === 0 || i === data.length-1 || i === Math.floor(data.length/2))) {
+            const dt = (d.data || '').slice(0, 10);
+            return `<text x="${xs(i)}" y="${H-8}" font-size="10" fill="#6b7280" text-anchor="middle">${dt}</text>`;
+          }
+          return '';
+        }).join('');
+        host.innerHTML = `
+          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:200px;display:block">
+            <polygon points="${area}" fill="rgba(37,99,235,.1)" />
+            <polyline points="${pts}" fill="none" stroke="#2563eb" stroke-width="2" />
+            ${data.map((d, i) => `<circle cx="${xs(i)}" cy="${ys(d.pendentes)}" r="3" fill="#2563eb"><title>${(d.data||'').slice(0,10)}: ${d.pendentes}</title></circle>`).join('')}
+            <text x="${PAD}" y="${PAD-8}" font-size="10" fill="#6b7280">${max}</text>
+            <text x="${PAD}" y="${H-PAD+4}" font-size="10" fill="#6b7280">0</text>
+            ${labels}
+          </svg>`;
       } catch (e) { console.error('loadNotasSerie', e); }
     }
 
