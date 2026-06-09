@@ -973,16 +973,21 @@ function normalizarColaborador(c) {
  *   4. Aplica acumulador diário como segurança
  */
 async function getTeamsBySector(sectorId) {
-  // Paralelo: sessions/current + V2 (via cache para evitar chamadas duplicadas)
+  // IMPORTANTE: usamos getSessionsByDate com data BRT explícita em vez de
+  // getSessions ('today') porque a EDP usa "today" em UTC. Servidor em UTC
+  // + EDP em UTC = após 21h BRT (00h UTC), /api/Sessions/today já retorna
+  // sessões de "amanhã" UTC = só plantão noturno (≈ 17 equipes em vez de 128).
+  // Bug exposto em 08/06/2026 às 21h BRT quando carteira inicial do dia caiu
+  // pra valor minúsculo enquanto KPIs do dia inteiro ainda apareciam corretos.
+  const todayBRT = dateBRT();
   const [sessions, statusList] = await Promise.all([
-    getSessions(sectorId),
+    getSessionsByDate(sectorId, todayBRT),
     getV2Cached(sectorId),
   ]);
 
   // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current).
   // Não filtramos por data: sessões abertas de dias anteriores (equipe esqueceu de encerrar)
   // devem aparecer — a data de início fica visível no card para identificação.
-  const todayBRT = dateBRT();
 
   const allEngelmig     = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
   const engelmigSessions = allEngelmig; // sem corte de data — todas as sessões abertas
