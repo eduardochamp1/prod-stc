@@ -171,9 +171,18 @@ async function updateDailyAgg(data) {
        GROUP BY td.equipe, coalesce(td.regional,'?')
     ),
     sai AS (
+      -- Saídas = qualquer nota que esteve presente em ALGUM momento (último de
+      -- ontem OU qualquer snapshot de hoje) e NÃO está no último snapshot do dia.
+      -- Captura também notas que entraram e foram tratadas no mesmo dia (churn
+      -- intra-day). Garante simetria com entraram: variacao = entraram - sairam.
       SELECT equipe, coalesce(regional,'?') AS regional, count(*) AS sairam_no_dia
-        FROM ult_anterior ua
-       WHERE NOT EXISTS (SELECT 1 FROM ult_dia ud WHERE ud.nota_number = ua.nota_number)
+        FROM (
+          SELECT DISTINCT nota_number, equipe, regional FROM notas_snapshots
+           WHERE snapshot_ts >= $1::date AND snapshot_ts < ($1::date + interval '1 day')
+          UNION
+          SELECT DISTINCT nota_number, equipe, regional FROM ult_anterior
+        ) u
+       WHERE NOT EXISTS (SELECT 1 FROM ult_dia ud WHERE ud.nota_number = u.nota_number)
        GROUP BY equipe, coalesce(regional,'?')
     ),
     todas_equipes AS (
