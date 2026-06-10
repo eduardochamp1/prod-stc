@@ -2636,6 +2636,13 @@ router.get('/notas/serie', async (req, res) => {
   } catch (err) { console.error('[notas/serie]', err.message); res.status(500).json({ error: err.message }); }
 });
 
+router.get('/notas/serie-horaria', async (req, res) => {
+  try {
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 30);
+    res.json(await notasQueries.getSerieHoraria(dias, _classif(req), _regionais(req)));
+  } catch (err) { console.error('[notas/serie-horaria]', err.message); res.status(500).json({ error: err.message }); }
+});
+
 router.get('/notas/por-equipe', async (req, res) => {
   try { res.json(await notasQueries.getPorEquipe(_classif(req), _regionais(req))); }
   catch (err) { console.error('[notas/por-equipe]', err.message); res.status(500).json({ error: err.message }); }

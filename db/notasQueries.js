@@ -125,6 +125,27 @@ async function getPorEquipe(classificacao = 'todas', regionais = null) {
   return r.rows;
 }
 
+/**
+ * Série horária: 1 ponto por snapshot_ts. Cada ponto é o backlog naquele
+ * instante (count das linhas com aquele snapshot_ts e filtros aplicados).
+ * Limitada a 30 dias pra não explodir resposta (720 pontos máx).
+ */
+async function getSerieHoraria(dias = 7, classificacao = 'todas', regionais = null) {
+  const pool = _getPool();
+  const cf = _classifClause(classificacao);
+  const r1 = _regionalParam(regionais, 2);
+  const params = r1.param ? [dias, r1.param] : [dias];
+  const sql = `
+    SELECT snapshot_ts AS ts, count(*)::int AS pendentes
+      FROM notas_snapshots
+     WHERE snapshot_ts >= now() - ($1::int * interval '1 day') ${cf} ${r1.clause}
+     GROUP BY snapshot_ts
+     ORDER BY snapshot_ts
+  `;
+  const r = await pool.query(sql, params);
+  return r.rows;
+}
+
 async function getNotasDeEquipe(equipe) {
   const pool = _getPool();
   const sql = `
@@ -139,4 +160,4 @@ async function getNotasDeEquipe(equipe) {
   return r.rows;
 }
 
-module.exports = { getKpis, getSerie, getPorEquipe, getNotasDeEquipe };
+module.exports = { getKpis, getSerie, getSerieHoraria, getPorEquipe, getNotasDeEquipe };

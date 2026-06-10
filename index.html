@@ -5899,45 +5899,69 @@
 
     async function loadNotasSerie() {
       try {
-        const dias = document.getElementById('notas-serie-dias').value;
-        const r = await fetch(`/api/notas/serie?dias=${dias}&classificacao=${_notasClassif()}${_notasRegionaisQS()}`);
-        const data = await r.json();
-        const host = document.getElementById('notas-chart');
+        const diasDaily = document.getElementById('notas-serie-dias').value;
+        // Gráfico horário tem limite de 30d (controlled no backend)
+        const diasHourly = Math.min(parseInt(diasDaily, 10) || 7, 30);
+        const qsCommon = `classificacao=${_notasClassif()}${_notasRegionaisQS()}`;
+        const [dataHourly, dataDaily] = await Promise.all([
+          fetch(`/api/notas/serie-horaria?dias=${diasHourly}&${qsCommon}`).then(r => r.json()),
+          fetch(`/api/notas/serie?dias=${diasDaily}&${qsCommon}`).then(r => r.json()),
+        ]);
+        const host  = document.getElementById('notas-chart');
         const tbody = document.getElementById('notas-historico-body');
-        if (!data.length) {
-          host.innerHTML = '<div style="padding:24px;color:#9ca3af;text-align:center">Sem dados históricos ainda — o gráfico vai crescer a cada snapshot horário.</div>';
-          if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#9ca3af">Sem dados.</td></tr>';
-          return;
+
+        // ── Gráfico horário ──────────────────────────────────────────────────
+        if (!dataHourly.length) {
+          host.innerHTML = '<div style="padding:24px;color:#9ca3af;text-align:center">Sem snapshots ainda — o gráfico aparece após a primeira coleta horária.</div>';
+        } else {
+          const W = 1000, H = 220, PAD_L = 44, PAD_R = 16, PAD_T = 16, PAD_B = 32;
+          const innerW = W - PAD_L - PAD_R;
+          const innerH = H - PAD_T - PAD_B;
+          const vals = dataHourly.map(d => d.pendentes || 0);
+          const minV = Math.min(...vals);
+          const maxV = Math.max(...vals);
+          // Escala "zoom" — Y começa um pouco abaixo do min pra valorizar a variação
+          const yMin = Math.max(0, Math.floor(minV * 0.95));
+          const yMax = Math.max(maxV + 1, yMin + 1);
+          const n = dataHourly.length;
+          const xs = (i) => n === 1 ? PAD_L + innerW / 2 : PAD_L + (i * innerW) / (n - 1);
+          const ys = (v) => PAD_T + innerH - ((v - yMin) * innerH) / (yMax - yMin);
+          const pts = dataHourly.map((d, i) => `${xs(i)},${ys(d.pendentes || 0)}`).join(' ');
+          const areaPts = `${PAD_L},${PAD_T + innerH} ${pts} ${PAD_L + innerW},${PAD_T + innerH}`;
+          // Eixo X: 5 labels distribuídas
+          const labelIdx = new Set();
+          for (let k = 0; k < 5; k++) labelIdx.add(Math.floor(k * (n - 1) / 4));
+          const labels = dataHourly.map((d, i) => {
+            if (!labelIdx.has(i)) return '';
+            const dt = new Date(d.ts);
+            const fmt = dt.toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+            return `<text x="${xs(i)}" y="${H - 10}" font-size="10" fill="#6b7280" text-anchor="middle">${fmt}</text>`;
+          }).join('');
+          host.innerHTML = `
+            <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:220px;display:block">
+              <polygon points="${areaPts}" fill="rgba(37,99,235,.08)" />
+              <polyline points="${pts}" fill="none" stroke="#2563eb" stroke-width="2" />
+              ${dataHourly.map((d, i) => {
+                const tip = `${new Date(d.ts).toLocaleString('pt-BR')}: ${d.pendentes||0}`;
+                return `<circle cx="${xs(i)}" cy="${ys(d.pendentes||0)}" r="2.5" fill="#2563eb"><title>${tip}</title></circle>`;
+              }).join('')}
+              <text x="${PAD_L - 4}" y="${PAD_T + 4}" font-size="10" fill="#6b7280" text-anchor="end">${yMax}</text>
+              <text x="${PAD_L - 4}" y="${PAD_T + innerH + 4}" font-size="10" fill="#6b7280" text-anchor="end">${yMin}</text>
+              ${labels}
+            </svg>
+            <div style="font-size:11px;color:#9ca3af;margin-top:4px;text-align:center">
+              Snapshot horário · ${n} ponto${n === 1 ? '' : 's'} · últimos ${diasHourly}d
+            </div>`;
         }
 
-        // ── Gráfico: linha simples do backlog ────────────────────────────────
-        const W = 1000, H = 200, PAD_L = 40, PAD_R = 16, PAD_T = 16, PAD_B = 28;
-        const innerW = W - PAD_L - PAD_R;
-        const innerH = H - PAD_T - PAD_B;
-        const maxV = Math.max(...data.map(d => d.pendentes || 0), 1);
-        const n = data.length;
-        const xs = (i) => n === 1 ? PAD_L + innerW / 2 : PAD_L + (i * innerW) / (n - 1);
-        const ys = (v) => PAD_T + innerH - (v * innerH) / maxV;
-        const pts = data.map((d, i) => `${xs(i)},${ys(d.pendentes || 0)}`).join(' ');
-        const areaPts = `${PAD_L},${PAD_T + innerH} ${pts} ${PAD_L + innerW},${PAD_T + innerH}`;
-        const labels = data.map((d, i) => {
-          if (n > 1 && (i === 0 || i === n - 1 || i === Math.floor(n / 2))) {
-            return `<text x="${xs(i)}" y="${H - 8}" font-size="10" fill="#6b7280" text-anchor="middle">${(d.data || '').slice(0, 10)}</text>`;
-          }
-          return '';
-        }).join('');
-        host.innerHTML = `
-          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:200px;display:block">
-            <polygon points="${areaPts}" fill="rgba(37,99,235,.1)" />
-            <polyline points="${pts}" fill="none" stroke="#2563eb" stroke-width="2" />
-            ${data.map((d, i) => `<circle cx="${xs(i)}" cy="${ys(d.pendentes || 0)}" r="3" fill="#2563eb"><title>${(d.data||'').slice(0,10)}: ${d.pendentes||0}</title></circle>`).join('')}
-            <text x="${PAD_L - 4}" y="${PAD_T + 4}" font-size="10" fill="#6b7280" text-anchor="end">${maxV}</text>
-            <text x="${PAD_L - 4}" y="${PAD_T + innerH + 4}" font-size="10" fill="#6b7280" text-anchor="end">0</text>
-            ${labels}
-          </svg>`;
-
         // ── Tabela "Histórico diário" — ordem descendente ────────────────────
-        if (tbody) {
+        const data = dataDaily;
+        if (!tbody) return;
+        if (!data.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#9ca3af">Sem dados.</td></tr>';
+          return;
+        }
+        {
           // O backend retorna em ordem ASC por data. Iniciou = pendentes_fim_dia
           // do dia anterior (null se for o primeiro registro).
           const sorted = [...data].sort((a, b) => String(b.data).localeCompare(String(a.data)));
