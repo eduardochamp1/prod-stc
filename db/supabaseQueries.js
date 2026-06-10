@@ -34,6 +34,7 @@
 const { getClient } = require('../services/supabaseClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
 const { dateBRT } = require('../services/timeUtil');
+const { applyRegional } = require('../services/regionalGroups');
 
 /**
  * Filtra um array de linhas mantendo só registros de equipes oficiais.
@@ -188,7 +189,7 @@ async function getTeamsFromSupabase(filters = {}) {
     .filter('data->>date', 'gte', cutoff7);
 
   if (filters.regional && filters.regional !== 'ALL') {
-    query = query.eq('regional', filters.regional);
+    query = applyRegional(query, filters.regional);
   }
 
   const { data, error } = await query.order('team_name');
@@ -225,7 +226,7 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
       .gte('date', de)
       .lte('date', ateExpand)
       .order('captured_at', { ascending: false });
-    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     return q;
   });
   // Aplica whitelist: só equipes oficiais entram no histórico
@@ -399,7 +400,7 @@ async function getSubcatMonthTotals(yearMonth, regional) {
       sb.from('team_daily_subcat_totals').select('team_name, regional, tipo, sub_code, count, quantidade'),
       yearMonth
     );
-    if (regional) q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     return q;
   });
 
@@ -426,7 +427,7 @@ async function getSubcatDailyHistory(yearMonth, regional) {
       sb.from('team_daily_subcat_totals').select('date, team_name, regional, tipo, sub_code, count, quantidade'),
       yearMonth
     ).order('date');
-    if (regional) q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     return q;
   });
 
@@ -457,7 +458,7 @@ async function getSubcatTeamRanking(yearMonth, regional, tipo, subCode) {
       sb.from('team_daily_subcat_totals').select('team_name, regional, sector_id, tipo, sub_code, count, quantidade'),
       yearMonth
     );
-    if (regional) q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     if (tipo)     q = q.eq('tipo', tipo);
     if (subCode)  q = q.eq('sub_code', subCode);
     return q;
@@ -493,7 +494,7 @@ async function getTeamRanking(yearMonth, regional) {
       sb.from('team_daily_totals').select('team_name, regional, sector_id, tipo_code, count'),
       yearMonth
     );
-    if (regional && regional !== 'ALL') query = query.eq('regional', regional);
+    query = applyRegional(query, regional);
     return query;
   });
 
@@ -556,7 +557,7 @@ async function getTeamProducao(filters = {}) {
       .select('team_name, regional, sector_id, tipo_code, count');
     if (filters.de)                                     query = query.gte('date', filters.de);
     if (filters.ate)                                    query = query.lte('date', filters.ate);
-    if (filters.regional && filters.regional !== 'ALL') query = query.eq('regional', filters.regional);
+    query = applyRegional(query, filters.regional);
     if (filters.team     && filters.team     !== 'ALL') query = query.eq('team_name', filters.team);
     return query.order('team_name');
   });
@@ -600,7 +601,7 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
       .lte('date', ate)
       .order('captured_at', { ascending: false });
     if (teamName && teamName !== 'ALL') q = q.eq('team_name', teamName);
-    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     return q;
   });
 
@@ -721,7 +722,7 @@ async function getDailySubcatTotals(de, ate, regional, team) {
       .gte('date', de)
       .lte('date', ate);
     if (regionaisArr)                            query = query.in('regional', regionaisArr);
-    else if (regional && regional !== 'ALL')     query = query.eq('regional', regional);
+    else                                         query = applyRegional(query, regional);
     if (teamsArr)                                query = query.in('team_name', teamsArr);
     else if (team && team !== 'ALL')             query = query.eq('team_name', team);
     return query;
@@ -836,7 +837,7 @@ async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
       .lte('date', ate)
       .order('date')
       .range(page * PAGE, (page + 1) * PAGE - 1);
-    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     const { data, error } = await q;
     if (error) throw new Error(`[export] ${tableName}: ${error.message}`);
     if (!data || data.length === 0) break;
@@ -924,7 +925,7 @@ async function getNotasIndividuais(de, ate, regional) {
       .select('team_name, regional, sector_id, captured_at, date, data')
       .gte('date', de).lte('date', ate)
       .order('captured_at', { ascending: false });
-    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     return q;
   });
 
@@ -1043,7 +1044,7 @@ async function getPerformanceEquipes(de, ate, regional, tipo, team) {
     if (de)                                     query = query.gte('date', de);
     if (ate)                                    query = query.lte('date', ate);
     if (regionaisArr)                           query = query.in('regional', regionaisArr);
-    else if (regional && regional !== 'ALL')    query = query.eq('regional', regional);
+    else                                        query = applyRegional(query, regional);
     if (teamsArr)                               query = query.in('team_name', teamsArr);
     else if (team && team !== 'ALL')            query = query.eq('team_name', team);
     return query;
@@ -1285,7 +1286,7 @@ async function _fetchRejeicoes({ de, ate, regional, regionais, team, teams, tipo
     // Aceita tanto valor único (regional/team) quanto array (regionais/teams).
     // Quando array com 1 só, vira eq; com 2+, vira in.
     if (Array.isArray(regionais) && regionais.length > 0)      q = q.in('regional', regionais);
-    else if (regional && regional !== 'ALL')                    q = q.eq('regional', regional);
+    else                                                        q = applyRegional(q, regional);
     if (Array.isArray(teams) && teams.length > 0)               q = q.in('team_name', teams);
     else if (team && team !== 'ALL')                            q = q.eq('team_name', team);
     if (Array.isArray(tipos) && tipos.length > 0)               q = q.in('tipo', tipos);
@@ -1440,7 +1441,7 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
       .select('team_name, regional, count')
       .gte('date', de)
       .lte('date', ate);
-    if (regional && regional !== 'ALL') q = q.eq('regional', regional);
+    q = applyRegional(q, regional);
     if (opts.team && opts.team !== 'ALL') q = q.eq('team_name', opts.team);
     return q;
   });

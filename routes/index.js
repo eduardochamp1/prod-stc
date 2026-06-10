@@ -7,6 +7,7 @@ const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
 const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail } = require('../services/wpaService');
 const { dateBRT } = require('../services/timeUtil');
+const { applyRegional, expandRegional } = require('../services/regionalGroups');
 
 // ── VALIDADORES DE PARAMS ─────────────────────────────────────────────────────
 const _RE_YYYYMM    = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -132,20 +133,22 @@ async function _resolveTeamRegional(sigla) {
  */
 async function enforceTeamRegional(req, res, team) {
   if (!team || team === 'ALL') return true;
-  if (!req.user || !req.user.regional || req.user.regional === 'ALL') return true;
-  // Múltiplas siglas (CSV) — bloqueia se QUALQUER uma não for da regional
+  if (!req.user || !req.user.regional) return true;
+  // Expande grupos: ES → ['GUA','CAC']. Sigla simples vira [sigla]. ALL → null (passa).
+  const userRegs = expandRegional(req.user.regional);
+  if (!userRegs) return true;  // ALL ou similar — sem filtro
+  // Múltiplas siglas (CSV) — bloqueia se QUALQUER uma não for da(s) regional(is)
   const teams = String(team).split(',').map(s => s.trim()).filter(Boolean);
   for (const t of teams) {
     const reg = await _resolveTeamRegional(t);
     // Bloqueia em 2 casos:
     //   1. Sigla desconhecida (não está em equipes_oficiais) — defesa contra
     //      sigla "fantasma" ou typo intencional pra burlar o filtro
-    //   2. Sigla pertence a outra regional
-    // Admin (regional=ALL) já saiu antes do loop.
-    if (!reg || reg !== req.user.regional) {
+    //   2. Sigla pertence a uma regional fora do escopo do usuário
+    if (!reg || !userRegs.includes(reg)) {
       res.status(403).json({
         error: reg
-          ? `Acesso negado: equipe ${t} não pertence à sua regional (${req.user.regional}).`
+          ? `Acesso negado: equipe ${t} não pertence à(s) regional(is) do seu usuário (${userRegs.join(', ')}).`
           : `Acesso negado: equipe ${t} não está cadastrada ou não pertence à sua regional.`,
         code: 'TEAM_REGIONAL_MISMATCH',
       });
@@ -172,9 +175,10 @@ router.get('/equipes', async (req, res) => {
       .eq('ativo', true)
       .order('regional')
       .order('sigla');
-    // Não-admin → só sua regional (defesa em profundidade — middleware já força regional na query)
-    if (req.user && req.user.regional && req.user.regional !== 'ALL') {
-      q = q.eq('regional', req.user.regional);
+    // Não-admin → só sua(s) regional(is). Expande grupos (ES → GUA,CAC).
+    // Defesa em profundidade — middleware já força regional na query.
+    if (req.user && req.user.regional) {
+      q = applyRegional(q, req.user.regional);
     }
     const { data, error } = await q;
     if (error) throw error;
@@ -257,12 +261,13 @@ router.post('/metas', async (req, res) => {
     }
 
     const isAdmin = req.user.role === 'admin';
-    const userReg = req.user.regional; // 'ALL' (admin), 'GUA', 'CAC', 'SJC'
+    const userReg = req.user.regional; // 'ALL' (admin), 'GUA', 'CAC', 'SJC', 'ES', ...
     const incoming = req.body || {};
 
     // Filtragem por role:
     //   - admin: aceita o body inteiro (todas regionais)
-    //   - gua/cac/sjc: só aceita o slot da SUA regional, descarta o resto
+    //   - regional simples (GUA/CAC/SJC): só aceita o slot da SUA regional
+    //   - grupo (ES → GUA+CAC): aceita slots de qualquer regional expandida
     let payload;
     if (isAdmin) {
       payload = incoming;
@@ -270,11 +275,17 @@ router.post('/metas', async (req, res) => {
       if (!userReg || userReg === 'ALL') {
         return res.status(403).json({ error: 'Conta sem regional vinculada', code: 'NO_REGIONAL' });
       }
-      if (!incoming[userReg]) {
-        return res.status(400).json({ error: `Body deve conter o slot ${userReg} pra atualizar metas dessa regional` });
+      const allowed = expandRegional(userReg) || [userReg];
+      // Pega apenas os slots que o user pode editar
+      payload = {};
+      for (const r of allowed) {
+        if (incoming[r] !== undefined) payload[r] = incoming[r];
       }
-      // Mantém só a regional do user — outras regionais ficam intactas no banco
-      payload = { [userReg]: incoming[userReg] };
+      if (Object.keys(payload).length === 0) {
+        return res.status(400).json({
+          error: `Body deve conter pelo menos um dos slots: ${allowed.join(', ')}`,
+        });
+      }
     }
 
     const sq = sbq();

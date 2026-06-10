@@ -29,6 +29,7 @@
 const { _getPool } = require('../services/pgShim');
 const { getClient } = require('../services/supabaseClient');
 const { getRoute }  = require('../services/osrmService');
+const { regionalSqlClause } = require('../services/regionalGroups');
 
 // ── helper: extrai deslocamentos de um payload.checkpoints[] ─────────────────
 
@@ -168,9 +169,9 @@ async function listDeslocamentos(de, ate, opts = {}) {
   if (Array.isArray(opts.regionais) && opts.regionais.length > 0) {
     const ph = opts.regionais.map(r => { params2.push(r); return `$${params2.length}`; });
     snapWhere += ` AND s.regional IN (${ph.join(', ')})`;
-  } else if (opts.regional && opts.regional !== 'ALL') {
-    params2.push(opts.regional);
-    snapWhere += ` AND s.regional = $${params2.length}`;
+  } else {
+    const c = regionalSqlClause(opts.regional, params2, 's.regional');
+    if (c) snapWhere += ` AND ${c}`;
   }
   if (Array.isArray(opts.teams) && opts.teams.length > 0) {
     const ph = opts.teams.map(t => { params2.push(t); return `$${params2.length}`; });

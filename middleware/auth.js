@@ -50,8 +50,10 @@ function verifyToken(token) {
 
 // ── Usuários (configurados no .env) ─────────────────────────────────────────
 // Formato AUTH_USERS: "usuario1:sha256hash1:role1:regional1,usuario2:..."
-// Roles: admin | gua | cac
-// Regionais: ALL | GUA | CAC
+// Roles:     admin | gua | cac | sjc | es
+//            (role só controla acesso a /admin; qualquer valor != 'admin' bloqueia)
+// Regionais: ALL | GUA | CAC | SJC | ES
+//            (ES é grupo que expande pra ['GUA','CAC'] — ver services/regionalGroups.js)
 
 function getUsers() {
   const raw = process.env.AUTH_USERS || '';

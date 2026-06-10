@@ -10,6 +10,7 @@
 
 const { getClient } = require('../services/supabaseClient');
 const { _getPool } = require('../services/pgShim');
+const { applyRegional, regionalSqlClause } = require('../services/regionalGroups');
 
 // ── Leitura ──────────────────────────────────────────────────────────────────
 
@@ -69,7 +70,7 @@ async function listRejectionsByPeriod(de, ate, opts = {}) {
     .lte('session_date', ate)
     .order('rejection_date', { ascending: false });
 
-  if (opts.regional && opts.regional !== 'ALL') q = q.eq('regional', opts.regional);
+  q = applyRegional(q, opts.regional);
   if (opts.tipo)     q = q.eq('tipo', opts.tipo);
   if (opts.teamName) q = q.eq('team_name', opts.teamName);
 
@@ -91,9 +92,7 @@ async function getTopMotivos(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  if (opts.regional && opts.regional !== 'ALL') {
-    params.push(opts.regional); where.push(`regional = $${params.length}`);
-  }
+  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
   if (opts.tipo)     { params.push(opts.tipo);     where.push(`tipo = $${params.length}`); }
   if (opts.teamName) { params.push(opts.teamName); where.push(`team_name = $${params.length}`); }
 
@@ -122,9 +121,7 @@ async function getTopTeams(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  if (opts.regional && opts.regional !== 'ALL') {
-    params.push(opts.regional); where.push(`regional = $${params.length}`);
-  }
+  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
   if (opts.tipo) { params.push(opts.tipo); where.push(`tipo = $${params.length}`); }
 
   const sql = `
@@ -149,9 +146,7 @@ async function getTopColaboradores(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  if (opts.regional && opts.regional !== 'ALL') {
-    params.push(opts.regional); where.push(`regional = $${params.length}`);
-  }
+  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
   if (opts.tipo)     { params.push(opts.tipo);     where.push(`tipo = $${params.length}`); }
   if (opts.teamName) { params.push(opts.teamName); where.push(`team_name = $${params.length}`); }
 
@@ -180,9 +175,7 @@ async function getResumoPeriodo(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  if (opts.regional && opts.regional !== 'ALL') {
-    params.push(opts.regional); where.push(`regional = $${params.length}`);
-  }
+  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
 
   const [total, porRegional, porTipo] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS total FROM note_rejections WHERE ${where.join(' AND ')}`, params),
