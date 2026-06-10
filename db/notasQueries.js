@@ -63,34 +63,25 @@ async function getKpis(classificacao = 'todas', regionais = null) {
 
 async function getSerie(dias = 30, classificacao = 'todas', regionais = null) {
   const pool = _getPool();
-  // Para 'todas' sem filtro regional usa notas_daily_agg (rápido).
-  if (classificacao === 'todas' && (!regionais || !regionais.length)) {
-    const r = await pool.query(`
-      SELECT data, sum(pendentes_fim_dia)::int AS pendentes
-        FROM notas_daily_agg
-       WHERE data >= current_date - $1::int
-       GROUP BY data
-       ORDER BY data
-    `, [dias]);
-    return r.rows;
+  // Sempre usa notas_daily_agg (já tem pendentes_fim_dia, entraram_no_dia,
+  // sairam_no_dia por (data, equipe, regional)). Filtro por classificação
+  // não afeta o gráfico — só o agregado por regional/data.
+  const params = [dias];
+  let regClause = '';
+  if (regionais && regionais.length) {
+    params.push(regionais);
+    regClause = `AND regional = ANY($${params.length})`;
   }
-  // Caso geral: reconstrói via snapshots
-  const cf = _classifClause(classificacao);
-  const r1 = _regionalParam(regionais, 2);
-  const params = r1.param ? [dias, r1.param] : [dias];
   const r = await pool.query(`
-    WITH ult_por_dia AS (
-      SELECT date_trunc('day', snapshot_ts AT TIME ZONE 'America/Sao_Paulo')::date AS data,
-             max(snapshot_ts) AS ts
-        FROM notas_snapshots
-       WHERE snapshot_ts >= current_date - $1::int
-       GROUP BY 1
-    )
-    SELECT u.data, count(s.*)::int AS pendentes
-      FROM ult_por_dia u
-      JOIN notas_snapshots s ON s.snapshot_ts = u.ts ${cf} ${r1.clause}
-     GROUP BY u.data
-     ORDER BY u.data
+    SELECT data,
+           sum(pendentes_fim_dia)::int AS pendentes,
+           sum(entraram_no_dia)::int   AS entraram,
+           sum(sairam_no_dia)::int     AS sairam
+      FROM notas_daily_agg
+     WHERE data >= current_date - $1::int
+       ${regClause}
+     GROUP BY data
+     ORDER BY data
   `, params);
   return r.rows;
 }

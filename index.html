@@ -5884,29 +5884,86 @@
         const r = await fetch(`/api/notas/serie?dias=${dias}&classificacao=${_notasClassif()}${_notasRegionaisQS()}`);
         const data = await r.json();
         const host = document.getElementById('notas-chart');
-        if (!data.length) { host.innerHTML = '<div style="padding:24px;color:#9ca3af;text-align:center">Sem dados históricos ainda — o gráfico vai crescer a cada snapshot horário.</div>'; return; }
-        const W = 1000, H = 200, PAD = 32;
-        const max = Math.max(...data.map(d => d.pendentes), 1);
-        const xs = (i) => PAD + (i * (W - 2*PAD)) / Math.max(data.length - 1, 1);
-        const ys = (v) => H - PAD - (v * (H - 2*PAD)) / max;
-        const pts = data.map((d, i) => `${xs(i)},${ys(d.pendentes)}`).join(' ');
-        const area = `${PAD},${H-PAD} ${pts} ${xs(data.length-1)},${H-PAD}`;
+        if (!data.length) {
+          host.innerHTML = '<div style="padding:24px;color:#9ca3af;text-align:center">Sem dados históricos ainda — o gráfico vai crescer a cada snapshot horário.</div>';
+          return;
+        }
+        // Layout: gráfico combinado. Linha azul = backlog (eixo Y principal,
+        // esquerda). Barras = fluxo do dia (entraram em cima da linha do meio,
+        // saíram em baixo). Escala do fluxo é independente (eixo Y direita).
+        const W = 1000, H = 260, PAD_L = 40, PAD_R = 40, PAD_T = 16, PAD_B = 40;
+        const innerW = W - PAD_L - PAD_R;
+        const innerH = H - PAD_T - PAD_B;
+
+        const maxBacklog = Math.max(...data.map(d => d.pendentes || 0), 1);
+        const maxFluxo   = Math.max(
+          ...data.map(d => Math.max(d.entraram || 0, d.sairam || 0)),
+          1
+        );
+
+        // Eixo X: centro da "faixa" de cada dia
+        const n = data.length;
+        const bandW = innerW / Math.max(n, 1);
+        const xCenter = (i) => PAD_L + bandW * (i + 0.5);
+        // Eixo Y backlog (linha): topo do gráfico → maxBacklog
+        const yBacklog = (v) => PAD_T + innerH - (v * innerH) / maxBacklog;
+        // Eixo Y fluxo (barras): metade superior pra entraram, metade inferior pra saíram.
+        // Limita altura das barras a 40% do innerH pra não cobrir a linha.
+        const BAR_MAX_H = innerH * 0.4;
+        const yMid = PAD_T + innerH / 2;
+        const barH = (v) => (v * BAR_MAX_H) / maxFluxo;
+        const barW = Math.max(bandW * 0.35, 2);
+
+        // Pontos da linha (backlog)
+        const pts = data.map((d, i) => `${xCenter(i)},${yBacklog(d.pendentes || 0)}`).join(' ');
+        const areaPts = `${PAD_L},${PAD_T + innerH} ${pts} ${PAD_L + innerW},${PAD_T + innerH}`;
+
+        // Barras: entraram (vermelho) acima do yMid, saíram (verde) abaixo
+        const bars = data.map((d, i) => {
+          const cx = xCenter(i);
+          const x  = cx - barW / 2;
+          const he = barH(d.entraram || 0);
+          const hs = barH(d.sairam   || 0);
+          const tip = `${(d.data||'').slice(0,10)}\nbacklog ${d.pendentes||0} · entraram +${d.entraram||0} · saíram −${d.sairam||0}`;
+          return `
+            ${he > 0 ? `<rect x="${x}" y="${yMid - he}" width="${barW}" height="${he}" fill="#dc2626" opacity=".75"><title>${tip}</title></rect>` : ''}
+            ${hs > 0 ? `<rect x="${x}" y="${yMid}"      width="${barW}" height="${hs}" fill="#16a34a" opacity=".75"><title>${tip}</title></rect>` : ''}
+          `;
+        }).join('');
+
+        // Labels eixo X — primeiro, meio e último
         const labels = data.map((d, i) => {
-          if (data.length > 1 && (i === 0 || i === data.length-1 || i === Math.floor(data.length/2))) {
+          if (n > 1 && (i === 0 || i === n - 1 || i === Math.floor(n / 2))) {
             const dt = (d.data || '').slice(0, 10);
-            return `<text x="${xs(i)}" y="${H-8}" font-size="10" fill="#6b7280" text-anchor="middle">${dt}</text>`;
+            return `<text x="${xCenter(i)}" y="${H - 14}" font-size="10" fill="#6b7280" text-anchor="middle">${dt}</text>`;
           }
           return '';
         }).join('');
+
         host.innerHTML = `
-          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:200px;display:block">
-            <polygon points="${area}" fill="rgba(37,99,235,.1)" />
+          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
+            <!-- linha de referência do meio (zero do fluxo) -->
+            <line x1="${PAD_L}" y1="${yMid}" x2="${PAD_L + innerW}" y2="${yMid}" stroke="#e5e7eb" stroke-dasharray="3,3" />
+            <!-- barras (fluxo do dia) -->
+            ${bars}
+            <!-- linha do backlog -->
+            <polygon points="${areaPts}" fill="rgba(37,99,235,.08)" />
             <polyline points="${pts}" fill="none" stroke="#2563eb" stroke-width="2" />
-            ${data.map((d, i) => `<circle cx="${xs(i)}" cy="${ys(d.pendentes)}" r="3" fill="#2563eb"><title>${(d.data||'').slice(0,10)}: ${d.pendentes}</title></circle>`).join('')}
-            <text x="${PAD}" y="${PAD-8}" font-size="10" fill="#6b7280">${max}</text>
-            <text x="${PAD}" y="${H-PAD+4}" font-size="10" fill="#6b7280">0</text>
+            ${data.map((d, i) =>
+              `<circle cx="${xCenter(i)}" cy="${yBacklog(d.pendentes || 0)}" r="3" fill="#2563eb"><title>${(d.data||'').slice(0,10)}: backlog ${d.pendentes||0}</title></circle>`
+            ).join('')}
+            <!-- eixos -->
+            <text x="${PAD_L - 4}" y="${PAD_T + 4}" font-size="10" fill="#6b7280" text-anchor="end">${maxBacklog}</text>
+            <text x="${PAD_L - 4}" y="${PAD_T + innerH + 4}" font-size="10" fill="#6b7280" text-anchor="end">0</text>
+            <text x="${PAD_L + innerW + 4}" y="${yMid - barH(maxFluxo) + 4}" font-size="9" fill="#dc2626">+${maxFluxo}</text>
+            <text x="${PAD_L + innerW + 4}" y="${yMid + barH(maxFluxo) + 4}" font-size="9" fill="#16a34a">−${maxFluxo}</text>
             ${labels}
-          </svg>`;
+          </svg>
+          <div style="display:flex;gap:16px;font-size:11px;color:#6b7280;margin-top:6px;justify-content:center;flex-wrap:wrap">
+            <span><span style="display:inline-block;width:10px;height:2px;background:#2563eb;vertical-align:middle"></span> Backlog (fim do dia)</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#dc2626;opacity:.75;vertical-align:middle"></span> Entraram no dia</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:#16a34a;opacity:.75;vertical-align:middle"></span> Saíram no dia (tratadas)</span>
+          </div>`;
       } catch (e) { console.error('loadNotasSerie', e); }
     }
 
