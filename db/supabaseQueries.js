@@ -34,7 +34,7 @@
 const { getClient } = require('../services/supabaseClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
 const { dateBRT } = require('../services/timeUtil');
-const { applyRegional } = require('../services/regionalGroups');
+const { applyRegional, expandRegional } = require('../services/regionalGroups');
 
 /**
  * Filtra um array de linhas mantendo só registros de equipes oficiais.
@@ -669,7 +669,7 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
  *
  * Retorna { ALL, GUA, CAC } com a contagem total no período.
  */
-async function getRealizadasDoDia(de, ate) {
+async function getRealizadasDoDia(de, ate, regional) {
   const sb = getClient();
   // Default = data BRT atual (UTC-3). toISOString() puro daria a data UTC,
   // que após 21:00 BRT já virou pra "amanhã" e retornaria zero indevidamente.
@@ -677,18 +677,21 @@ async function getRealizadasDoDia(de, ate) {
   de  = de  || today;
   ate = ate || de;
 
-  // Lê do nível por-equipe (paginado) e filtra pela whitelist antes de somar
-  const data = await _selectAll(() => sb
-    .from('team_daily_totals')
-    .select('team_name, regional, count')
-    .gte('date', de)
-    .lte('date', ate)
-  );
+  // Aplica filtro de regional no banco (suporta grupos: ES → IN (GUA,CAC)).
+  // Sem isso, user ES via SJC nos totais via fallback shape pré-existente.
+  const data = await _selectAll(() => applyRegional(
+    sb.from('team_daily_totals')
+      .select('team_name, regional, count')
+      .gte('date', de)
+      .lte('date', ate),
+    regional
+  ));
 
-  // SJC adicionado em 08/06/2026. Sem essa chave, frontend filtrando SJC fazia
-  // fallback pra acc.ALL e exibia o total geral como se fosse só de SJC —
-  // bug visível como "% executado da carteira = 135%".
-  const acc = { ALL: 0, GUA: 0, CAC: 0, SJC: 0 };
+  // Shape do acc reflete só as regionais visíveis ao usuário.
+  // Ex: user ES recebe { ALL, GUA, CAC } (sem SJC); user SJC recebe { ALL, SJC }.
+  const regs = expandRegional(regional) || ['GUA', 'CAC', 'SJC'];
+  const acc = { ALL: 0 };
+  regs.forEach(r => { acc[r] = 0; });
   _onlyOficiais(data, 'team_name').forEach(r => {
     if (acc[r.regional] !== undefined) acc[r.regional] += r.count;
     acc.ALL += r.count;
@@ -728,8 +731,12 @@ async function getDailySubcatTotals(de, ate, regional, team) {
     return query;
   });
 
-  const totais = { ALL: {}, GUA: {}, CAC: {}, SJC: {} };
-  const quantidades = { ALL: {}, GUA: {}, CAC: {}, SJC: {} };
+  // Shape reflete só as regionais visíveis ao usuário (ES vê GUA+CAC, não SJC).
+  // Se regionaisArr veio explícito (multi-select), usa essa lista; senão expande.
+  const regsVis = regionaisArr || expandRegional(regional) || ['GUA', 'CAC', 'SJC'];
+  const totais = { ALL: {} };
+  const quantidades = { ALL: {} };
+  regsVis.forEach(r => { totais[r] = {}; quantidades[r] = {}; });
   _onlyOficiais(data, 'team_name').forEach(r => {
     const key = r.sub_code === 'OUTROS' ? `${r.tipo}_OUTROS` : r.sub_code;
     const reg = r.regional;

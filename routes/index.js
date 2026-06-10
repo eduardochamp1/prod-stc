@@ -219,7 +219,7 @@ router.get('/teams/:teamId', async (req, res) => {
 // GET /api/summary
 router.get('/summary', async (req, res) => {
   try {
-    const summary = await getSummary();
+    const summary = await getSummary(req.query);
     res.json({ summary });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -336,8 +336,15 @@ router.get('/totais/dia', async (req, res) => {
     const today = dateBRT();
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
-    if (!sq) return res.json({ de, ate, totais: { ALL: 0, GUA: 0, CAC: 0, SJC: 0 } });
-    const totais = await sq.getRealizadasDoDia(de, ate);
+    // Middleware ja sobrescreveu req.query.regional pra valor do user (ex: 'ES').
+    const regional = req.query.regional;
+    if (!sq) {
+      const regs = expandRegional(regional) || ['GUA', 'CAC', 'SJC'];
+      const totais = { ALL: 0 };
+      regs.forEach(r => { totais[r] = 0; });
+      return res.json({ de, ate, totais });
+    }
+    const totais = await sq.getRealizadasDoDia(de, ate, regional);
     res.json({ de, ate, totais });
   } catch (err) {
     res.status(500).json({ error: err.message });

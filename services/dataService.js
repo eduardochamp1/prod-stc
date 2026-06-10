@@ -6,6 +6,7 @@
 const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/mockData');
 const { getTeamsBySector, REGIONAL_MAP } = require('./wpaService');
 const { isOficial, getMeta } = require('./equipesOficiais');
+const { expandRegional, regionalMatches } = require('./regionalGroups');
 
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 
@@ -246,11 +247,22 @@ const SETORES = {
 async function getTeams(filters = {}) {
   if (MODE === 'mock') return getMockTeams(filters);
 
-  // Determina quais setores buscar
+  // Determina quais setores buscar.
+  // Suporta grupos: regional='ES' expande para ['GUA','CAC'] e une os setores
+  // (DESG+DEPT+DESC). Antes, regional='ES' caia no fallback SETORES.ALL e
+  // incluía DSSJ — vazando SJC pro usuário do Espírito Santo.
   const regional = filters.regional || 'ALL';
-  const setores  = filters.sectorId && filters.sectorId !== 'ALL'
+  const regs     = expandRegional(regional);  // null = ALL (sem filtro)
+  let setoresPorRegional;
+  if (!regs) {
+    setoresPorRegional = SETORES.ALL;
+  } else {
+    setoresPorRegional = regs.flatMap(r => SETORES[r] || []);
+    if (setoresPorRegional.length === 0) setoresPorRegional = SETORES.ALL;
+  }
+  const setores = filters.sectorId && filters.sectorId !== 'ALL'
     ? [filters.sectorId]
-    : (SETORES[regional] || SETORES.ALL);
+    : setoresPorRegional;
 
   // Busca SERIAL (não paralelo): cada getTeamsBySector já dispara ~60 fetches
   // aninhados (sessões × endpoints rejected/executed). Com 4 setores em paralelo
@@ -287,13 +299,20 @@ async function getTeamDetail(teamId) {
 }
 
 // ── GET SUMMARY ───────────────────────────────────────────────────────────────
-async function getSummary() {
+async function getSummary(filters = {}) {
   if (MODE === 'mock') return getMockSummary();
 
-  const regionais = [
-    { regionalId: 'GUA', nome: 'Guarapari', setores: SETORES.GUA },
-    { regionalId: 'CAC', nome: 'Cachoeiro',  setores: SETORES.CAC },
+  const TODAS_REGIONAIS = [
+    { regionalId: 'GUA', nome: 'Guarapari',           setores: SETORES.GUA },
+    { regionalId: 'CAC', nome: 'Cachoeiro',           setores: SETORES.CAC },
+    { regionalId: 'SJC', nome: 'São José dos Campos', setores: SETORES.SJC },
   ];
+
+  // Filtra pelas regionais visíveis ao usuário (grupos como ES expandem).
+  const regs = expandRegional(filters.regional);
+  const regionais = regs
+    ? TODAS_REGIONAIS.filter(r => regs.includes(r.regionalId))
+    : TODAS_REGIONAIS;
 
   return Promise.all(regionais.map(async r => {
     const resultados = await Promise.all(r.setores.map(s => getTeamsBySector(s)));
