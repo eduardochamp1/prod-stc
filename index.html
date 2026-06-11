@@ -9498,11 +9498,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
     function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
 
-    // Helper: testa se uma regional está no filtro (suporta ALL, single, CSV multi).
+    // Helper: testa se uma regional está no filtro (suporta ALL, single, CSV multi, grupos).
+    // Quando currentRegional é um grupo ('ES'), expande para as siglas filhas
+    // (['GUA','CAC']) antes de comparar — antes, _regionalMatch('GUA') com
+    // currentRegional='ES' retornava false e tela inteira ficava vazia pro user ES.
     function _regionalMatch(reg) {
       if (!currentRegional || currentRegional === 'ALL') return true;
-      const list = String(currentRegional).split(',').map(s => s.trim()).filter(Boolean);
-      if (list.length === 0 || list.includes('ALL')) return true;
+      // Expande cada item do CSV: 'GUA' → ['GUA'], 'ES' → ['GUA','CAC'], 'ALL' → []
+      const list = String(currentRegional).split(',')
+        .flatMap(s => {
+          const t = s.trim();
+          if (!t || t === 'ALL') return [];
+          return expandRegional(t) || [t];
+        });
+      if (list.length === 0) return true;
       return list.includes(reg);
     }
 
