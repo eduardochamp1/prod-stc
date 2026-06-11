@@ -73,7 +73,16 @@ async function pushTeams(teams) {
     const sb = getClient();
     const now = new Date().toISOString();
 
-    const rows = teams.map(t => ({
+    // Dedupe por team_name — se o WPA devolveu a mesma equipe 2x no mesmo
+    // batch (split de sessão, race), Postgres aborta o upsert inteiro com
+    // "ON CONFLICT DO UPDATE command cannot affect row a second time".
+    // Mantemos a ÚLTIMA ocorrência (a mais recente do snapshot).
+    const dedupMap = new Map();
+    teams.forEach(t => {
+      if (!t.teamName) return;
+      dedupMap.set(t.teamName, t);
+    });
+    const rows = [...dedupMap.values()].map(t => ({
       team_name:  t.teamName,
       regional:   t.regional,
       sector_id:  t.sectorId,
