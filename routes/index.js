@@ -95,7 +95,37 @@ router.get('/teams', async (req, res) => {
       // wpa / mock: dados ao vivo da API WPA ou mock
       teams = await getTeams(req.query);
     }
-    res.json({ teams, count: teams.length, mode: MODE });
+
+    // ── Carteira inicial deduplicada (UUID-aware) ─────────────────────────
+    // Soma global de UUIDs únicos do primeiro snapshot do dia de cada equipe.
+    // Resolve dupla contagem quando o EDP redistribui notas entre equipes
+    // durante o dia (mesma nota aparece em 2 primeiros snapshots).
+    // Frontend usa esse total quando disponível em vez de somar `carteiraInicialReal`
+    // de cada team (que ainda mostra o count individual da equipe).
+    let carteiraInicialDedup = null;
+    try {
+      // _carteiraInicialDedupTotal vive em services/dataService.js. Importação
+      // tardia (require dentro do try) pra evitar quebrar modo mock/supabase.
+      const dataServiceLazy = require('../services/dataService');
+      if (typeof dataServiceLazy._carteiraInicialDedupTotal === 'function') {
+        carteiraInicialDedup = dataServiceLazy._carteiraInicialDedupTotal(teams);
+      }
+    } catch (_) { /* ignora — fallback usa soma simples no frontend */ }
+
+    // Strip dos UUIDs dos teams antes de enviar — só serviram pro cálculo
+    // server-side. Sem isso, payload cresce ~150KB com lista de UUIDs por equipe.
+    for (const t of teams) {
+      if (t && t._carteiraInicialUUIDs) delete t._carteiraInicialUUIDs;
+    }
+
+    res.json({
+      teams,
+      count: teams.length,
+      mode: MODE,
+      summary: {
+        carteira_inicial_dedup: carteiraInicialDedup,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

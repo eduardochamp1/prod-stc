@@ -5896,6 +5896,10 @@
 
     // ── ESTADO ────────────────────────────────────────────────────────────────
     let allTeams = [];
+    // Summary do response /api/teams: { carteira_inicial_dedup, ... }
+    // Carteira inicial deduplicada (UUIDs únicos cross-team) — backend resolve
+    // dupla contagem de notas transferidas pelo EDP durante o dia.
+    let _lastTeamsSummary = null;
     let currentRegional = 'ALL';
     let currentFilter = '';
     let currentTab = 'monitor';
@@ -9229,6 +9233,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (res.error) throw new Error(res.error);
 
         allTeams = res.teams || [];
+        _lastTeamsSummary = res.summary || null;
         document.getElementById('sync-label').textContent =
           new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
         document.getElementById('last-update').textContent = hist
@@ -9720,8 +9725,26 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // operador (atual <= inicial), independente de qual fonte é mais completa.
       // Bug reportado em 11/06/2026 (admin via inicial=1514, atual=2177).
       const carteiraInicialDerivada = emCarteira + executadas + concluidasLive + rejeitadas;
-      const somaInicialReal = teamsVisible.reduce((s, t) =>
+      // Carteira inicial: preferir o valor DEDUPLICADO (UUIDs únicos cross-team)
+      // calculado no backend — resolve dupla contagem de notas transferidas pelo
+      // EDP entre equipes (uma nota pode aparecer no primeiro snapshot de 2 equipes).
+      // Fallback pra soma per-team se backend ainda não trouxe (modo histórico,
+      // versão antiga do server, etc).
+      // Atenção: dedupBackend reflete TODO o escopo do user (server-side filtrado).
+      // Se admin filtra client-side por uma regional específica, somaPerTeam é
+      // o subset visível (com dupla contagem residual) — aceitamos isso pra evitar
+      // chamar /teams de novo só pra recalcular dedup do subset.
+      const dedupBackend = (_lastTeamsSummary && typeof _lastTeamsSummary.carteira_inicial_dedup === 'number')
+        ? _lastTeamsSummary.carteira_inicial_dedup
+        : null;
+      const somaPerTeam = teamsVisible.reduce((s, t) =>
         s + (typeof t.carteiraInicialReal === 'number' ? t.carteiraInicialReal : 0), 0);
+      const filtroRegionalAtivo = currentRegional && currentRegional !== 'ALL';
+      // Usa dedup do backend quando sem filtro client-side; senão usa soma per-team
+      // (que sub-conta, mas pelo menos é coerente com o filtro aplicado).
+      const somaInicialReal = (dedupBackend !== null && !filtroRegionalAtivo)
+        ? dedupBackend
+        : somaPerTeam;
       const equipesComInicial = teamsVisible.filter(t => typeof t.carteiraInicialReal === 'number').length;
       const carteiraInicial = Math.max(somaInicialReal, carteiraInicialDerivada);
 

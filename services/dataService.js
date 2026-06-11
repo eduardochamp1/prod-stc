@@ -118,13 +118,20 @@ async function _enrichCarteiraInicial(teams) {
     const siglas = teams.map(t => t.teamName || t.sigla).filter(Boolean);
     if (siglas.length === 0) return teams;
 
+    // Antes pegávamos só os comprimentos (jsonb_array_length). Agora extraímos
+    // os ARRAYS completos pra deduplicar UUIDs entre equipes: o EDP redistribui
+    // notas durante o dia, e a mesma nota pode aparecer no primeiro snapshot de
+    // 2 equipes diferentes (uma onde estava, outra pra onde foi). Sem dedup,
+    // a soma global das carteiras iniciais inflava artificialmente (446 OS
+    // "fantasma" reportadas em 11/06/2026, admin via 3438 inicial / 2992
+    // explicáveis em saídas).
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (team_name)
               team_name,
-              coalesce(jsonb_array_length(data->'notasBaixadas'),   0) AS bx,
-              coalesce(jsonb_array_length(data->'notasExecutadas'), 0) AS ex,
-              coalesce(jsonb_array_length(data->'notasConcluidas'), 0) AS co,
-              coalesce(jsonb_array_length(data->'notasRejeitadas'), 0) AS rj
+              coalesce(data->'notasBaixadas',   '[]'::jsonb) AS baixadas,
+              coalesce(data->'notasExecutadas', '[]'::jsonb) AS executadas,
+              coalesce(data->'notasConcluidas', '[]'::jsonb) AS concluidas,
+              coalesce(data->'notasRejeitadas', '[]'::jsonb) AS rejeitadas
        FROM snapshots
        WHERE date = $1
          AND team_name = ANY($2::text[])
@@ -132,18 +139,38 @@ async function _enrichCarteiraInicial(teams) {
       [hoje, siglas]
     );
 
-    const inicialPorEquipe = {};
+    // Para cada equipe: extrai UUIDs únicos dos 4 buckets do primeiro snapshot.
+    // count individual = uuids únicos DENTRO da equipe (raro ter dup intra-team).
+    const dataPorEquipe = {};
     rows.forEach(r => {
-      inicialPorEquipe[r.team_name] = (r.bx || 0) + (r.ex || 0) + (r.co || 0) + (r.rj || 0);
+      const uuids = new Set();
+      ['baixadas', 'executadas', 'concluidas', 'rejeitadas'].forEach(bucket => {
+        const arr = r[bucket] || [];
+        if (Array.isArray(arr)) {
+          arr.forEach(n => { if (n && n.id) uuids.add(n.id); });
+        }
+      });
+      dataPorEquipe[r.team_name] = {
+        count: uuids.size,
+        uuids: [...uuids],
+      };
     });
 
     let comDados = 0;
     teams.forEach(t => {
       const nome = t.teamName || t.sigla;
-      const v = inicialPorEquipe[nome];
-      // null pra equipes sem snapshot (não logaram hoje) — frontend ignora da soma
-      t.carteiraInicialReal = (typeof v === 'number') ? v : null;
-      if (t.carteiraInicialReal != null) comDados++;
+      const info = dataPorEquipe[nome];
+      if (info) {
+        t.carteiraInicialReal = info.count;
+        // Anexa UUIDs ao team pra que a camada acima (getTeams) possa agregar
+        // globalmente deduplicado. Frontend NUNCA deve usar t._carteiraInicialUUIDs
+        // diretamente — só o `summary.carteira_inicial_dedup` do response.
+        t._carteiraInicialUUIDs = info.uuids;
+        comDados++;
+      } else {
+        t.carteiraInicialReal = null;
+        t._carteiraInicialUUIDs = null;
+      }
     });
     console.log(`[dataService] carteira inicial: ${comDados}/${teams.length} equipes com primeiro snapshot do dia`);
   } catch (err) {
@@ -151,6 +178,27 @@ async function _enrichCarteiraInicial(teams) {
   }
 
   return teams;
+}
+
+/**
+ * Soma global deduplicada dos UUIDs do primeiro snapshot do dia de TODAS as
+ * equipes — resolve dupla contagem de notas transferidas entre equipes pelo
+ * EDP. Retorna número (count) ou null se nenhuma equipe tinha UUIDs.
+ *
+ * Espera que `_enrichCarteiraInicial` já tenha rodado e populado
+ * `t._carteiraInicialUUIDs` em cada team.
+ */
+function _carteiraInicialDedupTotal(teams) {
+  if (!Array.isArray(teams) || teams.length === 0) return null;
+  const seen = new Set();
+  let hadAny = false;
+  for (const t of teams) {
+    const uuids = t._carteiraInicialUUIDs;
+    if (!Array.isArray(uuids)) continue;
+    hadAny = true;
+    for (const u of uuids) seen.add(u);
+  }
+  return hadAny ? seen.size : null;
 }
 
 /**
@@ -330,4 +378,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getTeamDetail, getSummary };
+module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal };
