@@ -5805,6 +5805,65 @@
       RD: 'RD',
     };
 
+    // ── REGIONAIS ─────────────────────────────────────────────────────────
+    // ATENÇÃO: este bloco DEVE ficar antes de qualquer let/const top-level
+    // que use REGIONAIS_ATIVAS (ex: _metasCache). Caso contrário, a inicialização
+    // do módulo quebra com "Cannot access 'REGIONAIS_ATIVAS' before initialization"
+    // (Temporal Dead Zone do JS) e a página inteira congela em "Carregando...".
+    //
+    // Centralizado pra facilitar adicionar novas (ex: SJC adicionado em 08/06/2026).
+    const REGIONAIS_ATIVAS = ['GUA', 'CAC', 'SJC'];
+    const REGIONAIS_NOMES  = {
+      GUA: 'Guarapari',
+      CAC: 'Cachoeiro',
+      SJC: 'São José dos Campos',
+      ES:  'Espírito Santo',
+      ALL: 'Todas as Regionais',
+    };
+    function regionalNome(sigla) {
+      return REGIONAIS_NOMES[sigla] || sigla || '—';
+    }
+
+    // Espelha services/regionalGroups.js do backend. Mantenha em sincronia se adicionar grupos novos.
+    const REGIONAIS_GROUPS = { ES: ['GUA', 'CAC'] };
+    function expandRegional(regional) {
+      if (!regional || regional === 'ALL') return null;
+      const r = String(regional).toUpperCase().trim();
+      if (REGIONAIS_GROUPS[r]) return [...REGIONAIS_GROUPS[r]];
+      return [r];
+    }
+    function regionalMatches(userReg, rowReg) {
+      const regs = expandRegional(userReg);
+      if (!regs) return true;
+      return regs.includes(String(rowReg || '').toUpperCase());
+    }
+    // True se a regional do user é um grupo conhecido (ex: 'ES') OU sigla individual
+    // OU 'ALL'. Usado pra autorizar usuários ES em validações que antes só aceitavam
+    // siglas individuais (GUA/CAC/SJC).
+    function regionalAutorizada(userReg) {
+      if (!userReg) return false;
+      const r = String(userReg).toUpperCase().trim();
+      if (r === 'ALL') return true;
+      if (REGIONAIS_GROUPS[r]) return true;
+      return REGIONAIS_ATIVAS.includes(r);
+    }
+
+    /**
+     * Gera <optgroup>s agrupados por regional pra dropdowns de equipes.
+     * Itera REGIONAIS_ATIVAS pra incluir todas (GUA/CAC/SJC) automaticamente.
+     * @param eqs array de equipes (cada uma com .regional)
+     * @param optBuilder fn(equipe) → string HTML do <option>
+     * @param showCount se true, inclui "(N)" no label do optgroup
+     */
+    function regionalOptgroups(eqs, optBuilder, showCount = false) {
+      return REGIONAIS_ATIVAS.map(reg => {
+        const arr = eqs.filter(e => e.regional === reg);
+        if (arr.length === 0) return '';
+        const label = showCount ? `${regionalNome(reg)} (${arr.length})` : regionalNome(reg);
+        return `<optgroup label="${label}">${arr.map(optBuilder).join('')}</optgroup>`;
+      }).join('');
+    }
+
     // Linhas de produtividade — MD/SF/DD desdobrados em subcategorias.
     // Cada linha vira um card. Ordem aqui = ordem de exibição.
     //   tipo:    o TIPO ao qual a linha pertence (controla filtros)
@@ -9097,60 +9156,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
     function closeMetasModal(e) { if (e.target === document.getElementById('metas-overlay')) closeMetasDirect(); }
     function closeMetasDirect() { document.getElementById('metas-overlay').classList.remove('open'); }
 
-    // ── REGIONAIS ─────────────────────────────────────────────────────────
-    // Lista de regionais ativas + helper de nome. Centralizado pra facilitar
-    // adicionar novas (ex: SJC adicionado em 08/06/2026).
-    const REGIONAIS_ATIVAS = ['GUA', 'CAC', 'SJC'];
-    const REGIONAIS_NOMES  = {
-      GUA: 'Guarapari',
-      CAC: 'Cachoeiro',
-      SJC: 'São José dos Campos',
-      ES:  'Espírito Santo',
-      ALL: 'Todas as Regionais',
-    };
-    function regionalNome(sigla) {
-      return REGIONAIS_NOMES[sigla] || sigla || '—';
-    }
-
-    // Espelha services/regionalGroups.js do backend. Mantenha em sincronia se adicionar grupos novos.
-    const REGIONAIS_GROUPS = { ES: ['GUA', 'CAC'] };
-    function expandRegional(regional) {
-      if (!regional || regional === 'ALL') return null;
-      const r = String(regional).toUpperCase().trim();
-      if (REGIONAIS_GROUPS[r]) return [...REGIONAIS_GROUPS[r]];
-      return [r];
-    }
-    function regionalMatches(userReg, rowReg) {
-      const regs = expandRegional(userReg);
-      if (!regs) return true;
-      return regs.includes(String(rowReg || '').toUpperCase());
-    }
-    // True se a regional do user é um grupo conhecido (ex: 'ES') OU sigla individual
-    // OU 'ALL'. Usado pra autorizar usuários ES em validações que antes só aceitavam
-    // siglas individuais (GUA/CAC/SJC).
-    function regionalAutorizada(userReg) {
-      if (!userReg) return false;
-      const r = String(userReg).toUpperCase().trim();
-      if (r === 'ALL') return true;
-      if (REGIONAIS_GROUPS[r]) return true;
-      return REGIONAIS_ATIVAS.includes(r);
-    }
-
-    /**
-     * Gera <optgroup>s agrupados por regional pra dropdowns de equipes.
-     * Itera REGIONAIS_ATIVAS pra incluir todas (GUA/CAC/SJC) automaticamente.
-     * @param eqs array de equipes (cada uma com .regional)
-     * @param optBuilder fn(equipe) → string HTML do <option>
-     * @param showCount se true, inclui "(N)" no label do optgroup
-     */
-    function regionalOptgroups(eqs, optBuilder, showCount = false) {
-      return REGIONAIS_ATIVAS.map(reg => {
-        const arr = eqs.filter(e => e.regional === reg);
-        if (arr.length === 0) return '';
-        const label = showCount ? `${regionalNome(reg)} (${arr.length})` : regionalNome(reg);
-        return `<optgroup label="${label}">${arr.map(optBuilder).join('')}</optgroup>`;
-      }).join('');
-    }
+    // (REGIONAIS_ATIVAS / REGIONAIS_NOMES / expandRegional / regionalMatches /
+    //  regionalAutorizada / regionalOptgroups foram movidos pra perto de
+    //  TIPOS_SERVICO no topo do <script>, pra serem inicializados antes de
+    //  _metasCache e outros usos top-level que dependem deles. Ver comentário
+    //  no bloco original.)
 
     // ── CARREGA DADOS ─────────────────────────────────────────────────────
     function todayISO() {
