@@ -263,10 +263,10 @@ async function _buildDiaSummary(siglasFiltro) {
     ]);
 
     const inicialUUIDs   = new Set();
-    const atualUUIDs     = new Set();
-    const andamentoUUIDs = new Set();
-    const concluidasUUIDs = new Set();
-    const rejeitadasUUIDs = new Set();
+    const atualRaw       = new Set();
+    const andamentoRaw   = new Set();
+    const concluidasRaw  = new Set();
+    const rejeitadasRaw  = new Set();
 
     // Primeiro snap → INICIAL (todos os buckets juntos, dedup global)
     for (const r of firstRes.rows) {
@@ -278,35 +278,64 @@ async function _buildDiaSummary(siglasFiltro) {
       });
     }
 
-    // Último snap → estados ATUAIS por bucket
+    // Último snap → estados ATUAIS por bucket (com possíveis sobreposições
+    // entre equipes — mesma nota pode estar em "concluida" na equipe A e
+    // "baixada" na equipe B se EDP transferiu pós-conclusão; ou em equipes
+    // USO MÚTUO que compartilham notas).
     for (const r of lastRes.rows) {
       const addAll = (arr, set) => {
         if (Array.isArray(arr)) for (const n of arr) { if (n && n.id) set.add(n.id); }
       };
-      addAll(r.baixadas,   atualUUIDs);
-      addAll(r.executadas, andamentoUUIDs);
-      addAll(r.concluidas, concluidasUUIDs);
-      addAll(r.rejeitadas, rejeitadasUUIDs);
+      addAll(r.baixadas,   atualRaw);
+      addAll(r.executadas, andamentoRaw);
+      addAll(r.concluidas, concluidasRaw);
+      addAll(r.rejeitadas, rejeitadasRaw);
     }
 
-    // Canceladas = inicial \ (atual ∪ andamento ∪ concluidas ∪ rejeitadas).
-    // Inclui também notas que mudaram de equipe e foram CONCLUÍDAS pela nova
-    // equipe — não é o caso típico, mas matemática fecha por construção.
-    const rastreadas = new Set([
-      ...atualUUIDs, ...andamentoUUIDs, ...concluidasUUIDs, ...rejeitadasUUIDs,
+    // Classificação única por UUID — cada nota fica em EXATAMENTE 1 bucket
+    // final. Prioridade: concluida > rejeitada > andamento > atual.
+    // Sem isso, a aritmética inflava 'canceladas' (UUIDs em 2 buckets
+    // sobrepostos eram contados 2x na soma, mas só 1x na união) — bug
+    // reportado em 11/06/2026 (esperado canc=294, retornava 904).
+    const finalAtual      = new Set();
+    const finalAndamento  = new Set();
+    const finalConcluidas = new Set();
+    const finalRejeitadas = new Set();
+    const todasRastreadas = new Set([
+      ...atualRaw, ...andamentoRaw, ...concluidasRaw, ...rejeitadasRaw,
     ]);
+    for (const u of todasRastreadas) {
+      if      (concluidasRaw.has(u))  finalConcluidas.add(u);
+      else if (rejeitadasRaw.has(u))  finalRejeitadas.add(u);
+      else if (andamentoRaw.has(u))   finalAndamento.add(u);
+      else                            finalAtual.add(u);
+    }
+
+    // Canceladas = inicial \ (todos os buckets do último snap).
+    // Notas que estavam no início mas sumiram (canceladas pelo EDP).
     let canceladas = 0;
     for (const u of inicialUUIDs) {
-      if (!rastreadas.has(u)) canceladas++;
+      if (!todasRastreadas.has(u)) canceladas++;
+    }
+
+    // Invariante (verificável): inicial = atual + andamento + concluidas
+    //                                   + rejeitadas + canceladas + entradas_novas
+    // onde "entradas_novas" = UUIDs no último snap mas NÃO no primeiro snap
+    // (notas que entraram durante o dia, ex: equipe logou tarde com novas
+    // notas, ou EDP adicionou ao longo do dia).
+    let entradasNovas = 0;
+    for (const u of todasRastreadas) {
+      if (!inicialUUIDs.has(u)) entradasNovas++;
     }
 
     return {
       inicial:    inicialUUIDs.size,
-      atual:      atualUUIDs.size,
-      andamento:  andamentoUUIDs.size,
-      concluidas: concluidasUUIDs.size,
-      rejeitadas: rejeitadasUUIDs.size,
+      atual:      finalAtual.size,
+      andamento:  finalAndamento.size,
+      concluidas: finalConcluidas.size,
+      rejeitadas: finalRejeitadas.size,
       canceladas,
+      entradas_novas: entradasNovas,
     };
   } catch (err) {
     console.warn('[dataService] buildDiaSummary falhou:', err.message);
