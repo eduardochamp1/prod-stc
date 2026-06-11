@@ -4424,20 +4424,24 @@
           </div>
           <div class="metric-sub" id="m-ativas" style="display:none"></div>
         </div>
-        <div class="metric-card accent-verde">
+        <div class="metric-card accent-verde"
+             title="OS concluídas no range (status finalizado). Fonte: notasConcluidas das equipes com sessão ativa + acumulador persistente (daily_totals) pra cobrir equipes deslogadas.">
           <div class="metric-label">OS Executadas</div>
           <div class="metric-value verde" id="m-concluidas">—</div>
           <div class="metric-sub" id="m-concluidas-pct"></div>
         </div>
-        <div class="metric-card accent-amarelo" id="card-andamento">
+        <div class="metric-card accent-amarelo" id="card-andamento"
+             title="OS em execução AGORA (status 'executada'/iniciada). Conta só equipes com sessão ativa no range — equipes encerradas não entram. Estado de tempo real, não cumulativo.">
           <div class="metric-label">Em Andamento</div>
           <div class="metric-value amarelo" id="m-executadas">—</div>
         </div>
-        <div class="metric-card accent-vermelho">
+        <div class="metric-card accent-vermelho"
+             title="OS rejeitadas no range. Fonte: tabela note_rejections (persistente — captura rejeições mesmo após equipe deslogar).">
           <div class="metric-label">OS Rejeitadas</div>
           <div class="metric-value vermelho" id="m-rejeitadas">—</div>
         </div>
-        <div class="metric-card accent-preto" id="card-carteira">
+        <div class="metric-card accent-preto" id="card-carteira"
+             title="ATUAL: notas baixadas pendentes (não iniciadas) AGORA — estado de tempo real.&#10;TOTAL DIA: carteira inicial cumulativa do dia, deduplicada por UUID via backend.">
           <div class="metric-label">OS em Carteira</div>
           <div style="display:flex;align-items:baseline;gap:14px;margin-top:2px">
             <div style="display:flex;flex-direction:column;align-items:flex-start">
