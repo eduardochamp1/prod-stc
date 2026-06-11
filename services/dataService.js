@@ -202,6 +202,119 @@ function _carteiraInicialDedupTotal(teams) {
 }
 
 /**
+ * Build do summary completo do dia comparando PRIMEIRO e ÚLTIMO snapshot
+ * de cada equipe. Detecta:
+ *
+ *   inicial    = UUIDs únicos no PRIMEIRO snap (qualquer bucket)
+ *   atual      = UUIDs em "baixadas" do ÚLTIMO snap (pendentes não iniciadas)
+ *   andamento  = UUIDs em "executadas" do ÚLTIMO snap (em execução)
+ *   concluidas = UUIDs em "concluidas" do ÚLTIMO snap
+ *   rejeitadas = UUIDs em "rejeitadas" do ÚLTIMO snap
+ *   canceladas = inicial \ (atual ∪ andamento ∪ concluidas ∪ rejeitadas)
+ *                ← notas que estavam no payload no início do dia mas SUMIRAM
+ *                  (canceladas/transferidas pelo EDP sem virar concluída/rejeitada).
+ *
+ * Aritmética: inicial = atual + andamento + concluidas + rejeitadas + canceladas.
+ *
+ * Filtragem: `siglasFiltro` (opcional) restringe o cálculo às equipes do escopo
+ * do usuário (admin → todas; non-admin → só suas regionais). Sem isso, o summary
+ * vazaria contagens de regionais que o user não deveria ver.
+ *
+ * Retorna null em caso de erro de DB — frontend cai em cálculo per-team.
+ */
+async function _buildDiaSummary(siglasFiltro) {
+  try {
+    const { _getPool } = require('./pgShim');
+    const pool = _getPool();
+    if (!pool) return null;
+    const hoje = _hojeBRT();
+
+    // 2 queries em paralelo: primeiro e último snapshot do dia por equipe.
+    // DISTINCT ON é eficiente (1 row por equipe) e usa índice de captured_at.
+    const filterClause = (Array.isArray(siglasFiltro) && siglasFiltro.length > 0)
+      ? `AND team_name = ANY($2::text[])`
+      : '';
+    const params = [hoje];
+    if (filterClause) params.push(siglasFiltro);
+
+    const queryFirst = `
+      SELECT DISTINCT ON (team_name) team_name,
+        coalesce(data->'notasBaixadas',   '[]'::jsonb) AS baixadas,
+        coalesce(data->'notasExecutadas', '[]'::jsonb) AS executadas,
+        coalesce(data->'notasConcluidas', '[]'::jsonb) AS concluidas,
+        coalesce(data->'notasRejeitadas', '[]'::jsonb) AS rejeitadas
+      FROM snapshots
+      WHERE date = $1 ${filterClause}
+      ORDER BY team_name, captured_at ASC`;
+
+    const queryLast = `
+      SELECT DISTINCT ON (team_name) team_name,
+        coalesce(data->'notasBaixadas',   '[]'::jsonb) AS baixadas,
+        coalesce(data->'notasExecutadas', '[]'::jsonb) AS executadas,
+        coalesce(data->'notasConcluidas', '[]'::jsonb) AS concluidas,
+        coalesce(data->'notasRejeitadas', '[]'::jsonb) AS rejeitadas
+      FROM snapshots
+      WHERE date = $1 ${filterClause}
+      ORDER BY team_name, captured_at DESC`;
+
+    const [firstRes, lastRes] = await Promise.all([
+      pool.query(queryFirst, params),
+      pool.query(queryLast, params),
+    ]);
+
+    const inicialUUIDs   = new Set();
+    const atualUUIDs     = new Set();
+    const andamentoUUIDs = new Set();
+    const concluidasUUIDs = new Set();
+    const rejeitadasUUIDs = new Set();
+
+    // Primeiro snap → INICIAL (todos os buckets juntos, dedup global)
+    for (const r of firstRes.rows) {
+      ['baixadas', 'executadas', 'concluidas', 'rejeitadas'].forEach(b => {
+        const arr = r[b];
+        if (Array.isArray(arr)) {
+          for (const n of arr) { if (n && n.id) inicialUUIDs.add(n.id); }
+        }
+      });
+    }
+
+    // Último snap → estados ATUAIS por bucket
+    for (const r of lastRes.rows) {
+      const addAll = (arr, set) => {
+        if (Array.isArray(arr)) for (const n of arr) { if (n && n.id) set.add(n.id); }
+      };
+      addAll(r.baixadas,   atualUUIDs);
+      addAll(r.executadas, andamentoUUIDs);
+      addAll(r.concluidas, concluidasUUIDs);
+      addAll(r.rejeitadas, rejeitadasUUIDs);
+    }
+
+    // Canceladas = inicial \ (atual ∪ andamento ∪ concluidas ∪ rejeitadas).
+    // Inclui também notas que mudaram de equipe e foram CONCLUÍDAS pela nova
+    // equipe — não é o caso típico, mas matemática fecha por construção.
+    const rastreadas = new Set([
+      ...atualUUIDs, ...andamentoUUIDs, ...concluidasUUIDs, ...rejeitadasUUIDs,
+    ]);
+    let canceladas = 0;
+    for (const u of inicialUUIDs) {
+      if (!rastreadas.has(u)) canceladas++;
+    }
+
+    return {
+      inicial:    inicialUUIDs.size,
+      atual:      atualUUIDs.size,
+      andamento:  andamentoUUIDs.size,
+      concluidas: concluidasUUIDs.size,
+      rejeitadas: rejeitadasUUIDs.size,
+      canceladas,
+    };
+  } catch (err) {
+    console.warn('[dataService] buildDiaSummary falhou:', err.message);
+    return null;
+  }
+}
+
+/**
  * Enriquece equipes ENCERRADAS (sessionEnd preenchido) cujo notasConcluidas
  * está vazio. Causa: v2.Concluded só popula sessões abertas, e a EDP não
  * expõe endpoint /api/notes/concluded/{sessionId}/session (confirmado 404
@@ -378,4 +491,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal };
+module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary };

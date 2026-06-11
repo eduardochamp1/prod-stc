@@ -96,18 +96,28 @@ router.get('/teams', async (req, res) => {
       teams = await getTeams(req.query);
     }
 
-    // ── Carteira inicial deduplicada (UUID-aware) ─────────────────────────
-    // Soma global de UUIDs únicos do primeiro snapshot do dia de cada equipe.
-    // Resolve dupla contagem quando o EDP redistribui notas entre equipes
-    // durante o dia (mesma nota aparece em 2 primeiros snapshots).
-    // Frontend usa esse total quando disponível em vez de somar `carteiraInicialReal`
-    // de cada team (que ainda mostra o count individual da equipe).
+    // ── Summary do dia (UUID-aware, deduplicado, com canceladas) ──────────
+    // Compara PRIMEIRO e ÚLTIMO snapshot do dia de cada equipe pra detectar:
+    //   - inicial: tudo que entrou no dia
+    //   - atual/andamento/concluidas/rejeitadas: estado no último snap
+    //   - canceladas: estavam no inicial mas sumiram (EDP cancelou/transferiu)
+    // Aritmética fecha por construção: inicial = atual+andamento+conc+rej+canc.
+    let diaSummary = null;
     let carteiraInicialDedup = null;
     try {
-      // _carteiraInicialDedupTotal vive em services/dataService.js. Importação
-      // tardia (require dentro do try) pra evitar quebrar modo mock/supabase.
       const dataServiceLazy = require('../services/dataService');
-      if (typeof dataServiceLazy._carteiraInicialDedupTotal === 'function') {
+      // Filtra o summary pras equipes visíveis ao user (escopo de regional já
+      // aplicado em getTeams). Sem isso, summary global vazaria contagens
+      // de outras regionais que o user não pode ver.
+      const siglasFiltro = teams.map(t => t.teamName || t.sigla).filter(Boolean);
+      if (typeof dataServiceLazy._buildDiaSummary === 'function') {
+        diaSummary = await dataServiceLazy._buildDiaSummary(siglasFiltro);
+      }
+      // Fallback / retrocompat: campo legado carteira_inicial_dedup continua presente
+      // (frontend antigo pode ainda usar). Novos campos vão em diaSummary.
+      if (diaSummary && typeof diaSummary.inicial === 'number') {
+        carteiraInicialDedup = diaSummary.inicial;
+      } else if (typeof dataServiceLazy._carteiraInicialDedupTotal === 'function') {
         carteiraInicialDedup = dataServiceLazy._carteiraInicialDedupTotal(teams);
       }
     } catch (_) { /* ignora — fallback usa soma simples no frontend */ }
@@ -124,6 +134,7 @@ router.get('/teams', async (req, res) => {
       mode: MODE,
       summary: {
         carteira_inicial_dedup: carteiraInicialDedup,
+        dia: diaSummary,  // { inicial, atual, andamento, concluidas, rejeitadas, canceladas }
       },
     });
   } catch (err) {

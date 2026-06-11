@@ -4452,6 +4452,12 @@
               </div>
             </div>
           </div>
+          <!-- Sub-info: notas canceladas/transferidas pelo EDP no dia -->
+          <!-- Só aparece quando há diferença detectada via diff de snapshots -->
+          <div id="m-carteira-canceladas" style="display:none;font-size:11px;color:var(--text2);margin-top:6px"
+               title="Notas que estavam no início do dia mas foram canceladas ou redistribuídas pelo EDP — saíram do payload sem virar executadas/rejeitadas.">
+            <span style="color:#c49000">●</span> <span id="m-carteira-canceladas-num">—</span> movimentadas pelo EDP
+          </div>
         </div>
         <div class="metric-card accent-verde">
           <div class="metric-label">Re-logins</div>
@@ -9788,6 +9794,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
       } else {
         if (mBaixIniWrap) mBaixIniWrap.style.display = 'none';
       }
+
+      // Sub-info: OS movimentadas pelo EDP (canceladas/transferidas).
+      // Vem do diff entre primeiro e último snapshot do dia, calculado no backend.
+      // Só aparece em modo live (snapshot do "ultimo" só existe no dia atual).
+      const dia = _lastTeamsSummary && _lastTeamsSummary.dia;
+      const mCanceladasWrap = document.getElementById('m-carteira-canceladas');
+      const mCanceladasNum  = document.getElementById('m-carteira-canceladas-num');
+      if (isLiveToday && dia && typeof dia.canceladas === 'number' && dia.canceladas > 0 && !filtroRegionalAtivo) {
+        if (mCanceladasNum)  mCanceladasNum.textContent = dia.canceladas;
+        if (mCanceladasWrap) mCanceladasWrap.style.display = '';
+      } else {
+        if (mCanceladasWrap) mCanceladasWrap.style.display = 'none';
+      }
+
       document.getElementById('m-relogins').textContent = relogins;
 
       // ── Modo histórico: oculta cards de estado atual ─────────────────────
