@@ -7,7 +7,7 @@ const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
 const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail } = require('../services/wpaService');
 const { dateBRT } = require('../services/timeUtil');
-const { applyRegional, expandRegional } = require('../services/regionalGroups');
+const { applyRegional, expandRegional, regionalMatches } = require('../services/regionalGroups');
 
 // ── VALIDADORES DE PARAMS ─────────────────────────────────────────────────────
 const _RE_YYYYMM    = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -1981,7 +1981,7 @@ router.get('/admin/equipes-sem-producao', async (req, res) => {
 
     // Whitelist filtrada por regional
     const all = getOficiais().filter(e =>
-      regional === 'ALL' || e.regional === regional
+      regional === 'ALL' || regionalMatches(regional, e.regional)
     );
     const ausentes = all.filter(e => !produziram.has(e.sigla.toUpperCase()));
 

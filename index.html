@@ -4686,8 +4686,9 @@
             <span class="filter-label">Regional</span>
             <select class="filter-select" id="desloc-regional-select" onchange="loadDeslocamentos()">
               <option value="ALL">Todas</option>
-              <option value="GUA">GUA</option>
-              <option value="CAC">CAC</option>
+              <option value="GUA">Guarapari</option>
+              <option value="CAC">Cachoeiro</option>
+              <option value="SJC">São José dos Campos</option>
             </select>
           </div>
           <div class="filter-group">
@@ -5448,21 +5449,49 @@
         const ids = [
           'regional-select', 'ranking-regional-select', 'hist-regional-select',
           'graf-regional-select', 'rej-regional-select', 'desloc-regional-select',
+          'mapa-regional-select', 'notas-regional-select',
         ];
+        // Pra grupos (ex: ES → GUA+CAC) o user pode escolher entre as filhas
+        // (não é read-only puro). Pra sigla simples (GUA/CAC/SJC) trava no valor.
+        const expanded = expandRegional(sess.regional);
+        const isGroup = expanded && expanded.length > 1;
+
         ids.forEach(id => {
           const el = document.getElementById(id);
           if (!el) return;
-          el.value = sess.regional;
-          el.disabled = true;
-          // Se o multi-select já foi inicializado pra esse id, aplica via API
-          if (window.MultiSelect && MultiSelect.getValues) {
-            try {
-              MultiSelect.setValues(id, [sess.regional]);
-              MultiSelect.setDisabled(id, true);
-            } catch (_) { /* não inicializado ainda — ok */ }
+
+          if (isGroup) {
+            // Re-popula com ALL (significando "todas do escopo") + as filhas.
+            // O label 'ALL' fica "Todas (Grupo)" pra deixar claro o escopo.
+            const opts = [
+              `<option value="ALL">Todas (${regionalNome(sess.regional)})</option>`,
+              ...expanded.map(r => `<option value="${r}">${regionalNome(r)}</option>`),
+            ].join('');
+            el.innerHTML = opts;
+            el.value = 'ALL';
+            el.disabled = false;
+            if (window.MultiSelect && MultiSelect.getValues) {
+              try {
+                MultiSelect.refresh(id);
+                MultiSelect.setAll(id);
+                MultiSelect.setDisabled(id, false);
+              } catch (_) { /* não inicializado ainda — ok */ }
+            }
+          } else {
+            // Sigla simples: trava no valor único permitido.
+            el.value = sess.regional;
+            el.disabled = true;
+            if (window.MultiSelect && MultiSelect.getValues) {
+              try {
+                MultiSelect.setValues(id, [sess.regional]);
+                MultiSelect.setDisabled(id, true);
+              } catch (_) { /* não inicializado ainda — ok */ }
+            }
           }
         });
-        currentRegional = sess.regional;
+        // currentRegional: pra grupo, default 'ALL' (escopo expandido no backend);
+        // pra sigla simples, a própria sigla.
+        currentRegional = isGroup ? 'ALL' : sess.regional;
       }
     }
 
@@ -7133,8 +7162,18 @@
       const userReg = sess && sess.regional;
       const isAdmin = sess && sess.role === 'admin';
 
-      // Define quais regionais o user vê (não-admin só a sua)
-      const regionais = (userReg && userReg !== 'ALL') ? [userReg] : REGIONAIS_ATIVAS;
+      // Define quais regionais o user vê.
+      // - admin/ALL: todas as ativas
+      // - grupo (ex: ES → GUA+CAC): expande pras siglas filhas
+      // - sigla simples: só a sua
+      const regionais = (() => {
+        if (!userReg || userReg === 'ALL') return REGIONAIS_ATIVAS;
+        const expanded = expandRegional(userReg);
+        if (expanded && expanded.length > 1) {
+          return expanded.filter(r => REGIONAIS_ATIVAS.includes(r));
+        }
+        return [userReg];
+      })();
       const nomeReg = { GUA: 'Guarapari', CAC: 'Cachoeiro', SJC: 'São José dos Campos' };
       const corReg  = { GUA: '#086738', CAC: '#0a4d8c', SJC: '#c4520d' };
 
@@ -7449,7 +7488,14 @@
           fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}${teamQs}`),
           fetch(`${API}/totais/subcat?de=${cs.de}&ate=${cs.ate}&regional=${regional}${teamQs}`),
         ]);
-        const subcatData = subcatRes.ok ? await subcatRes.json() : { totais: { ALL:{},GUA:{},CAC:{},SJC:{} }, quantidades:{} };
+        const subcatData = subcatRes.ok
+          ? await subcatRes.json()
+          : (() => {
+              // Fallback dinâmico — popula slot por regional ativa + ALL.
+              const t = { ALL: {} };
+              REGIONAIS_ATIVAS.forEach(r => { t[r] = {}; });
+              return { totais: t, quantidades: {} };
+            })();
         const equipeData = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
         const csData     = csRes.ok     ? await csRes.json()     : null;
 
@@ -7759,7 +7805,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     // ── METAS (banco de dados via API) ─────────────────────────────────────
-    let _metasCache = { GUA: {}, CAC: {}, SJC: {} };
+    // Cache de metas — inicializa um slot por regional ativa.
+    // Cliente nunca acessa metas por grupo (ex: 'ES'); grupos são expandidos
+    // pras siglas filhas antes de ler/escrever.
+    let _metasCache = REGIONAIS_ATIVAS.reduce((acc, r) => { acc[r] = {}; return acc; }, {});
 
     async function fetchMetas() {
       try {
@@ -7925,8 +7974,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // regional. Para tipos MD/SF/DD: usa _subcatMap para classificar em sub_code;
     // ausência → OUTROS. Retorna também `quantidades` por key (DD/C93, DD/BTZ013).
     function calcTotaisPorRegional(teams, de, ate) {
-      const totais = { GUA: {}, CAC: {}, SJC: {}, ALL: {} };
-      const quantidades = { GUA: {}, CAC: {}, SJC: {}, ALL: {} };
+      // Inicializa slots por regional ativa + ALL — evita undefined em quem indexa.
+      const totais = { ALL: {} };
+      const quantidades = { ALL: {} };
+      REGIONAIS_ATIVAS.forEach(r => { totais[r] = {}; quantidades[r] = {}; });
       const TIPOS_DESDOBRADOS = { MD: 1, SF: 1, DD: 1 };
 
       const hoje = todayISO();
@@ -8395,7 +8446,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Calculado a partir de dentroDoRange (mesmos dados da matriz abaixo),
       // garantindo que cards e totais de linha sempre batem com o período selecionado.
       const consolidaTotais = {};
-      const regsVisiveis = (regional && regional !== 'ALL') ? [regional] : REGIONAIS_ATIVAS;
+      // Expande grupo (ex: ES → GUA+CAC) pra somar nas filhas; sigla simples → ela mesma.
+      const regsVisiveis = (regional && regional !== 'ALL')
+        ? (expandRegional(regional) || [regional])
+        : REGIONAIS_ATIVAS;
       dentroDoRange.forEach(d => {
         regsVisiveis.forEach(r => {
           Object.entries(d[r] || {}).forEach(([key, v]) => {
@@ -8936,10 +8990,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const isAdmin = role === 'admin';
       const userRegional = (window.__currentUserRegional || 'ALL').toUpperCase();
 
-      // Define quais regionais o usuário pode ver
-      const regsVisiveis = isAdmin
-        ? REGIONAIS_ATIVAS.slice()
-        : (REGIONAIS_ATIVAS.includes(userRegional) ? [userRegional] : []);
+      // Define quais regionais o usuário pode ver.
+      // - admin: todas as ativas
+      // - grupo (ex: ES → GUA+CAC): expande pras siglas filhas
+      // - sigla simples: só a sua
+      const regsVisiveis = (() => {
+        if (isAdmin) return REGIONAIS_ATIVAS.slice();
+        const expanded = expandRegional(userRegional);
+        if (expanded) return expanded.filter(r => REGIONAIS_ATIVAS.includes(r));
+        return REGIONAIS_ATIVAS.includes(userRegional) ? [userRegional] : [];
+      })();
 
       if (regsVisiveis.length === 0) {
         alert('Sua conta não está vinculada a uma regional válida.');
@@ -8965,7 +9025,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Pode editar: admin OU usuário regional autenticado (edita SÓ sua regional).
       // Read-only só pra perfis estranhos (sem regional vinculada, sem role).
       const podeEditar = isAdmin
-        || (userRegional && REGIONAIS_ATIVAS.includes(userRegional));
+        || (userRegional && regionalAutorizada(userRegional) && userRegional !== 'ALL');
 
       regsVisiveis.forEach(reg => {
         const grid = document.getElementById('metas-grid-' + reg);
@@ -9004,8 +9064,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const userReg = (window.__currentUserRegional || '').toUpperCase();
       const isAdmin = role === 'admin';
 
-      // Não-admin precisa ter regional válida
-      if (!isAdmin && !REGIONAIS_ATIVAS.includes(userReg)) {
+      // Não-admin precisa ter regional válida (sigla simples ou grupo conhecido)
+      if (!isAdmin && (!regionalAutorizada(userReg) || userReg === 'ALL')) {
         alert('Sua conta não está vinculada a uma regional válida.');
         return;
       }
@@ -9013,9 +9073,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const btn = document.querySelector('#metas-overlay .btn-salvar');
       if (btn) { btn.textContent = 'Salvando...'; btn.disabled = true; }
 
-      // Admin envia todas regionais; user regional envia só a sua.
+      // Admin envia todas regionais; user regional envia só a sua (ou as expandidas
+      // se for um grupo, ex: ES → GUA+CAC).
       // Backend valida e descarta slots não autorizados (defesa em camadas).
-      const regsParaSalvar = isAdmin ? REGIONAIS_ATIVAS : [userReg];
+      const regsParaSalvar = isAdmin
+        ? REGIONAIS_ATIVAS
+        : (expandRegional(userReg) || [userReg]).filter(r => REGIONAIS_ATIVAS.includes(r));
       const obj = {};
       regsParaSalvar.forEach(reg => {
         obj[reg] = {};
@@ -9042,9 +9105,35 @@ ${equipes.length > 0 ? `<div class="perf-section">
       GUA: 'Guarapari',
       CAC: 'Cachoeiro',
       SJC: 'São José dos Campos',
+      ES:  'Espírito Santo',
+      ALL: 'Todas as Regionais',
     };
     function regionalNome(sigla) {
       return REGIONAIS_NOMES[sigla] || sigla || '—';
+    }
+
+    // Espelha services/regionalGroups.js do backend. Mantenha em sincronia se adicionar grupos novos.
+    const REGIONAIS_GROUPS = { ES: ['GUA', 'CAC'] };
+    function expandRegional(regional) {
+      if (!regional || regional === 'ALL') return null;
+      const r = String(regional).toUpperCase().trim();
+      if (REGIONAIS_GROUPS[r]) return [...REGIONAIS_GROUPS[r]];
+      return [r];
+    }
+    function regionalMatches(userReg, rowReg) {
+      const regs = expandRegional(userReg);
+      if (!regs) return true;
+      return regs.includes(String(rowReg || '').toUpperCase());
+    }
+    // True se a regional do user é um grupo conhecido (ex: 'ES') OU sigla individual
+    // OU 'ALL'. Usado pra autorizar usuários ES em validações que antes só aceitavam
+    // siglas individuais (GUA/CAC/SJC).
+    function regionalAutorizada(userReg) {
+      if (!userReg) return false;
+      const r = String(userReg).toUpperCase().trim();
+      if (r === 'ALL') return true;
+      if (REGIONAIS_GROUPS[r]) return true;
+      return REGIONAIS_ATIVAS.includes(r);
     }
 
     /**
@@ -10990,8 +11079,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
           <div>
             <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Regional</label>
             <select id="eq-form-regional" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
-              <option value="GUA" ${e.regional === 'GUA' ? 'selected' : ''}>GUA</option>
-              <option value="CAC" ${e.regional === 'CAC' ? 'selected' : ''}>CAC</option>
+              ${REGIONAIS_ATIVAS.map(r => `<option value="${r}" ${e.regional === r ? 'selected' : ''}>${r}</option>`).join('')}
             </select>
           </div>
           <div>
