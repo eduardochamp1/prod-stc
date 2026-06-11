@@ -5440,59 +5440,61 @@
       showOrHide('btn-header-metas', true);       // todos os roles podem abrir
       showOrHide('btn-header-admin', isAdmin);
 
-      // Restringe regional no seletor para usuários não-admin.
-      // Inclui IDs que viraram multi-select (rej/desloc): aplica via
-      // MultiSelect.setValues+setDisabled quando o componente já estiver
-      // inicializado; senão setamos o <select> original e o init pega
-      // depois pelo `applyUserPermissions` chamado no boot/init de aba.
-      if (sess.regional && sess.regional !== 'ALL') {
-        const ids = [
-          'regional-select', 'ranking-regional-select', 'hist-regional-select',
-          'graf-regional-select', 'rej-regional-select', 'desloc-regional-select',
-          'mapa-regional-select', 'notas-regional-select',
-        ];
-        // Pra grupos (ex: ES → GUA+CAC) o user pode escolher entre as filhas
-        // (não é read-only puro). Pra sigla simples (GUA/CAC/SJC) trava no valor.
-        const expanded = expandRegional(sess.regional);
-        const isGroup = expanded && expanded.length > 1;
+      // Re-popula SEMPRE os dropdowns de regional baseado no escopo do user.
+      // Antes só modificava quando regional!='ALL', mas isso deixava o dropdown
+      // contaminado ao trocar de conta sem reload (ex: login engelmig_es → logout
+      // → login admin mantinha dropdown só com GUA+CAC, escondendo SJC).
+      //
+      // Escopo por tipo de user:
+      //   admin (regional='ALL') → todas as REGIONAIS_ATIVAS, dropdown destravado
+      //   grupo (ex: 'ES')      → expandRegional() → siglas filhas, destravado
+      //   sigla (GUA/CAC/SJC)   → 1 só sigla, dropdown travado (disabled)
+      const userReg = sess.regional || 'ALL';
+      const expanded = expandRegional(userReg);  // null pra ALL
+      const escopo = userReg === 'ALL'
+        ? REGIONAIS_ATIVAS.slice()
+        : (expanded || [userReg]);
+      const isSinglesigla = userReg !== 'ALL' && escopo.length === 1 && !expanded;
+      const labelTodas = userReg === 'ALL'
+        ? 'Todas as Regionais'
+        : `Todas (${regionalNome(userReg)})`;
 
-        ids.forEach(id => {
-          const el = document.getElementById(id);
-          if (!el) return;
+      const ids = [
+        'regional-select', 'ranking-regional-select', 'hist-regional-select',
+        'graf-regional-select', 'rej-regional-select', 'desloc-regional-select',
+        'mapa-regional-select', 'notas-regional-select',
+      ];
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
 
-          if (isGroup) {
-            // Re-popula com ALL (significando "todas do escopo") + as filhas.
-            // O label 'ALL' fica "Todas (Grupo)" pra deixar claro o escopo.
-            const opts = [
-              `<option value="ALL">Todas (${regionalNome(sess.regional)})</option>`,
-              ...expanded.map(r => `<option value="${r}">${regionalNome(r)}</option>`),
-            ].join('');
-            el.innerHTML = opts;
-            el.value = 'ALL';
-            el.disabled = false;
-            if (window.MultiSelect && MultiSelect.getValues) {
-              try {
-                MultiSelect.refresh(id);
-                MultiSelect.setAll(id);
-                MultiSelect.setDisabled(id, false);
-              } catch (_) { /* não inicializado ainda — ok */ }
+        // Re-popula o <select> original com as regionais do escopo do user
+        const opts = [
+          `<option value="ALL">${labelTodas}</option>`,
+          ...escopo.map(r => `<option value="${r}">${regionalNome(r)}</option>`),
+        ].join('');
+        el.innerHTML = opts;
+        el.value = isSinglesigla ? userReg : 'ALL';
+        el.disabled = isSinglesigla;
+
+        // Sincroniza o componente MultiSelect (se já inicializado pra esse id)
+        if (window.MultiSelect && MultiSelect.getValues) {
+          try {
+            MultiSelect.refresh(id);
+            if (isSinglesigla) {
+              MultiSelect.setValues(id, [userReg]);
+              MultiSelect.setDisabled(id, true);
+            } else {
+              MultiSelect.setAll(id);
+              MultiSelect.setDisabled(id, false);
             }
-          } else {
-            // Sigla simples: trava no valor único permitido.
-            el.value = sess.regional;
-            el.disabled = true;
-            if (window.MultiSelect && MultiSelect.getValues) {
-              try {
-                MultiSelect.setValues(id, [sess.regional]);
-                MultiSelect.setDisabled(id, true);
-              } catch (_) { /* não inicializado ainda — ok */ }
-            }
-          }
-        });
-        // currentRegional: pra grupo, default 'ALL' (escopo expandido no backend);
-        // pra sigla simples, a própria sigla.
-        currentRegional = isGroup ? 'ALL' : sess.regional;
-      }
+          } catch (_) { /* não inicializado ainda — ok, init pega depois */ }
+        }
+      });
+
+      // currentRegional: pra sigla única, a sigla travada. Pra ALL ou grupo, 'ALL'
+      // (significando "todas do escopo expandido"). O backend faz a expansão real.
+      currentRegional = isSinglesigla ? userReg : 'ALL';
     }
 
     function boot() {
