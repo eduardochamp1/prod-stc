@@ -41,11 +41,12 @@ router.post('/auth/login', (req, res) => {
     return res.status(401).json({ error: 'Usuário ou senha incorretos' });
 
   res.json({
-    token:    result.token,
-    username: result.username,
-    role:     result.role,
-    regional: result.regional,
-    exp:      result.exp,
+    token:     result.token,
+    v:         result.v,
+    username:  result.username,
+    role:      result.role,
+    regionals: result.regionals,
+    exp:       result.exp,
   });
 });
 
