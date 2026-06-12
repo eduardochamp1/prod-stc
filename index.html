@@ -5352,7 +5352,11 @@
 
     // Deriva sess.regional (string legada — 'ALL' | 'ES' | sigla única) a partir
     // do array regionals[] retornado pelo backend (JWT v=2). Mantém compat com
-    // ~15 callsites que ainda leem sess.regional direto. Task 10 vai migrar tudo.
+    // callsites que ainda leem sess.regional direto.
+    // TODO(post-Task-10): ainda restam ~7 callsites lendo sess.regional para travar
+    // dropdowns de regional ao perfil do user (linhas ~6255, 6742, 7299, 7419, 5502).
+    // Migrar para sess.regionals[] em task futura — quando todos sumirem, remover
+    // _deriveLegacyRegional e o set de data.regional em saveSession().
     function _deriveLegacyRegional(regionals) {
       if (!Array.isArray(regionals) || regionals.length === 0) return 'ALL';
       // ALL = todas as ativas selecionadas
@@ -6297,11 +6301,12 @@
       const tipos     = MultiSelect.getValues('rej-tipo-select');
       const motivos   = MultiSelect.getValues('rej-motivo-select');
       const qp = new URLSearchParams({ de, ate });
-      // Regional: backend hoje aceita 1 só. Se mais de 1 marcada, manda
-      // sem filtro (= todas) — o filtro fica no client se necessário.
-      // Mantém comportamento "ALL" quando vazio.
-      if (regionais.length === 1) qp.set('regional', regionais[0]);
-      else if (regionais.length > 1) qp.set('regional', regionais.join(','));
+      // Regionals: backend aceita CSV via IN (Task 10).
+      // Sem seleção ⇒ todas as regionais permitidas do user.
+      const _rejExp = regionais.length === 0
+        ? [...userRegionals]
+        : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
+      qp.set('regionals', (_rejExp.length ? _rejExp : [...userRegionals]).join(','));
       if (teams.length > 0)   qp.set('team',   teams.join(','));
       if (tipos.length > 0)   qp.set('tipos',  tipos.join(','));
       if (motivos.length > 0) qp.set('motivos', motivos.join(','));
@@ -6323,8 +6328,10 @@
         const { de, ate } = rejRange();
         const regionais = MultiSelect.getValues('rej-regional-select');
         const qp = new URLSearchParams({ de, ate });
-        if (regionais.length === 1)      qp.set('regional', regionais[0]);
-        else if (regionais.length > 1)   qp.set('regional', regionais.join(','));
+        const _motExp = regionais.length === 0
+          ? [...userRegionals]
+          : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
+        qp.set('regionals', (_motExp.length ? _motExp : [...userRegionals]).join(','));
         const motivos = await fetch(`${API}/rejeicoes/motivos?${qp.toString()}`).then(r => r.json());
         motivos.sort((a, b) => String(a.code).localeCompare(String(b.code)));
         const opts = ['<option value="ALL">Todos os motivos</option>']
@@ -6754,8 +6761,10 @@
       const teams     = MultiSelect.getValues('desloc-equipe-select');
       const acimaVal = document.getElementById('desloc-acima-select')?.value || '';
       const qs  = new URLSearchParams({ de, ate });
-      if (regionais.length === 1)    qs.set('regional', regionais[0]);
-      else if (regionais.length > 1) qs.set('regional', regionais.join(','));
+      const _desExp = regionais.length === 0
+        ? [...userRegionals]
+        : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
+      qs.set('regionals', (_desExp.length ? _desExp : [...userRegionals]).join(','));
       if (teams.length > 0)          qs.set('team', teams.join(','));
       // Limite alto (5000 = max do backend). Antes era 300 como anti-quota
       // do OSRM publico (1 req/s); agora com HERE + cache local cobrindo
@@ -7596,7 +7605,13 @@
       const teams     = MultiSelect.getValues('graf-equipe-select');
       // Regional/team: backend aceita CSV via IN. Tipo equipe (COMERCIAL/PLANTAO/TODAS)
       // não tem semântica multi — quando ≥2, considera TODAS (igual desmarcar tudo).
-      const regional = regionais.length === 0 ? 'ALL'   : regionais.join(',');
+      // Sem seleção (vazio ou 'ALL') ⇒ manda todas as regionais permitidas ao user.
+      // Backend aceita ?regionals=GUA,CAC (CSV). Expande grupos (ES → GUA,CAC) e
+      // restringe ao userRegionals (defesa em profundidade — backend revalida).
+      const _grafExpanded = (regionais.length === 0 || regionais.includes('ALL'))
+        ? [...userRegionals]
+        : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
+      const regionalsCsv = encodeURIComponent((_grafExpanded.length ? _grafExpanded : [...userRegionals]).join(','));
       const tipo     = tipos.length !== 1     ? 'TODAS' : tipos[0];
       const team     = teams.length === 0     ? 'ALL'   : teams.join(',');
 
@@ -7616,9 +7631,9 @@
         const cs = grafCsCicloRange();
 
         const [subcatRes, equipeRes, csRes] = await Promise.all([
-          fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regional=${regional}${teamQs}`),
-          fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regional=${regional}&tipo=${tipo}${teamQs}`),
-          fetch(`${API}/totais/subcat?de=${cs.de}&ate=${cs.ate}&regional=${regional}${teamQs}`),
+          fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regionals=${regionalsCsv}${teamQs}`),
+          fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regionals=${regionalsCsv}&tipo=${tipo}${teamQs}`),
+          fetch(`${API}/totais/subcat?de=${cs.de}&ate=${cs.ate}&regionals=${regionalsCsv}${teamQs}`),
         ]);
         const subcatData = subcatRes.ok
           ? await subcatRes.json()
@@ -8409,13 +8424,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const input = document.getElementById('ranking-mes-input');
       const ym = input?.value || mesAtualInput();
       if (input && !input.value) input.value = ym;
-      const { backendValue, clientFilter } = _readMultiRegional('ranking-regional-select');
+      const { clientFilter, regionalsCsv } = _readMultiRegional('ranking-regional-select');
       document.getElementById('ranking-mes-label').textContent = fmtMes(ym);
       document.getElementById('ranking-content').innerHTML =
         '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
 
       try {
-        const url = `${API}/ranking/equipes?m=${ym}${backendValue !== 'ALL' ? '&regional=' + backendValue : ''}`;
+        const url = `${API}/ranking/equipes?m=${ym}&regionals=${regionalsCsv}`;
         const data = await fetch(url).then(r => r.json());
         let ranking = data.ranking || [];
         // Multi-regional (2 de 3): backend trouxe tudo, filtra aqui
@@ -8510,7 +8525,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // continua restrito porque o usuário só consegue selecionar a sua. Caso 2 de 3
       // pra admin: backend retorna agregado de todas → não tem regional por linha pra
       // filtrar com precisão aqui, então usamos backendValue direto.
-      const { backendValue } = _readMultiRegional('hist-regional-select');
+      const { backendValue, regionalsCsv } = _readMultiRegional('hist-regional-select');
       const regional = backendValue;
 
       // Mês "principal" = mês do início do range (endpoint subcats agrega por mês inteiro)
@@ -8520,8 +8535,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       cont.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando subcategorias...</div>';
 
       try {
-        const params = new URLSearchParams({ m: ym });
-        if (regional !== 'ALL') params.set('regional', regional);
+        const params = new URLSearchParams({ m: ym, regionals: decodeURIComponent(regionalsCsv) });
         const [diarioRes, mesRes] = await Promise.all([
           fetch(`${API}/historico/subcats/diario?${params}`).then(r => r.json()),
           fetch(`${API}/historico/subcats/mes?${params}`).then(r => r.json()),
@@ -8758,7 +8772,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       try {
         const params = new URLSearchParams({ m: ym, tipo, subCode });
-        if (regional && regional !== 'ALL') params.set('regional', regional);
+        const _rkExp = (!regional || regional === 'ALL')
+          ? [...userRegionals]
+          : (expandRegional(regional) || [regional]).filter(r => userRegionals.includes(r));
+        params.set('regionals', (_rkExp.length ? _rkExp : [...userRegionals]).join(','));
         const data = await fetch(`${API}/historico/subcats/ranking?${params}`).then(r => r.json());
         renderSubcatRanking(data.ranking || [], tipo, subCode, nome, qtdUnit);
       } catch (err) {
@@ -8875,8 +8892,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (ateInput && !ateInput.value) ateInput.value = today;
       const de = deInput?.value || firstOfMonth;
       const ate = ateInput?.value || today;
-      const { backendValue, clientFilter } = _readMultiRegional('hist-regional-select');
+      const { backendValue, clientFilter, regionalsCsv } = _readMultiRegional('hist-regional-select');
       _histRegionalClientFilter = clientFilter;
+      const _histRegionalsCsv = regionalsCsv;
 
       document.getElementById('hist-periodo-label').textContent = `${fmtData(de)} a ${fmtData(ate)}`;
 
@@ -8889,8 +8907,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         '<div class="empty-state"><div class="spinner"></div><br>Carregando histórico...</div>';
 
       try {
-        const params = new URLSearchParams({ de, ate });
-        if (backendValue !== 'ALL') params.set('regional', backendValue);
+        const params = new URLSearchParams({ de, ate, regionals: decodeURIComponent(_histRegionalsCsv) });
         const data = await fetch(`${API}/historico/sessoes?${params}`).then(r => r.json());
         _histDias = data.dias || [];
         popularHistTeamSelect(_histDias);
@@ -9285,12 +9302,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       document.getElementById('date-display').textContent = label;
 
       try {
-        // Histórico: se for multi-regional (CSV) ou 'ALL', manda regional vazio
-        // e filtra client-side via _regionalMatch. Backend só aceita 1 valor.
-        const _isSingleReg = currentRegional && currentRegional !== 'ALL' && !String(currentRegional).includes(',');
+        // Histórico: manda regionals=CSV (Task 10 — backend aceita IN nativamente).
+        // Live (/teams): scope é derivado do JWT, mas mandamos regionals explícito
+        // pra refletir selectedRegionals (subset do user). Backend revalida.
+        const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
         const url = hist
-          ? `${API}/teams/historico?de=${de}&ate=${ate}&regional=${_isSingleReg ? currentRegional : ''}`
-          : `${API}/teams`;
+          ? `${API}/teams/historico?de=${de}&ate=${ate}&regionals=${_regionalsCsv}`
+          : `${API}/teams?regionals=${_regionalsCsv}`;
 
         const [res] = await Promise.all([
           fetch(url).then(r => r.json()),
@@ -9343,13 +9361,45 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // Debounce 300ms p/ evitar uma escrita por checkbox marcado em sequência
       clearTimeout(_saveFiltersTimer);
       _saveFiltersTimer = setTimeout(() => {
-        const body = { regional: currentRegional, tipos: [...selectedTipos], subcats: [...selectedSubcats] };
+        // Schema v2 (Task 10): regionals=[...] em vez de regional='X' (CSV/sigla).
+        // migrateFilter() na leitura cobre saves antigos.
+        const body = {
+          regionals: [...selectedRegionals],
+          tipos: [...selectedTipos],
+          subcats: [...selectedSubcats],
+        };
         fetch(`${API}/settings/${_filtersKey()}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         }).catch(err => console.warn('[filtros] falha ao salvar:', err.message));
       }, 300);
+    }
+
+    /**
+     * Task 10: migra saved filter do schema v1 (regional: 'ES'|'GUA'|'ALL'|CSV)
+     * para v2 (regionals: ['GUA','CAC']). Idempotente — se já é v2, retorna como veio.
+     */
+    function migrateFilter(f) {
+      if (!f || typeof f !== 'object') return f;
+      if (Array.isArray(f.regionals)) return f;          // já v2
+      let regionals;
+      const raw = f.regional;
+      if (!raw || raw === 'ALL') {
+        regionals = [...userRegionals];
+      } else if (typeof raw === 'string' && raw.includes(',')) {
+        // CSV salvo de versão intermediária
+        const parts = raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+        regionals = parts.flatMap(p => expandRegional(p) || [p]);
+      } else {
+        const up = String(raw).toUpperCase();
+        regionals = expandRegional(up) || [up];
+      }
+      // Restringe ao userRegionals (defesa contra contaminação cross-user)
+      regionals = regionals.filter(r => userRegionals.includes(r));
+      if (!regionals.length) regionals = [...userRegionals];
+      const { regional, ...rest } = f;
+      return { ...rest, regionals };
     }
 
     async function applySavedFilters() {
@@ -9364,34 +9414,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }
       if (!saved) return;
 
-      // Regional salvo: só aplica se compatível com a permissão do user.
-      // Defesa contra contaminação por chave global antiga ou desserialização
-      // de dados de outro perfil.
-      const sess = getStoredSession();
-      const userReg = sess && sess.regional;
-      let allowedRegional = saved.regional;
-      if (userReg && userReg !== 'ALL' && allowedRegional !== userReg) {
-        // Não-admin: ignora valor salvo se não bater com sua regional
-        allowedRegional = userReg;
-      }
+      // Task 10: migra schema v1 (regional) → v2 (regionals[]). migrateFilter
+      // já restringe ao userRegionals — defesa contra contaminação cross-user.
+      saved = migrateFilter(saved);
 
       const regSel = document.getElementById('regional-select');
-      if (allowedRegional && regSel && !regSel.disabled) {
-        // Roteia via selectRegional pra atualizar selectedRegionals + sync.
-        // Suprime renderAll/saveFilters intermediário — init() vai renderizar.
-        const parts = String(allowedRegional).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-        if (allowedRegional === 'ALL' || !parts.length) {
-          selectedRegionals = [...userRegionals];
-        } else {
-          const expanded = parts.flatMap(p => expandRegional(p) || [p]);
-          const filtered = expanded.filter(r => userRegionals.includes(r));
-          selectedRegionals = filtered.length ? filtered : [...userRegionals];
-        }
+      if (Array.isArray(saved.regionals) && saved.regionals.length && regSel && !regSel.disabled) {
+        selectedRegionals = saved.regionals.filter(r => userRegionals.includes(r));
+        if (!selectedRegionals.length) selectedRegionals = [...userRegionals];
         _syncCurrentRegional();
-        regSel.value = allowedRegional;
+        // Mantém value legado no select pra UI (CSV ou sigla única).
+        regSel.value = currentRegional;
         ['ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
           const el = document.getElementById(id);
-          if (el && !el.disabled) el.value = allowedRegional;
+          if (el && !el.disabled) el.value = currentRegional;
         });
       }
 
@@ -9620,11 +9656,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const v = document.getElementById(id)?.value || 'ALL';
         vals = [v];
       }
+      // Expande grupos (ES → GUA,CAC) e restringe ao userRegionals.
+      const expanded = (vals.includes('ALL'))
+        ? [...userRegionals]
+        : vals.flatMap(v => expandRegional(v) || [v]).filter(r => userRegionals.includes(r));
+      const regionalsArr = expanded.length ? expanded : [...userRegionals];
+      const regionalsCsv = encodeURIComponent(regionalsArr.join(','));
+
       const total = (typeof REGIONAIS_ATIVAS !== 'undefined' && REGIONAIS_ATIVAS.length) || 3;
       const isAll = vals[0] === 'ALL' || vals.length >= total;
-      if (isAll) return { backendValue: 'ALL', clientFilter: null };
-      if (vals.length === 1) return { backendValue: vals[0], clientFilter: null };
-      return { backendValue: 'ALL', clientFilter: new Set(vals) };
+      if (isAll) return { backendValue: 'ALL', clientFilter: null, regionalsCsv, regionalsArr };
+      if (vals.length === 1) return { backendValue: vals[0], clientFilter: null, regionalsCsv, regionalsArr };
+      return { backendValue: 'ALL', clientFilter: new Set(vals), regionalsCsv, regionalsArr };
     }
 
     // Resolve regional de um registro do histórico/ranking (payload ou fallback por setor)
@@ -9845,7 +9888,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // está logado). Mesmo padrão de "OS Executadas" que já usa o agregado
       // persistente. Bug reportado em 11/06/2026.
       {
-        const reg = currentRegional && currentRegional !== 'ALL' ? `&regional=${currentRegional}` : '';
+        const reg = `&regionals=${encodeURIComponent(selectedRegionals.join(','))}`;
         fetch(`${API}/rejeicoes/totais?de=${de}&ate=${ate}${reg}`)
           .then(r => r.json())
           .then(j => {
@@ -9920,9 +9963,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
         // equipes oficiais (whitelist filtrada pela regional do user).
         // Whitelist define TOTAL EQUIPES — soma das equipes que DEVERIAM logar,
         // não só as que estão com sessão tocando o range atual.
+        const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
         const [totaisRes, equipesRes] = await Promise.all([
-          fetch(`${API}/totais/dia?de=${de}&ate=${ate}`),
-          fetch(`${API}/equipes`),
+          fetch(`${API}/totais/dia?de=${de}&ate=${ate}&regionals=${_regionalsCsv}`),
+          fetch(`${API}/equipes?regionals=${_regionalsCsv}`),
         ]);
         const j = await totaisRes.json();
         const eqData = await equipesRes.json().catch(() => null);
@@ -11566,7 +11610,13 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (btn) { btn.innerHTML = '⏳ Baixando...'; btn.disabled = true; }
 
       try {
-        const url = `${API}/export/historico?de=${de}&ate=${ate}&regional=${regional}`;
+        // `regional` aqui é o backendValue do helper (sigla única ou 'ALL').
+        // Para 'ALL' mandamos todas as regionais permitidas; senão expande/restringe.
+        const _expReg = (regional === 'ALL')
+          ? [...userRegionals]
+          : (expandRegional(regional) || [regional]).filter(r => userRegionals.includes(r));
+        const _regCsv = encodeURIComponent((_expReg.length ? _expReg : [...userRegionals]).join(','));
+        const url = `${API}/export/historico?de=${de}&ate=${ate}&regionals=${_regCsv}`;
         const res = await fetch(url);
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
