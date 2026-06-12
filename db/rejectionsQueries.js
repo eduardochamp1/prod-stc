@@ -10,7 +10,7 @@
 
 const { getClient } = require('../services/supabaseClient');
 const { _getPool } = require('../services/pgShim');
-const { applyRegional, regionalSqlClause } = require('../services/regionalGroups');
+const { inRegionals, inRegionalsSql } = require('../services/regionals');
 
 // ── Leitura ──────────────────────────────────────────────────────────────────
 
@@ -57,8 +57,8 @@ async function getEmptyRejectedIds() {
  * @param {string} de            'YYYY-MM-DD'
  * @param {string} ate           'YYYY-MM-DD'
  * @param {object} [opts]
- * @param {string} [opts.regional]  'GUA' | 'CAC' | 'ALL'
- * @param {string} [opts.tipo]      'MD' | 'LN' | ... (filtro)
+ * @param {string[]} [opts.regionals]  ['GUA'] | ['GUA','CAC'] | undefined (sem filtro)
+ * @param {string} [opts.tipo]         'MD' | 'LN' | ... (filtro)
  * @param {string} [opts.teamName]
  */
 async function listRejectionsByPeriod(de, ate, opts = {}) {
@@ -70,7 +70,9 @@ async function listRejectionsByPeriod(de, ate, opts = {}) {
     .lte('session_date', ate)
     .order('rejection_date', { ascending: false });
 
-  q = applyRegional(q, opts.regional);
+  if (Array.isArray(opts.regionals) && opts.regionals.length > 0) {
+    q = inRegionals(q, opts.regionals);
+  }
   if (opts.tipo)     q = q.eq('tipo', opts.tipo);
   if (opts.teamName) q = q.eq('team_name', opts.teamName);
 
@@ -92,7 +94,9 @@ async function getTopMotivos(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
+  if (Array.isArray(opts.regionals) && opts.regionals.length > 0) {
+    where.push(inRegionalsSql(opts.regionals, params));
+  }
   if (opts.tipo)     { params.push(opts.tipo);     where.push(`tipo = $${params.length}`); }
   if (opts.teamName) { params.push(opts.teamName); where.push(`team_name = $${params.length}`); }
 
@@ -121,7 +125,9 @@ async function getTopTeams(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
+  if (Array.isArray(opts.regionals) && opts.regionals.length > 0) {
+    where.push(inRegionalsSql(opts.regionals, params));
+  }
   if (opts.tipo) { params.push(opts.tipo); where.push(`tipo = $${params.length}`); }
 
   const sql = `
@@ -146,7 +152,9 @@ async function getTopColaboradores(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
+  if (Array.isArray(opts.regionals) && opts.regionals.length > 0) {
+    where.push(inRegionalsSql(opts.regionals, params));
+  }
   if (opts.tipo)     { params.push(opts.tipo);     where.push(`tipo = $${params.length}`); }
   if (opts.teamName) { params.push(opts.teamName); where.push(`team_name = $${params.length}`); }
 
@@ -175,7 +183,9 @@ async function getResumoPeriodo(de, ate, opts = {}) {
   const pool = _getPool();
   const params = [de, ate];
   const where  = ['session_date >= $1', 'session_date <= $2'];
-  { const c = regionalSqlClause(opts.regional, params); if (c) where.push(c); }
+  if (Array.isArray(opts.regionals) && opts.regionals.length > 0) {
+    where.push(inRegionalsSql(opts.regionals, params));
+  }
 
   const [total, porRegional, porTipo] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS total FROM note_rejections WHERE ${where.join(' AND ')}`, params),

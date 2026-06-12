@@ -6,7 +6,8 @@
 const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/mockData');
 const { getTeamsBySector, REGIONAL_MAP } = require('./wpaService');
 const { isOficial, getMeta } = require('./equipesOficiais');
-const { expandRegional, regionalMatches } = require('./regionalGroups');
+// Nota: regional agora é SEMPRE string[] de siglas reais (GUA/CAC/SJC).
+// Caller (route ou cron) responsável por garantir array válido.
 
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 
@@ -437,14 +438,12 @@ const SETORES = {
 async function getTeams(filters = {}) {
   if (MODE === 'mock') return getMockTeams(filters);
 
-  // Determina quais setores buscar.
-  // Suporta grupos: regional='ES' expande para ['GUA','CAC'] e une os setores
-  // (DESG+DEPT+DESC). Antes, regional='ES' caia no fallback SETORES.ALL e
-  // incluía DSSJ — vazando SJC pro usuário do Espírito Santo.
-  const regional = filters.regional || 'ALL';
-  const regs     = expandRegional(regional);  // null = ALL (sem filtro)
+  // Determina quais setores buscar. `filters.regionals` é string[] de siglas
+  // reais (GUA/CAC/SJC), expandido pelo middleware applyScope a partir do
+  // escopo do usuário. Sem array (ex: cron sem filtro) → SETORES.ALL.
+  const regs = Array.isArray(filters.regionals) ? filters.regionals : null;
   let setoresPorRegional;
-  if (!regs) {
+  if (!regs || regs.length === 0) {
     setoresPorRegional = SETORES.ALL;
   } else {
     setoresPorRegional = regs.flatMap(r => SETORES[r] || []);
@@ -498,9 +497,10 @@ async function getSummary(filters = {}) {
     { regionalId: 'SJC', nome: 'São José dos Campos', setores: SETORES.SJC },
   ];
 
-  // Filtra pelas regionais visíveis ao usuário (grupos como ES expandem).
-  const regs = expandRegional(filters.regional);
-  const regionais = regs
+  // Filtra pelas regionais visíveis ao usuário. `filters.regionals` é
+  // string[] de siglas reais (sem ALL/grupos). Sem array → todas.
+  const regs = Array.isArray(filters.regionals) ? filters.regionals : null;
+  const regionais = (regs && regs.length > 0)
     ? TODAS_REGIONAIS.filter(r => regs.includes(r.regionalId))
     : TODAS_REGIONAIS;
 

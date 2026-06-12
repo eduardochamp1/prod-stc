@@ -98,7 +98,7 @@ router.get('/teams', async (req, res) => {
       teams = await sbq().getTeamsFromSupabase({ ...req.query, regionals: req.scope.regionals });
     } else {
       // wpa / mock: dados ao vivo da API WPA ou mock
-      teams = await getTeams(req.query);
+      teams = await getTeams({ ...req.query, regionals: req.scope.regionals });
     }
 
     // ── Summary do dia (UUID-aware, deduplicado, com canceladas) ──────────
@@ -265,7 +265,7 @@ router.get('/teams/:teamId', async (req, res) => {
 // GET /api/summary
 router.get('/summary', async (req, res) => {
   try {
-    const summary = await getSummary(req.query);
+    const summary = await getSummary({ ...req.query, regionals: req.scope.regionals });
     res.json({ summary });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2562,13 +2562,12 @@ function _parseDeslocFilters(req) {
   // Multi-select compat: aceita "team=SIG1,SIG2" e "regional=GUA,CAC"
   const teamsArr     = _csv(req.query.team);
   const teams        = teamsArr && !teamsArr.includes('ALL') ? teamsArr : null;
-  const regionaisArr = _csv(req.query.regional);
-  const regionais    = regionaisArr && !regionaisArr.includes('ALL')
-    ? regionaisArr.map(s => s.toUpperCase()) : null;
+  // Regional: sempre usa req.scope.regionals (já intersectado pelo applyScope
+  // com o escopo do usuário). Query string ?regionals= é lida pelo middleware.
+  const regionais    = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length > 0)
+    ? req.scope.regionals : null;
   return {
     de, ate,
-    // Compat: regional singular se 1 só item; senão null. team_name idem.
-    regional:  regionais && regionais.length === 1 ? regionais[0] : 'ALL',
     regionais,
     team_name: teams && teams.length === 1 ? teams[0] : null,
     teams,
