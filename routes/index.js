@@ -7,7 +7,7 @@ const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
 const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail } = require('../services/wpaService');
 const { dateBRT } = require('../services/timeUtil');
-const { applyRegional, expandRegional, regionalMatches } = require('../services/regionalGroups');
+const { inRegionals } = require('../services/regionals');
 
 // ── VALIDADORES DE PARAMS ─────────────────────────────────────────────────────
 const _RE_YYYYMM    = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -23,7 +23,7 @@ function _parseYearMonth(req, res) {
   }
   return raw || new Date().toISOString().slice(0, 7);
 }
-const { login: authLogin, authMiddleware, requireAdmin }    = require('../middleware/auth');
+const { login: authLogin, authMiddleware, requireAdmin, compatRegionalParam, applyScope } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -51,6 +51,11 @@ router.post('/auth/login', (req, res) => {
 
 // Protege TODAS as rotas abaixo com JWT
 router.use(authMiddleware);
+
+// Compat: aceita ?regional=XX legado e normaliza pra req.scope.regionals
+router.use(compatRegionalParam);
+// Popula req.scope.regionals (sempre array não-vazio) com escopo do user
+router.use(applyScope);
 
 // Todas as rotas /admin/* exigem role=admin (defesa em profundidade — frontend
 // também esconde botões pra não-admin, mas a API rejeita por sua conta).
@@ -176,8 +181,8 @@ async function enforceTeamRegional(req, res, team) {
   if (!team || team === 'ALL') return true;
   if (!req.user || !req.user.regional) return true;
   // Expande grupos: ES → ['GUA','CAC']. Sigla simples vira [sigla]. ALL → null (passa).
-  const userRegs = expandRegional(req.user.regional);
-  if (!userRegs) return true;  // ALL ou similar — sem filtro
+  const userRegs = req.user.regionals;
+  if (!userRegs || userRegs.includes('ALL')) return true;  // ALL ou similar — sem filtro
   // Múltiplas siglas (CSV) — bloqueia se QUALQUER uma não for da(s) regional(is)
   const teams = String(team).split(',').map(s => s.trim()).filter(Boolean);
   for (const t of teams) {
@@ -218,8 +223,8 @@ router.get('/equipes', async (req, res) => {
       .order('sigla');
     // Não-admin → só sua(s) regional(is). Expande grupos (ES → GUA,CAC).
     // Defesa em profundidade — middleware já força regional na query.
-    if (req.user && req.user.regional) {
-      q = applyRegional(q, req.user.regional);
+    if (req.scope && req.scope.regionals) {
+      q = inRegionals(q, req.scope.regionals);
     }
     const { data, error } = await q;
     if (error) throw error;
@@ -316,7 +321,7 @@ router.post('/metas', async (req, res) => {
       if (!userReg || userReg === 'ALL') {
         return res.status(403).json({ error: 'Conta sem regional vinculada', code: 'NO_REGIONAL' });
       }
-      const allowed = expandRegional(userReg) || [userReg];
+      const allowed = req.user.regionals;
       // Pega apenas os slots que o user pode editar
       payload = {};
       for (const r of allowed) {
@@ -380,7 +385,7 @@ router.get('/totais/dia', async (req, res) => {
     // Middleware ja sobrescreveu req.query.regional pra valor do user (ex: 'ES').
     const regional = req.query.regional;
     if (!sq) {
-      const regs = expandRegional(regional) || ['GUA', 'CAC', 'SJC'];
+      const regs = (req.scope && req.scope.regionals) || req.user.regionals || ['GUA', 'CAC', 'SJC'];
       const totais = { ALL: 0 };
       regs.forEach(r => { totais[r] = 0; });
       return res.json({ de, ate, totais });
@@ -2022,7 +2027,7 @@ router.get('/admin/equipes-sem-producao', async (req, res) => {
 
     // Whitelist filtrada por regional
     const all = getOficiais().filter(e =>
-      regional === 'ALL' || regionalMatches(regional, e.regional)
+      req.scope.regionals.includes((e.regional || '').toUpperCase())
     );
     const ausentes = all.filter(e => !produziram.has(e.sigla.toUpperCase()));
 
