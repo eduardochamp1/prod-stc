@@ -45,6 +45,7 @@ function verifyToken(token) {
     if (sig !== expected) return null;
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    if (payload.v !== 2) return null;   // força re-login após upgrade
     return payload;
   } catch { return null; }
 }
@@ -109,11 +110,12 @@ function login(username, password) {
 
   const now     = Math.floor(Date.now() / 1000);
   const payload = {
-    username: user.username,
-    role:     user.role,
-    regional: user.regional,
-    iat:      now,
-    exp:      now + SESSION_SECS,
+    v:         2,
+    username:  user.username,
+    role:      user.role,
+    regionals: user.regionals,
+    iat:       now,
+    exp:       now + SESSION_SECS,
   };
   return { token: signToken(payload), ...payload };
 }
@@ -129,18 +131,14 @@ function authMiddleware(req, res, next) {
   const token   = authHeader.slice(7);
   const payload = verifyToken(token);
   if (!payload) {
-    return res.status(401).json({ error: 'Sessão expirada ou inválida', code: 'EXPIRED' });
+    return res.status(401).json({
+      error: 'Sessão expirada, inválida ou desatualizada',
+      code: 'EXPIRED',
+      relogin: true,
+    });
   }
 
   req.user = payload;
-
-  // Força filtro de regional para usuários não-admin
-  if (payload.regional && payload.regional !== 'ALL') {
-    // Sobrescreve qualquer regional enviado pelo cliente
-    req.query.regional = payload.regional;
-    if (req.body) req.body.regional = payload.regional;
-  }
-
   next();
 }
 
