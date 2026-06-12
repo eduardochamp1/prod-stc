@@ -4456,11 +4456,15 @@
               </div>
             </div>
           </div>
-          <!-- Sub-info: notas canceladas/transferidas pelo EDP no dia -->
-          <!-- Só aparece quando há diferença detectada via diff de snapshots -->
-          <div id="m-carteira-canceladas" style="display:none;font-size:11px;color:var(--text2);margin-top:6px"
-               title="Notas que estavam no início do dia mas foram canceladas ou redistribuídas pelo EDP — saíram do payload sem virar executadas/rejeitadas.">
-            <span style="color:#c49000">●</span> <span id="m-carteira-canceladas-num">—</span> movimentadas pelo EDP
+          <!-- Sub-info: fluxo do dia (fecha por construção)                       -->
+          <!-- inicial + entradas_novas = atual + andamento + concluidas + rejeitadas + canceladas -->
+          <div id="m-carteira-entradas" style="display:none;font-size:11px;color:var(--text2);margin-top:6px"
+               title="Notas que entraram no payload depois do primeiro snapshot do dia (equipes que logaram tarde, EDP redistribuiu).">
+            <span style="color:#3b8a4b">●</span> <span id="m-carteira-entradas-num">—</span> entradas novas no dia
+          </div>
+          <div id="m-carteira-canceladas" style="display:none;font-size:11px;color:var(--text2);margin-top:2px"
+               title="Notas que estavam no início do dia e saíram do payload sem virar executada/concluida/rejeitada. Engloba: canceladas pelo EDP, transferidas pra equipe fora do filtro, ou equipes que deslogaram levando concluidas.">
+            <span style="color:#c49000">●</span> <span id="m-carteira-canceladas-num">—</span> fora do dispositivo
           </div>
         </div>
         <div class="metric-card accent-verde">
@@ -9789,48 +9793,61 @@ ${equipes.length > 0 ? `<div class="perf-section">
       teamsVisible = teamsVisible || teamsAll;
       const { de, ate, isLiveToday } = currentMonitorRange();
 
-      // Carteira ATUAL = soma de pendentes (notas baixadas não iniciadas).
-      // Andamento tem coluna própria — então NÃO entra em 'atual'.
-      // Equipes encerradas: 0 (dispositivo deslogou).
-      const emCarteira = teamsVisible.reduce((s, t) => s + _carteiraPendentes(t), 0);
+      // ────────────────────────────────────────────────────────────────────────
+      // FONTE ÚNICA: summary.dia do backend (vem de _buildDiaSummary em
+      // services/dataService.js — diff entre 1º e último snapshot do dia,
+      // deduplicado por UUID cross-team).
+      //
+      // INVARIANTE (fecha por construção):
+      //   inicial + entradas_novas = atual + andamento + concluidas + rejeitadas + canceladas
+      //
+      // Onde:
+      //   atual       = pendentes no payload do dispositivo AGORA
+      //   andamento   = status "iniciada" AGORA (não conta UUIDs que viraram concluida)
+      //   concluidas  = terminaram OK no dia (UUIDs do último snap, deduplicados)
+      //   rejeitadas  = terminaram REJEITADAS no dia (UUIDs do último snap)
+      //   canceladas  = sumiram do payload entre 1º e último snap, SEM virar
+      //                 concluida/rejeitada/andamento/atual (engloba canc EDP,
+      //                 transferências pra fora do filtro, equipes deslogadas)
+      //   entradas_novas = entraram no payload DEPOIS do 1º snap
+      //
+      // Em modo histórico (data passada), summary.dia pode não estar disponível
+      // (snapshots antigos descartados). Aí caímos no fallback live (reduce).
+      // ────────────────────────────────────────────────────────────────────────
+      const dia = _lastTeamsSummary && _lastTeamsSummary.dia;
+      const useDia = isLiveToday && dia && typeof dia.atual === 'number';
 
-      // Em andamento: notas com status 'executada' (sendo trabalhadas AGORA).
-      // - Em modo "hoje" ao vivo: aplica filtro sessaoHoje pra evitar contar
-      //   notas de sessões abertas desde ontem.
-      // - Equipes JÁ ENCERRADAS (t.sessionEnd preenchido) NUNCA contam — ninguém
-      //   está trabalhando nas notas delas; o que sobrou é trabalho abandonado/
-      //   pendente de redistribuição, não 'em andamento'.
-      // Dedup: WPA devolve mesmo UUID em notasExecutadas E notasConcluidas
-      // durante transição "iniciada → concluida". Sem este filtro, a nota era
-      // contada nos 2 cards simultaneamente. Card EM ANDAMENTO deve mostrar
-      // só notas QUE AINDA NÃO foram concluídas — então excluímos UUIDs que
-      // aparecem em notasConcluidas da equipe.
-      const executadas = teamsAll.reduce((s, t) => {
-        if (t.sessionEnd) return s;   // encerrada — não conta
-        let arr;
-        if (isLiveToday) {
-          const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(_refLogon(t));
-          if (!sessaoHoje) return s;
-          arr = t.notasExecutadas || [];
-        } else {
-          arr = t.notasExecutadas || [];
-        }
-        const concIds = new Set((t.notasConcluidas || []).map(n => n.id).filter(Boolean));
-        return s + arr.filter(n => {
-          if (n.id && concIds.has(n.id)) return false;
-          return notaPertenceAoRange(n, de, ate);
-        }).length;
-      }, 0);
+      const emCarteira = useDia ? dia.atual
+        : teamsVisible.reduce((s, t) => s + _carteiraPendentes(t), 0);
 
-      // Concluídas: filtradas por conclusionDate dentro do range
-      const concluidasLive = teamsAll.reduce((s, t) =>
-        s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
+      // Em andamento: status "executada" agora, sem dupla contagem com concluidas.
+      const executadas = useDia ? dia.andamento
+        : teamsAll.reduce((s, t) => {
+            if (t.sessionEnd) return s;
+            let arr;
+            if (isLiveToday) {
+              const sessaoHoje = t._ghostFromAcc || !sessaoAnterior(_refLogon(t));
+              if (!sessaoHoje) return s;
+              arr = t.notasExecutadas || [];
+            } else {
+              arr = t.notasExecutadas || [];
+            }
+            const concIds = new Set((t.notasConcluidas || []).map(n => n.id).filter(Boolean));
+            return s + arr.filter(n => {
+              if (n.id && concIds.has(n.id)) return false;
+              return notaPertenceAoRange(n, de, ate);
+            }).length;
+          }, 0);
 
-      // Rejeitadas: filtradas por conclusionDate dentro do range (mesma lógica
-       // de executadas/concluídas). Sem isso, o card mostrava TODO o histórico
-       // disponível das equipes ativas, independente do range selecionado.
-      const rejeitadas = teamsAll.reduce((s, t) =>
-        s + (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
+      // Concluidas no dia
+      const concluidasLive = useDia ? dia.concluidas
+        : teamsAll.reduce((s, t) =>
+            s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
+
+      // Rejeitadas no dia
+      const rejeitadas = useDia ? dia.rejeitadas
+        : teamsAll.reduce((s, t) =>
+            s + (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
       // Re-logins: usa a mesma lógica do card individual (linha ~9169).
       // t.relogins quase sempre é 0 nos snapshots — relogouNoDia (detectado
       // pós-fato comparando sessionBegin com sessionBeginReal) é o indicador
@@ -9843,43 +9860,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }, 0);
       const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline).length;
 
-      // Carteira INICIAL (Total Dia) — INVARIANTE: inicial >= atual + saídas
-      // (andamento + executadas + rejeitadas). Duas fontes possíveis:
-      //
-      //   (a) carteiraInicialDerivada: soma direta dos 4 KPIs do dia.
-      //       Sempre >= emCarteira por construção (executadas/andamento/rej
-      //       são números não-negativos).
-      //   (b) somaInicialReal: vem do primeiro snapshot do dia (carteiraInicialReal
-      //       populado pelo backend). Pode SUBESTIMAR quando equipes logam após
-      //       o snapshot inicial ter sido tirado — sem inicial, atual ficaria
-      //       maior que inicial visualmente (inversão impossível conceitualmente).
-      //
-      // Pegamos o MAIOR dos dois — garante que a aritmética sempre fecha pro
-      // operador (atual <= inicial), independente de qual fonte é mais completa.
-      // Bug reportado em 11/06/2026 (admin via inicial=1514, atual=2177).
-      const carteiraInicialDerivada = emCarteira + executadas + concluidasLive + rejeitadas;
-      // Carteira inicial: preferir o valor DEDUPLICADO (UUIDs únicos cross-team)
-      // calculado no backend — resolve dupla contagem de notas transferidas pelo
-      // EDP entre equipes (uma nota pode aparecer no primeiro snapshot de 2 equipes).
-      // Fallback pra soma per-team se backend ainda não trouxe (modo histórico,
-      // versão antiga do server, etc).
-      // Atenção: dedupBackend reflete TODO o escopo do user (server-side filtrado).
-      // Se admin filtra client-side por uma regional específica, somaPerTeam é
-      // o subset visível (com dupla contagem residual) — aceitamos isso pra evitar
-      // chamar /teams de novo só pra recalcular dedup do subset.
-      const dedupBackend = (_lastTeamsSummary && typeof _lastTeamsSummary.carteira_inicial_dedup === 'number')
-        ? _lastTeamsSummary.carteira_inicial_dedup
-        : null;
-      const somaPerTeam = teamsVisible.reduce((s, t) =>
-        s + (typeof t.carteiraInicialReal === 'number' ? t.carteiraInicialReal : 0), 0);
-      const filtroRegionalAtivo = currentRegional && currentRegional !== 'ALL';
-      // Usa dedup do backend quando sem filtro client-side; senão usa soma per-team
-      // (que sub-conta, mas pelo menos é coerente com o filtro aplicado).
-      const somaInicialReal = (dedupBackend !== null && !filtroRegionalAtivo)
-        ? dedupBackend
-        : somaPerTeam;
-      const equipesComInicial = teamsVisible.filter(t => typeof t.carteiraInicialReal === 'number').length;
-      const carteiraInicial = Math.max(somaInicialReal, carteiraInicialDerivada);
+      // Carteira INICIAL (Total Dia): UUIDs únicos do PRIMEIRO snapshot de cada
+      // equipe no dia, deduplicados cross-team. Fonte única: summary.dia.inicial.
+      // Fallback: soma per-team (modo histórico) ou derivação dos KPIs.
+      const carteiraInicial = useDia ? dia.inicial
+        : Math.max(
+            teamsVisible.reduce((s, t) => s + (typeof t.carteiraInicialReal === 'number' ? t.carteiraInicialReal : 0), 0),
+            emCarteira + executadas + concluidasLive + rejeitadas
+          );
 
       // TOTAL EQUIPES (m-total) = whitelist (equipes oficiais ativas visíveis ao
       // user, filtradas pela regional dele). Atualizado no bloco try/catch logo
@@ -9892,24 +9880,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (mAtivasNum) mAtivasNum.textContent = ativas;
       document.getElementById('m-ativas').textContent = `${ativas} em campo`;
       document.getElementById('m-executadas').textContent = executadas;
+      // OS REJEITADAS vem de summary.dia (snapshot dedup) — única fonte.
+      // Fallback live (reduce) só em modo histórico (sem dia disponível).
       document.getElementById('m-rejeitadas').textContent = rejeitadas;
-      // OS REJEITADAS sempre via /api/rejeicoes/totais (live E histórico).
-      // O reduce acima conta só de allTeams — perde rejeitadas de equipes que
-      // deslogaram durante o dia. O endpoint lê de note_rejections (tabela
-      // dedicada com TODAS as rejeições do dia, independente de quem ainda
-      // está logado). Mesmo padrão de "OS Executadas" que já usa o agregado
-      // persistente. Bug reportado em 11/06/2026.
-      {
-        const reg = `&regionals=${encodeURIComponent(selectedRegionals.join(','))}`;
-        fetch(`${API}/rejeicoes/totais?de=${de}&ate=${ate}${reg}`)
-          .then(r => r.json())
-          .then(j => {
-            if (typeof j?.total === 'number') {
-              document.getElementById('m-rejeitadas').textContent = j.total;
-            }
-          })
-          .catch(() => { /* mantém o valor live calculado */ });
-      }
       // OS em carteira: layout 'ATUAL / TOTAL DIA' (estilo do card Total equipes)
       // Atual: pendentes no dispositivo agora. Total dia: cumulativo do dia (deduplicado).
       document.getElementById('m-baixadas').textContent = emCarteira;
@@ -9922,17 +9895,27 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (mBaixIniWrap) mBaixIniWrap.style.display = 'none';
       }
 
-      // Sub-info: OS movimentadas pelo EDP (canceladas/transferidas).
-      // Vem do diff entre primeiro e último snapshot do dia, calculado no backend.
-      // Só aparece em modo live (snapshot do "ultimo" só existe no dia atual).
-      const dia = _lastTeamsSummary && _lastTeamsSummary.dia;
-      const mCanceladasWrap = document.getElementById('m-carteira-canceladas');
-      const mCanceladasNum  = document.getElementById('m-carteira-canceladas-num');
-      if (isLiveToday && dia && typeof dia.canceladas === 'number' && dia.canceladas > 0 && !filtroRegionalAtivo) {
-        if (mCanceladasNum)  mCanceladasNum.textContent = dia.canceladas;
-        if (mCanceladasWrap) mCanceladasWrap.style.display = '';
+      // Sub-info do card OS EM CARTEIRA: rastreia o fluxo do dia.
+      // INVARIANTE: inicial + entradas_novas = atual + andamento + concluidas + rejeitadas + canceladas
+      //   - entradas_novas: entraram no payload DEPOIS do 1º snapshot
+      //   - canceladas: estavam no 1º snap e saíram sem virar concluida/rej/andamento
+      //     (engloba cancelamento EDP, transferência cross-team fora do filtro,
+      //      equipes deslogadas levando concluidas)
+      const mCancWrap  = document.getElementById('m-carteira-canceladas');
+      const mCancNum   = document.getElementById('m-carteira-canceladas-num');
+      const mEntrWrap  = document.getElementById('m-carteira-entradas');
+      const mEntrNum   = document.getElementById('m-carteira-entradas-num');
+      if (useDia && typeof dia.entradas_novas === 'number' && dia.entradas_novas > 0) {
+        if (mEntrNum)  mEntrNum.textContent  = dia.entradas_novas;
+        if (mEntrWrap) mEntrWrap.style.display = '';
       } else {
-        if (mCanceladasWrap) mCanceladasWrap.style.display = 'none';
+        if (mEntrWrap) mEntrWrap.style.display = 'none';
+      }
+      if (useDia && typeof dia.canceladas === 'number' && dia.canceladas > 0) {
+        if (mCancNum)  mCancNum.textContent  = dia.canceladas;
+        if (mCancWrap) mCancWrap.style.display = '';
+      } else {
+        if (mCancWrap) mCancWrap.style.display = 'none';
       }
 
       document.getElementById('m-relogins').textContent = relogins;
@@ -9945,22 +9928,15 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (cardAndamento) cardAndamento.style.display = isLiveToday ? '' : 'none';
       if (cardCarteira)  cardCarteira.style.display  = isLiveToday ? '' : 'none';
 
-      // KPI 'OS EXECUTADAS' = só CONCLUÍDAS no range (sem andamento).
-      // Andamento tem KPI próprio ('EM ANDAMENTO'). Antes esse KPI somava
-      // andamento + concluídas e quebrava a fórmula da carteira inicial.
-      // Em paralelo busca o acumulador persistente do Supabase (daily_totals)
-      // pra cobrir equipes deslogadas — o realizadasPersist soma andamento+
-      // concluídas, então subtraímos executadas pra ficar só concluídas.
+      // OS EXECUTADAS = concluidas do dia (fonte única: summary.dia.concluidas)
       document.getElementById('m-concluidas').textContent = concluidasLive;
-      // Em modo histórico, carteira não faz sentido — mostra range em vez de "%"
-      // % é calculada sobre a carteira INICIAL (total cumulativo do dia), não
-      // sobre o atual. Atual decresce conforme equipes executam — usar atual
-      // como base inflaria artificialmente a % (ex: executou 5 de 17, atual=12,
-      // 5/12=42% vs 5/17=29% real). Inicial é o denominador correto.
+
+      // Sub-info '% da carteira': base = carteira inicial (denominador correto;
+      // atual decresce conforme execução, inflaria % artificialmente).
       const baseCarteira = carteiraInicial || emCarteira;
       if (isLiveToday) {
-        const pctLive = baseCarteira > 0 ? Math.round((concluidasLive / baseCarteira) * 100) : 0;
-        document.getElementById('m-concluidas-pct').textContent = `${pctLive}% da carteira`;
+        const pct = baseCarteira > 0 ? Math.round((concluidasLive / baseCarteira) * 100) : 0;
+        document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
       } else {
         const dias = (() => {
           const ms = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
@@ -9970,61 +9946,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
           dias === 1 ? 'no dia selecionado' : `em ${dias} dias`;
       }
 
+      // TOTAL EQUIPES = whitelist (oficiais ativas visíveis ao user).
+      // /api/equipes aplica filtro de regional server-side. Separado de summary.dia
+      // porque whitelist é informação cadastral, não cumulativa do dia.
       try {
-        // Busca em PARALELO: daily_totals (KPIs persistentes) + lista de
-        // equipes oficiais (whitelist filtrada pela regional do user).
-        // Whitelist define TOTAL EQUIPES — soma das equipes que DEVERIAM logar,
-        // não só as que estão com sessão tocando o range atual.
         const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
-        const [totaisRes, equipesRes] = await Promise.all([
-          fetch(`${API}/totais/dia?de=${de}&ate=${ate}&regionals=${_regionalsCsv}`),
-          fetch(`${API}/equipes?regionals=${_regionalsCsv}`),
-        ]);
-        const j = await totaisRes.json();
-        const eqData = await equipesRes.json().catch(() => null);
-
-        // ── TOTAL EQUIPES = whitelist (oficiais ativas visíveis ao user) ──
-        // Backend /api/equipes já aplica filtro pela regional do user logado
-        // (admin → todas, ES → GUA+CAC, GUA → só GUA). Count direto.
-        // Antes mostrava teamsVisible.length (= equipes com sessão tocando o
-        // range), o que não bate com a frota cadastrada. Reportado 11/06/2026.
+        const eqData = await fetch(`${API}/equipes?regionals=${_regionalsCsv}`)
+          .then(r => r.json()).catch(() => null);
         if (eqData?.equipes) {
           const oficiais = eqData.equipes.filter(e => e.ativo);
           document.getElementById('m-total').textContent = oficiais.length;
         }
-
-        const reg = currentRegional || 'ALL';
-        // realizadasPersist do banco soma andamento+concluídas — pra extrair só
-        // concluídas, subtrai executadas (andamento). daily_totals é cumulativo
-        // do range, então pode incluir notas de equipes deslogadas.
-        const realizadasPersist = (j?.totais?.[reg]) ?? (j?.totais?.ALL) ?? null;
-        const concluidasPersist = realizadasPersist != null
-          ? Math.max(0, realizadasPersist - executadas)
-          : concluidasLive;
-        const concluidas = Math.max(concluidasPersist, concluidasLive);
-        document.getElementById('m-concluidas').textContent = concluidas;
-
-        // ── Carteira inicial (Total Dia) — INVARIANTE: inicial >= atual ──
-        // Mesma lógica do início: pega o MAIOR entre derivada e snapshot real.
-        // Snapshot subestima quando equipes logam após primeiro snap do dia
-        // ser tirado; derivada sempre é >= emCarteira por construção.
-        const carteiraInicialDerivadaFinal = emCarteira + executadas + concluidas + rejeitadas;
-        const carteiraInicialFinal = Math.max(somaInicialReal, carteiraInicialDerivadaFinal);
-        if (mBaixIni && carteiraInicialFinal > 0 && carteiraInicialFinal !== emCarteira) {
-          mBaixIni.textContent = carteiraInicialFinal;
-          if (mBaixIniWrap) mBaixIniWrap.style.display = 'flex';
-        }
-        // Atualiza baseCarteira pra cálculo do % abaixo
-        const baseFinal = carteiraInicialFinal || emCarteira;
-        if (isLiveToday) {
-          // % sobre carteira inicial — fecha com a aritmética da carteira
-          const pct = baseFinal > 0 ? Math.round((concluidas / baseFinal) * 100) : 0;
-          document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
-        }
-        // Em histórico, mantém o subtítulo "em N dias" já setado acima
       } catch (err) {
-        console.warn('[KPI] falha ao buscar daily_totals/equipes:', err.message);
-        // mantém o valor live já renderizado
+        console.warn('[KPI] falha ao buscar /equipes:', err.message);
       }
     }
 
