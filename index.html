@@ -9797,6 +9797,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // - Equipes JÁ ENCERRADAS (t.sessionEnd preenchido) NUNCA contam — ninguém
       //   está trabalhando nas notas delas; o que sobrou é trabalho abandonado/
       //   pendente de redistribuição, não 'em andamento'.
+      // Dedup: WPA devolve mesmo UUID em notasExecutadas E notasConcluidas
+      // durante transição "iniciada → concluida". Sem este filtro, a nota era
+      // contada nos 2 cards simultaneamente. Card EM ANDAMENTO deve mostrar
+      // só notas QUE AINDA NÃO foram concluídas — então excluímos UUIDs que
+      // aparecem em notasConcluidas da equipe.
       const executadas = teamsAll.reduce((s, t) => {
         if (t.sessionEnd) return s;   // encerrada — não conta
         let arr;
@@ -9807,7 +9812,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
         } else {
           arr = t.notasExecutadas || [];
         }
-        return s + arr.filter(n => notaPertenceAoRange(n, de, ate)).length;
+        const concIds = new Set((t.notasConcluidas || []).map(n => n.id).filter(Boolean));
+        return s + arr.filter(n => {
+          if (n.id && concIds.has(n.id)) return false;
+          return notaPertenceAoRange(n, de, ate);
+        }).length;
       }, 0);
 
       // Concluídas: filtradas por conclusionDate dentro do range

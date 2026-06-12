@@ -208,7 +208,13 @@ async function upsertTeamDailyTotals(teams, _date) {
 
   // Chave: (notaDate, team_name, tipo_code). notaDate respeita conclusionDate
   // de notas executadas em dia anterior à sessão atual (evita inflação).
+  //
+  // Dedupe por noteId DENTRO de (date, team, tipo): WPA devolve o MESMO UUID
+  // em notasExecutadas E notasConcluidas durante a transição "iniciada → concluida".
+  // Sem dedup, cada nota nesse estado era contada 2x — inflava daily_totals em
+  // ~30-40% (espelha o padrão de upsertSubcatTotals abaixo).
   const acc = {};
+  const seen = new Set();
   teams.forEach(t => {
     const sessDate = _sessionDate(t);
     if (!sessDate) return;
@@ -218,6 +224,11 @@ async function upsertTeamDailyTotals(teams, _date) {
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
       const notaDate = _notaDate(n, sessDate, t.sessionBegin);
+      if (n.id) {
+        const dedupeKey = `${notaDate}|${teamName}|${code}|${n.id}`;
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+      }
       const key = `${notaDate}|${teamName}|${code}`;
       if (!acc[key]) {
         acc[key] = {
