@@ -34,7 +34,14 @@
 const { getClient } = require('../services/supabaseClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
 const { dateBRT } = require('../services/timeUtil');
-const { applyRegional, expandRegional } = require('../services/regionalGroups');
+const { inRegionals } = require('../services/regionals');
+
+/** Valida `regionals[]` e lança se vier vazio/inválido. */
+function _assertRegionals(regionals, fnName) {
+  if (!Array.isArray(regionals) || regionals.length === 0) {
+    throw new Error(`${fnName}: regionals required (non-empty array)`);
+  }
+}
 
 /**
  * Filtra um array de linhas mantendo só registros de equipes oficiais.
@@ -188,8 +195,8 @@ async function getTeamsFromSupabase(filters = {}) {
     .select('data, regional, updated_at')
     .filter('data->>date', 'gte', cutoff7);
 
-  if (filters.regional && filters.regional !== 'ALL') {
-    query = applyRegional(query, filters.regional);
+  if (Array.isArray(filters.regionals) && filters.regionals.length > 0) {
+    query = inRegionals(query, filters.regionals);
   }
 
   const { data, error } = await query.order('team_name');
@@ -207,7 +214,8 @@ async function getTeamsFromSupabase(filters = {}) {
  * com notas concluídas acumuladas de todos os dias do intervalo.
  * de, ate: 'YYYY-MM-DD'
  */
-async function getTeamsByDateFromSnapshots(de, ate, regional) {
+async function getTeamsByDateFromSnapshots(de, ate, regionals) {
+  _assertRegionals(regionals, 'getTeamsByDateFromSnapshots');
   const sb = getClient();
 
   // Pra capturar o LOGOFF de equipes que viram a meia-noite, expande o range
@@ -226,7 +234,7 @@ async function getTeamsByDateFromSnapshots(de, ate, regional) {
       .gte('date', de)
       .lte('date', ateExpand)
       .order('captured_at', { ascending: false });
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     return q;
   });
   // Aplica whitelist: só equipes oficiais entram no histórico
@@ -392,7 +400,8 @@ async function getDailyHistory(yearMonth) {
  * Estrutura:
  *   { GUA: { 'MD/TL11': { count, quantidade }, 'DD/C93': { count, quantidade }, ... }, CAC: {...} }
  */
-async function getSubcatMonthTotals(yearMonth, regional) {
+async function getSubcatMonthTotals(yearMonth, regionals) {
+  _assertRegionals(regionals, 'getSubcatMonthTotals');
   const sb = getClient();
   // Lê por equipe (paginado) e filtra pela whitelist antes de agregar
   const data = await _selectAll(() => {
@@ -400,11 +409,12 @@ async function getSubcatMonthTotals(yearMonth, regional) {
       sb.from('team_daily_subcat_totals').select('team_name, regional, tipo, sub_code, count, quantidade'),
       yearMonth
     );
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     return q;
   });
 
-  const totais = { GUA: {}, CAC: {}, SJC: {} };
+  const totais = {};
+  regionals.forEach(r => { totais[r] = {}; });
   _onlyOficiais(data, 'team_name').forEach(row => {
     if (!totais[row.regional]) totais[row.regional] = {};
     const key = `${row.tipo}/${row.sub_code}`;
@@ -420,21 +430,27 @@ async function getSubcatMonthTotals(yearMonth, regional) {
  * Estrutura:
  *   [ { date, GUA: { 'MD/TL11': {count, quantidade}, ... }, CAC: {...} }, ... ]
  */
-async function getSubcatDailyHistory(yearMonth, regional) {
+async function getSubcatDailyHistory(yearMonth, regionals) {
+  _assertRegionals(regionals, 'getSubcatDailyHistory');
   const sb = getClient();
   const data = await _selectAll(() => {
     let q = filterByMonth(
       sb.from('team_daily_subcat_totals').select('date, team_name, regional, tipo, sub_code, count, quantidade'),
       yearMonth
     ).order('date');
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     return q;
   });
 
+  const _emptyShape = () => {
+    const obj = { };
+    regionals.forEach(r => { obj[r] = {}; });
+    return obj;
+  };
   const byDate = {};
   _onlyOficiais(data, 'team_name').forEach(row => {
     const d = row.date;
-    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {}, SJC: {} };
+    if (!byDate[d]) byDate[d] = { date: d, ..._emptyShape() };
     if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
     const key = `${row.tipo}/${row.sub_code}`;
     if (!byDate[d][row.regional][key]) {
@@ -451,14 +467,15 @@ async function getSubcatDailyHistory(yearMonth, regional) {
  * Retorna lista ordenada por count decrescente.
  *   [ { team_name, regional, sector_id, tipo, sub_code, count, quantidade } ]
  */
-async function getSubcatTeamRanking(yearMonth, regional, tipo, subCode) {
+async function getSubcatTeamRanking(yearMonth, regionals, tipo, subCode) {
+  _assertRegionals(regionals, 'getSubcatTeamRanking');
   const sb = getClient();
   const data = await _selectAll(() => {
     let q = filterByMonth(
       sb.from('team_daily_subcat_totals').select('team_name, regional, sector_id, tipo, sub_code, count, quantidade'),
       yearMonth
     );
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     if (tipo)     q = q.eq('tipo', tipo);
     if (subCode)  q = q.eq('sub_code', subCode);
     return q;
@@ -487,14 +504,15 @@ async function getSubcatTeamRanking(yearMonth, regional, tipo, subCode) {
  * Ranking de equipes no mês — total de notas concluídas por equipe.
  * Retorna lista ordenada por total decrescente.
  */
-async function getTeamRanking(yearMonth, regional) {
+async function getTeamRanking(yearMonth, regionals) {
+  _assertRegionals(regionals, 'getTeamRanking');
   const sb = getClient();
   const data = await _selectAll(() => {
     let query = filterByMonth(
       sb.from('team_daily_totals').select('team_name, regional, sector_id, tipo_code, count'),
       yearMonth
     );
-    query = applyRegional(query, regional);
+    query = inRegionals(query, regionals);
     return query;
   });
 
@@ -547,9 +565,10 @@ async function getTeamDailyHistory(yearMonth, teamName) {
 
 /**
  * Produção agregada por equipe com filtros livres de período, regional e equipe.
- * filters: { de, ate, regional, team }
+ * filters: { de, ate, regionals: string[], team }
  */
 async function getTeamProducao(filters = {}) {
+  _assertRegionals(filters.regionals, 'getTeamProducao');
   const sb = getClient();
   const data = await _selectAll(() => {
     let query = sb
@@ -557,7 +576,7 @@ async function getTeamProducao(filters = {}) {
       .select('team_name, regional, sector_id, tipo_code, count');
     if (filters.de)                                     query = query.gte('date', filters.de);
     if (filters.ate)                                    query = query.lte('date', filters.ate);
-    query = applyRegional(query, filters.regional);
+    query = inRegionals(query, filters.regionals);
     if (filters.team     && filters.team     !== 'ALL') query = query.eq('team_name', filters.team);
     return query.order('team_name');
   });
@@ -588,9 +607,10 @@ async function getTeamProducao(filters = {}) {
  * Fonte: tabela snapshots (snapshot mais recente por date+team_name).
  * yearMonth: 'YYYY-MM'
  * teamName: nome exato da equipe ou null para todas
- * regional: 'GUA'|'CAC' ou null para todas
+ * regionals: string[] de siglas reais (sempre array não-vazio)
  */
-async function getTeamSessionHistory(de, ate, teamName, regional) {
+async function getTeamSessionHistory(de, ate, teamName, regionals) {
+  _assertRegionals(regionals, 'getTeamSessionHistory');
   const sb = getClient();
   // Usa lte() inclusivo direto — sem precisar de truque +1 dia/UTC
   const allRows = await _selectAll(() => {
@@ -601,7 +621,7 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
       .lte('date', ate)
       .order('captured_at', { ascending: false });
     if (teamName && teamName !== 'ALL') q = q.eq('team_name', teamName);
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     return q;
   });
 
@@ -669,7 +689,8 @@ async function getTeamSessionHistory(de, ate, teamName, regional) {
  *
  * Retorna { ALL, GUA, CAC } com a contagem total no período.
  */
-async function getRealizadasDoDia(de, ate, regional) {
+async function getRealizadasDoDia(de, ate, regionals) {
+  _assertRegionals(regionals, 'getRealizadasDoDia');
   const sb = getClient();
   // Default = data BRT atual (UTC-3). toISOString() puro daria a data UTC,
   // que após 21:00 BRT já virou pra "amanhã" e retornaria zero indevidamente.
@@ -677,21 +698,20 @@ async function getRealizadasDoDia(de, ate, regional) {
   de  = de  || today;
   ate = ate || de;
 
-  // Aplica filtro de regional no banco (suporta grupos: ES → IN (GUA,CAC)).
-  // Sem isso, user ES via SJC nos totais via fallback shape pré-existente.
-  const data = await _selectAll(() => applyRegional(
+  // Aplica filtro de regional no banco (siglas reais — caller responsável
+  // por traduzir grupos/escopo do user pra array de regionais válidas).
+  const data = await _selectAll(() => inRegionals(
     sb.from('team_daily_totals')
       .select('team_name, regional, count')
       .gte('date', de)
       .lte('date', ate),
-    regional
+    regionals
   ));
 
   // Shape do acc reflete só as regionais visíveis ao usuário.
   // Ex: user ES recebe { ALL, GUA, CAC } (sem SJC); user SJC recebe { ALL, SJC }.
-  const regs = expandRegional(regional) || ['GUA', 'CAC', 'SJC'];
   const acc = { ALL: 0 };
-  regs.forEach(r => { acc[r] = 0; });
+  regionals.forEach(r => { acc[r] = 0; });
   _onlyOficiais(data, 'team_name').forEach(r => {
     if (acc[r.regional] !== undefined) acc[r.regional] += r.count;
     acc.ALL += r.count;
@@ -704,19 +724,19 @@ async function getRealizadasDoDia(de, ate, regional) {
  * { GUA: { L0: n, L1: n, ... }, CAC: { ... }, ALL: { ... } }
  * com quantidades separadas para DD (metros/pontos).
  */
-async function getDailySubcatTotals(de, ate, regional, team) {
+async function getDailySubcatTotals(de, ate, regionals, team) {
+  _assertRegionals(regionals, 'getDailySubcatTotals');
   const sb = getClient();
   const today = dateBRT();
   de  = de  || today;
   ate = ate || de;
 
-  // Multi-select: team/regional aceitam CSV ("SIG1,SIG2"). Quando há vírgula,
-  // usa IN; senão eq (mantém compat com chamadas legadas que passam string).
+  // Multi-select: team aceita CSV ("SIG1,SIG2"). Quando há vírgula, usa IN;
+  // senão eq. Regional já vem como array do caller (req.scope.regionals).
   const _csv = (v) => v && v !== 'ALL' && String(v).includes(',')
     ? String(v).split(',').map(s => s.trim()).filter(Boolean)
     : null;
-  const teamsArr     = _csv(team);
-  const regionaisArr = _csv(regional);
+  const teamsArr = _csv(team);
 
   const data = await _selectAll(() => {
     let query = sb
@@ -724,19 +744,16 @@ async function getDailySubcatTotals(de, ate, regional, team) {
       .select('team_name, regional, tipo, sub_code, count, quantidade')
       .gte('date', de)
       .lte('date', ate);
-    if (regionaisArr)                            query = query.in('regional', regionaisArr);
-    else                                         query = applyRegional(query, regional);
+    query = inRegionals(query, regionals);
     if (teamsArr)                                query = query.in('team_name', teamsArr);
     else if (team && team !== 'ALL')             query = query.eq('team_name', team);
     return query;
   });
 
   // Shape reflete só as regionais visíveis ao usuário (ES vê GUA+CAC, não SJC).
-  // Se regionaisArr veio explícito (multi-select), usa essa lista; senão expande.
-  const regsVis = regionaisArr || expandRegional(regional) || ['GUA', 'CAC', 'SJC'];
   const totais = { ALL: {} };
   const quantidades = { ALL: {} };
-  regsVis.forEach(r => { totais[r] = {}; quantidades[r] = {}; });
+  regionals.forEach(r => { totais[r] = {}; quantidades[r] = {}; });
   _onlyOficiais(data, 'team_name').forEach(r => {
     const key = r.sub_code === 'OUTROS' ? `${r.tipo}_OUTROS` : r.sub_code;
     const reg = r.regional;
@@ -833,7 +850,8 @@ async function setSetting(key, value) {
  * Busca todas as linhas de uma tabela num intervalo, paginando para evitar o
  * limite de 1000 linhas do Supabase. Retorna array com todos os registros.
  */
-async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
+async function _paginateTable(sb, tableName, selectFields, de, ate, regionals) {
+  _assertRegionals(regionals, '_paginateTable');
   const PAGE = 1000;
   let allRows = [], page = 0;
   while (true) {
@@ -844,7 +862,7 @@ async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
       .lte('date', ate)
       .order('date')
       .range(page * PAGE, (page + 1) * PAGE - 1);
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     const { data, error } = await q;
     if (error) throw new Error(`[export] ${tableName}: ${error.message}`);
     if (!data || data.length === 0) break;
@@ -863,15 +881,16 @@ async function _paginateTable(sb, tableName, selectFields, de, ate, regional) {
  *   team_totais:   team_daily_totals    (equipe × tipo_code)
  *   daily_totais:  daily_totals         (regional × tipo_code)
  */
-async function getExportData(de, ate, regional) {
+async function getExportData(de, ate, regionals) {
+  _assertRegionals(regionals, 'getExportData');
   const sb = getClient();
   // Lê tudo do nível por-equipe; agrega "daily_*" filtrando pela whitelist
   const [team_subcat_raw, team_totais_raw, notas_individuais] = await Promise.all([
     _paginateTable(sb, 'team_daily_subcat_totals',
-      'date, team_name, regional, sector_id, tipo, sub_code, count, quantidade', de, ate, regional),
+      'date, team_name, regional, sector_id, tipo, sub_code, count, quantidade', de, ate, regionals),
     _paginateTable(sb, 'team_daily_totals',
-      'date, team_name, regional, sector_id, tipo_code, count', de, ate, regional),
-    getNotasIndividuais(de, ate, regional),
+      'date, team_name, regional, sector_id, tipo_code, count', de, ate, regionals),
+    getNotasIndividuais(de, ate, regionals),
   ]);
 
   const team_subcat = _onlyOficiais(team_subcat_raw, 'team_name');
@@ -921,7 +940,8 @@ async function getExportData(de, ate, regional) {
  *
  * Whitelist aplicada: só notas de equipes oficiais entram no resultado.
  */
-async function getNotasIndividuais(de, ate, regional) {
+async function getNotasIndividuais(de, ate, regionals) {
+  _assertRegionals(regionals, 'getNotasIndividuais');
   const sb = getClient();
   de  = de  || dateBRT();
   ate = ate || de;
@@ -932,7 +952,7 @@ async function getNotasIndividuais(de, ate, regional) {
       .select('team_name, regional, sector_id, captured_at, date, data')
       .gte('date', de).lte('date', ate)
       .order('captured_at', { ascending: false });
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     return q;
   });
 
@@ -1035,14 +1055,14 @@ async function getNotasIndividuais(de, ate, regional) {
  * Performance de equipes num período: total OS, dias trabalhados, média OS/dia.
  * tipo: 'COMERCIAL' (team_name starts with EC), 'PLANTAO' (starts with EP), 'TODAS'
  */
-async function getPerformanceEquipes(de, ate, regional, tipo, team) {
+async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
+  _assertRegionals(regionals, 'getPerformanceEquipes');
   const sb = getClient();
-  // Multi-select: team/regional aceitam CSV (igual getDailySubcatTotals)
+  // Multi-select: team aceita CSV. Regional já vem como array do caller.
   const _csv = (v) => v && v !== 'ALL' && String(v).includes(',')
     ? String(v).split(',').map(s => s.trim()).filter(Boolean)
     : null;
-  const teamsArr     = _csv(team);
-  const regionaisArr = _csv(regional);
+  const teamsArr = _csv(team);
 
   const data = await _selectAll(() => {
     let query = sb
@@ -1050,8 +1070,7 @@ async function getPerformanceEquipes(de, ate, regional, tipo, team) {
       .select('team_name, regional, sector_id, tipo_code, count, date');
     if (de)                                     query = query.gte('date', de);
     if (ate)                                    query = query.lte('date', ate);
-    if (regionaisArr)                           query = query.in('regional', regionaisArr);
-    else                                        query = applyRegional(query, regional);
+    query = inRegionals(query, regionals);
     if (teamsArr)                               query = query.in('team_name', teamsArr);
     else if (team && team !== 'ALL')            query = query.eq('team_name', team);
     return query;
@@ -1274,12 +1293,13 @@ function _aplicarExclusaoMotivos(rows) {
  * @param {object} opts
  * @param {string} opts.de            'YYYY-MM-DD'
  * @param {string} opts.ate           'YYYY-MM-DD'
- * @param {string} [opts.regional]    'GUA' | 'CAC' | 'ALL'
+ * @param {string[]} opts.regionais   array de siglas reais (obrigatório, não-vazio)
  * @param {string} [opts.team]        sigla específica
  * @param {string[]} [opts.tipos]     ['MD','SF',...]
  * @param {boolean} [opts.somenteComMotivo]  só linhas com reason_codes não vazio
  */
-async function _fetchRejeicoes({ de, ate, regional, regionais, team, teams, tipos, somenteComMotivo } = {}) {
+async function _fetchRejeicoes({ de, ate, regionais, team, teams, tipos, somenteComMotivo } = {}) {
+  _assertRegionals(regionais, '_fetchRejeicoes');
   const sb = getClient();
   const today = dateBRT();
   de  = de  || today;
@@ -1290,10 +1310,7 @@ async function _fetchRejeicoes({ de, ate, regional, regionais, team, teams, tipo
       .select('note_id, numero, tipo, team_name, regional, sector_id, session_date, motivo_codes, motivo_textos, rejection_date, observacao, formulario, collaborator_codes, collaborator_names')
       .gte('session_date', de)
       .lte('session_date', ate);
-    // Aceita tanto valor único (regional/team) quanto array (regionais/teams).
-    // Quando array com 1 só, vira eq; com 2+, vira in.
-    if (Array.isArray(regionais) && regionais.length > 0)      q = q.in('regional', regionais);
-    else                                                        q = applyRegional(q, regional);
+    q = inRegionals(q, regionais);
     if (Array.isArray(teams) && teams.length > 0)               q = q.in('team_name', teams);
     else if (team && team !== 'ALL')                            q = q.eq('team_name', team);
     if (Array.isArray(tipos) && tipos.length > 0)               q = q.in('tipo', tipos);
@@ -1358,14 +1375,15 @@ function _aplicarFiltroLegitimas(rows, opts) {
   return rows.filter(r => !_ehLegitima(r));
 }
 
-async function getRejeicoesTotais(de, ate, regional, opts = {}) {
+async function getRejeicoesTotais(de, ate, regionals, opts = {}) {
+  _assertRegionals(regionals, 'getRejeicoesTotais');
   const sb = getClient();
   const today = dateBRT();
   de  = de  || today;
   ate = ate || de;
 
   let rows = await _fetchRejeicoes({
-    de, ate, regional, regionais: opts.regionais,
+    de, ate, regionais: regionals,
     team: opts.team, teams: opts.teams,
     tipos: opts.tipos,
   });
@@ -1385,7 +1403,8 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
 
   const total = rows.length;
   let comMotivo = 0, semMotivo = 0;
-  const porRegional = { GUA: 0, CAC: 0, SJC: 0 };
+  const porRegional = {};
+  regionals.forEach(r => { porRegional[r] = 0; });
   const porTipo     = {};
   const motivoMap   = new Map();  // code → { code, label, count }
   const equipeMap   = new Map();  // team → { team, regional, count }
@@ -1448,7 +1467,7 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
       .select('team_name, regional, count')
       .gte('date', de)
       .lte('date', ate);
-    q = applyRegional(q, regional);
+    q = inRegionals(q, regionals);
     if (opts.team && opts.team !== 'ALL') q = q.eq('team_name', opts.team);
     return q;
   });
@@ -1490,9 +1509,10 @@ async function getRejeicoesTotais(de, ate, regional, opts = {}) {
  * Lista detalhada de rejeições com paginação cliente-lado.
  * Aplica filtros + ordena por session_date desc.
  */
-async function getRejeicoesLista(de, ate, regional, opts = {}) {
+async function getRejeicoesLista(de, ate, regionals, opts = {}) {
+  _assertRegionals(regionals, 'getRejeicoesLista');
   const rowsRaw = await _fetchRejeicoes({
-    de, ate, regional, regionais: opts.regionais,
+    de, ate, regionais: regionals,
     team: opts.team, teams: opts.teams,
     tipos: opts.tipos,
     somenteComMotivo: opts.somenteComMotivo,
@@ -1529,8 +1549,9 @@ async function getRejeicoesLista(de, ate, regional, opts = {}) {
 /**
  * Catálogo distinto de motivos vistos no período (pra alimentar dropdown de filtro).
  */
-async function getRejeicoesMotivos(de, ate, regional, opts = {}) {
-  const rowsRaw = await _fetchRejeicoes({ de, ate, regional, regionais: opts.regionais });
+async function getRejeicoesMotivos(de, ate, regionals, opts = {}) {
+  _assertRegionals(regionals, 'getRejeicoesMotivos');
+  const rowsRaw = await _fetchRejeicoes({ de, ate, regionais: regionals });
   // Por padrão exclui rejeições "legítimas" (cliente já fez o acerto).
   const rows = _aplicarFiltroLegitimas(rowsRaw, opts);
   const map = new Map();

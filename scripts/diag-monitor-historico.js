@@ -24,7 +24,8 @@ if (!DE || !ATE) {
   console.log(`Diagnóstico: ${DE} → ${ATE} ${REG ? `(${REG})` : '(todas)'}\n`);
 
   // 1) O que /teams/historico retorna (mesmo que o Monitor consome)
-  const teams = await getTeamsByDateFromSnapshots(DE, ATE, REG);
+  const regionals = REG ? [REG] : ['GUA', 'CAC', 'SJC'];
+  const teams = await getTeamsByDateFromSnapshots(DE, ATE, regionals);
   console.log(`=== /teams/historico ===`);
   console.log(`Total equipes: ${teams.length}`);
   let totalConc = 0, totalExec = 0, totalRej = 0;

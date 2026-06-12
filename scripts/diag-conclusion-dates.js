@@ -31,7 +31,7 @@ function notaPertenceAoRange(n, de, ate) {
 }
 
 (async () => {
-  const teams = await getTeamsByDateFromSnapshots(DE, ATE);
+  const teams = await getTeamsByDateFromSnapshots(DE, ATE, ['GUA', 'CAC', 'SJC']);
   console.log(`Equipes: ${teams.length}\n`);
 
   // Coleta TODAS as notas (concluidas + executadas)

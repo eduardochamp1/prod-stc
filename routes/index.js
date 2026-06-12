@@ -95,7 +95,7 @@ router.get('/teams', async (req, res) => {
     let teams;
     if (MODE === 'supabase') {
       // Vercel: lê último snapshot do Supabase
-      teams = await sbq().getTeamsFromSupabase(req.query);
+      teams = await sbq().getTeamsFromSupabase({ ...req.query, regionals: req.scope.regionals });
     } else {
       // wpa / mock: dados ao vivo da API WPA ou mock
       teams = await getTeams(req.query);
@@ -237,14 +237,14 @@ router.get('/equipes', async (req, res) => {
 // GET /api/teams/historico?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=GUA
 // Retorna equipes de um período via snapshots (Supabase)
 router.get('/teams/historico', async (req, res) => {
-  const { de, ate, regional } = req.query;
+  const { de, ate } = req.query;
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
   if (!de || !dateRe.test(de) || !ate || !dateRe.test(ate)) {
     return res.status(400).json({ error: 'Parâmetros de e ate obrigatórios no formato YYYY-MM-DD' });
   }
   try {
     const sq    = sbq();
-    const teams = sq ? await sq.getTeamsByDateFromSnapshots(de, ate, regional) : [];
+    const teams = sq ? await sq.getTeamsByDateFromSnapshots(de, ate, req.scope.regionals) : [];
     res.json({ teams, count: teams.length, de, ate, mode: MODE });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -362,11 +362,14 @@ router.get('/totais/subcat', async (req, res) => {
     const today = dateBRT();
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
-    const regional = req.query.regional || 'ALL';
     const team     = req.query.team     || null;   // sigla específica ou null/ALL
     if (!(await enforceTeamRegional(req, res, team))) return;
-    if (!sq) return res.json({ de, ate, totais: { ALL: {}, GUA: {}, CAC: {} }, quantidades: { ALL: {}, GUA: {}, CAC: {} } });
-    const result = await sq.getDailySubcatTotals(de, ate, regional, team);
+    if (!sq) {
+      const empty = { ALL: {} };
+      req.scope.regionals.forEach(r => { empty[r] = {}; });
+      return res.json({ de, ate, totais: empty, quantidades: { ...empty } });
+    }
+    const result = await sq.getDailySubcatTotals(de, ate, req.scope.regionals, team);
     res.json({ de, ate, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -382,15 +385,12 @@ router.get('/totais/dia', async (req, res) => {
     const today = dateBRT();
     const de  = req.query.de  || req.query.date || today;
     const ate = req.query.ate || req.query.date || de;
-    // Middleware ja sobrescreveu req.query.regional pra valor do user (ex: 'ES').
-    const regional = req.query.regional;
     if (!sq) {
-      const regs = (req.scope && req.scope.regionals) || req.user.regionals || ['GUA', 'CAC', 'SJC'];
       const totais = { ALL: 0 };
-      regs.forEach(r => { totais[r] = 0; });
+      req.scope.regionals.forEach(r => { totais[r] = 0; });
       return res.json({ de, ate, totais });
     }
-    const totais = await sq.getRealizadasDoDia(de, ate, regional);
+    const totais = await sq.getRealizadasDoDia(de, ate, req.scope.regionals);
     res.json({ de, ate, totais });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -407,7 +407,6 @@ router.get('/export/historico', async (req, res) => {
     const firstOfMonth = today.slice(0, 8) + '01';
     const de       = req.query.de       || firstOfMonth;
     const ate      = req.query.ate      || today;
-    const regional = req.query.regional || 'ALL';
 
     const MAX_DAYS = 93;
     const diffMs = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
@@ -415,8 +414,8 @@ router.get('/export/historico', async (req, res) => {
       return res.status(400).json({ error: `Período máximo para exportação: ${MAX_DAYS} dias.` });
     }
     if (!sq) return res.json({ daily_subcat: [], team_subcat: [], team_totais: [], daily_totais: [], de, ate });
-    const data = await sq.getExportData(de, ate, regional);
-    res.json({ ...data, de, ate, regional });
+    const data = await sq.getExportData(de, ate, req.scope.regionals);
+    res.json({ ...data, de, ate, regionals: req.scope.regionals });
   } catch (err) {
     console.error('[export/historico]', err.message);
     res.status(500).json({ error: err.message });
@@ -431,12 +430,11 @@ router.get('/performance/equipes', async (req, res) => {
     const today = dateBRT();
     const de       = req.query.de       || today;
     const ate      = req.query.ate      || de;
-    const regional = req.query.regional || 'ALL';
     const tipo     = req.query.tipo     || 'TODAS';
     const team     = req.query.team     || null;
     if (!(await enforceTeamRegional(req, res, team))) return;
     if (!sq) return res.json({ equipes: [], de, ate });
-    const result = await sq.getPerformanceEquipes(de, ate, regional, tipo, team);
+    const result = await sq.getPerformanceEquipes(de, ate, req.scope.regionals, tipo, team);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -583,7 +581,7 @@ router.get('/historico/sessoes', async (req, res) => {
       return res.status(400).json({ error: 'Formato inválido. Use YYYY-MM-DD' });
     if (!(await enforceTeamRegional(req, res, req.query.team))) return;
     if (!sq) return res.json({ dias: [] });
-    const dias = await sq.getTeamSessionHistory(de, ate, req.query.team || null, req.query.regional || null);
+    const dias = await sq.getTeamSessionHistory(de, ate, req.query.team || null, req.scope.regionals);
     res.json({ de, ate, dias });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -610,10 +608,13 @@ router.get('/historico/subcats/mes', async (req, res) => {
   try {
     const sq = sbq();
     const ym = _parseYearMonth(req, res); if (!ym) return;
-    const regional = req.query.regional || null;
-    if (!sq) return res.json({ mes: ym, totais: { GUA: {}, CAC: {} } });
-    const totais = await sq.getSubcatMonthTotals(ym, regional);
-    res.json({ mes: ym, regional, totais });
+    if (!sq) {
+      const empty = {};
+      req.scope.regionals.forEach(r => { empty[r] = {}; });
+      return res.json({ mes: ym, totais: empty });
+    }
+    const totais = await sq.getSubcatMonthTotals(ym, req.scope.regionals);
+    res.json({ mes: ym, regionals: req.scope.regionals, totais });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -626,10 +627,9 @@ router.get('/historico/subcats/diario', async (req, res) => {
   try {
     const sq = sbq();
     const ym = _parseYearMonth(req, res); if (!ym) return;
-    const regional = req.query.regional || null;
     if (!sq) return res.json({ mes: ym, dias: [] });
-    const dias = await sq.getSubcatDailyHistory(ym, regional);
-    res.json({ mes: ym, regional, dias });
+    const dias = await sq.getSubcatDailyHistory(ym, req.scope.regionals);
+    res.json({ mes: ym, regionals: req.scope.regionals, dias });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -642,12 +642,11 @@ router.get('/historico/subcats/ranking', async (req, res) => {
   try {
     const sq = sbq();
     const ym = _parseYearMonth(req, res); if (!ym) return;
-    const regional = req.query.regional || null;
     const tipo     = req.query.tipo     || null;
     const subCode  = req.query.subCode  || null;
     if (!sq) return res.json({ mes: ym, ranking: [] });
-    const ranking = await sq.getSubcatTeamRanking(ym, regional, tipo, subCode);
-    res.json({ mes: ym, regional, tipo, subCode, ranking });
+    const ranking = await sq.getSubcatTeamRanking(ym, req.scope.regionals, tipo, subCode);
+    res.json({ mes: ym, regionals: req.scope.regionals, tipo, subCode, ranking });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -677,10 +676,9 @@ router.get('/ranking/equipes', async (req, res) => {
   try {
     const sq       = sbq();
     const ym       = _parseYearMonth(req, res); if (!ym) return;
-    const regional = req.query.regional || null;
     if (!sq) return res.json({ mes: ym, ranking: [] });
-    const ranking = await sq.getTeamRanking(ym, regional);
-    res.json({ mes: ym, regional: regional || 'ALL', ranking });
+    const ranking = await sq.getTeamRanking(ym, req.scope.regionals);
+    res.json({ mes: ym, regionals: req.scope.regionals, ranking });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1221,7 +1219,7 @@ router.get('/equipes/producao', async (req, res) => {
     const sq = sbq();
     if (!(await enforceTeamRegional(req, res, req.query.team))) return;
     if (!sq) return res.json({ equipes: [], tipos: [] });
-    const resultado = await sq.getTeamProducao(req.query);
+    const resultado = await sq.getTeamProducao({ ...req.query, regionals: req.scope.regionals });
     res.json(resultado);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2508,7 +2506,7 @@ router.get('/rejeicoes/totais', async (req, res) => {
     if (!sq) return res.json({ total: 0, comMotivo: 0, semMotivo: 0, porRegional: {GUA:0,CAC:0}, porTipo: {}, porMotivo: [], porEquipe: [], porDia: [], executadasNoPeriodo: 0, percentualGeral: null });
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesTotais(f.de, f.ate, f.regional, { team: f.team, teams: f.teams, regionais: f.regionais, tipos: f.tipos, motivos: f.motivos, incluirContaPaga: f.incluirContaPaga });
+    const result = await sq.getRejeicoesTotais(f.de, f.ate, req.scope.regionals, { team: f.team, teams: f.teams, tipos: f.tipos, motivos: f.motivos, incluirContaPaga: f.incluirContaPaga });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/totais]', err.message);
@@ -2523,8 +2521,8 @@ router.get('/rejeicoes/lista', async (req, res) => {
     if (!sq) return res.json({ total: 0, limit: 500, offset: 0, rows: [] });
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesLista(f.de, f.ate, f.regional, {
-      team: f.team, teams: f.teams, regionais: f.regionais,
+    const result = await sq.getRejeicoesLista(f.de, f.ate, req.scope.regionals, {
+      team: f.team, teams: f.teams,
       tipos: f.tipos, motivos: f.motivos, somenteComMotivo: f.somenteComMotivo,
       incluirContaPaga: f.incluirContaPaga,
       limit: req.query.limit, offset: req.query.offset,
@@ -2544,7 +2542,7 @@ router.get('/rejeicoes/motivos', async (req, res) => {
     if (!sq) return res.json([]);
     const f = _parseRejeicoesFilters(req, res);
     if (!f) return;
-    const result = await sq.getRejeicoesMotivos(f.de, f.ate, f.regional, { regionais: f.regionais, incluirContaPaga: f.incluirContaPaga });
+    const result = await sq.getRejeicoesMotivos(f.de, f.ate, req.scope.regionals, { incluirContaPaga: f.incluirContaPaga });
     res.json(result);
   } catch (err) {
     console.error('[rejeicoes/motivos]', err.message);
