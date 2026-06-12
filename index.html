@@ -5350,7 +5350,31 @@
       } catch { return null; }
     }
 
-    function saveSession(data) { localStorage.setItem(SESSION_KEY, JSON.stringify(data)); }
+    // Deriva sess.regional (string legada — 'ALL' | 'ES' | sigla única) a partir
+    // do array regionals[] retornado pelo backend (JWT v=2). Mantém compat com
+    // ~15 callsites que ainda leem sess.regional direto. Task 10 vai migrar tudo.
+    function _deriveLegacyRegional(regionals) {
+      if (!Array.isArray(regionals) || regionals.length === 0) return 'ALL';
+      // ALL = todas as ativas selecionadas
+      if (typeof REGIONAIS_ATIVAS !== 'undefined' && regionals.length >= REGIONAIS_ATIVAS.length) {
+        const allOk = REGIONAIS_ATIVAS.every(r => regionals.includes(r));
+        if (allOk) return 'ALL';
+      }
+      // Grupo ES = exatamente [GUA, CAC]
+      if (regionals.length === 2 && regionals.includes('GUA') && regionals.includes('CAC')) {
+        return 'ES';
+      }
+      if (regionals.length === 1) return regionals[0];
+      // Fallback: CSV
+      return regionals.join(',');
+    }
+    function saveSession(data) {
+      // Backend JWT v=2 só devolve regionals[]; preserva compat de sess.regional.
+      if (data && Array.isArray(data.regionals) && !data.regional) {
+        data.regional = _deriveLegacyRegional(data.regionals);
+      }
+      localStorage.setItem(SESSION_KEY, JSON.stringify(data));
+    }
     function clearSession() { localStorage.removeItem(SESSION_KEY); }
 
     // Patch global de window.fetch: injeta Bearer e redireciona 401 → login
@@ -5432,9 +5456,25 @@
       document.getElementById('user-chip-name').textContent = sess.username;
       document.getElementById('user-chip').classList.add('show');
 
+      // JWT v=2: lê regionals[] como fonte da verdade. Compat: se vier antigo,
+      // deriva de sess.regional via expandRegional.
+      if (Array.isArray(sess.regionals) && sess.regionals.length > 0) {
+        userRegionals = sess.regionals.map(r => String(r).toUpperCase());
+      } else if (sess.regional) {
+        // Token legado (v=1) — não deveria acontecer pós-Task 7, mas defesa.
+        const exp = expandRegional(sess.regional);
+        userRegionals = exp ? [...exp] : (sess.regional === 'ALL' ? [...REGIONAIS_ATIVAS] : [sess.regional]);
+      } else {
+        alert('Token sem regionais — re-login necessário');
+        logout();
+        return;
+      }
+      selectedRegionals = [...userRegionals];
+      _syncCurrentRegional();
+
       // Guarda role + regional globalmente pra openMetas/openAdmin checarem
       window.__currentUserRole     = sess.role || '';
-      window.__currentUserRegional = sess.regional || 'ALL';
+      window.__currentUserRegional = sess.regional || _deriveLegacyRegional(userRegionals);
 
       // Botão Metas: visível pra todos os roles autenticados.
       //   - admin: edita metas das 2 regionais (GUA + CAC).
@@ -5502,9 +5542,9 @@
         }
       });
 
-      // currentRegional: pra sigla única, a sigla travada. Pra ALL ou grupo, 'ALL'
-      // (significando "todas do escopo expandido"). O backend faz a expansão real.
-      currentRegional = isSinglesigla ? userReg : 'ALL';
+      // currentRegional: agora vem de selectedRegionals via _syncCurrentRegional()
+      // (já chamado no início de applyUserPermissions). Re-sync defensivo aqui.
+      _syncCurrentRegional();
     }
 
     function boot() {
@@ -5910,7 +5950,24 @@
     // Carteira inicial deduplicada (UUIDs únicos cross-team) — backend resolve
     // dupla contagem de notas transferidas pelo EDP durante o dia.
     let _lastTeamsSummary = null;
+    // ── Permissões: modelo unificado (Task 9) ──────────────────────────────
+    // userRegionals  : imutável, populado em applyUserPermissions a partir do JWT.regionals[]
+    // selectedRegionals: mutável, reflete o estado do dropdown (subset de userRegionals).
+    // currentRegional: legacy CSV/'ALL'/sigla — mantido por compat (15+ callsites).
+    //                  Sincronizado automaticamente via _syncCurrentRegional().
+    let userRegionals = [];
+    let selectedRegionals = [];
     let currentRegional = 'ALL';
+    function _syncCurrentRegional() {
+      if (!selectedRegionals.length) { currentRegional = 'ALL'; return; }
+      if (userRegionals.length && selectedRegionals.length === userRegionals.length) {
+        const allOk = userRegionals.every(r => selectedRegionals.includes(r));
+        if (allOk) { currentRegional = 'ALL'; return; }
+      }
+      currentRegional = selectedRegionals.length === 1
+        ? selectedRegionals[0]
+        : selectedRegionals.join(',');
+    }
     let currentFilter = '';
     let currentTab = 'monitor';
     let selectedTipos = new Set(Object.keys(TIPOS_SERVICO)); // todos selecionados por padrão
@@ -9320,7 +9377,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       const regSel = document.getElementById('regional-select');
       if (allowedRegional && regSel && !regSel.disabled) {
-        currentRegional = allowedRegional;
+        // Roteia via selectRegional pra atualizar selectedRegionals + sync.
+        // Suprime renderAll/saveFilters intermediário — init() vai renderizar.
+        const parts = String(allowedRegional).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+        if (allowedRegional === 'ALL' || !parts.length) {
+          selectedRegionals = [...userRegionals];
+        } else {
+          const expanded = parts.flatMap(p => expandRegional(p) || [p]);
+          const filtered = expanded.filter(r => userRegionals.includes(r));
+          selectedRegionals = filtered.length ? filtered : [...userRegionals];
+        }
+        _syncCurrentRegional();
         regSel.value = allowedRegional;
         ['ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
           const el = document.getElementById(id);
@@ -9506,30 +9573,31 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // ── FILTROS ───────────────────────────────────────────────────────────
     function selectRegional(regional) {
       // Aceita 'ALL', 'GUA', 'CAC', 'SJC' (single) ou CSV ('GUA,SJC') do multi-select.
-      currentRegional = regional;
+      // Atualiza selectedRegionals (modelo unificado Task 9) e sincroniza currentRegional.
+      if (!regional || regional === 'ALL') {
+        selectedRegionals = [...userRegionals];
+      } else {
+        const parts = String(regional).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+        // Expande grupos legados (ex: 'ES' → ['GUA','CAC']) e filtra ao escopo do user
+        const expanded = parts.flatMap(p => expandRegional(p) || [p]);
+        const filtered = expanded.filter(r => userRegionals.includes(r));
+        selectedRegionals = filtered.length ? filtered : [...userRegionals];
+      }
+      _syncCurrentRegional();
       const sel = document.getElementById('regional-select');
-      if (sel && sel.value !== regional) sel.value = regional;
+      if (sel && sel.value !== currentRegional) sel.value = currentRegional;
       saveFilters();
       renderAll();
     }
 
     function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
 
-    // Helper: testa se uma regional está no filtro (suporta ALL, single, CSV multi, grupos).
-    // Quando currentRegional é um grupo ('ES'), expande para as siglas filhas
-    // (['GUA','CAC']) antes de comparar — antes, _regionalMatch('GUA') com
-    // currentRegional='ES' retornava false e tela inteira ficava vazia pro user ES.
-    function _regionalMatch(reg) {
-      if (!currentRegional || currentRegional === 'ALL') return true;
-      // Expande cada item do CSV: 'GUA' → ['GUA'], 'ES' → ['GUA','CAC'], 'ALL' → []
-      const list = String(currentRegional).split(',')
-        .flatMap(s => {
-          const t = s.trim();
-          if (!t || t === 'ALL') return [];
-          return expandRegional(t) || [t];
-        });
-      if (list.length === 0) return true;
-      return list.includes(reg);
+    // Testa se uma regional passa pelo filtro do dropdown principal.
+    // Modelo unificado (Task 9): usa selectedRegionals (array de siglas, ex: ['GUA','CAC']).
+    // Vazio = sem filtro (defensivo — não deveria ocorrer pois o multi-select re-marca tudo).
+    function _regionalMatch(rowRegional) {
+      if (!selectedRegionals.length) return true;
+      return selectedRegionals.includes(String(rowRegional || '').toUpperCase());
     }
 
     // Mapping setor → regional (usado pra inferir regional quando payload não traz)
