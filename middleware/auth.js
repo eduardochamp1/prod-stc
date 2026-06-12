@@ -5,6 +5,7 @@
  */
 
 const crypto = require('crypto');
+const { isValidRegional } = require('../services/regionals');
 
 const _DEFAULT_SECRET = 'wpa-monitor-mude-esta-chave';
 const JWT_SECRET      = process.env.JWT_SECRET || _DEFAULT_SECRET;
@@ -49,22 +50,46 @@ function verifyToken(token) {
 }
 
 // ── Usuários (configurados no .env) ─────────────────────────────────────────
-// Formato AUTH_USERS: "usuario1:sha256hash1:role1:regional1,usuario2:..."
-// Roles:     admin | gua | cac | sjc | es
+// Formato AUTH_USERS: "usuario:sha256hash:role:GUA|CAC|SJC,outro:..."
+// Roles:     admin | user
 //            (role só controla acesso a /admin; qualquer valor != 'admin' bloqueia)
-// Regionais: ALL | GUA | CAC | SJC | ES
-//            (ES é grupo que expande pra ['GUA','CAC'] — ver services/regionalGroups.js)
+// Regionais: lista de siglas reais separadas por '|'. Sem 'ALL', sem grupos.
 
 function getUsers() {
   const raw = process.env.AUTH_USERS || '';
   return raw.split(',').filter(Boolean).map(entry => {
     const parts = entry.trim().split(':');
-    return {
-      username:     parts[0],
-      passwordHash: parts[1],
-      role:         parts[2] || 'gua',
-      regional:     parts[3] || 'ALL',
-    };
+    const username = parts[0];
+    const passwordHash = parts[1];
+    const role = parts[2] || 'user';
+    const regionalsStr = parts[3] || '';
+
+    if (regionalsStr === 'ALL') {
+      throw new Error(
+        `AUTH_USERS: user "${username}" tem regional="ALL" — não é mais aceito. ` +
+        `Liste as siglas explicitamente: GUA|CAC|SJC`
+      );
+    }
+    if (regionalsStr === 'ES') {
+      throw new Error(
+        `AUTH_USERS: user "${username}" tem regional="ES" — grupos não são mais aceitos. ` +
+        `Use GUA|CAC`
+      );
+    }
+
+    const regionals = regionalsStr
+      .split('|')
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (regionals.length === 0) {
+      throw new Error(`AUTH_USERS: user "${username}" sem regionals válidas (campo vazia)`);
+    }
+    const invalid = regionals.filter(r => !isValidRegional(r));
+    if (invalid.length > 0) {
+      throw new Error(`AUTH_USERS: user "${username}" tem siglas invalidas: ${invalid.join(', ')}`);
+    }
+    return { username, passwordHash, role, regionals };
   });
 }
 
@@ -132,4 +157,4 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { login, authMiddleware, requireAdmin, verifyToken };
+module.exports = { login, authMiddleware, requireAdmin, verifyToken, getUsers };
