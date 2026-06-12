@@ -106,3 +106,80 @@ test('verifyToken: rejeita token v=1 (sem campo v)', () => {
   const result = verifyToken(token);
   assert.equal(result, null, 'token v=1 deve ser rejeitado');
 });
+
+const { applyScope, compatRegionalParam } = require('../middleware/auth');
+
+function mockReqRes(query = {}, user = { regionals: ['GUA', 'CAC'] }) {
+  const res = {
+    _status: null, _body: null,
+    status(c) { this._status = c; return this; },
+    json(b) { this._body = b; return this; },
+    end() { return this; },
+  };
+  const req = { query, user, scope: null };
+  let nextCalled = false;
+  const next = () => { nextCalled = true; };
+  return { req, res, next, called: () => nextCalled };
+}
+
+test('applyScope: sem ?regionals — usa todas do user', () => {
+  const m = mockReqRes({}, { regionals: ['GUA', 'CAC'] });
+  applyScope(m.req, m.res, m.next);
+  assert.deepEqual(m.req.scope.regionals, ['GUA', 'CAC']);
+  assert.ok(m.called());
+});
+
+test('applyScope: ?regionals=GUA intersecta com user', () => {
+  const m = mockReqRes({ regionals: 'GUA' }, { regionals: ['GUA', 'CAC'] });
+  applyScope(m.req, m.res, m.next);
+  assert.deepEqual(m.req.scope.regionals, ['GUA']);
+});
+
+test('applyScope: ?regionals=SJC quando user nao tem — 403', () => {
+  const m = mockReqRes({ regionals: 'SJC' }, { regionals: ['GUA', 'CAC'] });
+  applyScope(m.req, m.res, m.next);
+  assert.equal(m.res._status, 403);
+  assert.equal(m.called(), false);
+});
+
+test('applyScope: ?regionals=SJC,GUA — filtra silenciosamente (mantem GUA)', () => {
+  const m = mockReqRes({ regionals: 'SJC,GUA' }, { regionals: ['GUA', 'CAC'] });
+  applyScope(m.req, m.res, m.next);
+  assert.deepEqual(m.req.scope.regionals, ['GUA']);
+  assert.ok(m.called());
+});
+
+test('applyScope: ?regionals=gua,cac — normaliza pra uppercase', () => {
+  const m = mockReqRes({ regionals: 'gua,cac' }, { regionals: ['GUA', 'CAC'] });
+  applyScope(m.req, m.res, m.next);
+  assert.deepEqual(m.req.scope.regionals, ['GUA', 'CAC']);
+});
+
+test('compatRegionalParam: ?regional=GUA vira ?regionals=GUA', () => {
+  const m = mockReqRes({ regional: 'GUA' });
+  compatRegionalParam(m.req, m.res, m.next);
+  assert.equal(m.req.query.regionals, 'GUA');
+  assert.equal(m.req.query.regional, undefined);
+  assert.ok(m.called());
+});
+
+test('compatRegionalParam: ?regional=ALL — apaga (cai em todas)', () => {
+  const m = mockReqRes({ regional: 'ALL' });
+  compatRegionalParam(m.req, m.res, m.next);
+  assert.equal(m.req.query.regional, undefined);
+  assert.equal(m.req.query.regionals, undefined);
+  assert.ok(m.called());
+});
+
+test('compatRegionalParam: ?regional=ES — apaga (cai em todas)', () => {
+  const m = mockReqRes({ regional: 'ES' });
+  compatRegionalParam(m.req, m.res, m.next);
+  assert.equal(m.req.query.regional, undefined);
+  assert.ok(m.called());
+});
+
+test('compatRegionalParam: ja tem ?regionals=X — nao toca', () => {
+  const m = mockReqRes({ regionals: 'GUA' });
+  compatRegionalParam(m.req, m.res, m.next);
+  assert.equal(m.req.query.regionals, 'GUA');
+});

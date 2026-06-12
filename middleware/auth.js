@@ -155,4 +155,49 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-module.exports = { login, authMiddleware, requireAdmin, verifyToken, getUsers };
+// ── Compat soft: aceita ?regional=GUA (singular, legado) ─────────────────
+// Converte pra ?regionals=GUA e remove o singular. Loga warn quando usado.
+// Pode ser removido depois de 1 release uma vez que os bookmarks/integrações migrarem.
+function compatRegionalParam(req, _res, next) {
+  if (req.query.regional && !req.query.regionals) {
+    const v = String(req.query.regional);
+    if (v === 'ALL' || v === 'ES') {
+      console.warn('[compat] legacy regional param:', { user: req.user?.username, value: v });
+      delete req.query.regional;   // deixa scope cair em "todas do user"
+    } else {
+      req.query.regionals = v;
+      delete req.query.regional;
+    }
+  }
+  next();
+}
+
+// ── Aplica escopo de regionais ─────────────────────────────────────────────
+// Lê ?regionals=CSV, intersecta com req.user.regionals, popula req.scope.regionals.
+// Sem param → todas do user. Intersect vazio → 403.
+function applyScope(req, res, next) {
+  if (!req.user || !Array.isArray(req.user.regionals)) {
+    return res.status(401).json({ error: 'sem regionals no token', code: 'NO_REGIONALS' });
+  }
+  const requested = String(req.query.regionals || '')
+    .split(',')
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean);
+
+  const allowed = req.user.regionals;
+  const scope = requested.length === 0
+    ? [...allowed]
+    : requested.filter(r => allowed.includes(r));
+
+  if (scope.length === 0) {
+    return res.status(403).json({ error: 'no_accessible_regionals' });
+  }
+
+  req.scope = { regionals: scope };
+  next();
+}
+
+module.exports = {
+  login, authMiddleware, requireAdmin, verifyToken, getUsers,
+  applyScope, compatRegionalParam,
+};
