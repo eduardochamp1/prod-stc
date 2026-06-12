@@ -8,7 +8,7 @@
  */
 
 require('dotenv').config();
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 
 const DATA     = process.argv[2];
 const REGIONAL = (process.argv[3] || 'GUA').toUpperCase();

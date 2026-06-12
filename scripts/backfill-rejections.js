@@ -35,7 +35,7 @@
  */
 
 require('dotenv').config();
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 const { login: wpaLogin } = require('../services/wpaService');
 const { fetchRejectionDetails, getDiscoveredPaths } = require('../services/rejectionService');
 const { getKnownRejectedIds, getEmptyRejectedIds, upsertRejections } = require('../db/rejectionsQueries');

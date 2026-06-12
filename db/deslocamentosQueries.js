@@ -27,7 +27,7 @@
  */
 
 const { _getPool } = require('../services/pgShim');
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 const { getRoute }  = require('../services/osrmService');
 const { inRegionalsSql } = require('../services/regionals');
 

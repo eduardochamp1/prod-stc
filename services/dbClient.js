@@ -1,5 +1,5 @@
 /**
- * services/supabaseClient.js
+ * services/dbClient.js
  *
  * Cliente compartilhado para o backend de dados. Dual-mode:
  *
@@ -27,7 +27,7 @@ function _init() {
     const { Client } = require('./pgShim');
     _client = new Client();
     _mode   = 'pg';
-    console.log('[supabaseClient] modo=pg (Postgres local via shim)');
+    console.log('[dbClient] modo=pg (Postgres local via shim)');
     return _client;
   }
 
@@ -36,7 +36,7 @@ function _init() {
     const URL = process.env.SUPABASE_URL || 'https://iyadtjzehhebwojreudz.supabase.co';
     _client = createClient(URL, process.env.SUPABASE_SERVICE_KEY);
     _mode   = 'supabase';
-    console.log('[supabaseClient] modo=supabase (@supabase/supabase-js)');
+    console.log('[dbClient] modo=supabase (@supabase/supabase-js)');
     return _client;
   }
 

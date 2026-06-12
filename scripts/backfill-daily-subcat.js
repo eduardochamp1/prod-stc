@@ -27,7 +27,7 @@
 
 require('dotenv').config();
 
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 
 const argDe  = process.argv[2] || null;
 const argAte = process.argv[3] || null;

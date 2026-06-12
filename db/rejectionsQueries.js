@@ -8,7 +8,7 @@
  *   - Não chama WPA daqui. Quem coleta da WPA é services/rejectionService.js.
  */
 
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 const { _getPool } = require('../services/pgShim');
 const { inRegionals, inRegionalsSql } = require('../services/regionals');
 

@@ -17,7 +17,7 @@
 require('dotenv').config();
 process.env.DATA_MODE = 'wpa';
 
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 const { getNoteDetail } = require('../services/wpaService');
 
 (async () => {

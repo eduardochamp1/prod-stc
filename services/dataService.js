@@ -46,7 +46,7 @@ async function _enrichComEscalaELogonReal(teams) {
 
   // 2) sessionBeginReal: primeiro snapshot do dia (BRT) de cada equipe
   try {
-    const { getClient } = require('./supabaseClient');
+    const { getClient } = require('./dbClient');
     const sb = getClient();
     if (!sb) return teams;
     const hoje = _hojeBRT();

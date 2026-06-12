@@ -210,7 +210,7 @@ _rebuildFromFallback();
 
 async function _doRefresh() {
   try {
-    const { getClient } = require('./supabaseClient');
+    const { getClient } = require('./dbClient');
     const sb = getClient();
     // Tenta com escala primeiro; se a migration ainda não rodou, faz fallback
     // sem essas colunas (não quebra o serviço).

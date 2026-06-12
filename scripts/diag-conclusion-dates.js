@@ -6,7 +6,7 @@
  */
 
 require('dotenv').config();
-const { getTeamsByDateFromSnapshots } = require('../db/supabaseQueries');
+const { getTeamsByDateFromSnapshots } = require('../db/queries');
 
 const DE  = process.argv[2];
 const ATE = process.argv[3];

@@ -6,7 +6,7 @@
  * Aqui só lemos do cache e gravamos em batch. Nunca chama WPA daqui.
  */
 
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 
 /**
  * Retorna o conjunto de UUIDs já classificados (para deduplicação rápida).

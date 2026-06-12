@@ -1,6 +1,6 @@
 /**
  * test/pagination.test.js
- * Testa o _selectAll de db/supabaseQueries.js — paginação até esgotar resultados.
+ * Testa o _selectAll de db/queries.js — paginação até esgotar resultados.
  * Usa um query builder fake que simula o comportamento do supabase-js v2.
  */
 
@@ -31,7 +31,7 @@ function makeFakeBuilder(allRows) {
 function getSelectAll() {
   // _selectAll não é exportado; vamos re-implementar a versão que está no
   // arquivo (fonte da verdade ainda é o código de produção)
-  // Implementação canônica copiada de db/supabaseQueries.js:
+  // Implementação canônica copiada de db/queries.js:
   return async function _selectAll(queryFactory, pageSize = 1000) {
     let allRows = [];
     let page = 0;

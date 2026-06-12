@@ -23,7 +23,7 @@
 const fetch = require('node-fetch');
 const https = require('https');
 const crypto = require('crypto');
-const { getClient } = require('./supabaseClient');
+const { getClient } = require('./dbClient');
 
 const HERE_API_KEY = process.env.HERE_API_KEY || '';
 const PROVIDER = HERE_API_KEY ? 'here' : 'osrm';

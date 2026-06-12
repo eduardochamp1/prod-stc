@@ -1,5 +1,5 @@
 /**
- * db/supabaseQueries.js
+ * db/queries.js
  * Queries de leitura usadas pelo Vercel (DATA_MODE=supabase) e pelos endpoints de histórico.
  *
  * ─────────────────────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
 const { dateBRT } = require('../services/timeUtil');
 const { inRegionals } = require('../services/regionals');

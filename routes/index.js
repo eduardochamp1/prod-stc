@@ -67,7 +67,7 @@ function sbq() {
   if (_sbq) return _sbq;
   if (MODE === 'mock') return null;
   try {
-    _sbq = require('../db/supabaseQueries');
+    _sbq = require('../db/queries');
     return _sbq;
   } catch (err) {
     console.warn('[SBQ] Módulo indisponível:', err.message);
@@ -156,7 +156,7 @@ async function _resolveTeamRegional(sigla) {
   // Cache de 60s — equipes oficiais mudam raramente
   if (!_equipeRegionalCache.map || (Date.now() - _equipeRegionalCache.fetchedAt) > 60000) {
     try {
-      const sb = require('../services/supabaseClient').getClient();
+      const sb = require('../services/dbClient').getClient();
       const { data } = await sb.from('equipes_oficiais').select('sigla, regional');
       const m = new Map();
       (data || []).forEach(e => m.set(e.sigla, e.regional));
@@ -214,7 +214,7 @@ router.get('/equipes', async (req, res) => {
   try {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     let q = sb
       .from('equipes_oficiais')
       .select('sigla, regional, tipo, ativo')
@@ -1315,7 +1315,7 @@ router.get('/admin/health', async (_req, res) => {
       // Idade do último snapshot — pega o updated_at mais recente
       if (teams.length > 0) {
         // teams_current.updated_at vem nos rows mas não no .data — refazemos query rápida
-        const { data: ages } = await require('../services/supabaseClient').getClient()
+        const { data: ages } = await require('../services/dbClient').getClient()
           .from('teams_current')
           .select('updated_at')
           .order('updated_at', { ascending: false })
@@ -1391,7 +1391,7 @@ router.get('/admin/equipes', async (_req, res) => {
   try {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     const { data, error } = await sb
       .from('equipes_oficiais')
       .select('sigla, regional, tipo, placa, ativo, escala_inicio, escala_fim, created_at, updated_at')
@@ -1416,7 +1416,7 @@ router.post('/admin/equipes', async (req, res) => {
   if (errors.length > 0) return res.status(400).json({ error: errors.join('; ') });
 
   try {
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     const sigla = req.body.sigla.toUpperCase().trim();
     const { error } = await sb
       .from('equipes_oficiais')
@@ -1501,7 +1501,7 @@ router.put('/admin/equipes/:sigla', async (req, res) => {
   upd.updated_at = new Date().toISOString();
 
   try {
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     const { data, error } = await sb
       .from('equipes_oficiais')
       .update(upd)
@@ -1527,7 +1527,7 @@ router.delete('/admin/equipes/:sigla', async (req, res) => {
 
   const hard = req.query.hard === '1';
   try {
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     let resp;
     if (hard) {
       resp = await sb.from('equipes_oficiais').delete().eq('sigla', sigla).select();
@@ -1560,7 +1560,7 @@ router.get('/admin/drift', async (req, res) => {
     return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
   }
   try {
-    const { detectDrift } = require('../services/supabasePush');
+    const { detectDrift } = require('../services/dataWriter');
     const report = await detectDrift(date);
     res.json(report);
   } catch (err) {
@@ -1575,7 +1575,7 @@ router.post('/admin/drift/repair', async (req, res) => {
     return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
   }
   try {
-    const { detectDrift, consolidateDay } = require('../services/supabasePush');
+    const { detectDrift, consolidateDay } = require('../services/dataWriter');
     const before = await detectDrift(date);
     await consolidateDay(date);
     const after = await detectDrift(date);
@@ -1608,7 +1608,7 @@ router.get('/admin/subcat-trace', async (req, res) => {
   try {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     const { isOficial } = require('../services/equipesOficiais');
 
     // Pega snapshot mais recente por (date, team) que tenha sessionDate=date
@@ -1733,10 +1733,10 @@ let _reclassifyJob = null; // { id, status, date, tipo, started_at, finished_at,
 
 async function _runReclassifyBackground(jobState) {
   try {
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     const { classificarBatch } = require('../services/classifierService');
     const { upsertSubcategorias } = require('../db/subcategoriasQueries');
-    const { consolidateDay } = require('../services/supabasePush');
+    const { consolidateDay } = require('../services/dataWriter');
 
     const date = jobState.date;
     const tipoFilter = jobState.tipo === 'ALL' ? null : jobState.tipo;
@@ -1879,7 +1879,7 @@ router.get('/admin/note-trace', async (req, res) => {
   try {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
 
     const out = {
       query: { numero: numero || null, id: id || null },
@@ -2011,7 +2011,7 @@ router.get('/admin/equipes-sem-producao', async (req, res) => {
   try {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
     const { getOficiais } = require('../services/equipesOficiais');
 
     // Quem produziu no período (qualquer equipe oficial com pelo menos 1 record)
@@ -2051,7 +2051,7 @@ router.get('/admin/team-search', async (req, res) => {
     .split(',').map(s => s.trim()).filter(Boolean);
   if (siglas.length === 0) return res.status(400).json({ error: 'parâmetro siglas obrigatório (separado por vírgula)' });
   try {
-    const sb = require('../services/supabaseClient').getClient();
+    const sb = require('../services/dbClient').getClient();
 
     // Snapshots últimos 90 dias
     const cutoff = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
@@ -2239,7 +2239,7 @@ router.post('/admin/backfill', async (req, res) => {
   }
   try {
     const { getTeamsByDate }                                          = require('../services/wpaService');
-    const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/supabasePush');
+    const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/dataWriter');
 
     const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
     console.log(`[BACKFILL] Iniciando para ${date}...`);
@@ -2313,7 +2313,7 @@ router.post('/admin/backfill/range', async (req, res) => {
   }
 
   const { getTeamsByDate }                                          = require('../services/wpaService');
-  const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/supabasePush');
+  const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/dataWriter');
   const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
 
   const resultados = [];

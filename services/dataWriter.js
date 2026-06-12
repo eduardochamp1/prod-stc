@@ -1,11 +1,11 @@
 /**
- * services/supabasePush.js
+ * services/dataWriter.js
  * Escrita no Supabase — snapshots, teams_current, daily_totals e team_daily_totals.
  */
 
-const { getClient } = require('./supabaseClient');
+const { getClient } = require('./dbClient');
 const { dateBRT, dateBRTMinusDays } = require('./timeUtil');
-const log = require('./logger').forModule('supabase');
+const log = require('./logger').forModule('dataWriter');
 
 // Data operacional BRT (America/Sao_Paulo). Usar UTC daria a data errada após 21:00 BRT
 // (quando UTC já virou pro dia seguinte) e desalinharia tudo com o front.

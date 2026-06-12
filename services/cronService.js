@@ -32,7 +32,7 @@ const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se t
 
 async function _recordSubcatError(err) {
   try {
-    const sq = require('../db/supabaseQueries');
+    const sq = require('../db/queries');
     await sq.setSetting('subcat_error', {
       message: err && err.message ? err.message : String(err),
       ts:      new Date().toISOString(),
@@ -42,7 +42,7 @@ async function _recordSubcatError(err) {
 
 async function _clearSubcatError() {
   try {
-    const sq = require('../db/supabaseQueries');
+    const sq = require('../db/queries');
     // Marca como resolvido (não deleta, mantém histórico do último sucesso)
     await sq.setSetting('subcat_error', { message: null, ts: new Date().toISOString() });
   } catch (_) {}
@@ -106,7 +106,7 @@ async function runSnapshot() {
     }
 
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals } = require('./supabasePush');
+    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals } = require('./dataWriter');
 
     // snapshots e teams_current: apenas equipes reais (sem ghosts)
     await saveSnapshot(teams);
@@ -180,7 +180,7 @@ async function runSyncEscalas(teams) {
   if (!teams || teams.length === 0) return;
 
   const { getMeta, forceRefresh } = require('./equipesOficiais');
-  const { getClient } = require('./supabaseClient');
+  const { getClient } = require('./dbClient');
   const sb = getClient();
   if (!sb) return;
 
@@ -255,7 +255,7 @@ async function runCacheNotaDetails(teams) {
   if (candidatos.length === 0) return;
 
   // 2) Filtra os que ainda não estão no cache
-  const sq = require('../db/supabaseQueries');
+  const sq = require('../db/queries');
   const idsFaltando = await sq.filtrarNotesNaoCacheadas(candidatos.map(c => c.id));
   if (idsFaltando.length === 0) {
     console.log(`[CRON] Cache OS: nada novo (${candidatos.length} UUIDs, todos cacheados)`);
@@ -384,7 +384,7 @@ async function runClassifyRejections(teams) {
   if (process.env.DATA_MODE === 'mock') return;
   if (!teams || teams.length === 0) return;
 
-  const { getClient } = require('./supabaseClient');
+  const { getClient } = require('./dbClient');
   const { fetchRejectionDetails } = require('./rejectionService');
   const sb = getClient();
   if (!sb) return;
@@ -498,7 +498,7 @@ async function runClassifyRejections(teams) {
 // classifica em massa. Usado pra inicializar a tabela ou recuperar lacunas.
 
 async function runBackfillRejeicoes(daysBack) {
-  const { getClient } = require('./supabaseClient');
+  const { getClient } = require('./dbClient');
   const { fetchRejectionDetails } = require('./rejectionService');
   const sb = getClient();
   if (!sb) return { error: 'supabase indisponível' };
@@ -633,10 +633,10 @@ async function runBackfillRejeicoes(daysBack) {
 // (~50-150 KB), então N*2 chamadas por execução.
 
 async function runRetryRecentOutros(daysBack) {
-  const { getClient } = require('./supabaseClient');
+  const { getClient } = require('./dbClient');
   const { upsertSubcategorias } = require('../db/subcategoriasQueries');
   const { classificarBatch } = require('./classifierService');
-  const { consolidateDay } = require('./supabasePush');
+  const { consolidateDay } = require('./dataWriter');
   const sb = getClient();
 
   // Janela default = 7 dias. Alguns Activities[] só são populadas pela WPA dias
@@ -725,10 +725,10 @@ async function runRetryRecentOutros(daysBack) {
 // Esta função re-roda o classificador em TODAS as DD classificadas (qualquer
 // sub_code) dos últimos N dias e atualiza o cache. Reconsolida os dias afetados.
 async function runRevalidateDD(daysBack, opts = {}) {
-  const { getClient }           = require('./supabaseClient');
+  const { getClient }           = require('./dbClient');
   const { upsertSubcategorias } = require('../db/subcategoriasQueries');
   const { classificarBatch }    = require('./classifierService');
-  const { consolidateDay }      = require('./supabasePush');
+  const { consolidateDay }      = require('./dataWriter');
   const sb = getClient();
 
   // Modo "all=true" ignora janela de tempo e revalida TODAS as DD do banco
@@ -837,7 +837,7 @@ async function runRevalidateDD(daysBack, opts = {}) {
 //       subcategoria pode estar comprometida!
 
 async function runUuidHealthCheck() {
-  const { getClient } = require('./supabaseClient');
+  const { getClient } = require('./dbClient');
   const sb = getClient();
   const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString();
 
@@ -889,7 +889,7 @@ async function runConsolidate(date) {
   // Sem data explícita usa BRT (America/Sao_Paulo) — evita consolidar "amanhã" depois das 21h UTC
   date = date || dateBRT();
   try {
-    const { consolidateDay, cleanOldSnapshots, cleanOldNoteDetails } = require('./supabasePush');
+    const { consolidateDay, cleanOldSnapshots, cleanOldNoteDetails } = require('./dataWriter');
     await consolidateDay(date);
     // Limpa registros antigos (uma vez por dia, após a consolidação)
     await cleanOldSnapshots();
@@ -910,7 +910,7 @@ async function runConsolidate(date) {
 
 async function runDriftCheck(date) {
   try {
-    const { detectDrift, consolidateDay } = require('./supabasePush');
+    const { detectDrift, consolidateDay } = require('./dataWriter');
     date = date || dateBRT();
     const report = await detectDrift(date);
 
@@ -935,7 +935,7 @@ async function runDriftCheck(date) {
 
       // Registra no app_settings para observabilidade
       try {
-        const sq = require('../db/supabaseQueries');
+        const sq = require('../db/queries');
         await sq.setSetting('drift_last_repair', {
           date,
           before: report,
@@ -1081,7 +1081,7 @@ async function runSyncLogoffs(targetDate) {
   if (process.env.DATA_MODE === 'mock') return;
 
   const { getSessionsByDate } = require('./wpaService');
-  const { getClient } = require('./supabaseClient');
+  const { getClient } = require('./dbClient');
   const sb = getClient();
   if (!sb) return;
 

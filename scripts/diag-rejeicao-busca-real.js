@@ -6,7 +6,7 @@
  */
 
 require('dotenv').config();
-const { getClient } = require('../services/supabaseClient');
+const { getClient } = require('../services/dbClient');
 const { wpaFetch } = require('../services/wpaService');
 
 const AMOSTRA = parseInt(process.argv[2] || '50', 10);
