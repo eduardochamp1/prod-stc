@@ -8166,7 +8166,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
         // Todas as notas da equipe contam pra sessDate (sem filtrar por
         // conclusionDate da nota — a regra é por sessão).
-        const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+        // Produtividade do dia = SÓ notasConcluidas. Notas em andamento ainda
+        // podem virar rejeitadas — não são "produção feita". Alinhado com cron
+        // (services/dataWriter.js upsertSubcatTotals).
+        const realizadas = t.notasConcluidas || [];
 
         realizadas.forEach(n => {
           const tipo = n.tipoCode;

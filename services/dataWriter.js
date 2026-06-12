@@ -209,26 +209,18 @@ async function upsertTeamDailyTotals(teams, _date) {
   // Chave: (notaDate, team_name, tipo_code). notaDate respeita conclusionDate
   // de notas executadas em dia anterior à sessão atual (evita inflação).
   //
-  // Dedupe por noteId DENTRO de (date, team, tipo): WPA devolve o MESMO UUID
-  // em notasExecutadas E notasConcluidas durante a transição "iniciada → concluida".
-  // Sem dedup, cada nota nesse estado era contada 2x — inflava daily_totals em
-  // ~30-40% (espelha o padrão de upsertSubcatTotals abaixo).
+  // Produtividade do dia = SÓ notasConcluidas. Notas em andamento ainda podem
+  // virar rejeitadas (não são "produção feita"). Regra alinhada com o card
+  // OS EXECUTADAS do Monitor e com upsertSubcatTotals.
   const acc = {};
-  const seen = new Set();
   teams.forEach(t => {
     const sessDate = _sessionDate(t);
     if (!sessDate) return;
     const teamName = t.teamName || t.sigla;
-    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
-    realizadas.forEach(n => {
+    (t.notasConcluidas || []).forEach(n => {
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
       const notaDate = _notaDate(n, sessDate, t.sessionBegin);
-      if (n.id) {
-        const dedupeKey = `${notaDate}|${teamName}|${code}|${n.id}`;
-        if (seen.has(dedupeKey)) return;
-        seen.add(dedupeKey);
-      }
       const key = `${notaDate}|${teamName}|${code}`;
       if (!acc[key]) {
         acc[key] = {
@@ -281,7 +273,10 @@ async function upsertSubcatTotals(teams, _date) {
     if (!teamName || !t.regional) return;
     const sessDate = _sessionDate(t);
     if (!sessDate) return;                          // sem sessão → descarta
-    const realizadas = [...(t.notasExecutadas || []), ...(t.notasConcluidas || [])];
+    // Produtividade do dia = SÓ notasConcluidas. Notas em andamento (executadas)
+    // ainda podem virar rejeitadas — não são "produção feita". Regra de negócio
+    // alinhada com o card OS EXECUTADAS.
+    const realizadas = t.notasConcluidas || [];
     realizadas.forEach(n => {
       if (!n.id) return;
       const tipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
