@@ -258,9 +258,19 @@ async function _buildDiaSummary(siglasFiltro) {
       WHERE date = $1 ${filterClause}
       ORDER BY team_name, captured_at DESC`;
 
-    const [firstRes, lastRes] = await Promise.all([
+    // 3ª query: note_rejections persistente. WPA limpa notasRejeitadas do
+    // payload após algumas horas, então o snapshot subconta. note_rejections
+    // é alimentada por cron separado (services/rejectionService.js) via
+    // /api/notes/rejected — é a FONTE AUTORITATIVA pra UUIDs rejeitadas no dia.
+    const queryRej = `
+      SELECT note_id
+      FROM note_rejections
+      WHERE session_date = $1 ${filterClause}`;
+
+    const [firstRes, lastRes, rejRes] = await Promise.all([
       pool.query(queryFirst, params),
       pool.query(queryLast, params),
+      pool.query(queryRej, params),
     ]);
 
     const inicialUUIDs   = new Set();
@@ -291,6 +301,13 @@ async function _buildDiaSummary(siglasFiltro) {
       addAll(r.executadas, andamentoRaw);
       addAll(r.concluidas, concluidasRaw);
       addAll(r.rejeitadas, rejeitadasRaw);
+    }
+
+    // União com note_rejections persistente — captura rejeitadas que o WPA
+    // já limpou do payload do dispositivo. Sem isso, snapshot.rejeitadas
+    // subconta (ex: dia 12/06 mostrava 2 vs 17 reais na tabela).
+    for (const r of rejRes.rows) {
+      if (r.note_id) rejeitadasRaw.add(r.note_id);
     }
 
     // Classificação única por UUID — cada nota fica em EXATAMENTE 1 bucket
