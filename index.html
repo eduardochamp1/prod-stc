@@ -9860,10 +9860,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }, 0);
       const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline).length;
 
-      // Carteira INICIAL (Total Dia): UUIDs únicos do PRIMEIRO snapshot de cada
-      // equipe no dia, deduplicados cross-team. Fonte única: summary.dia.inicial.
+      // Carteira TOTAL DIA = tudo que passou pela carteira hoje =
+      //   inicial (1º snapshot) + entradas_novas (chegaram depois)
+      // Garante atual ≤ total dia sempre. Sem entradas, atual cresceria além do
+      // total visualmente — usuário confundia "tenho 830 de 792 pra fazer?".
       // Fallback: soma per-team (modo histórico) ou derivação dos KPIs.
-      const carteiraInicial = useDia ? dia.inicial
+      const carteiraInicial = useDia ? (dia.inicial + (dia.entradas_novas || 0))
         : Math.max(
             teamsVisible.reduce((s, t) => s + (typeof t.carteiraInicialReal === 'number' ? t.carteiraInicialReal : 0), 0),
             emCarteira + executadas + concluidasLive + rejeitadas
@@ -9878,7 +9880,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // compat retroativa caso algo leia esse texto no DOM.
       const mAtivasNum = document.getElementById('m-ativas-num');
       if (mAtivasNum) mAtivasNum.textContent = ativas;
-      document.getElementById('m-ativas').textContent = `${ativas} em campo`;
+      // m-ativas (sub-texto) é populado abaixo no try/catch — distingue
+      // "em campo agora" de "ativas no dia" (incluindo deslogadas).
       document.getElementById('m-executadas').textContent = executadas;
       // OS REJEITADAS vem de summary.dia (snapshot dedup) — única fonte.
       // Fallback live (reduce) só em modo histórico (sem dia disponível).
@@ -9928,27 +9931,53 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (cardAndamento) cardAndamento.style.display = isLiveToday ? '' : 'none';
       if (cardCarteira)  cardCarteira.style.display  = isLiveToday ? '' : 'none';
 
-      // OS EXECUTADAS = concluidas do dia (fonte única: summary.dia.concluidas)
+      // OS EXECUTADAS = concluidas do dia. Inicia com summary.dia.concluidas
+      // (snapshot dedup) mas é OVERWRITTEN com a soma de /totais/subcat assim
+      // que o fetch resolver — garante que o card bate com a soma dos cards de
+      // produtividade por construção (mesma fonte).
       document.getElementById('m-concluidas').textContent = concluidasLive;
 
       // Sub-info '% da carteira': base = carteira inicial (denominador correto;
       // atual decresce conforme execução, inflaria % artificialmente).
       const baseCarteira = carteiraInicial || emCarteira;
-      if (isLiveToday) {
-        const pct = baseCarteira > 0 ? Math.round((concluidasLive / baseCarteira) * 100) : 0;
-        document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
-      } else {
-        const dias = (() => {
-          const ms = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
-          return Math.round(ms / 86400000) + 1;
-        })();
-        document.getElementById('m-concluidas-pct').textContent =
-          dias === 1 ? 'no dia selecionado' : `em ${dias} dias`;
+      function _renderPct(val) {
+        if (isLiveToday) {
+          const pct = baseCarteira > 0 ? Math.round((val / baseCarteira) * 100) : 0;
+          document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
+        } else {
+          const dias = (() => {
+            const ms = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
+            return Math.round(ms / 86400000) + 1;
+          })();
+          document.getElementById('m-concluidas-pct').textContent =
+            dias === 1 ? 'no dia selecionado' : `em ${dias} dias`;
+        }
+      }
+      _renderPct(concluidasLive);
+
+      // Sincroniza OS EXECUTADAS com a soma dos cards de produtividade.
+      // /totais/subcat é a fonte autoritativa: cron agrega por (date, team, tipo,
+      // sub_code), e a soma de todos os sub_codes = total de concluidas do dia
+      // visíveis nos cards. Sem isso, os 2 números divergiam (ex: 14 vs soma 11).
+      {
+        const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
+        fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regionals=${_regionalsCsv}`)
+          .then(r => r.json())
+          .then(j => {
+            const sum = Object.values(j?.totais?.ALL || {}).reduce((s, v) => s + (v || 0), 0);
+            if (sum > 0) {
+              document.getElementById('m-concluidas').textContent = sum;
+              _renderPct(sum);
+            }
+          })
+          .catch(() => { /* mantém summary.dia.concluidas */ });
       }
 
       // TOTAL EQUIPES = whitelist (oficiais ativas visíveis ao user).
       // /api/equipes aplica filtro de regional server-side. Separado de summary.dia
       // porque whitelist é informação cadastral, não cumulativa do dia.
+      // Sub-texto: "X em campo · Y ativas no dia" — distingue equipes em sessão
+      // ABERTA (em campo agora) das que TOCARAM o dia (incluindo já encerradas).
       try {
         const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
         const eqData = await fetch(`${API}/equipes?regionals=${_regionalsCsv}`)
@@ -9956,6 +9985,16 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (eqData?.equipes) {
           const oficiais = eqData.equipes.filter(e => e.ativo);
           document.getElementById('m-total').textContent = oficiais.length;
+        }
+        // Sub-texto: distingue "em campo agora" (29, mostrado inline) das equipes
+        // que tocaram o dia (incluindo já encerradas). Sem isso, o user via "29
+        // em campo" mas a seção "Equipes" abaixo listava 36 — confusão.
+        const mAtivasEl = document.getElementById('m-ativas');
+        if (mAtivasEl && teamsVisible.length !== ativas) {
+          mAtivasEl.textContent = `${teamsVisible.length} ativas no dia`;
+          mAtivasEl.style.display = '';
+        } else if (mAtivasEl) {
+          mAtivasEl.style.display = 'none';
         }
       } catch (err) {
         console.warn('[KPI] falha ao buscar /equipes:', err.message);
