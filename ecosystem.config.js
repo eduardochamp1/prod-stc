@@ -11,12 +11,11 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      // HERE Routing API key — pega gratis em https://platform.here.com
-      // (Access Manager -> App -> Credentials -> REST API Keys). Free tier
-      // permanente: 250k req/mes. Quando vazio, o app cai pro OSRM publico
-      // (que o Fortinet bloqueia em prod). NAO commitar a key real aqui;
-      // editar este arquivo direto no servidor e nao versionar a mudanca.
-      HERE_API_KEY: '',
+      // Routing (deslocamentos): app usa OSRM via proxy Cloudflare Worker
+      // configurado em OSRM_HOST do .env do servidor. Free tier permanente,
+      // sem chave, sem cartao. Worker repassa pro router.project-osrm.org
+      // (Fortinet bloqueia o dominio direto, mas libera o do Worker).
+      // Codigo do Worker: https://dash.cloudflare.com -> Workers -> osrm-proxy
     },
     log_date_format: 'YYYY-MM-DD HH:mm:ss',
     error_file:  './logs/err.log',
