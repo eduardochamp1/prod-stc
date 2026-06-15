@@ -1,23 +1,20 @@
 /**
  * services/osrmService.js
  *
- * Consulta tempo/distância de rota dirigindo entre 2 pontos.
+ * Consulta tempo/distância de rota dirigindo entre 2 pontos via OSRM.
  *
- * PROVIDER: detectado automaticamente pelo env:
- *   - HERE_API_KEY setado  → HERE Routing v8 (preferido, 250k req/mes free)
- *   - senao                → OSRM publico (gratis, mas Fortinet bloqueia 403
- *                            na producao da Engelmig — so funciona em dev)
+ * OSRM_HOST configura o endpoint. Em prod aponta pra Cloudflare Worker
+ * (`osrm-proxy.jose-zouain.workers.dev`) que repassa pro OSRM publico —
+ * router.project-osrm.org direto e bloqueado pelo Fortinet do servidor.
+ * Free tier do Worker: 100k req/dia, sem cartao. Em dev, default vai
+ * direto pro OSRM publico (sem Fortinet pra bloquear).
  *
- * Por que HERE: o servidor de producao esta atras de Fortinet que bloqueia
- * router.project-osrm.org. HERE (dominio business-categorized) passa.
+ * Cache: tabela `osrm_cache` (md5 das coords arredondadas ~1m). Entries
+ * cacheados de provedores antigos (HERE pre-jun/2026) continuam validos —
+ * distancia/tempo sao similares.
  *
- * Cache: mesma tabela `osrm_cache` (nome historico, agnostico a provider).
- * Chave = md5 das coords arredondadas a 5 casas (~1m). Entries cacheados de
- * OSRM continuam validos mesmo apos migrar pra HERE — tempos sao similares.
- *
- * RATE LIMITING:
- *   - HERE: 100ms (10 req/s safety, free tier permite muito mais)
- *   - OSRM: 1100ms (~1 req/s, fair-use do publico)
+ * RATE LIMITING: 1100ms (~1 req/s) — fair-use do OSRM publico.
+ * Cache hits sao instantaneos, so requests novas pagam o throttle.
  */
 
 const fetch = require('node-fetch');
@@ -25,13 +22,8 @@ const https = require('https');
 const crypto = require('crypto');
 const { getClient } = require('./dbClient');
 
-const HERE_API_KEY = process.env.HERE_API_KEY || '';
-const PROVIDER = HERE_API_KEY ? 'here' : 'osrm';
 const OSRM_HOST = process.env.OSRM_HOST || 'https://router.project-osrm.org';
-const MIN_INTERVAL_MS = parseInt(
-  process.env.ROUTING_MIN_INTERVAL_MS || (PROVIDER === 'here' ? '100' : '1100'),
-  10
-);
+const MIN_INTERVAL_MS = parseInt(process.env.ROUTING_MIN_INTERVAL_MS || '1100', 10);
 
 // Agent com TLS verification desabilitada — necessario pq o servidor de
 // producao da Engelmig esta atras de Fortinet com TLS interception, e a CA
@@ -97,7 +89,7 @@ async function _writeCache(key, oLat, oLng, dLat, dLng, payload) {
     duration_sec: payload.duration_sec,
     distance_m:   payload.distance_m,
     geometry:     payload.geometry,
-    source:       PROVIDER === 'here' ? 'here_v8' : 'osrm_public',
+    source:       'osrm',
   }, { onConflict: 'cache_key' });
 }
 
@@ -127,52 +119,6 @@ async function _fetchOsrm(oLat, oLng, dLat, dLng) {
   };
 }
 
-/**
- * Consulta HERE Routing v8 e retorna { duration_sec, distance_m, geometry }.
- * Docs: https://www.here.com/docs/bundle/routing-api-v8-api-reference/page/index.html
- *
- * Polyline vem em "flexible polyline" (formato proprietário HERE). Salvamos
- * como objeto { format, value } pra distinguir de GeoJSON. Pro mapa visual
- * (futuro), decodificar com pacote @here/flexpolyline.
- */
-async function _fetchHere(oLat, oLng, dLat, dLng) {
-  await _throttle();
-  const url = `https://router.hereapi.com/v8/routes`
-    + `?transportMode=car`
-    + `&origin=${oLat},${oLng}`
-    + `&destination=${dLat},${dLng}`
-    + `&return=summary,polyline`
-    + `&apiKey=${encodeURIComponent(HERE_API_KEY)}`;
-  let res;
-  try {
-    res = await fetch(url, { timeout: 15000, agent: _insecureAgent });
-  } catch (err) {
-    throw new Error(`HERE fetch erro: ${err.message}`);
-  }
-  if (!res.ok) {
-    let body = '';
-    try { body = (await res.text()).slice(0, 150); } catch (_) {}
-    throw new Error(`HERE HTTP ${res.status}: ${body}`);
-  }
-  const json = await res.json();
-  const section = json.routes && json.routes[0] && json.routes[0].sections && json.routes[0].sections[0];
-  if (!section || !section.summary) {
-    throw new Error(`HERE sem rota: ${JSON.stringify(json).slice(0, 100)}`);
-  }
-  return {
-    duration_sec: section.summary.duration,
-    distance_m:   section.summary.length,
-    geometry:     section.polyline ? { format: 'flexible_polyline', value: section.polyline } : null,
-    cached:       false,
-  };
-}
-
-/** Escolhe o provider baseado em env. */
-async function _fetchRoute(oLat, oLng, dLat, dLng) {
-  return PROVIDER === 'here'
-    ? _fetchHere(oLat, oLng, dLat, dLng)
-    : _fetchOsrm(oLat, oLng, dLat, dLng);
-}
 
 // ── API pública ──────────────────────────────────────────────────────────────
 
@@ -201,11 +147,11 @@ async function getRoute(oLat, oLng, dLat, dLng) {
   if (cached) return cached;
 
   try {
-    const fresh = await _fetchRoute(oLat, oLng, dLat, dLng);
+    const fresh = await _fetchOsrm(oLat, oLng, dLat, dLng);
     await _writeCache(key, oLat, oLng, dLat, dLng, fresh);
     return fresh;
   } catch (err) {
-    console.warn(`[routing:${PROVIDER}] ${err.message} (${oLat},${oLng}→${dLat},${dLng})`);
+    console.warn(`[routing] ${err.message} (${oLat},${oLng}→${dLat},${dLng})`);
     return null;
   }
 }

@@ -11957,7 +11957,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       try {
         const coordStr = dedup.map(c => `${c[1]},${c[0]}`).join(';'); // OSRM = lng,lat
-        const url = `https://router.project-osrm.org/route/v1/driving/${coordStr}?geometries=geojson&overview=full`;
+        // Rota frontend (aba Mapa) — passa pelo proxy Cloudflare. Direto pro
+        // router.project-osrm.org é bloqueado pelo Fortinet em prod. Backend
+        // (services/osrmService.js) usa o mesmo proxy via OSRM_HOST do .env.
+        const url = `https://osrm-proxy.jose-zouain.workers.dev/route/v1/driving/${coordStr}?geometries=geojson&overview=full`;
         const r = await fetch(url);
         if (!r.ok) { _osrmCache.set(key, null); return null; }
         const data = await r.json();
