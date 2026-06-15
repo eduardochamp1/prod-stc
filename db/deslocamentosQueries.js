@@ -260,7 +260,10 @@ async function listDeslocamentos(de, ate, opts = {}) {
   }
 
   // Limite antes do OSRM pra não estourar quota
-  const LIMIT = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), 5000);
+  // Cap maximo do enrichment OSRM. 20k pairs = ~10s na 1a consulta com OSRM
+  // paralelizado (chunks de 10) e Worker cacheado. Subiu de 5000 -> 20000 pra
+  // cobrir periodos de 15 dias inteiros (tipico ~7k notas * ~1.5 pairs = 10k).
+  const LIMIT = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), 20000);
   const cut = desloc.slice(0, LIMIT);
   console.log(`[deslocamentos] passo 4: ${desloc.length} deslocamentos extraídos, processando ${cut.length} via OSRM...`);
   const tOsrm = Date.now();
@@ -339,7 +342,10 @@ async function listDeslocamentos(de, ate, opts = {}) {
 
 /** Ranking de equipes por % desvio médio. */
 async function rankingEquipes(de, ate, opts = {}) {
-  const lista = await listDeslocamentos(de, ate, { ...opts, limit: 5000 });
+  // limit alto: precisamos de TODOS os deslocamentos do periodo pra ranking
+  // honesto. Com OSRM paralelizado + Worker cacheado (commit e97691f), 20k
+  // pairs sao ~10s na 1a vez e <2s nas subsequentes.
+  const lista = await listDeslocamentos(de, ate, { ...opts, limit: 20000 });
   const byTeam = new Map();
   for (const d of lista.rows) {
     if (d.status === 'sem_osrm' || d.tempo_osrm_sec === 0) continue;
@@ -368,7 +374,10 @@ async function rankingEquipes(de, ate, opts = {}) {
 
 /** Tendência diária: tempo médio real vs Maps por dia, com continuidade de calendário. */
 async function tendenciaDiaria(de, ate, opts = {}) {
-  const lista = await listDeslocamentos(de, ate, { ...opts, limit: 5000 });
+  // limit alto: tendencia precisa amostrar todos os dias do periodo, nao so os
+  // mais recentes. Antes era 5000 e dias antigos sumiam quando rawNotas DESC
+  // truncava neles. Com OSRM paralelizado, 20k pairs = ~10s 1a vez.
+  const lista = await listDeslocamentos(de, ate, { ...opts, limit: 20000 });
   const byDay = new Map();
   for (const d of lista.rows) {
     if (d.status === 'sem_osrm') continue;
