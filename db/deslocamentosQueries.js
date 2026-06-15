@@ -143,17 +143,23 @@ async function listDeslocamentos(de, ate, opts = {}) {
     AND (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz < ($2::date + interval '1 day')
   `;
 
+  // ORDER BY timestamp DESC + LIMIT alto: se algum dia bater no teto, perde os
+  // dias mais ANTIGOS (previsível), não dias do meio. Antes era LIMIT 3000 sem
+  // ORDER, que truncava por ordem física e fazia dias inteiros sumirem do meio
+  // do período (ex: 09/10/11/06 sumiam apesar de terem ~1400 notas).
   const sqlNotas = `
     SELECT
       nd.note_id,
       nd.numero,
       nd.tipo,
-      nd.payload->'checkpoints' AS checkpoints
+      nd.payload->'checkpoints' AS checkpoints,
+      (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz AS first_ts
     FROM note_details nd
     WHERE nd.payload->'checkpoints' IS NOT NULL
       AND jsonb_array_length(nd.payload->'checkpoints') >= 2
       AND ${wherePeriodo}
-    LIMIT 3000
+    ORDER BY first_ts DESC
+    LIMIT 20000
   `;
   const { rows: rawNotas } = await pool.query(sqlNotas, params);
   const t1 = Date.now();
