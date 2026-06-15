@@ -6770,12 +6770,11 @@
         : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
       qs.set('regionals', (_desExp.length ? _desExp : [...userRegionals]).join(','));
       if (teams.length > 0)          qs.set('team', teams.join(','));
-      // Limite alto (5000 = max do backend). Antes era 300 como anti-quota
-      // do OSRM publico (1 req/s); agora com HERE + cache local cobrindo
-      // quase tudo, faz sentido carregar tudo. Periodos de mais de 1 mes com
-      // ~135 deslocamentos/dia podem encostar no teto — nesse caso, restringir
-      // por regional/equipe/data resolve.
-      qs.set('limit', '5000');
+      // Limite 20000: cap do backend (commit bba4f4f). Cobre periodos longos
+      // sem cortar dados. Carregamento ~10s na 1a vez, <2s subsequentes
+      // (Cloudflare Worker + cache local). Cards (DESLOCAMENTOS/ACIMA/DESVIO)
+      // refletem todo o universo, nao so amostra.
+      qs.set('limit', '20000');
       if (acimaVal === '50' || acimaVal === '100') qs.set('acima', acimaVal);
       document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
       return qs.toString();
