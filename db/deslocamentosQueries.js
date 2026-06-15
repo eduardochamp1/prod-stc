@@ -266,36 +266,43 @@ async function listDeslocamentos(de, ate, opts = {}) {
   const tOsrm = Date.now();
   let osrmHits = 0, osrmMisses = 0, osrmFails = 0;
 
-  // Enriquece com OSRM (cache-friendly)
-  for (const d of cut) {
-    const r = await getRoute(d.origem.lat, d.origem.lng, d.destino.lat, d.destino.lng);
-    if (r) {
-      if (r.cached) osrmHits++; else osrmMisses++;
-      d.tempo_osrm_sec = r.duration_sec;
-      d.distancia_m    = r.distance_m;
-      d.geometry       = r.geometry;
-      if (d.tempo_osrm_sec === 0) {
-        d.desvio_pct = null;
-        d.status = 'origem_destino_iguais';
+  // Enriquece com OSRM em chunks paralelos. Worker Cloudflare aguenta
+  // dezenas de req simultaneas; cache hits sao ~0ms; cache miss ~150ms.
+  // Antes era sequencial com throttle 1.1s = 500 pairs * 1.1s = 9min na 1a
+  // consulta. Agora chunks de 10 * ~200ms = ~10s na pior hipotese.
+  const CHUNK = 10;
+  for (let i = 0; i < cut.length; i += CHUNK) {
+    const batch = cut.slice(i, i + CHUNK);
+    await Promise.all(batch.map(async (d) => {
+      const r = await getRoute(d.origem.lat, d.origem.lng, d.destino.lat, d.destino.lng);
+      if (r) {
+        if (r.cached) osrmHits++; else osrmMisses++;
+        d.tempo_osrm_sec = r.duration_sec;
+        d.distancia_m    = r.distance_m;
+        d.geometry       = r.geometry;
+        if (d.tempo_osrm_sec === 0) {
+          d.desvio_pct = null;
+          d.status = 'origem_destino_iguais';
+        } else {
+          d.desvio_pct = +(100 * (d.tempo_real_sec - d.tempo_osrm_sec) / d.tempo_osrm_sec).toFixed(1);
+          // Excedente em segundos (real - osrm). 'lento' exige AMBOS:
+          //   desvio > 50% (fator > THRESHOLD)  E  excedente > 15min de tolerância.
+          // Isso evita marcar como lento deslocamentos curtos (ex: 2min real vs 1min osrm).
+          const excedenteSec    = d.tempo_real_sec - d.tempo_osrm_sec;
+          const TOLERANCIA_SEC  = 15 * 60;   // 15 min
+          const fatorAcima      = (d.tempo_real_sec / d.tempo_osrm_sec) > THRESHOLD;
+          const excedenteAcima  = excedenteSec > TOLERANCIA_SEC;
+          d.excedente_sec = excedenteSec;
+          d.status = (fatorAcima && excedenteAcima) ? 'lento' : 'ok';
+        }
       } else {
-        d.desvio_pct = +(100 * (d.tempo_real_sec - d.tempo_osrm_sec) / d.tempo_osrm_sec).toFixed(1);
-        // Excedente em segundos (real - osrm). 'lento' exige AMBOS:
-        //   desvio > 50% (fator > THRESHOLD)  E  excedente > 15min de tolerância.
-        // Isso evita marcar como lento deslocamentos curtos (ex: 2min real vs 1min osrm).
-        const excedenteSec    = d.tempo_real_sec - d.tempo_osrm_sec;
-        const TOLERANCIA_SEC  = 15 * 60;   // 15 min
-        const fatorAcima      = (d.tempo_real_sec / d.tempo_osrm_sec) > THRESHOLD;
-        const excedenteAcima  = excedenteSec > TOLERANCIA_SEC;
-        d.excedente_sec = excedenteSec;    // exposto pra UI mostrar "16 min de desvio"
-        d.status = (fatorAcima && excedenteAcima) ? 'lento' : 'ok';
+        osrmFails++;
+        d.tempo_osrm_sec = null;
+        d.distancia_m    = null;
+        d.desvio_pct     = null;
+        d.status         = 'sem_osrm';
       }
-    } else {
-      osrmFails++;
-      d.tempo_osrm_sec = null;
-      d.distancia_m    = null;
-      d.desvio_pct     = null;
-      d.status         = 'sem_osrm';
-    }
+    }));
   }
   console.log(`[deslocamentos] passo 4: OSRM concluído em ${((Date.now() - tOsrm) / 1000).toFixed(1)}s — cache hits=${osrmHits} misses=${osrmMisses} fails=${osrmFails}`);
 

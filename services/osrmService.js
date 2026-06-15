@@ -23,7 +23,11 @@ const crypto = require('crypto');
 const { getClient } = require('./dbClient');
 
 const OSRM_HOST = process.env.OSRM_HOST || 'https://router.project-osrm.org';
-const MIN_INTERVAL_MS = parseInt(process.env.ROUTING_MIN_INTERVAL_MS || '1100', 10);
+// Throttle baixo porque OSRM_HOST normalmente aponta pro Cloudflare Worker que
+// cacheia as respostas (edge cache 24h). Worker aguenta milhares de req/s sem
+// stress; o OSRM publico atras do Worker recebe so cache miss esporadicos.
+// Em dev (sem OSRM_HOST), pode voltar pra 1100ms via env pra respeitar fair-use.
+const MIN_INTERVAL_MS = parseInt(process.env.ROUTING_MIN_INTERVAL_MS || '50', 10);
 
 // Agent com TLS verification desabilitada — necessario pq o servidor de
 // producao da Engelmig esta atras de Fortinet com TLS interception, e a CA
