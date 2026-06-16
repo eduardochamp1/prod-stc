@@ -7302,22 +7302,20 @@
     function renderContadorTransgressao(data) {
       const cont = document.getElementById('contador-cards');
       if (!cont) return;
-      const sess = getStoredSession();
-      const userReg = sess && sess.regional;
-      const isAdmin = sess && sess.role === 'admin';
 
-      // Define quais regionais o user vê.
-      // - admin/ALL: todas as ativas
-      // - grupo (ex: ES → GUA+CAC): expande pras siglas filhas
-      // - sigla simples: só a sua
-      const regionais = (() => {
-        if (!userReg || userReg === 'ALL') return REGIONAIS_ATIVAS;
-        const expanded = expandRegional(userReg);
-        if (expanded && expanded.length > 1) {
-          return expanded.filter(r => REGIONAIS_ATIVAS.includes(r));
-        }
-        return [userReg];
-      })();
+      // Respeita o filtro de regional ATIVO no dropdown da aba Gráficos.
+      // Fallback pro escopo do user (userRegionals) quando o dropdown está
+      // vazio ou inclui 'ALL'. Antes ignorava o dropdown e mostrava sempre
+      // todas as regionais permitidas — admin via card SJC mesmo filtrando
+      // só GUA+CAC.
+      const grafSelected = (typeof MultiSelect !== 'undefined')
+        ? (MultiSelect.getValues('graf-regional-select') || [])
+        : [];
+      const _filtered = (grafSelected.length === 0 || grafSelected.includes('ALL'))
+        ? (Array.isArray(userRegionals) ? [...userRegionals] : [...REGIONAIS_ATIVAS])
+        : grafSelected.flatMap(r => expandRegional(r) || [r])
+                      .filter(r => REGIONAIS_ATIVAS.includes(r) && (userRegionals || []).includes(r));
+      const regionais = _filtered.length > 0 ? _filtered : REGIONAIS_ATIVAS;
       const nomeReg = { GUA: 'Guarapari', CAC: 'Cachoeiro', SJC: 'São José dos Campos' };
       const corReg  = { GUA: '#086738', CAC: '#0a4d8c', SJC: '#c4520d' };
 
