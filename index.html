@@ -7615,6 +7615,10 @@
         ? [...userRegionals]
         : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
       const regionalsCsv = encodeURIComponent((_grafExpanded.length ? _grafExpanded : [...userRegionals]).join(','));
+      // renderGraficosHTML escolhe slot via subcatData.totais[regional]. Quando
+      // ha multiplas regionais selecionadas (ou todas), usa o slot 'ALL'
+      // (agregado). Quando uma só, usa a sigla específica.
+      const regional = _grafExpanded.length === 1 ? _grafExpanded[0] : 'ALL';
       const tipo     = tipos.length !== 1     ? 'TODAS' : tipos[0];
       const team     = teams.length === 0     ? 'ALL'   : teams.join(',');
 
