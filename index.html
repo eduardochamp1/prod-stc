@@ -4621,9 +4621,7 @@
           <div class="filter-group">
             <span class="filter-label">Regional</span>
             <select class="filter-select" id="mapa-regional-select"
-                    style="min-width:140px"
-                    onchange="mapaSetRegionalFilter(this.value)">
-              <option value="ALL">Todas</option>
+                    style="min-width:140px" multiple>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
               <option value="SJC">São José dos Campos</option>
@@ -6017,13 +6015,43 @@
       if (tab === 'rejeicoes') initRejeicoes();
       if (tab === 'desloc') initDeslocamentos();
       if (tab === 'notas') initNotas();
+
+      // Após carregar a aba, sincroniza o dropdown de regional dela com o
+      // estado global (selectedRegionals). Quando o user mudou em outra aba,
+      // chega aqui já refletindo a escolha. Adiado pra após init pra garantir
+      // que o MultiSelect já foi montado.
+      setTimeout(() => {
+        const map = {
+          rejeicoes:  'rej-regional-select',
+          notas:      'notas-regional-select',
+          graficos:   'graf-regional-select',
+          ranking:    'ranking-regional-select',
+          historico:  'hist-regional-select',
+          desloc:     'desloc-regional-select',
+          mapa:       'mapa-regional-select',
+        };
+        const id = map[tab];
+        if (!id) return;
+        if (typeof MultiSelect === 'undefined' || !document.getElementById(id)) return;
+        try {
+          MultiSelect.setValues(id, [...(selectedRegionals || [])]);
+          if (id === 'mapa-regional-select' && typeof mapaSetRegionalFilter === 'function') {
+            mapaSetRegionalFilter([...(selectedRegionals || [])]);
+          }
+        } catch (_) { /* dropdown talvez ainda não inicializado */ }
+      }, 50);
     }
 
     // ── NOTAS DEVOLVIDAS ──────────────────────────────────────────────────────
     let _notasMultiSelectInited = false;
     function initNotas() {
       if (!_notasMultiSelectInited && typeof MultiSelect !== 'undefined') {
-        MultiSelect.init('notas-regional-select', { onChange: () => loadNotasAll() });
+        MultiSelect.init('notas-regional-select', {
+          onChange: () => {
+            syncRegionalDropdowns('notas-regional-select', MultiSelect.getValues('notas-regional-select'));
+            loadNotasAll();
+          },
+        });
         _notasMultiSelectInited = true;
       }
       loadNotasAll();
@@ -6253,7 +6281,12 @@
       }
       // Multi-select nos filtros (lazy init — só uma vez)
       if (!_rejMultiInited) {
-        MultiSelect.init('rej-regional-select', { onChange: () => loadRejeicoes() });
+        MultiSelect.init('rej-regional-select', {
+          onChange: () => {
+            syncRegionalDropdowns('rej-regional-select', MultiSelect.getValues('rej-regional-select'));
+            loadRejeicoes();
+          },
+        });
         MultiSelect.init('rej-equipe-select',   { onChange: () => loadRejeicoes() });
         MultiSelect.init('rej-tipo-select',     { onChange: () => loadRejeicoes() });
         // Motivos populam dinamicamente em loadRejMotivosSelect — refresh é chamado lá
@@ -6744,7 +6777,12 @@
       }
       // Multi-select (lazy)
       if (!_deslocMultiInited) {
-        MultiSelect.init('desloc-regional-select', { onChange: () => loadDeslocamentos() });
+        MultiSelect.init('desloc-regional-select', {
+          onChange: () => {
+            syncRegionalDropdowns('desloc-regional-select', MultiSelect.getValues('desloc-regional-select'));
+            loadDeslocamentos();
+          },
+        });
         MultiSelect.init('desloc-equipe-select',   { onChange: () => loadDeslocamentos() });
         const sess = getStoredSession();
         if (sess && sess.regional && sess.regional !== 'ALL') {
@@ -7417,7 +7455,12 @@
     let _grafMultiInited = false;
     function _grafEnsureMultiSelect() {
       if (_grafMultiInited) return;
-      MultiSelect.init('graf-regional-select', { onChange: () => loadGraficos() });
+      MultiSelect.init('graf-regional-select', {
+        onChange: () => {
+          syncRegionalDropdowns('graf-regional-select', MultiSelect.getValues('graf-regional-select'));
+          loadGraficos();
+        },
+      });
       MultiSelect.init('graf-tipo-select',     { onChange: () => loadGraficos() });
       MultiSelect.init('graf-equipe-select',   { onChange: () => loadGraficos() });
       const sess = getStoredSession();
@@ -8416,7 +8459,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (!_rankingMultiInited && typeof MultiSelect !== 'undefined'
           && document.getElementById('ranking-regional-select')) {
         MultiSelect.init('ranking-regional-select', {
-          onChange: () => loadRanking(),
+          onChange: () => {
+            syncRegionalDropdowns('ranking-regional-select', MultiSelect.getValues('ranking-regional-select'));
+            loadRanking();
+          },
           allLabel: 'Todas as Regionais',
         });
         _rankingMultiInited = true;
@@ -8879,7 +8925,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (!_histMultiInited && typeof MultiSelect !== 'undefined'
           && document.getElementById('hist-regional-select')) {
         MultiSelect.init('hist-regional-select', {
-          onChange: () => loadHistorico(),
+          onChange: () => {
+            syncRegionalDropdowns('hist-regional-select', MultiSelect.getValues('hist-regional-select'));
+            loadHistorico();
+          },
           allLabel: 'Todas as Regionais',
         });
         _histMultiInited = true;
@@ -9635,6 +9684,59 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
+
+    /**
+     * Sincroniza o filtro de regional entre TODOS os dropdowns de tabs.
+     * Quando um tab muda, propaga pro estado global + outros dropdowns.
+     *
+     * @param {string} exceptId  id do dropdown que disparou (não re-aplica nele)
+     * @param {string[]} values  array de siglas selecionadas (vazio = todas)
+     */
+    function syncRegionalDropdowns(exceptId, values) {
+      // Normaliza pra siglas reais do escopo do user
+      const arr = Array.isArray(values) ? values : [];
+      const expanded = (arr.length === 0)
+        ? [...(userRegionals || [])]
+        : arr.flatMap(r => expandRegional(r) || [r])
+             .filter(r => (userRegionals || []).includes(r));
+      const finalRegs = expanded.length > 0 ? expanded : [...(userRegionals || [])];
+
+      // Atualiza estado global (Monitor)
+      selectedRegionals = finalRegs;
+      if (typeof _syncCurrentRegional === 'function') _syncCurrentRegional();
+
+      // Propaga pros outros dropdowns
+      const DROPDOWNS = [
+        'regional-select',          // Monitor (master)
+        'rej-regional-select',      // Rejeições
+        'notas-regional-select',    // Notas
+        'graf-regional-select',     // Gráficos
+        'ranking-regional-select',  // Ranking
+        'hist-regional-select',     // Histórico
+        'desloc-regional-select',   // Deslocamentos
+        'mapa-regional-select',     // Mapa
+      ];
+      DROPDOWNS.forEach(id => {
+        if (id === exceptId) return;
+        const el = document.getElementById(id);
+        if (!el) return;
+        try {
+          if (typeof MultiSelect !== 'undefined' && typeof MultiSelect.setValues === 'function') {
+            MultiSelect.setValues(id, [...finalRegs]);
+          } else {
+            // Fallback single-select
+            el.value = finalRegs.length === 1 ? finalRegs[0] : 'ALL';
+          }
+        } catch (_) { /* dropdown talvez ainda não inicializado */ }
+      });
+
+      // Atualiza filtro local do Mapa (já que ele tem state próprio _mapaRegionalFilter)
+      if (exceptId !== 'mapa-regional-select' && typeof mapaSetRegionalFilter === 'function') {
+        mapaSetRegionalFilter(finalRegs);
+      }
+
+      saveFilters();
+    }
 
     // Testa se uma regional passa pelo filtro do dropdown principal.
     // Modelo unificado (Task 9): usa selectedRegionals (array de siglas, ex: ['GUA','CAC']).
@@ -10708,10 +10810,12 @@ ${equipes.length > 0 ? `<div class="perf-section">
             const vals = MultiSelect.getValues('regional-select');
             // getValues retorna ['ALL'] ou array de valores selecionados.
             // Vazio = usuário desmarcou tudo → equivale a 'ALL' (sem filtro).
-            // Sem isso, currentRegional ficava '' e o título exibia o último
-            // valor antes da desmarcação (bug visto em 09/06/2026 madrugada).
             const csv = (!vals.length || vals[0] === 'ALL') ? 'ALL' : vals.join(',');
             selectRegional(csv);
+            // Propaga pros outros dropdowns das outras abas (mapa, gráficos, etc).
+            // Passa o array final (vazio ou siglas), não 'ALL'.
+            const arr = (!vals.length || vals[0] === 'ALL') ? [] : vals;
+            syncRegionalDropdowns('regional-select', arr);
           },
           allLabel: 'Todas as Regionais',
         });
@@ -11736,8 +11840,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     let _mapaFilterSearch   = '';    // texto digitado no campo de busca
     let _mapaFilterTipo     = '';    // ex: 'DD', 'SF', 'MD'
     let _mapaFilterSubcat   = '';    // ex: 'C93', 'L0', 'OBSOLETO'
-    let _mapaRegionalFilter = 'ALL'; // 'ALL' | 'GUA' | 'CAC' — filtra dropdown de equipes
+    // Array de siglas. Vazio = todas. Preenchido = só essas (igual outros tabs).
+    let _mapaRegionalFilter = []; // ex: ['GUA', 'CAC']
 
+    let _mapaMSInit = false;
     function initMapa() {
       const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
       const di = document.getElementById('mapa-date-input');
@@ -11752,6 +11858,23 @@ ${equipes.length > 0 ? `<div class="perf-section">
         }).addTo(_mapaMap);
       } else {
         setTimeout(() => _mapaMap.invalidateSize(), 100);
+      }
+
+      // MultiSelect só inicializa 1x — onChange propaga pra outros tabs
+      if (!_mapaMSInit && typeof MultiSelect !== 'undefined') {
+        MultiSelect.init('mapa-regional-select', {
+          onChange: () => {
+            const vals = MultiSelect.getValues('mapa-regional-select') || [];
+            mapaSetRegionalFilter(vals);
+            syncRegionalDropdowns('mapa-regional-select', vals);
+          },
+        });
+        // Sincroniza com o estado global ao abrir a aba pela 1a vez
+        if (Array.isArray(selectedRegionals) && selectedRegionals.length > 0) {
+          MultiSelect.setValues('mapa-regional-select', [...selectedRegionals]);
+          mapaSetRegionalFilter([...selectedRegionals]);
+        }
+        _mapaMSInit = true;
       }
 
       _popularMapaTeamSelect();
@@ -11780,10 +11903,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (!box) return;
       const q = (_mapaTeamFiltro || '').toLowerCase().trim();
 
-      // Aplica filtro de regional ANTES do filtro de busca
-      const porRegional = _mapaRegionalFilter === 'ALL'
+      // Aplica filtro de regional ANTES do filtro de busca.
+      // Array vazio = "todas" (igual outros tabs); preenchido = subset.
+      const porRegional = (!_mapaRegionalFilter || _mapaRegionalFilter.length === 0)
         ? _mapaTeamLista
-        : _mapaTeamLista.filter(e => e.regional === _mapaRegionalFilter);
+        : _mapaTeamLista.filter(e => _mapaRegionalFilter.includes(e.regional));
 
       const filtrados = porRegional.filter(e =>
         !q || e.sigla.toLowerCase().includes(q) || (e.tipo || '').toLowerCase().includes(q)
@@ -11821,27 +11945,32 @@ ${equipes.length > 0 ? `<div class="perf-section">
      * Handler do select de regional. Filtra o dropdown de equipes e, se a equipe
      * selecionada atualmente não pertence à nova regional, limpa a seleção.
      */
-    function mapaSetRegionalFilter(v) {
-      _mapaRegionalFilter = v || 'ALL';
+    function mapaSetRegionalFilter(arr) {
+      // Aceita array (multi-select) ou string legacy ('ALL'|sigla).
+      if (Array.isArray(arr)) {
+        _mapaRegionalFilter = arr.filter(Boolean);
+      } else if (!arr || arr === 'ALL') {
+        _mapaRegionalFilter = [];
+      } else {
+        _mapaRegionalFilter = [String(arr)];
+      }
 
-      // Se a equipe selecionada não bate com a nova regional, limpa
+      // Se a equipe selecionada não bate com nenhuma regional do filtro, limpa
       const siglaAtual = document.getElementById('mapa-team-select')?.value;
-      if (siglaAtual) {
+      if (siglaAtual && _mapaRegionalFilter.length > 0) {
         const eq = _mapaTeamLista.find(e => e.sigla === siglaAtual);
-        if (eq && _mapaRegionalFilter !== 'ALL' && eq.regional !== _mapaRegionalFilter) {
+        if (eq && !_mapaRegionalFilter.includes(eq.regional)) {
           document.getElementById('mapa-team-select').value = '';
           const disp = document.getElementById('mapa-team-display');
           if (disp) { disp.textContent = '— Selecione uma equipe —'; disp.style.color = 'var(--text2)'; }
           _mapaRawData = null;
           document.getElementById('mapa-sidebar-list').innerHTML =
             '<div class="empty-state" style="font-size:12px">Selecione uma equipe.</div>';
-          // Limpa camadas do mapa
           _mapaLayers.forEach(l => _mapaMap?.removeLayer(l));
           _mapaLayers = [];
         }
       }
 
-      // Re-renderiza o dropdown filtrado
       _renderMapaTeamOptions();
     }
 
