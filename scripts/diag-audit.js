@@ -233,6 +233,54 @@ async function main() {
     }
   });
 
+  // ── 7. COMPOSIÇÃO DAS DD/OUTROS ───────────────────────────────────────────
+  await section('7. COMPOSIÇÃO DAS DD/OUTROS (o % alto é legítimo ou esconde ramal?)', async () => {
+    const top = await q(
+      `SELECT COALESCE(NULLIF(code_text,''),'(sem desc)') AS desc, count(*)::int AS n
+       FROM note_subcategorias WHERE tipo='DD' AND sub_code='OUTROS'
+       GROUP BY 1 ORDER BY n DESC LIMIT 15`);
+    info('Top descrições (GroupDescription) entre DD/OUTROS:');
+    top.forEach(r => info(`${String(r.n).padStart(5)}  ${r.desc}`));
+
+    // Probe direto: DD/OUTROS cujo texto menciona "ramal" — possíveis ramais
+    // perdidos pela via CAPEX (Activities=[] + GroupDescription).
+    const ramalish = await q(
+      `SELECT count(*)::int AS n,
+              count(*) FILTER (
+                WHERE COALESCE(nd.payload->'endereco'->>'logradouro','') ILIKE '%ramal%bt%'
+              )::int AS com_ramalbt
+       FROM note_subcategorias ns
+       LEFT JOIN note_details nd ON nd.note_id = ns.note_id
+       WHERE ns.tipo='DD' AND ns.sub_code='OUTROS' AND ns.code_text ILIKE '%ramal%'`);
+    const { n, com_ramalbt } = ramalish[0];
+    console.log('');
+    if (n === 0) ok('Nenhuma DD/OUTROS com "ramal" na descrição — % de OUTROS é composição legítima.');
+    else {
+      warn(`${n} DD/OUTROS têm "ramal" na descrição.`);
+      if (com_ramalbt > 0)
+        bad(`  dessas, ${com_ramalbt} têm "ramal bt" no Address ⟵ deveriam ser C93 (subnotificadas).`);
+      else
+        ok(`  nenhuma com "ramal bt" no Address — ramal não-BT, fora do indicador por regra (ok).`);
+    }
+  });
+
+  // ── 8. COMPOSIÇÃO DAS MD/OUTROS ───────────────────────────────────────────
+  await section('8. COMPOSIÇÃO DAS MD/OUTROS (deveria ser tudo Code != SPEB)', async () => {
+    const r0 = await q(
+      `SELECT count(*) FILTER (WHERE upper(COALESCE(code,''))='SPEB')::int AS speb,
+              count(*)::int AS total
+       FROM note_subcategorias WHERE tipo='MD' AND sub_code='OUTROS'`);
+    const { speb, total } = r0[0];
+    if (speb === 0) ok(`As ${total} MD/OUTROS têm Code != SPEB — correto (só SPEB vira TL11/OBSOLETO).`);
+    else bad(`${speb}/${total} MD/OUTROS têm Code=SPEB ⟵ deveriam ser TL11/OBSOLETO, não OUTROS!`);
+    const top = await q(
+      `SELECT COALESCE(NULLIF(code,''),'(null)') AS code, count(*)::int AS n
+       FROM note_subcategorias WHERE tipo='MD' AND sub_code='OUTROS'
+       GROUP BY 1 ORDER BY n DESC LIMIT 10`);
+    info('Top Codes entre MD/OUTROS:');
+    top.forEach(r => info(`${String(r.n).padStart(5)}  ${r.code}`));
+  });
+
   H('FIM DA AUDITORIA');
   console.log('  Cole esta saída de volta no chat pra interpretação.\n');
 }
