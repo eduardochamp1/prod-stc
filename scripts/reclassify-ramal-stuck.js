@@ -25,7 +25,7 @@ require('dotenv').config({ override: true });
 const APPLY = process.argv.includes('--apply');
 const MODE  = (process.env.DATA_MODE || 'mock').toLowerCase();
 
-const { dateBRT, dateBRTMinusDays } = require('../services/timeUtil');
+const { dateBRTMinusDays } = require('../services/timeUtil');
 
 let pool;
 try {
@@ -53,8 +53,7 @@ async function main() {
   const cands = await q(
     `SELECT ns.note_id, ns.numero, ns.code, ns.code_text,
             to_char(ns.classified_at,'YYYY-MM-DD') AS classified_at,
-            COALESCE(nd.payload->'endereco'->>'logradouro','') AS address,
-            COALESCE(nd.payload->'datas'->>'conclusao','')     AS conclusao
+            COALESCE(nd.payload->'endereco'->>'logradouro','') AS address
      FROM note_subcategorias ns
      LEFT JOIN note_details nd ON nd.note_id = ns.note_id
      WHERE ns.tipo = 'DD' AND ns.sub_code = 'OUTROS'
@@ -111,31 +110,28 @@ async function main() {
   await upsertSubcategorias(changed);
   log(`\n  ✅ ${changed.length} classificação(ões) atualizada(s) em note_subcategorias.`);
 
-  // Datas a reconsolidar: vêm da conclusão da nota (note_details). Sem isso,
-  // não dá pra saber o dia operacional — loga e pula.
-  const byId = Object.fromEntries(cands.map(c => [c.note_id, c]));
+  // Datas a reconsolidar: descobre, pela própria tabela `snapshots`, em que dia(s)
+  // cada nota corrigida aparece em notasConcluidas. Fonte real — não depende de
+  // note_details (3 das notas nem têm). Limita à janela de 30 dias: snapshots
+  // mais antigos já foram limpos (cleanOldSnapshots), então o agregado dessas
+  // só seria reconstruível com backfill via WPA.
   const datas = new Set();
-  let semData = 0;
+  const semSnap = [];
   for (const c of changed) {
-    const conc = byId[c.note_id]?.conclusao || '';
-    const d = conc.slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) datas.add(d);
-    else semData++;
+    const rows = await q(
+      `SELECT DISTINCT date::text AS d FROM snapshots
+       WHERE date >= $1 AND data->'notasConcluidas' @> $2::jsonb`,
+      [cutoff30, JSON.stringify([{ id: c.note_id }])]);
+    if (rows.length === 0) semSnap.push(c.numero || c.note_id);
+    rows.forEach(r => datas.add(r.d));
   }
-  if (semData > 0) log(`  ⚠️  ${semData} nota(s) sem data de conclusão no cache — total agregado dessas não será reconsolidado automaticamente.`);
+  if (semSnap.length > 0)
+    log(`  ⚠️  ${semSnap.length} nota(s) sem snapshot na janela de 30d — cache corrigido, mas` +
+        ` agregado histórico não reconstruível sem backfill WPA: ${semSnap.join(', ')}`);
 
-  const hoje = dateBRT();
   for (const d of [...datas].sort()) {
-    if (d < dateBRTMinusDays(30)) {
-      log(`  ⚠️  ${d}: fora da janela de snapshots (30d) — agregado histórico não pode ser reconstruído daqui (precisaria backfill via WPA).`);
-      continue;
-    }
-    try {
-      await consolidateDay(d);
-      log(`  ✅ reconsolidado ${d}`);
-    } catch (e) {
-      log(`  🔴 falha ao reconsolidar ${d}: ${e.message}`);
-    }
+    try { await consolidateDay(d); log(`  ✅ reconsolidado ${d}`); }
+    catch (e) { log(`  🔴 falha ao reconsolidar ${d}: ${e.message}`); }
   }
   log('\n  Concluído.\n');
 }
