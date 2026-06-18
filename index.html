@@ -4456,9 +4456,11 @@
               </div>
             </div>
           </div>
+          <!-- "A fazer agora" = pendentes (atual) + em andamento. Número acionável. -->
+          <div id="m-carteira-afazer" style="display:none;font-size:11px;color:var(--text);margin-top:6px;font-weight:600"></div>
           <!-- Sub-info: fluxo do dia (fecha por construção)                       -->
           <!-- inicial + entradas_novas = atual + andamento + concluidas + rejeitadas + canceladas -->
-          <div id="m-carteira-entradas" style="display:none;font-size:11px;color:var(--text2);margin-top:6px"
+          <div id="m-carteira-entradas" style="display:none;font-size:11px;color:var(--text2);margin-top:2px"
                title="Notas que entraram no payload depois do primeiro snapshot do dia (equipes que logaram tarde, EDP redistribuiu).">
             <span style="color:#3b8a4b">●</span> <span id="m-carteira-entradas-num">—</span> entradas novas no dia
           </div>
@@ -8248,10 +8250,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // Cada linha vira um card. Linhas sem meta E sem realizado são suprimidas
     // (evita poluir a tela com "OBSOLETO 0/sem meta") — exceto OUTROS, que
     // sempre aparecem para dar visibilidade da catch-all category de cada tipo.
-    function renderBlockRegional(totaisReg, metasReg, qtdReg) {
+    function renderBlockRegional(totaisReg, qtdReg) {
       const linhasExibir = PROD_LINHAS.filter(l => {
         const realizado = totaisReg[l.key] || 0;
-        const meta = parseInt(metasReg[l.key] || 0);
         // Filtro "Tipos" opera no nível do TIPO
         const tipoSelecionado = selectedTipos.size === 0 || selectedTipos.has(l.tipo);
         if (!tipoSelecionado) return false;
@@ -8264,7 +8265,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         // OUTROS sempre visíveis (mesmo com 0/0) — usuário vê a categoria
         // catch-all e sabe que zero significa "nenhuma fora da spec hoje"
         const isOutros = l.subCode === 'OUTROS';
-        return realizado > 0 || meta > 0 || isOutros;
+        return realizado > 0 || isOutros;
       });
 
       if (linhasExibir.length === 0)
@@ -8272,26 +8273,22 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       return `<div class="prod-grid">${linhasExibir.map(l => {
         const realizado = totaisReg[l.key] || 0;
-        const meta = parseInt(metasReg[l.key] || 0);
-        const pct = meta > 0 ? Math.min(Math.round((realizado / meta) * 100), 100) : 0;
-        // Faixas alinhadas com gauges da aba Graficos (>=70 verde, >=50 amarelo, <50 vermelho)
-        const colorClass = pct >= 70 ? 'done' : pct >= 50 ? 'warn' : 'danger';
         const qtdTotal = l.qtd ? (qtdReg[l.key] || 0) : 0;
+        // Card diário = só a contagem do que foi feito hoje (sem barra de meta).
+        // A soma desses realizados == OS Executadas por construção. Meta/progresso
+        // fica na aba Metas/Gráficos (mensal com rateio). Decisão 17/06/2026.
         return `<div class="prod-item">
         <div class="prod-item-top">
           <span class="prod-tipo-badge">${l.tipo}</span>
-          ${meta > 0 ? `<span class="prod-nums"><strong>${realizado}</strong> / ${meta}</span>` : `<span class="prod-sem-meta">sem meta</span>`}
+          <span class="prod-nums"><strong>${realizado}</strong></span>
         </div>
         <div style="font-size:11px;color:var(--text);margin-bottom:5px;font-weight:600">${l.nome}</div>
-        ${l.qtd && qtdTotal > 0 ? `<div style="font-size:10px;color:var(--text2);margin-bottom:5px">Qtd total: <strong>${qtdTotal}</strong></div>` : ''}
-        ${meta > 0 ? `<div class="prod-bar-track"><div class="prod-bar-fill ${colorClass}" style="width:${pct}%"></div></div>
-          <div style="font-size:10px;color:var(--text2);margin-top:3px;text-align:right">${pct}%</div>` : ''}
+        ${l.qtd && qtdTotal > 0 ? `<div style="font-size:10px;color:var(--text2)">Qtd total: <strong>${qtdTotal}</strong></div>` : ''}
       </div>`;
       }).join('')}</div>`;
     }
 
     async function renderProdutividade(teams) {
-      const metas = getMetas();
       const { de, ate } = currentMonitorRange();
 
       // Fonte da verdade: daily_subcat_totals (mesmo cron que alimenta daily_totals,
@@ -8336,12 +8333,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
         ? 'Produtividade do Dia'
         : (deTitle === ateTitle ? `Produtividade de ${fmtDateBR(deTitle)}` : `Produtividade do Período (${fmtDateBR(deTitle)} → ${fmtDateBR(ateTitle)})`);
       title.textContent = `${tituloPrefixo} — ${labelRegional}`;
-      const metasReg  = currentRegional === 'ALL' ? metasAcumuladas(metas) : (metas[currentRegional] || {});
       const totaisReg = currentRegional === 'ALL' ? totaisLive.ALL : (totaisLive[currentRegional] || {});
       const qtdReg    = currentRegional === 'ALL' ? qtdLive.ALL    : (qtdLive[currentRegional]    || {});
-      const semMeta = Object.keys(metasReg).length === 0;
-      grid.innerHTML = renderBlockRegional(totaisReg, metasReg, qtdReg)
-        + (semMeta ? `<div style="margin-top:10px;font-size:11px;color:var(--text2)">Defina metas em <strong>⚙ Metas</strong> para ver barras de progresso.</div>` : '');
+      grid.innerHTML = renderBlockRegional(totaisReg, qtdReg);
     }
 
     // ── METAS CALCULADAS ──────────────────────────────────────────────────
@@ -9999,6 +9993,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (mBaixIniWrap) mBaixIniWrap.style.display = 'flex';
       } else {
         if (mBaixIniWrap) mBaixIniWrap.style.display = 'none';
+      }
+
+      // "A fazer agora" = pendentes (atual) + em andamento. Número acionável que
+      // o gestor usa pra saber quanto resta do dia, sem o ruído do TOTAL DIA.
+      // (executadas aqui = dia.andamento; ver definição ~9927.)
+      const mAfazer = document.getElementById('m-carteira-afazer');
+      if (mAfazer) {
+        const aFazer = emCarteira + executadas;
+        if (isLiveToday && aFazer > 0) {
+          mAfazer.textContent = `${aFazer} a fazer · ${emCarteira} pendentes + ${executadas} em andamento`;
+          mAfazer.style.display = '';
+        } else {
+          mAfazer.style.display = 'none';
+        }
       }
 
       // Sub-info do card OS EM CARTEIRA: rastreia o fluxo do dia.
