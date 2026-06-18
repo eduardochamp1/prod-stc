@@ -4441,7 +4441,7 @@
           <div class="metric-value vermelho" id="m-rejeitadas">—</div>
         </div>
         <div class="metric-card accent-preto" id="card-carteira"
-             title="ATUAL: notas baixadas pendentes (não iniciadas) AGORA — estado de tempo real.&#10;TOTAL DIA: carteira inicial cumulativa do dia, deduplicada por UUID via backend.">
+             title="ATUAL: notas baixadas pendentes (não iniciadas) AGORA — estado de tempo real.&#10;TOTAL DIA: tudo que passou pela carteira hoje, deduplicado por UUID — inclui as que saíram (transferidas/canceladas/levadas no logoff).">
           <div class="metric-label">OS em Carteira</div>
           <div style="display:flex;align-items:baseline;gap:14px;margin-top:2px">
             <div style="display:flex;flex-direction:column;align-items:flex-start">
@@ -4464,7 +4464,7 @@
           </div>
           <div id="m-carteira-canceladas" style="display:none;font-size:11px;color:var(--text2);margin-top:2px"
                title="Notas que estavam no início do dia e saíram do payload sem virar executada/concluida/rejeitada. Engloba: canceladas pelo EDP, transferidas pra equipe fora do filtro, ou equipes que deslogaram levando concluidas.">
-            <span style="color:#c49000">●</span> <span id="m-carteira-canceladas-num">—</span> fora do dispositivo
+            <span style="color:#c49000">●</span> <span id="m-carteira-canceladas-num">—</span> saíram do dia (transferidas / canceladas)
           </div>
         </div>
         <div class="metric-card accent-verde">
@@ -10040,13 +10040,20 @@ ${equipes.length > 0 ? `<div class="perf-section">
       // produtividade por construção (mesma fonte).
       document.getElementById('m-concluidas').textContent = concluidasLive;
 
-      // Sub-info '% da carteira': base = carteira inicial (denominador correto;
-      // atual decresce conforme execução, inflaria % artificialmente).
-      const baseCarteira = carteiraInicial || emCarteira;
+      // Sub-info '% da carteira trabalhada': denominador = o que a equipe de fato
+      // engajou no dia = concluidas + andamento + rejeitadas + pendente atual.
+      // NÃO divide pela carteira total do dia (inicial+novas), que inclui notas
+      // que SAÍRAM do dispositivo (transferidas/canceladas/levadas no logoff) e
+      // inflava o denominador → % enganoso (29% em vez de 73%). Definição
+      // confirmada com o usuário em 17/06/2026.
+      // Numerador (val) e o termo "concluidas" do denominador usam o MESMO valor,
+      // então o % fica consistente seja qual for a fonte (summary.dia ou a soma
+      // de /totais/subcat que sobrescreve depois).
       function _renderPct(val) {
         if (isLiveToday) {
-          const pct = baseCarteira > 0 ? Math.round((val / baseCarteira) * 100) : 0;
-          document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira`;
+          const trabalhada = val + executadas + rejeitadas + emCarteira;
+          const pct = trabalhada > 0 ? Math.round((val / trabalhada) * 100) : 0;
+          document.getElementById('m-concluidas-pct').textContent = `${pct}% da carteira trabalhada`;
         } else {
           const dias = (() => {
             const ms = new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z');
