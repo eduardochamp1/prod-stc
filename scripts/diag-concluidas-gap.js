@@ -34,6 +34,23 @@ function isPriorDayISO(cd) {
   return s.slice(0, 10) < DIA;
 }
 
+// Espelha _sessionDate / _notaDate de services/dataWriter.js (entrada do consolidateDay).
+function shiftDay(iso, delta) {
+  const d = new Date(iso + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+function sessionDateOf(data) {
+  const sb = data && data.sessionBegin ? String(data.sessionBegin) : '';
+  return /^\d{4}-\d{2}-\d{2}/.test(sb) ? sb.slice(0, 10) : null;
+}
+function notaDateOf(n, sessDate) {
+  if (!n.conclusionDate) return sessDate;
+  const cd = String(n.conclusionDate).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(cd)) return sessDate;
+  return cd < sessDate ? cd : sessDate;
+}
+
 async function main() {
   console.log(`\n${'═'.repeat(64)}\n  FOLGA DE CONCLUÍDAS — ${DIA} (BRT)\n${'═'.repeat(64)}`);
 
@@ -87,6 +104,45 @@ async function main() {
   console.log(`       → mesma nota em 2+ equipes; agg conta por equipe, summary dedup`);
   console.log(`\n  Sanity: linhas que a agregação contaria (tipo & não-carry) = ${effRows}`);
   console.log(`          (deveria bater ~com A_sub ${A_sub}; diferença = dups entre equipes / timing)\n`);
+
+  // ── Por que team_daily_totals != team_daily_subcat? ───────────────────────
+  // Replica a entrada do consolidateDay (snapshots de [DIA-1, DIA, DIA+1],
+  // último por (team, sessionBegin) com _sessionDate in {DIA, DIA-1}) e conta
+  // as concluídas atribuídas a DIA via _notaDate. Mede duplicatas (equipe,tipo,id)
+  // — que totals conta e subcat dedup — e notas SEM id (subcat ignora).
+  const dM1 = shiftDay(DIA, -1), dP1 = shiftDay(DIA, +1);
+  const snapAll = await pool.query(
+    `SELECT team_name, data FROM snapshots
+     WHERE date = ANY($1::date[]) ORDER BY captured_at DESC`, [[dM1, DIA, dP1]]);
+  const latest = new Map();
+  for (const r of snapAll.rows) {
+    const data = r.data; if (!data) continue;
+    const sd = sessionDateOf(data);
+    if (sd !== DIA && sd !== dM1) continue;
+    const key = `${r.team_name}|${data.sessionBegin}`;
+    if (!latest.has(key)) latest.set(key, { team: r.team_name, sd, data });
+  }
+  let entriesTipo = 0, noId = 0, dupPairs = 0;
+  const pairSeen = new Set();
+  for (const { team, sd, data } of latest.values()) {
+    const conc = Array.isArray(data.notasConcluidas) ? data.notasConcluidas : [];
+    for (const n of conc) {
+      if (notaDateOf(n, sd) !== DIA) continue;
+      const tipo = n.tipoCode || n.tipo_code;
+      if (!tipo) continue;
+      entriesTipo++;
+      if (!n.id) { noId++; continue; }
+      const k = `${team}|${tipo}|${n.id}`;
+      if (pairSeen.has(k)) dupPairs++; else pairSeen.add(k);
+    }
+  }
+  console.log(`  Por que totals(${A_tipo}) vs subcat(${A_sub}) — entrada do consolidateDay:`);
+  console.log(`    entradas concluídas c/ tipo atribuídas a ${DIA} .. ${entriesTipo}  (~team_daily_totals)`);
+  console.log(`    distintas por (equipe,tipo,id) ................... ${pairSeen.size}  (~team_daily_subcat)`);
+  console.log(`    duplicatas (equipe,tipo,id) ..................... ${dupPairs}  ← totals conta, subcat dedup`);
+  console.log(`    sem id (subcat ignora, totals conta) ............ ${noId}`);
+  console.log(`    ➤ se dups>>sem-id: subcat (card) é o correto, totals infla → corrigir upsertTeamDailyTotals.`);
+  console.log(`    ➤ se sem-id>>dups: totals é o correto, subcat (card) subnotifica.\n`);
 
   if (carryIds.size > 0)
     console.log(`  ➤ Corrigível: excluir os ${carryIds.size} UUIDs carry-over do "concluídas" e do "inicial" do summary alinha com a agregação e mantém a invariante.`);
