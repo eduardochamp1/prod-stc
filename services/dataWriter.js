@@ -455,10 +455,16 @@ async function consolidateDay(date) {
 }
 
 /**
- * Compara o total de OS produzidas (notas executadas + concluídas) em um dia
- * entre as duas fontes:
+ * Compara o total de OS CONCLUÍDAS (produtividade do dia) em um dia entre as
+ * duas fontes:
  *   - SNAPSHOTS: snapshot mais recente de cada equipe com sessionDate=date
  *   - TABELA   : sum(count) de team_daily_totals para o mesmo date
+ *
+ * ⚠️ Ambos os lados contam SÓ notasConcluidas — team_daily_totals grava apenas
+ * concluídas ("Produtividade do dia = SÓ notasConcluidas", ver upsertTeamDailyTotals).
+ * Versão anterior somava executadas+concluídas no lado snapshot, comparando
+ * métrica de execução contra métrica de produção → drift falso-positivo crônico
+ * que o auto-reparo nunca zerava (mascarava drift real). Corrigido 17/06/2026.
  *
  * Drift positivo (snapshot > tabela) = consolidação atrasada / falha
  * Drift negativo (snapshot < tabela) = tabela inflada / wipe não rodou
@@ -497,7 +503,8 @@ async function detectDrift(date) {
     const key = `${s.team_name}|${t.sessionBegin}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    snapshot_count += (t.notasExecutadas || []).length + (t.notasConcluidas || []).length;
+    // SÓ concluídas — espelha o que team_daily_totals efetivamente grava.
+    snapshot_count += (t.notasConcluidas || []).length;
   }
 
   // Tabela: sum(count) de team_daily_totals para o date

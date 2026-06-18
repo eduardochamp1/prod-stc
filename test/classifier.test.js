@@ -55,7 +55,11 @@ const mdDet    = (Comments)                             => ({ Data: { Comments }
 const sf       = (Code, CodeText = 'desc')             => ({ Data: { Code, CodeText } });
 const dd       = (GroupCode = '63', GroupDescription = 'BF-CHAVE FUSIVEL', Code = null) =>
                    ({ Data: { Code, GroupCode, GroupDescription } });
-const details  = (Activities, Comments)                => ({ Data: { Activities, Comments } });
+// Address: regra de negócio EDP (20/05/2026) — C93 só vira "Subs Ramal" se o
+// Address contém "RAMAL BT". Default vazio (sem ramal bt); os testes de C93
+// passam o Address explicitamente p/ deixar a dependência visível.
+const RAMAL_BT = 'RUA TESTE 100 - RAMAL BT';
+const details  = (Activities, Comments, Address = '') => ({ Data: { Activities, Comments, Address } });
 const activity = (Code, Amount, IsPrimary = true)      => ({
   Activity:  { Code, Description: Code },
   Amount,
@@ -322,12 +326,28 @@ describe('classificarDD', () => {
       [`/api/notes/dd?noteId=${id}`]: dd('45', 'RAMAL DE LIGACAO'),
       [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([
         activity('C93', 12.5, true),
-      ]),
+      ], undefined, RAMAL_BT),
     });
     const r = await classificar(id, 'DD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'C93');
     assert.equal(r.sub_categoria, 'Subs Ramal');
     assert.equal(r.quantidade,    12.5);
+  });
+
+  test('REGRA RAMAL BT: atividade C93 mas Address SEM "ramal bt" → OUTROS (não conta como ramal)', async () => {
+    // Regra de negócio EDP (20/05/2026, confirmada com Clarissa @engelmig):
+    // só notas com "RAMAL BT" no Address contam como Subs Ramal. C93 em
+    // endereço sem "ramal bt" é ramal não-BT e fica fora do indicador.
+    const id = 'dd-c93-sem-ramalbt';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/dd?noteId=${id}`]: dd('45', 'RAMAL DE LIGACAO'),
+      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([
+        activity('C93', 9, true),
+      ], undefined, 'AVENIDA SEM MARCADOR 200'),
+    });
+    const r = await classificar(id, 'DD', { sectorId: 'DESG' });
+    assert.equal(r.sub_code,      'OUTROS');
+    assert.equal(r.sub_categoria, 'DD Outros');
   });
 
   test('IsPrimary tiebreak: prefere a primária quando há duplicatas do mesmo Code', async () => {
@@ -351,7 +371,7 @@ describe('classificarDD', () => {
       [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([
         activity('OUTRA', 1, true),    // primária mas não é C93/BTZ013
         activity('C93',   3, false),   // C93 secundária
-      ]),
+      ], undefined, RAMAL_BT),
     });
     const r = await classificar(id, 'DD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,   'C93');
@@ -387,7 +407,7 @@ describe('classificarDD', () => {
       [`/api/notes/dd?noteId=${id}`]: dd(),
       [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([
         activity('C93', 8, true),
-      ]),
+      ], undefined, RAMAL_BT),
     });
     const r = await classificar(id, 'DD'); // sem ctx
     assert.equal(r.sub_code, 'C93');
@@ -411,7 +431,7 @@ describe('classificarDD', () => {
     const id = 'dd-ramal-fallback';
     const { classificar } = loadClassifierWith({
       [`/api/notes/dd?noteId=${id}`]: dd('63', 'RAMAL DE LIGACAO - CAPEX', 'C93'),
-      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([]),
+      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details([], undefined, RAMAL_BT),
     });
     const r = await classificar(id, 'DD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'C93');
