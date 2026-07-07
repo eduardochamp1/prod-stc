@@ -7,8 +7,11 @@
   <title>WPA Monitor — Engelmig Energia</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-  <!-- SheetJS (XLSX) — geração de planilhas no cliente -->
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <!-- SheetJS (XLSX) — geração de planilhas no cliente.
+       Servido LOCALMENTE (vendor/) porque cdn.sheetjs.com é bloqueado pelo
+       Fortinet na rede corporativa — o CDN dava ERR_CONNECTION_TIMED_OUT e
+       todos os botões "Baixar XLSX" quebravam com "XLSX is not defined". -->
+  <script src="vendor/xlsx.full.min.js"></script>
   <!-- Leaflet.js — mapas interativos -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
