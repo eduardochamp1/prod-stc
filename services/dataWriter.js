@@ -537,9 +537,18 @@ async function detectDrift(date) {
  * da tabela que não tem uso operacional para dados tão antigos.
  */
 async function cleanOldSnapshots() {
+  // Retenção configurável via SNAPSHOT_RETENTION_DAYS no .env.
+  // 0 ou ausente = NUNCA apaga (decisão do negócio em jul/2026: manter o
+  // histórico bruto pra reprocessamentos retroativos de métricas futuras —
+  // custo ~16MB/dia ≈ 6GB/ano no disco da VM).
+  // Pra reativar a limpeza: SNAPSHOT_RETENTION_DAYS=90 (ou o TTL desejado).
+  const retentionDays = parseInt(process.env.SNAPSHOT_RETENTION_DAYS || '0', 10);
+  if (!retentionDays || retentionDays <= 0) {
+    log.info('clean_snapshots_skipped', { reason: 'retencao ilimitada (SNAPSHOT_RETENTION_DAYS nao setado)' });
+    return;
+  }
   const sb = getClient();
-  // Data-limite: hoje BRT menos 30 dias
-  const cutoff = dateBRTMinusDays(30);
+  const cutoff = dateBRTMinusDays(retentionDays);
 
   const { error, count } = await sb
     .from('snapshots')
