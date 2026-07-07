@@ -895,14 +895,20 @@ async function runUuidHealthCheck() {
 async function runConsolidate(date) {
   // Sem data explícita usa BRT (America/Sao_Paulo) — evita consolidar "amanhã" depois das 21h UTC
   date = date || dateBRT();
+  const { consolidateDay, cleanOldSnapshots, cleanOldNoteDetails } = require('./dataWriter');
+  // Etapas independentes: falha na consolidação NÃO pode pular a limpeza.
+  // (Bug até jul/2026: tudo num try só — consolidate_failed diario deixou
+  // snapshots acumularem ~60 dias/961MB porque cleanOldSnapshots nunca rodava.)
   try {
-    const { consolidateDay, cleanOldSnapshots, cleanOldNoteDetails } = require('./dataWriter');
     await consolidateDay(date);
-    // Limpa registros antigos (uma vez por dia, após a consolidação)
+  } catch (err) {
+    log.error('consolidate_failed', { date, msg: err.message });
+  }
+  try {
     await cleanOldSnapshots();
     await cleanOldNoteDetails();
   } catch (err) {
-    log.error('consolidate_failed', { date, msg: err.message });
+    log.error('clean_old_failed', { msg: err.message });
   }
 }
 
