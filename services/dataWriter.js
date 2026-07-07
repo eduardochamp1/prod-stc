@@ -579,9 +579,108 @@ async function cleanOldNoteDetails() {
   }
 }
 
+/**
+ * Aproveitamento de carteira POR EQUIPE — persiste em `team_daily_carteira`.
+ *
+ * Mesma matemática do _buildDiaSummary (dataService.js), mas agrupada por
+ * equipe em vez de agregada. Cada UUID classificado em EXATAMENTE 1 bucket:
+ *   concluida > rejeitada > andamento > atual > cancelada.
+ *
+ * Invariante por equipe:
+ *   inicial + entradas = atual + andamento + concluidas + rejeitadas + canceladas
+ *
+ * Nota: sem dedup cross-team — nota transferida entre equipes conta na
+ * carteira de ambas (visão de produtividade individual, não de estoque).
+ *
+ * Roda no cron (dia atual) e no backfill (datas passadas, enquanto os
+ * snapshots ainda existem — retenção ~30 dias).
+ */
+async function upsertTeamDailyCarteira(date) {
+  const { _getPool } = require('./pgShim');
+  const pool = _getPool();
+  if (!pool) return;
+  date = date || _hojeBRT();
+
+  const bucketsSql = (order) => `
+    SELECT DISTINCT ON (team_name) team_name, regional,
+      coalesce(data->'notasBaixadas',   '[]'::jsonb) AS baixadas,
+      coalesce(data->'notasExecutadas', '[]'::jsonb) AS executadas,
+      coalesce(data->'notasConcluidas', '[]'::jsonb) AS concluidas,
+      coalesce(data->'notasRejeitadas', '[]'::jsonb) AS rejeitadas
+    FROM snapshots
+    WHERE date = $1
+    ORDER BY team_name, captured_at ${order}`;
+
+  const [firstRes, lastRes, rejRes] = await Promise.all([
+    pool.query(bucketsSql('ASC'), [date]),
+    pool.query(bucketsSql('DESC'), [date]),
+    pool.query(`SELECT team_name, note_id FROM note_rejections WHERE session_date = $1`, [date]),
+  ]);
+  if (firstRes.rows.length === 0) return;
+
+  const ids = (arr) => {
+    const s = new Set();
+    if (Array.isArray(arr)) for (const n of arr) { if (n && n.id) s.add(n.id); }
+    return s;
+  };
+
+  // Rejeitadas persistentes por equipe (WPA limpa do payload após horas)
+  const rejByTeam = new Map();
+  for (const r of rejRes.rows) {
+    if (!rejByTeam.has(r.team_name)) rejByTeam.set(r.team_name, new Set());
+    if (r.note_id) rejByTeam.get(r.team_name).add(r.note_id);
+  }
+
+  const lastByTeam = new Map(lastRes.rows.map(r => [r.team_name, r]));
+  const rows = [];
+
+  for (const f of firstRes.rows) {
+    const team = f.team_name;
+    const l = lastByTeam.get(team) || f;
+
+    const inicial = new Set([
+      ...ids(f.baixadas), ...ids(f.executadas), ...ids(f.concluidas), ...ids(f.rejeitadas),
+    ]);
+    const atualRaw      = ids(l.baixadas);
+    const andamentoRaw  = ids(l.executadas);
+    const concluidasRaw = ids(l.concluidas);
+    const rejeitadasRaw = new Set([...ids(l.rejeitadas), ...(rejByTeam.get(team) || [])]);
+
+    const todas = new Set([...atualRaw, ...andamentoRaw, ...concluidasRaw, ...rejeitadasRaw]);
+    let atual = 0, andamento = 0, concluidas = 0, rejeitadas = 0;
+    for (const u of todas) {
+      if      (concluidasRaw.has(u))  concluidas++;
+      else if (rejeitadasRaw.has(u))  rejeitadas++;
+      else if (andamentoRaw.has(u))   andamento++;
+      else                            atual++;
+    }
+    let canceladas = 0;
+    for (const u of inicial) if (!todas.has(u)) canceladas++;
+    let entradas = 0;
+    for (const u of todas) if (!inicial.has(u)) entradas++;
+
+    rows.push({
+      date, team_name: team, regional: f.regional,
+      carteira_inicial: inicial.size,
+      entradas_novas:   entradas,
+      atual, andamento, concluidas, rejeitadas, canceladas,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  if (rows.length === 0) return;
+  const sb = getClient();
+  const { error } = await sb
+    .from('team_daily_carteira')
+    .upsert(rows, { onConflict: 'date,team_name' });
+  if (error) throw error;
+  log.info('team_daily_carteira_upserted', { date, rows: rows.length });
+}
+
 module.exports = {
   saveSnapshot, pushTeams,
   upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals,
+  upsertTeamDailyCarteira,
   consolidateDay, detectDrift,
   cleanOldSnapshots, cleanOldNoteDetails,
 };

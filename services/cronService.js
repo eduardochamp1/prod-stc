@@ -106,7 +106,7 @@ async function runSnapshot() {
     }
 
     const ts = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals } = require('./dataWriter');
+    const { saveSnapshot, pushTeams, upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals, upsertTeamDailyCarteira } = require('./dataWriter');
 
     // snapshots e teams_current: apenas equipes reais (sem ghosts)
     await saveSnapshot(teams);
@@ -120,6 +120,13 @@ async function runSnapshot() {
     await upsertTeamDailyTotals(allTeams);
 
     log.info('snapshot_saved', { teams: teams.length, ghosts: ghostCount, at: ts });
+
+    // Aproveitamento de carteira por equipe (team_daily_carteira) — histórico
+    // permanente do que estava disponível vs executado. Lê dos snapshots recém
+    // gravados; não bloqueia o ciclo.
+    upsertTeamDailyCarteira().catch(err =>
+      log.error('team_daily_carteira_failed', { msg: err.message })
+    );
 
     // Classifica subcategorias dos UUIDs novos (não bloqueia o snapshot).
     // Quando concluir, dispara upsertSubcatTotals pra atualizar team_daily_subcat_totals.

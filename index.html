@@ -4609,6 +4609,25 @@
         <div class="empty-state">Selecione um mês e clique em Atualizar.</div>
       </div>
 
+      <!-- ── APROVEITAMENTO DA CARTEIRA ─────────────────────────────────── -->
+      <!-- % executado sobre o que estava DISPONÍVEL na carteira da equipe.  -->
+      <!-- Fonte: team_daily_carteira (cron + backfill). Export XLSX cru.    -->
+      <div class="perf-section" style="margin-top:24px">
+        <div class="section-header" style="margin-bottom:12px">
+          <div>
+            <span class="section-title">Aproveitamento da Carteira</span>
+            <span style="font-size:11px;color:var(--text2);margin-left:8px">
+              executadas vs disponíveis por equipe (mesmo mês/regional do ranking acima)
+            </span>
+          </div>
+          <button class="btn-refresh" id="btn-carteira-xlsx" onclick="downloadCarteiraXLSX()"
+                  title="Baixar dados crus (dia × equipe) em Excel">⬇ Baixar XLSX</button>
+        </div>
+        <div id="carteira-content">
+          <div class="empty-state" style="font-size:12px">Carrega junto com o ranking.</div>
+        </div>
+      </div>
+
     </div>
 
     <!-- ── TAB: MAPA ────────────────────────────────────────────────────── -->
@@ -8488,6 +8507,134 @@ ${equipes.length > 0 ? `<div class="perf-section">
         document.getElementById('ranking-content').innerHTML =
           `<div class="empty-state">Erro: ${err.message}</div>`;
       }
+
+      // Aproveitamento da carteira — mesma janela (mês) e regionais do ranking
+      loadCarteiraAproveitamento(ym, regionalsCsv);
+    }
+
+    // ── APROVEITAMENTO DA CARTEIRA ──────────────────────────────────────────
+    // Linhas cruas (dia × equipe) vêm do backend; agrega por equipe pra tabela
+    // e guarda as cruas pro export XLSX (aba separada).
+    let _carteiraRaw = [];   // linhas dia × equipe do último load
+
+    function _ymRange(ym) {
+      // 'YYYY-MM' → { de: 1º dia, ate: min(último dia do mês, hoje BRT) }
+      const [y, m] = ym.split('-').map(Number);
+      const de  = `${ym}-01`;
+      const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+      const hoje = todayISO();
+      return { de, ate: last < hoje ? last : hoje };
+    }
+
+    async function loadCarteiraAproveitamento(ym, regionalsCsv) {
+      const cont = document.getElementById('carteira-content');
+      if (!cont) return;
+      cont.innerHTML = '<div class="empty-state" style="font-size:12px"><div class="spinner"></div><br>Carregando aproveitamento…</div>';
+      try {
+        const { de, ate } = _ymRange(ym);
+        const j = await fetch(`${API}/carteira/equipes?de=${de}&ate=${ate}&regionals=${regionalsCsv}`)
+          .then(r => r.json());
+        _carteiraRaw = j.rows || [];
+        renderCarteiraAproveitamento(_carteiraRaw);
+      } catch (err) {
+        cont.innerHTML = `<div class="empty-state" style="font-size:12px">Erro: ${err.message}</div>`;
+      }
+    }
+
+    function renderCarteiraAproveitamento(rows) {
+      const cont = document.getElementById('carteira-content');
+      if (!cont) return;
+      if (!rows.length) {
+        cont.innerHTML = '<div class="empty-state" style="font-size:12px">Sem dados de carteira no período. (Tabela nova — roda o backfill no servidor: <code>node scripts/backfill-carteira.js</code>)</div>';
+        return;
+      }
+
+      // Agrega por equipe
+      const byTeam = new Map();
+      for (const r of rows) {
+        if (!byTeam.has(r.team_name)) {
+          byTeam.set(r.team_name, {
+            team_name: r.team_name, regional: r.regional, dias: 0,
+            disponivel: 0, concluidas: 0, rejeitadas: 0, canceladas: 0,
+          });
+        }
+        const a = byTeam.get(r.team_name);
+        a.dias++;
+        a.disponivel += (r.carteira_inicial + r.entradas_novas);
+        a.concluidas += r.concluidas;
+        a.rejeitadas += r.rejeitadas;
+        a.canceladas += r.canceladas;
+      }
+
+      const agg = [...byTeam.values()].map(t => ({
+        ...t,
+        aproveitamento: t.disponivel > 0 ? +(100 * t.concluidas / t.disponivel).toFixed(1) : 0,
+      })).sort((a, b) => b.aproveitamento - a.aproveitamento);
+
+      const corPct = p => p >= 70 ? 'var(--verde)' : p >= 40 ? '#c49000' : 'var(--vermelho)';
+
+      cont.innerHTML = `
+      <div class="ranking-table-wrap">
+        <table class="ranking-table">
+          <thead>
+            <tr>
+              <th>#</th><th>Equipe</th><th>Regional</th><th>Dias</th>
+              <th title="Soma de (carteira inicial + entradas novas) dos dias trabalhados">Disponíveis</th>
+              <th>Concluídas</th><th>Rejeitadas</th>
+              <th title="Saíram da carteira sem execução (EDP cancelou/transferiu ou equipe deslogou)">Canceladas</th>
+              <th title="concluídas ÷ disponíveis">Aproveit. %</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${agg.map((t, i) => `
+              <tr>
+                <td>${i + 1}</td>
+                <td><strong>${t.team_name}</strong></td>
+                <td>${t.regional}</td>
+                <td>${t.dias}</td>
+                <td>${t.disponivel}</td>
+                <td>${t.concluidas}</td>
+                <td>${t.rejeitadas}</td>
+                <td>${t.canceladas}</td>
+                <td style="font-weight:700;color:${corPct(t.aproveitamento)}">${t.aproveitamento}%</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    }
+
+    function downloadCarteiraXLSX() {
+      if (!_carteiraRaw.length) { alert('Sem dados carregados — atualiza o ranking primeiro.'); return; }
+      const wb = XLSX.utils.book_new();
+
+      // Aba 1: dados crus (dia × equipe) — pro user tratar como quiser
+      const cru = _carteiraRaw.map(r => ({
+        Data: r.date, Equipe: r.team_name, Regional: r.regional,
+        'Carteira Inicial': r.carteira_inicial, 'Entradas Novas': r.entradas_novas,
+        'Disponíveis (ini+ent)': r.carteira_inicial + r.entradas_novas,
+        Atual: r.atual, 'Em Andamento': r.andamento,
+        'Concluídas': r.concluidas, Rejeitadas: r.rejeitadas, Canceladas: r.canceladas,
+        'Aproveitamento %': (r.carteira_inicial + r.entradas_novas) > 0
+          ? +(100 * r.concluidas / (r.carteira_inicial + r.entradas_novas)).toFixed(1) : 0,
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cru), 'Dia a dia');
+
+      // Aba 2: agregado por equipe (mesma visão da tabela)
+      const byTeam = new Map();
+      for (const r of _carteiraRaw) {
+        if (!byTeam.has(r.team_name)) byTeam.set(r.team_name, { Equipe: r.team_name, Regional: r.regional, Dias: 0, 'Disponíveis': 0, 'Concluídas': 0, Rejeitadas: 0, Canceladas: 0 });
+        const a = byTeam.get(r.team_name);
+        a.Dias++; a['Disponíveis'] += r.carteira_inicial + r.entradas_novas;
+        a['Concluídas'] += r.concluidas; a.Rejeitadas += r.rejeitadas; a.Canceladas += r.canceladas;
+      }
+      const aggRows = [...byTeam.values()].map(t => ({
+        ...t,
+        'Aproveitamento %': t['Disponíveis'] > 0 ? +(100 * t['Concluídas'] / t['Disponíveis']).toFixed(1) : 0,
+      })).sort((a, b) => b['Aproveitamento %'] - a['Aproveitamento %']);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(aggRows), 'Por equipe');
+
+      const ym = document.getElementById('ranking-mes-input')?.value || 'periodo';
+      XLSX.writeFile(wb, `aproveitamento-carteira-${ym}.xlsx`);
     }
 
     function renderRanking(ranking) {

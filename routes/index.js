@@ -2648,6 +2648,43 @@ router.put('/deslocamentos/threshold', requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/carteira/equipes?de=YYYY-MM-DD&ate=YYYY-MM-DD&regionals=GUA,CAC
+// Aproveitamento de carteira por equipe: linhas cruas (dia × equipe) de
+// team_daily_carteira (populada pelo cron + backfill). Cada linha:
+//   { date, team_name, regional, carteira_inicial, entradas_novas,
+//     atual, andamento, concluidas, rejeitadas, canceladas }
+// Invariante por linha: inicial + entradas = atual + andamento + concluidas
+// + rejeitadas + canceladas. Frontend agrega por equipe e exporta XLSX.
+router.get('/carteira/equipes', async (req, res) => {
+  try {
+    const { _getPool } = require('../services/pgShim');
+    const pool = _getPool();
+    if (!pool) return res.json({ rows: [] });
+    const today = dateBRT();
+    const de  = req.query.de  || today;
+    const ate = req.query.ate || de;
+
+    const params = [de, ate];
+    const { inRegionalsSql } = require('../services/regionals');
+    const regClause = inRegionalsSql(req.scope.regionals, params, 'c.regional');
+
+    const { rows } = await pool.query(`
+      SELECT c.date, c.team_name, c.regional,
+             c.carteira_inicial, c.entradas_novas,
+             c.atual, c.andamento, c.concluidas, c.rejeitadas, c.canceladas
+      FROM team_daily_carteira c
+      JOIN equipes_oficiais eo ON eo.sigla = c.team_name AND eo.ativo = true
+      WHERE c.date >= $1 AND c.date <= $2 AND ${regClause}
+      ORDER BY c.date, c.team_name
+    `, params);
+
+    res.json({ de, ate, rows });
+  } catch (err) {
+    console.error('[carteira/equipes]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/mapa/equipe?team=SIGLA&date=YYYY-MM-DD
 // Retorna notas com checkpoints GPS de uma equipe no dia.
 router.get('/mapa/equipe', async (req, res) => {
