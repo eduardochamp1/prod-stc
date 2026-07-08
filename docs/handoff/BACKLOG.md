@@ -27,17 +27,17 @@
 | P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
 | P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | **done** (a8dcbab, 08/07) |
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
-| P1-1 | Alerta ativo (watchdog + Teams) | Ops | pending |
-| P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | pending |
-| P1-3 | `snapshot_last_ok` em `app_settings` | Ops | pending |
-| P1-4 | SSRF em `/api/wpa/probe` vaza token EDP | Segurança | pending |
+| P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
+| P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
+| P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
+| P1-4 | SSRF em `/api/wpa/probe` vaza token EDP | Segurança | **done** (bbc5129, 08/07) |
 | P1-5 | Rate limit em `/auth/login` + scrypt | Segurança | pending |
-| P1-6 | Git hook `pre-push` roda `node --test` | Qualidade | pending |
-| P1-7 | Retry natural pra MD/SF/rejeições | Dados | pending |
-| P1-8 | `consolidateDay` transacional | Dados | pending |
-| P1-9 | Vendorizar Leaflet + fonte Roboto | Frontend | pending |
-| P1-10 | Remover vazamento de stack trace | Segurança | pending |
-| P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending |
+| P1-6 | Git hook `pre-push` roda `node --test` | Qualidade | **done** (e4dc4c8, 08/07) |
+| P1-7 | Retry natural pra MD/SF/rejeições | Dados | **done** (4a8e369, 08/07) — subcat MD/SF/DD; rejeições ver nota |
+| P1-8 | ~~`consolidateDay` transacional~~ (duplicata de P1-11) | Dados | — ver P1-11 |
+| P1-9 | Vendorizar Leaflet + fonte Roboto | Frontend | **done** (c62bf4a, 08/07) |
+| P1-10 | Remover vazamento de stack trace | Segurança | **done** (bbc5129, 08/07) |
+| P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending (requer staging) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
@@ -993,8 +993,35 @@ Ao concluir um item, mova pra cá com data + hash do commit:
 
 **Restam em P0:** P0-1 (continuidade humana — ação organizacional, não código)
 e P0-2 (backup offsite — precisa rclone + OneDrive na VM). Ambos exigem ação
-sua na VM/organização; não são executáveis por AI sozinha. Próximo item de
-código puro: P1-2 (`/health` real) e P1-10 (remover stack trace).
+sua na VM/organização; não são executáveis por AI sozinha.
+
+- **2026-07-08 · `bbc5129`** — **P1-2, P1-4, P1-10**. `/health` movido pra antes
+  do catch-all + check real (SELECT 1 + idade do snapshot, 503 se degradado).
+  SSRF do `/api/wpa/probe` fechado (`_wpaPathSeguro`: exige `/api/`, proíbe
+  host embutido) — 2 testes de contrato. Stack trace parou de vazar ao cliente.
+
+- **2026-07-08 · `e4dc4c8`** — **P1-3, P1-6, P1-1(script)**. `snapshot_last_ok`/
+  `snapshot_error` em `app_settings`, expostos em `/admin/health`
+  (`snapshot_stale_min`). Git hook `pre-push` roda `node --test` (via
+  `hooks/pre-push` + `scripts/install-hooks.sh`). `scripts/watchdog.sh` pronto
+  — **falta o José**: criar Teams Incoming Webhook + agendar no crontab
+  (`*/15 * * * *`). Instruções no cabeçalho do script.
+
+- **2026-07-08 · `c62bf4a`** — **P1-9**. Leaflet (js+css+imagens),
+  polylineDecorator e Roboto (4 TTF) vendorizados em `vendor/`. Zero CDN no
+  `index.html` — Fortinet não derruba mais Mapa/Deslocamentos.
+
+- **2026-07-08 · `4a8e369`** — **P1-7**. `safeJson` distingue transiente (5xx/
+  rede → retry) de definitivo (4xx → OUTROS). MD/SF/DD retornam null em falha
+  transiente do fetch primário → UUID fica fora do cache e retenta no ciclo
+  seguinte. 5 testes novos. **Nota:** cobre subcategorias (MD/SF/DD). As
+  REJEIÇÕES (`classificarRejeicao`) ainda gravam "sem motivo" em fetch falho —
+  fica como sub-item pendente de P1-7 (mesmo padrão: retornar null em
+  FETCH_FAILED e o caller `runClassifyRejections` pular). Menor impacto (é
+  indicador secundário), mas vale fechar.
+
+**Próximo item de código puro:** P1-5 (rate limit `/auth/login` + scrypt).
+Depois entra P2. P0-1/P0-2/P1-1(config)/P1-11 dependem de você (VM/org/staging).
 
 ---
 
