@@ -24,9 +24,9 @@
 |---|---|---|---|
 | P0-1 | Continuidade humana (bus factor 1) | Governança | pending |
 | P0-2 | Backup offsite (Postgres) | Ops | pending |
-| P0-3 | Matemática de agregação sem teste + consolidação não-atômica | Dados/Qualidade | pending |
-| P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | pending |
-| P0-5 | POST `/metas` quebrado para não-admin | Backend | pending |
+| P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
+| P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | **done** (a8dcbab, 08/07) |
+| P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | pending |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | pending |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | pending |
@@ -37,6 +37,7 @@
 | P1-8 | `consolidateDay` transacional | Dados | pending |
 | P1-9 | Vendorizar Leaflet + fonte Roboto | Frontend | pending |
 | P1-10 | Remover vazamento de stack trace | Segurança | pending |
+| P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
@@ -543,6 +544,47 @@ feita em PR separado depois dos testes.
 - **Rollback:** Trivial.
 - **Depende de:** nada.
 
+## P1-11 — `consolidateDay` transacional (rebaixado de P0-3)
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Fonte:** Auditoria de dados + pipeline 2026-07-08; rebaixado de P0-3 em 08/07.
+- **Evidência:** `services/dataWriter.js:consolidateDay` faz `DELETE` de
+  `team_daily_totals` e `team_daily_subcat_totals` (datas d-1, d) seguido de
+  reagregação via `upsertTeamDailyTotals`/`upsertSubcatTotals`, **sem
+  transação**. Crash entre o DELETE e o INSERT zera o(s) dia(s).
+- **Impacto:** Janela de crash zera dados que alimentam o contrato EDP.
+  **Já mitigado parcialmente** pelo drift-sweep D-1..D-7 (commit `f8b839b`):
+  um dia zerado por crash é detectado e re-consolidado até as 02:00 seguintes.
+  A janela de exposição caiu de "indefinida" pra "algumas horas". Por isso
+  saiu de P0 pra P1.
+- **Por que NÃO foi feito junto com P0-3:** reescrever o coração da
+  consolidação (que gera os números do contrato) **sem staging** tem risco
+  maior de introduzir um bug de corrupção silenciosa do que a rara janela de
+  crash que fecha. Deve ser feito com rede de segurança adequada.
+- **Ação (quando houver staging ou janela supervisionada):**
+  1. Extrair `_computeSubcatRows(teams)` de `upsertSubcatTotals` (separar o
+     fetch de `note_subcategorias` + agregação da gravação — espelhar o que
+     já foi feito com `_aggregateTeamDailyTotals`).
+  2. No `consolidateDay`: computar `totalRows` (puro) e `subcatRows` (async,
+     leitura) ANTES de tocar as tabelas.
+  3. Abrir client dedicado via `pgShim._getPool().connect()`:
+     `BEGIN` → `DELETE` das datas que efetivamente serão escritas (derivar
+     das rows, não fixo [d-1,d], pra não zerar dia sem dados) → `INSERT` das
+     rows → `COMMIT`. `ROLLBACK` em qualquer erro.
+  4. Teste: `test/consolidate.test.js` com pool fake que lança erro no meio
+     (após DELETE, antes do INSERT) e verifica que os dados antigos
+     permanecem (ROLLBACK funcionou).
+- **Aceite:**
+  - [ ] `consolidateDay` usa transação real (BEGIN/COMMIT/ROLLBACK).
+  - [ ] Teste de crash-no-meio prova que ROLLBACK preserva dados.
+  - [ ] Validado em staging antes de prod.
+  - [ ] Deploy com tag de rollback + validação de drift pós-deploy.
+- **Esforço:** 1-2 dias (com staging).
+- **Rollback:** Reverter o commit. `consolidateDay` volta ao não-atômico
+  (coberto pelo drift-sweep).
+- **Depende de:** staging (idealmente) ou janela de manutenção supervisionada.
+
 ---
 
 # P2 — Média prioridade (2 meses)
@@ -927,7 +969,32 @@ feita em PR separado depois dos testes.
 
 Ao concluir um item, mova pra cá com data + hash do commit:
 
-- (nada ainda — este backlog acabou de ser criado)
+- **2026-07-08 · `a8dcbab`** — **P0-4** e **P0-5** concluídos. `enforceTeamRegional`
+  e POST `/metas` deixaram de ler `req.user.regional` (singular, morto no v=2)
+  e passaram a usar `req.user.regionals` (array). Bônus: `server.js` só faz
+  `listen()` quando executado direto (`require.main === module`), destravando
+  testes de contrato. Novo `test/routes.test.js` (primeiro teste de rota do
+  projeto) cobre login + o fix P0-5. Suíte 152→158.
+
+- **2026-07-08 · `f8b839b`** — **P0-3** concluído (partes A, B, C):
+  - A: extraído `_aggregateTeamDailyTotals` (puro), `_sessionDate`/`_notaDate`
+    exportados. `test/dataWriter.test.js` — 14 casos travando a regra de
+    atribuição de dia.
+  - B: `test/diaSummary.test.js` — 8 casos com pool fake travando a aritmética
+    de buckets e a invariante `inicial+entradas = atual+and+conc+rej+canc`.
+  - C: `runDailyDriftSweep` varre D-1..D-7 (era só D-1 e D-7). Mitiga o
+    `consolidateDay` não-atômico (crash que zere um dia é reparado até 02:00).
+  - A **transação atômica do `consolidateDay`** foi deliberadamente rebaixada
+    pra **P1-11**: reescrever o coração da consolidação sem staging tem risco
+    maior de corromper números do contrato do que a rara janela de crash (ms
+    entre DELETE e INSERT), agora coberta pelo drift-sweep D-1..D-7. Fazer só
+    com staging ou janela de manutenção supervisionada + teste de crash.
+  - Suíte 158→180.
+
+**Restam em P0:** P0-1 (continuidade humana — ação organizacional, não código)
+e P0-2 (backup offsite — precisa rclone + OneDrive na VM). Ambos exigem ação
+sua na VM/organização; não são executáveis por AI sozinha. Próximo item de
+código puro: P1-2 (`/health` real) e P1-10 (remover stack trace).
 
 ---
 
