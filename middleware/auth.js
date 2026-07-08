@@ -98,15 +98,49 @@ function sha256(str) {
   return crypto.createHash('sha256').update(str).digest('hex');
 }
 
+// Comparação time-safe de strings (evita timing attack na verificação de hash).
+function _safeEqual(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+/**
+ * Verifica senha contra o hash armazenado (P1-5). Suporta 2 formatos:
+ *   - scrypt$<saltHex>$<hashHex>  → scrypt com salt por usuário (preferido)
+ *   - <64 hex chars>              → SHA-256 legado (sem salt) — compat retroativa
+ *
+ * Migração: rodar scripts/rehash-users.js pra gerar o AUTH_USERS no formato
+ * scrypt e substituir no .env. Enquanto o .env tiver hash SHA-256, loga um
+ * aviso 1x por boot recomendando a migração.
+ */
+let _legacyHashWarned = false;
+function _verifyPassword(password, stored) {
+  if (typeof stored !== 'string') return false;
+  if (stored.startsWith('scrypt$')) {
+    const [, saltHex, hashHex] = stored.split('$');
+    if (!saltHex || !hashHex) return false;
+    try {
+      const derived = crypto.scryptSync(password, Buffer.from(saltHex, 'hex'), 32).toString('hex');
+      return _safeEqual(derived, hashHex);
+    } catch { return false; }
+  }
+  // Legado SHA-256 (sem salt)
+  if (!_legacyHashWarned) {
+    console.warn('[AUTH] AUTH_USERS usa hash SHA-256 legado (sem salt). ' +
+      'Migre pra scrypt: node scripts/rehash-users.js (ver P1-5 no backlog).');
+    _legacyHashWarned = true;
+  }
+  return _safeEqual(sha256(password), stored);
+}
+
 // ── Login ─────────────────────────────────────────────────────────────────────
 
 function login(username, password) {
   const users = getUsers();
-  const hash  = sha256(password);
-  const user  = users.find(u =>
-    u.username === username && u.passwordHash === hash
-  );
-  if (!user) return null;
+  const user  = users.find(u => u.username === username);
+  if (!user || !_verifyPassword(password, user.passwordHash)) return null;
 
   const now     = Math.floor(Date.now() / 1000);
   const payload = {
@@ -197,7 +231,15 @@ function applyScope(req, res, next) {
   next();
 }
 
+// Gera hash scrypt no formato scrypt$salt$hash (usado por scripts/rehash-users.js).
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 32);
+  return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
+}
+
 module.exports = {
   login, authMiddleware, requireAdmin, verifyToken, getUsers,
   applyScope, compatRegionalParam,
+  hashPassword, _verifyPassword,
 };

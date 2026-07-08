@@ -183,3 +183,28 @@ test('compatRegionalParam: ja tem ?regionals=X — nao toca', () => {
   compatRegionalParam(m.req, m.res, m.next);
   assert.equal(m.req.query.regionals, 'GUA');
 });
+
+// ── P1-5: hash de senha (scrypt + compat SHA-256) ────────────────────────────
+const { hashPassword, _verifyPassword } = require('../middleware/auth');
+const _crypto = require('crypto');
+
+test('hashPassword: gera formato scrypt$salt$hash e valida roundtrip', () => {
+  const h = hashPassword('minhaSenha123');
+  assert.match(h, /^scrypt\$[0-9a-f]+\$[0-9a-f]+$/);
+  assert.equal(_verifyPassword('minhaSenha123', h), true);
+  assert.equal(_verifyPassword('senhaErrada', h), false);
+});
+
+test('_verifyPassword: aceita hash SHA-256 legado (compat retroativa)', () => {
+  const legado = _crypto.createHash('sha256').update('legada').digest('hex');
+  assert.equal(_verifyPassword('legada', legado), true);
+  assert.equal(_verifyPassword('outra', legado), false);
+});
+
+test('_verifyPassword: salts diferentes geram hashes diferentes (mesma senha)', () => {
+  const h1 = hashPassword('igual');
+  const h2 = hashPassword('igual');
+  assert.notEqual(h1, h2);                 // salt aleatório
+  assert.equal(_verifyPassword('igual', h1), true);
+  assert.equal(_verifyPassword('igual', h2), true);
+});

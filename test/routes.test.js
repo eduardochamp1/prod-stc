@@ -146,3 +146,28 @@ test('P1-4: /api/wpa/probe rejeita path que não começa com /api/ → 400', asy
   const status = await getRaw('/api/wpa/probe?path=' + encodeURIComponent('//evil.com/'), token);
   assert.equal(status, 400);
 });
+
+// ── P1-5: rate limit no /auth/login ───────────────────────────────────────────
+
+test('P1-5: 429 após 10 tentativas erradas seguidas (mesmo IP+user)', async () => {
+  // 10 tentativas erradas → contador chega no teto; a 11ª deve ser 429.
+  for (let i = 0; i < 10; i++) {
+    const { status } = await post('/api/auth/login', { username: 'ratelimit-victim', password: 'errada' });
+    assert.equal(status, 401, `tentativa ${i + 1} deveria ser 401`);
+  }
+  const { status, json } = await post('/api/auth/login', { username: 'ratelimit-victim', password: 'errada' });
+  assert.equal(status, 429, 'a 11ª tentativa deve ser bloqueada');
+  assert.equal(json.code, 'RATE_LIMITED');
+});
+
+test('P1-5: login OK zera o contador de tentativas', async () => {
+  // 3 erradas, depois 1 certa (zera), depois erradas de novo não devem estourar
+  for (let i = 0; i < 3; i++) {
+    await post('/api/auth/login', { username: 'admin', password: 'errada' });
+  }
+  const ok = await post('/api/auth/login', { username: 'admin', password: 'adminpass' });
+  assert.equal(ok.status, 200);
+  // Após sucesso, novas tentativas erradas recomeçam do zero (não 429 imediato)
+  const { status } = await post('/api/auth/login', { username: 'admin', password: 'errada' });
+  assert.equal(status, 401);
+});

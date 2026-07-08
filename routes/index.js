@@ -30,16 +30,51 @@ const router = express.Router();
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
+// Rate limit em memória pro /auth/login (P1-5). Sem dependência externa.
+// Chave = IP+username. Janela deslizante: máx N tentativas ERRADAS em JANELA.
+// Login OK zera o contador. Bloqueio devolve 429 com Retry-After.
+// Motivo: painel escuta na rede interna (172.25.x); sem throttle, brute force
+// ilimitado contra as 5 contas. Cluster mode = 1 instância, então o Map em
+// memória cobre todo o tráfego (documentado em ecosystem.config.js).
+const _loginTries = new Map();   // chave → { count, first }
+const LOGIN_MAX = 10;            // tentativas erradas
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;  // por 5 min
+
+function _loginKey(req, username) {
+  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  return `${ip}|${username || '?'}`;
+}
+
 // POST /api/auth/login  — única rota pública
 router.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password)
     return res.status(400).json({ error: 'username e password obrigatórios' });
 
-  const result = authLogin(username, password);
-  if (!result)
-    return res.status(401).json({ error: 'Usuário ou senha incorretos' });
+  const key = _loginKey(req, username);
+  const now = Date.now();
+  const rec = _loginTries.get(key);
+  if (rec && now - rec.first < LOGIN_WINDOW_MS && rec.count >= LOGIN_MAX) {
+    const retryS = Math.ceil((LOGIN_WINDOW_MS - (now - rec.first)) / 1000);
+    res.set('Retry-After', String(retryS));
+    return res.status(429).json({
+      error: `Muitas tentativas. Tente novamente em ${retryS}s.`,
+      code: 'RATE_LIMITED',
+    });
+  }
 
+  const result = authLogin(username, password);
+  if (!result) {
+    // Conta a tentativa errada (reinicia a janela se expirou)
+    if (!rec || now - rec.first >= LOGIN_WINDOW_MS) {
+      _loginTries.set(key, { count: 1, first: now });
+    } else {
+      rec.count += 1;
+    }
+    return res.status(401).json({ error: 'Usuário ou senha incorretos' });
+  }
+
+  _loginTries.delete(key);   // sucesso → zera contador
   res.json({
     token:     result.token,
     v:         result.v,
