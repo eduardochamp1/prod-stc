@@ -203,15 +203,18 @@ async function upsertDailyTotals(_teams, _date) {
 /**
  * Atualiza `team_daily_totals` por equipe/tipo (intraday — visão individual).
  */
-async function upsertTeamDailyTotals(teams, _date) {
-  const sb = getClient();
-
-  // Chave: (notaDate, team_name, tipo_code). notaDate respeita conclusionDate
-  // de notas executadas em dia anterior à sessão atual (evita inflação).
-  //
-  // Produtividade do dia = SÓ notasConcluidas. Notas em andamento ainda podem
-  // virar rejeitadas (não são "produção feita"). Regra alinhada com o card
-  // OS EXECUTADAS do Monitor e com upsertSubcatTotals.
+/**
+ * FUNÇÃO PURA (testável sem DB): agrega notasConcluidas das equipes em rows
+ * de team_daily_totals. Chave (notaDate, team_name, tipo_code).
+ *
+ * Produtividade do dia = SÓ notasConcluidas. Notas em andamento ainda podem
+ * virar rejeitadas (não são "produção feita"). Regra alinhada com o card
+ * OS EXECUTADAS do Monitor e com upsertSubcatTotals.
+ *
+ * @param {Array} teams
+ * @returns {Array<{date, team_name, regional, sector_id, tipo_code, count}>}
+ */
+function _aggregateTeamDailyTotals(teams) {
   const acc = {};
   teams.forEach(t => {
     const sessDate = _sessionDate(t);
@@ -231,8 +234,12 @@ async function upsertTeamDailyTotals(teams, _date) {
       acc[key].count += 1;
     });
   });
+  return Object.values(acc);
+}
 
-  const rows = Object.values(acc);
+async function upsertTeamDailyTotals(teams, _date) {
+  const sb = getClient();
+  const rows = _aggregateTeamDailyTotals(teams);
   if (rows.length === 0) return;
 
   const { error } = await sb
@@ -692,4 +699,6 @@ module.exports = {
   upsertTeamDailyCarteira,
   consolidateDay, detectDrift,
   cleanOldSnapshots, cleanOldNoteDetails,
+  // Exportadas pra teste (P0-3) — funções puras da regra de agregação.
+  _sessionDate, _notaDate, _aggregateTeamDailyTotals,
 };

@@ -971,17 +971,22 @@ async function runDriftCheck(date) {
   }
 }
 
-// Wrapper para o cron diário: verifica D-1 e D-7
+// Wrapper para o cron diário: varre D-1 até D-7 (janela completa da semana).
+//
+// Antes verificava só D-1 e D-7, deixando D-2..D-6 órfãos: se o
+// consolidateDay de um desses dias falhasse ou fosse interrompido no meio
+// (crash entre wipe e reagregação), NENHUM job reparava — o dia ficava com
+// dados parciais/zerados indefinidamente (risco P0-3 do backlog). Varrer a
+// semana inteira é barato (7 detectDrift; só consolida quem tem drift real)
+// e fecha esse buraco. Sequencial pra não competir por conexões do pool.
 async function runDailyDriftSweep() {
   const today = dateBRT();
-  // D-1 (ontem)
-  const d1 = new Date(today + 'T12:00:00Z');
-  d1.setUTCDate(d1.getUTCDate() - 1);
-  await runDriftCheck(d1.toISOString().slice(0, 10));
-  // D-7 (uma semana atrás)
-  const d7 = new Date(today + 'T12:00:00Z');
-  d7.setUTCDate(d7.getUTCDate() - 7);
-  await runDriftCheck(d7.toISOString().slice(0, 10));
+  const base = new Date(today + 'T12:00:00Z');
+  for (let d = 1; d <= 7; d++) {
+    const dia = new Date(base);
+    dia.setUTCDate(dia.getUTCDate() - d);
+    await runDriftCheck(dia.toISOString().slice(0, 10));
+  }
 }
 
 // ── START / STOP ──────────────────────────────────────────────────────────────
