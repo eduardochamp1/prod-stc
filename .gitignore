@@ -8,8 +8,13 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 
-# Documentação interna — não versionar (knowledge base do WPA, anotações, etc)
-docs/
+# Documentação interna — não versionar (knowledge base do WPA, anotações, etc).
+# EXCEÇÃO: docs/handoff/* é a documentação de continuidade (arquitetura, backlog,
+# runbook, audits) — versionado propositalmente pra qualquer dev/AI que entrar
+# depois conseguir operar sem depender de conhecimento tácito.
+# NOTA: usa docs/* (não docs/) pra permitir descer em subdirs específicos.
+docs/*
+!docs/handoff/
 
 # Workspace local — SOMENTE DO DEV. Specs em andamento, checkpoints de sessão,
 # decisões de produto, prompts originais, skills/superpowers, anotações.
