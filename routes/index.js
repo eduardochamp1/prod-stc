@@ -876,9 +876,11 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
         },
       });
     }
-    // Erro inesperado no nosso processamento (não vindo do WPA)
-    console.error(`[NOTA-DETAIL] ${noteId}:`, err.message);
-    res.status(500).json({ error: err.message, stack: err.stack?.split('\n').slice(0,3).join(' | ') });
+    // Erro inesperado no nosso processamento (não vindo do WPA).
+    // Stack completo vai pro log do servidor; cliente recebe só msg genérica
+    // (P1-10: não vazar estrutura interna — nomes de arquivo/linha — ao browser).
+    console.error(`[NOTA-DETAIL] ${noteId}:`, err.stack || err.message);
+    res.status(500).json({ error: 'Erro ao processar a nota.' });
   }
 });
 
@@ -904,8 +906,24 @@ router.post('/notas/subcategorias', async (req, res) => {
   }
 });
 
+// Valida que um path de proxy WPA é interno e seguro (P1-4: SSRF).
+// wpaFetch concatena `${WPA_API}${path}` — sem validação, `?path=.attacker.com/`
+// faz o destino virar host controlado pelo atacante, COM o Bearer token da EDP
+// anexado (credencial de terceiro). Exige começar com '/api/' e proíbe
+// caracteres que permitam trocar de host (`.` de subdomínio via '//', '@', '\').
+function _wpaPathSeguro(p) {
+  if (typeof p !== 'string' || !p.startsWith('/api/')) return false;
+  // Rejeita tentativas de sair do host: '//' (protocol-relative), '@' (userinfo),
+  // '\' (bypass), e espaço/controle.
+  if (/[\\@\s]|\/\//.test(p)) return false;
+  return true;
+}
+
 router.get('/wpa/probe', async (req, res) => {
   const path = req.query.path || '/api/sessions/current?sectorId=DESG';
+  if (!_wpaPathSeguro(path)) {
+    return res.status(400).json({ error: 'path inválido (deve começar com /api/ e não conter host)' });
+  }
   try {
     const wpaRes      = await wpaFetch(path);
     const contentType = wpaRes.headers.get('content-type') || '';

@@ -122,3 +122,27 @@ test('P0-5: POST /api/metas de não-admin com slot de OUTRA regional é filtrado
   // 400 (nenhum slot permitido) é o comportamento correto aqui.
   assert.equal(status, 400, `esperado 400, veio ${status}: ${JSON.stringify(json)}`);
 });
+
+// ── P1-4: SSRF no /api/wpa/probe ──────────────────────────────────────────────
+// O path é validado ANTES de chamar wpaFetch, então testamos o 400 sem precisar
+// de token WPA (o handler rejeita path malicioso na porta de entrada).
+
+async function getRaw(path, token) {
+  const headers = {};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const res = await fetch(base + path, { headers });
+  return res.status;
+}
+
+test('P1-4: /api/wpa/probe rejeita path com host embutido (SSRF) → 400', async () => {
+  const token = await loginAs('admin', 'adminpass');
+  const malicioso = encodeURIComponent('.attacker.com/steal');
+  const status = await getRaw(`/api/wpa/probe?path=${malicioso}`, token);
+  assert.equal(status, 400, 'path com host deve ser rejeitado antes de tocar a WPA');
+});
+
+test('P1-4: /api/wpa/probe rejeita path que não começa com /api/ → 400', async () => {
+  const token = await loginAs('admin', 'adminpass');
+  const status = await getRaw('/api/wpa/probe?path=' + encodeURIComponent('//evil.com/'), token);
+  assert.equal(status, 400);
+});

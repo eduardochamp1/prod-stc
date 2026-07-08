@@ -71,12 +71,47 @@ app.use('/api/cron', cronRoutes);
 
 app.use('/api', routes);
 
+// /health ANTES do static/catch-all (senão o app.get('*') responde HTML e o
+// health check vira placebo — bug P1-2, corrigido 08/07/2026). Faz check REAL:
+// SELECT 1 no Postgres + idade do último snapshot. Retorna 503 se degradado,
+// pra que watchdog/monitor externo detecte de verdade (P1-1, P2-9).
+app.get('/health', async (_req, res) => {
+  const out = { ok: true, ts: new Date().toISOString() };
+  try {
+    const { _getPool } = require('./services/pgShim');
+    const pool = _getPool();
+    await pool.query('SELECT 1');
+    out.db = 'ok';
+
+    // Idade do último snapshot (só relevante em horário operacional 06-20h BRT)
+    const { rows } = await pool.query('SELECT max(captured_at) AS last FROM snapshots');
+    const last = rows[0] && rows[0].last ? new Date(rows[0].last) : null;
+    if (last) {
+      const ageMin = Math.round((Date.now() - last.getTime()) / 60000);
+      out.last_snapshot_min = ageMin;
+      const horaBRT = (new Date(Date.now() - 3 * 3600 * 1000)).getUTCHours();
+      const emHorarioOperacional = horaBRT >= 6 && horaBRT < 20;
+      if (emHorarioOperacional && ageMin > 30) {
+        out.ok = false;
+        out.reason = `último snapshot há ${ageMin}min (esperado <30 em horário operacional)`;
+      }
+    } else {
+      out.last_snapshot_min = null;
+    }
+  } catch (err) {
+    out.ok = false;
+    out.db = 'error';
+    out.reason = 'Postgres inacessível';
+    console.error('[health] check falhou:', err.message);
+  }
+  res.status(out.ok ? 200 : 503).json(out);
+});
+
 app.use(express.static(path.join(__dirname)));
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
   res.sendFile(path.join(__dirname, 'index.html'));
 });
-app.get('/health', (_, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
 // ── INICIALIZAÇÃO (apenas fora do Vercel) ─────────────────────────────────────
 
