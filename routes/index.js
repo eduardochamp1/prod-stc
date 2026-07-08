@@ -180,10 +180,12 @@ async function _resolveTeamRegional(sigla) {
  */
 async function enforceTeamRegional(req, res, team) {
   if (!team || team === 'ALL') return true;
-  if (!req.user || !req.user.regional) return true;
-  // Expande grupos: ES → ['GUA','CAC']. Sigla simples vira [sigla]. ALL → null (passa).
-  const userRegs = req.user.regionals;
-  if (!userRegs || userRegs.includes('ALL')) return true;  // ALL ou similar — sem filtro
+  // JWT v=2 usa req.user.regionals (array de siglas reais). NÃO existe mais
+  // req.user.regional (singular) — a checagem antiga `!req.user.regional`
+  // dava early-return sempre-true e desativava esta guarda silenciosamente
+  // (bug P0-4, corrigido 08/07/2026). Ver docs/handoff/BACKLOG.md.
+  const userRegs = req.user && req.user.regionals;
+  if (!Array.isArray(userRegs) || userRegs.length === 0) return true;  // sem escopo → applyScope já cuidou
   // Múltiplas siglas (CSV) — bloqueia se QUALQUER uma não for da(s) regional(is)
   const teams = String(team).split(',').map(s => s.trim()).filter(Boolean);
   for (const t of teams) {
@@ -308,21 +310,21 @@ router.post('/metas', async (req, res) => {
     }
 
     const isAdmin = req.user.role === 'admin';
-    const userReg = req.user.regional; // 'ALL' (admin), 'GUA', 'CAC', 'SJC', 'ES', ...
     const incoming = req.body || {};
 
-    // Filtragem por role:
+    // Filtragem por role (JWT v=2 usa req.user.regionals — array de siglas reais).
     //   - admin: aceita o body inteiro (todas regionais)
-    //   - regional simples (GUA/CAC/SJC): só aceita o slot da SUA regional
-    //   - grupo (ES → GUA+CAC): aceita slots de qualquer regional expandida
+    //   - não-admin: só aceita os slots das regionais do seu escopo
+    // Bug P0-5 (corrigido 08/07/2026): lia req.user.regional (singular, não
+    // existe no v=2) → 403 pra QUALQUER não-admin. Ver docs/handoff/BACKLOG.md.
     let payload;
     if (isAdmin) {
       payload = incoming;
     } else {
-      if (!userReg || userReg === 'ALL') {
+      const allowed = req.user.regionals;
+      if (!Array.isArray(allowed) || allowed.length === 0) {
         return res.status(403).json({ error: 'Conta sem regional vinculada', code: 'NO_REGIONAL' });
       }
-      const allowed = req.user.regionals;
       // Pega apenas os slots que o user pode editar
       payload = {};
       for (const r of allowed) {

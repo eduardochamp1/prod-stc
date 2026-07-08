@@ -98,12 +98,14 @@ async function start() {
   });
 }
 
-if (process.env.VERCEL) {
-  module.exports = app;
-} else {
+// Sobe o servidor só quando executado direto (node server.js / pm2). Quando
+// importado por um teste (require('./server')), NÃO faz listen nem start()
+// — permite testes de contrato de rota sem conflito de porta nem cron.
+// require.main === module é true só pro processo principal.
+if (require.main === module && !process.env.VERCEL) {
   start().catch(err => {
     console.error('Erro fatal ao iniciar servidor:', err);
     process.exit(1);
   });
-  module.exports = app;
 }
+module.exports = app;
