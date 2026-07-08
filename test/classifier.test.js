@@ -535,3 +535,56 @@ describe('classificar (dispatch)', () => {
     assert.equal(r.note_id, id);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  P1-7 — Erro TRANSIENTE (5xx/timeout) → retry, NÃO grava OUTROS permanente
+//  (fixture null no stub simula HTTP 500). 404 continua sendo OUTROS/definitivo.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('P1-7 retry em erro transiente', () => {
+  test('MD: fetch primário 5xx → null (não classifica, retenta depois)', async () => {
+    const id = 'md-5xx';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/md?noteId=${id}`]: null,   // 500
+    });
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r, null);
+  });
+
+  test('MD SPEB: details/optimized 5xx → null (não sabe TL11 vs OBSOLETO)', async () => {
+    const id = 'md-speb-det-5xx';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/md?noteId=${id}`]: md('SPEB'),
+      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: null,  // 500
+    });
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r, null);
+  });
+
+  test('SF: ambos endpoints 5xx → null', async () => {
+    const id = 'sf-5xx';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/sfdl?noteId=${id}`]: null,  // 500
+      [`/api/notes/sfrl?noteId=${id}`]: null,  // 500
+    });
+    const r = await classificar(id, 'SF');
+    assert.equal(r, null);
+  });
+
+  test('DD: fetch primário (notes/dd) 5xx → null', async () => {
+    const id = 'dd-5xx';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/dd?noteId=${id}`]: null,  // 500
+      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: null,
+    });
+    const r = await classificar(id, 'DD', { sectorId: 'DESG' });
+    assert.equal(r, null);
+  });
+
+  test('MD: fetch primário 404 (ausente) → OUTROS, NÃO retenta (definitivo)', async () => {
+    const id = 'md-404';
+    const { classificar } = loadClassifierWith({}); // nada mockado → 404
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.ok(r, 'deve classificar (não null) — 404 é definitivo');
+    assert.equal(r.sub_code, 'OUTROS');
+  });
+});

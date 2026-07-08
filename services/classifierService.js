@@ -37,12 +37,26 @@ const { wpaFetch } = require('./wpaService');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// Sentinela pra distinguir "fetch FALHOU" (transiente: timeout, cold-start
+// Azure, HTTP != 2xx) de "respondeu OK mas sem o campo esperado" (definitivo).
+// Sem essa distinção, um timeout na classificação gravava OUTROS/sem-motivo
+// PERMANENTE — o UUID entrava no cache e nunca era retentado (bug P1-7).
+// Classificadores devolvem null quando o fetch PRIMÁRIO retorna FETCH_FAILED,
+// deixando o UUID fora do cache pra retentar de graça no ciclo seguinte.
+const FETCH_FAILED = Symbol('fetch_failed');
+
 async function safeJson(path) {
   try {
     const res = await wpaFetch(path);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; }
+    if (res.ok) return await res.json();
+    // Distingue transiente de definitivo:
+    //   5xx  → servidor instável / cold-start Azure → FETCH_FAILED (retenta)
+    //   4xx  → recurso ausente / definitivo → null (classifica como "sem dados")
+    // O bug P1-7 era timeout/cold-start (5xx e erro de rede) gravando OUTROS
+    // permanente; 404 legítimo não deve gerar retry infinito.
+    if (res.status >= 500) return FETCH_FAILED;
+    return null;
+  } catch { return FETCH_FAILED; }   // erro de rede/timeout → transiente
 }
 
 function nomeFallback(tipo) {
@@ -81,6 +95,8 @@ function nomeFallback(tipo) {
  */
 async function classificarMD(noteId, sectorId) {
   const md = await safeJson(`/api/notes/md?noteId=${noteId}`);
+  // Fetch primário falhou → não classifica agora (retenta no próximo ciclo).
+  if (md === FETCH_FAILED) return null;
 
   const code     = md?.Data?.Code     || null;
   const codeText = md?.Data?.CodeText || null;
@@ -99,6 +115,9 @@ async function classificarMD(noteId, sectorId) {
   // Comments NÃO está em /api/notes/md (verificado via diagnostic),
   // está só em /details/optimized.
   const det = await safeJson(`/api/Notes/${noteId}/details/optimized?sectorId=${sectorId || 'DESG'}`);
+  // Se o details falhou pra uma SPEB, NÃO temos como discriminar TL11 vs
+  // OBSOLETO — retorna null pra retentar (senão gravaria OBSOLETO por default).
+  if (det === FETCH_FAILED) return null;
   const comments = det?.Data?.Comments || '';
 
   const isTL11 = /TL11/i.test(comments);
@@ -120,11 +139,15 @@ async function classificarSF(noteId) {
   // SFDL (Local) — para SFs onde a equipe vai ao local
   let sf = await safeJson(`/api/notes/sfdl?noteId=${noteId}`);
   let endpoint = 'sfdl';
+  const sfdlFalhou = sf === FETCH_FAILED;
 
   // SFRL (Remote) — para SFs com corte/religação remotos
-  if (!sf?.Data?.Code) {
+  if (sfdlFalhou || !sf?.Data?.Code) {
     const sfrl = await safeJson(`/api/notes/sfrl?noteId=${noteId}`);
-    if (sfrl?.Data?.Code) { sf = sfrl; endpoint = 'sfrl'; }
+    // Ambos os fetches falharam → não classifica agora (retenta no próximo ciclo)
+    if (sfdlFalhou && sfrl === FETCH_FAILED) return null;
+    if (sfrl !== FETCH_FAILED && sfrl?.Data?.Code) { sf = sfrl; endpoint = 'sfrl'; }
+    else if (sfdlFalhou && sfrl !== FETCH_FAILED) { sf = sfrl; endpoint = 'sfrl'; }
   }
 
   const code     = sf?.Data?.Code     || null;
@@ -153,10 +176,15 @@ async function classificarSF(noteId) {
  *      (descartamos checkpoints/fotos no raw — só guardamos os campos relevantes)
  */
 async function classificarDD(noteId, sectorId) {
-  const [dd, det] = await Promise.all([
+  const [dd, detRaw] = await Promise.all([
     safeJson(`/api/notes/dd?noteId=${noteId}`),
     safeJson(`/api/Notes/${noteId}/details/optimized?sectorId=${sectorId || 'DESG'}`),
   ]);
+  // dd é o fetch primário (define o tipo). Falhou → retenta no próximo ciclo.
+  if (dd === FETCH_FAILED) return null;
+  // det é secundário (traz Activities/Amount): se falhou, degrada pra
+  // classificação por Code top-level (prioridade 2/3) — não é motivo de retry.
+  const det = detRaw === FETCH_FAILED ? null : detRaw;
 
   // Campos do /api/notes/dd: Code (note-level), GroupCode, GroupDescription
   const noteCode  = dd?.Data?.Code             || null;  // ex: 'C93' direto na nota
@@ -357,6 +385,11 @@ async function classificar(noteId, tipo, ctx = {}) {
   else if (t === 'SF') result = await classificarSF(noteId);
   else if (t === 'DD') result = await classificarDD(noteId, ctx.sectorId);
   else return null;
+
+  // result null = fetch transiente falhou (P1-7) → propaga null pra que o
+  // caller (classificarBatch) filtre o UUID e retente no próximo ciclo, em
+  // vez de gravar classificação incompleta/errada no cache.
+  if (!result) return null;
 
   return {
     note_id:       noteId,
