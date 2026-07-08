@@ -1286,6 +1286,9 @@ router.get('/admin/health', async (_req, res) => {
       teams_missing_today: null,
       last_snapshot:       null,
       subcat_error:        null,
+      snapshot_last_ok:    null,
+      snapshot_error:      null,
+      snapshot_stale_min:  null,
       token:               null,
       metas_configured:    null,
     };
@@ -1362,6 +1365,19 @@ router.get('/admin/health', async (_req, res) => {
         out.subcat_error = null;          // sem erro pendente
       }
     } catch (e) { out.subcat_error = { error: e.message }; }
+
+    // Saúde do ciclo de snapshot (P1-3): último OK + último erro + minutos
+    // desde o último sucesso. Watchdog (P1-1) usa snapshot_stale_min pra alertar.
+    try {
+      const okS  = await sq.getSetting('snapshot_last_ok');
+      const errS = await sq.getSetting('snapshot_error');
+      const lastOk = okS && okS.data && okS.data.ts ? okS.data.ts : null;
+      out.snapshot_last_ok = lastOk ? okS.data : null;
+      out.snapshot_error   = (errS && errS.data && errS.data.message) ? errS.data : null;
+      out.snapshot_stale_min = lastOk
+        ? Math.round((Date.now() - new Date(lastOk).getTime()) / 60000)
+        : null;
+    } catch (e) { out.snapshot_last_ok = { error: e.message }; }
 
     // Metas configuradas
     try {

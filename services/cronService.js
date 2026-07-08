@@ -48,6 +48,27 @@ async function _clearSubcatError() {
   } catch (_) {}
 }
 
+// Registra sucesso/erro do CICLO DE SNAPSHOT em app_settings (P1-3).
+// Sem isso, queda da WPA por horas era invisível — snapshot_failed só ia
+// pro log do pm2. Agora /admin/health e o watchdog (P1-1) leem snapshot_last_ok
+// e alertam se ficar velho. Espelha o padrão de _recordSubcatError.
+async function _recordSnapshotOk(meta) {
+  try {
+    const sq = require('../db/queries');
+    await sq.setSetting('snapshot_last_ok', { ts: new Date().toISOString(), ...meta });
+  } catch (_) { /* setting opcional */ }
+}
+
+async function _recordSnapshotError(err) {
+  try {
+    const sq = require('../db/queries');
+    await sq.setSetting('snapshot_error', {
+      message: err && err.message ? err.message : String(err),
+      ts:      new Date().toISOString(),
+    });
+  } catch (_) {}
+}
+
 // ── RENOVAÇÃO DE TOKEN ────────────────────────────────────────────────────────
 
 async function runTokenRefresh() {
@@ -120,6 +141,9 @@ async function runSnapshot() {
     await upsertTeamDailyTotals(allTeams);
 
     log.info('snapshot_saved', { teams: teams.length, ghosts: ghostCount, at: ts });
+    // Marca sucesso do ciclo pra observabilidade (P1-3) — /admin/health e
+    // watchdog leem snapshot_last_ok pra detectar queda da WPA.
+    _recordSnapshotOk({ teams: teams.length, ghosts: ghostCount });
 
     // Aproveitamento de carteira por equipe (team_daily_carteira) — histórico
     // permanente do que estava disponível vs executado. Lê dos snapshots recém
@@ -169,6 +193,7 @@ async function runSnapshot() {
     );
   } catch (err) {
     log.error('snapshot_failed', { msg: err.message });
+    _recordSnapshotError(err);   // P1-3: falha visível no /admin/health
   } finally {
     isRunning = false;
   }

@@ -1,0 +1,16 @@
+#!/bin/bash
+# Git hook pre-push — roda a suíte antes de permitir push (P1-6 do backlog).
+# Instalar com: bash scripts/install-hooks.sh  (ou copiar pra .git/hooks/)
+#
+# Motivo: a suíte de testes ficou VERMELHA por ~4 semanas em 2026 sem ninguém
+# notar (sem CI). Este hook garante que ninguém empurra código que quebra os
+# testes. Suíte roda em <1s. Pra pular em emergência: git push --no-verify.
+
+echo "🧪 pre-push: rodando node --test..."
+if ! node --test; then
+  echo ""
+  echo "❌ Testes FALHARAM. Push abortado."
+  echo "   Corrija os testes ou, em emergência real, use: git push --no-verify"
+  exit 1
+fi
+echo "✅ Testes OK — seguindo com o push."
