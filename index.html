@@ -10004,6 +10004,34 @@ ${equipes.length > 0 ? `<div class="perf-section">
     }
 
     /**
+     * Andamento REAL de uma equipe = notas iniciadas (notasExecutadas) que
+     * AINDA NÃO foram concluídas nem rejeitadas.
+     *
+     * Bug 09/07/2026 (reportado pelo José: "equipes executando mais de uma nota
+     * ao mesmo tempo, gerando dúvida na acertividade"): o WPA acumula em
+     * notasExecutadas as notas que a equipe abriu no dispositivo — inclusive as
+     * que ela JÁ concluiu na mesma sessão. Query em EPICO30 provou: das 3 em
+     * "andamento", 1 já estava em notasConcluidas (dupla contagem). A equipe
+     * pode legitimamente ter várias abertas ao mesmo tempo, mas uma nota
+     * concluída/rejeitada NÃO é mais "andamento" — cada UUID em 1 só bucket.
+     * O card agregado (renderMetrics) já excluía; o card por equipe não.
+     *
+     * Sessão encerrada → 0 (não há trabalho em curso).
+     */
+    function _notasEmAndamento(t) {
+      const doneIds = new Set(
+        [...(t.notasConcluidas || []), ...(t.notasRejeitadas || [])]
+          .map(n => n && n.id).filter(Boolean)
+      );
+      return (t.notasExecutadas || []).filter(n => !(n && n.id && doneIds.has(n.id)));
+    }
+
+    function _andamentoReal(t, de, ate) {
+      if (t.sessionEnd) return 0;
+      return _notasEmAndamento(t).filter(n => notaPertenceAoRange(n, de, ate)).length;
+    }
+
+    /**
      * Calcula a carteira INICIAL de uma equipe pra ser visualmente coerente:
      *   inicial = pendentes + andamento + executadas + rejeitadas
      *
@@ -10019,9 +10047,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
      */
     function carteiraInicialDe(t, de, ate) {
       const atual = _carteiraPendentes(t);
-      const and   = !t.sessionEnd
-        ? (t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length
-        : 0;
+      const and   = _andamentoReal(t, de, ate);
       const conc  = (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
       const rej   = (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
       return atual + and + conc + rej;
@@ -10079,9 +10105,14 @@ ${equipes.length > 0 ? `<div class="perf-section">
             } else {
               arr = t.notasExecutadas || [];
             }
-            const concIds = new Set((t.notasConcluidas || []).map(n => n.id).filter(Boolean));
+            // Exclui notas já concluídas E rejeitadas (estados terminais):
+            // cada UUID em 1 só bucket. Rejeitada também não é "andamento".
+            const doneIds = new Set(
+              [...(t.notasConcluidas || []), ...(t.notasRejeitadas || [])]
+                .map(n => n && n.id).filter(Boolean)
+            );
             return s + arr.filter(n => {
-              if (n.id && concIds.has(n.id)) return false;
+              if (n.id && doneIds.has(n.id)) return false;
               return notaPertenceAoRange(n, de, ate);
             }).length;
           }, 0);
@@ -10488,7 +10519,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
                 })()}
                 <div class="os-lbl">Carteira</div>
               </div>
-              <div class="os-cell"><div class="os-num executada">${sessaoAberta ? (t.notasExecutadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length : 0}</div><div class="os-lbl">Andamento</div></div>
+              <div class="os-cell" title="Notas iniciadas e ainda NÃO concluídas/rejeitadas. Uma equipe pode ter várias abertas ao mesmo tempo; notas já concluídas não contam aqui (cada nota em 1 só estado)."><div class="os-num executada">${sessaoAberta ? _andamentoReal(t, _rngDe, _rngAte) : 0}</div><div class="os-lbl">Andamento</div></div>
               <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
@@ -10624,7 +10655,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         <div class="modal-section-title">Ordens de Serviço</div>
         <div class="notas-tabs" id="notas-tabs">
           <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Em Carteira (${t.carteiraCount || 0})</button>
-          <button class="nota-tab" onclick="switchNotaTab('executada',this)">Em Andamento (${(t.notasExecutadas || []).length})</button>
+          <button class="nota-tab" onclick="switchNotaTab('executada',this)">Em Andamento (${_notasEmAndamento(t).length})</button>
           <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Executadas (${(t.notasConcluidas || []).length})</button>
           <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas || []).length})</button>
         </div>
@@ -10647,7 +10678,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       const t = window._modalTeam;
       if (!t) return;
       const map = {
-        baixada: t.notasBaixadas || [], executada: t.notasExecutadas || [],
+        baixada: t.notasBaixadas || [], executada: _notasEmAndamento(t),
         concluida: t.notasConcluidas || [], rejeitada: t.notasRejeitadas || [],
       };
       const notas = map[tipo] || [];
