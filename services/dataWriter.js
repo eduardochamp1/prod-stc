@@ -228,13 +228,20 @@ function _aggregateTeamDailyTotals(teams) {
       if (!acc[key]) {
         acc[key] = {
           date: notaDate, team_name: teamName, regional: t.regional, sector_id: t.sectorId,
-          tipo_code: code, count: 0,
+          tipo_code: code, _ids: new Set(),
         };
       }
-      acc[key].count += 1;
+      // DEDUP por UUID: a MESMA OS concluída aparece em várias sessões do dia
+      // quando a equipe reloga (o payload da WPA carrega as concluídas
+      // acumuladas em cada sessão). Sem dedup, a produção inflava até ~8x
+      // (bug 08/07/2026: ECCSJ82 tinha 18 OS reais viradas em 143 contagens).
+      // Espelha o dedupeKey de upsertSubcatTotals, que já fazia certo.
+      // Nota sem id (raro) usa fallback único pra não sumir da contagem.
+      const id = n.id || n.noteId || `sem-id:${acc[key]._ids.size}:${Math.random()}`;
+      acc[key]._ids.add(id);
     });
   });
-  return Object.values(acc);
+  return Object.values(acc).map(({ _ids, ...row }) => ({ ...row, count: _ids.size }));
 }
 
 async function upsertTeamDailyTotals(teams, _date) {
@@ -499,20 +506,32 @@ async function detectDrift(date) {
     .order('captured_at', { ascending: false });
   if (e1) throw e1;
 
-  // Mantém apenas o snapshot mais recente por (team, sessionBegin) cuja
-  // sessionDate seja exatamente o date alvo
+  // Reconstrói o que team_daily_totals DEVERIA ter pra `date` usando a MESMA
+  // função de gravação (_aggregateTeamDailyTotals): dedup por note id +
+  // atribuição por _notaDate. Antes o detector somava notasConcluidas.length
+  // por sessionDate sem dedup — pra equipes que relogam, contava a mesma nota
+  // várias vezes (ECCSJ82 = 143 ocorrências vs 18 reais) e comparava contra a
+  // tabela (já deduplicada), gerando drift fantasma que nenhum reparo zerava.
+  // Corrigido 08/07/2026.
+  //
+  // Um objeto-equipe por (team_name, sessionBegin), snapshot mais recente
+  // (snaps já vem ordenado por captured_at DESC). A janela [date, date+1]
+  // cobre todas as sessões que podem escrever em `date`: _notaDate empurra
+  // notas pra TRÁS, então uma sessão de date+1 pode ter nota com
+  // conclusionDate=date; sessões de date-1 nunca escrevem em date.
   const seen = new Set();
-  let snapshot_count = 0;
+  const teams = [];
   for (const s of (snaps || [])) {
     const t = s.data;
     if (!t || !t.sessionBegin) continue;
-    if (_sessionDate(t) !== date) continue;
     const key = `${s.team_name}|${t.sessionBegin}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    // SÓ concluídas — espelha o que team_daily_totals efetivamente grava.
-    snapshot_count += (t.notasConcluidas || []).length;
+    teams.push(t);
   }
+  const snapshot_count = _aggregateTeamDailyTotals(teams)
+    .filter(r => r.date === date)
+    .reduce((sum, r) => sum + r.count, 0);
 
   // Tabela: sum(count) de team_daily_totals para o date
   const { data: rows, error: e2 } = await sb

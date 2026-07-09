@@ -129,3 +129,62 @@ test('_aggregate: aceita sigla como fallback de teamName', () => {
 test('_aggregate: array vazio → []', () => {
   assert.deepEqual(_aggregateTeamDailyTotals([]), []);
 });
+
+// ── DEDUP por múltiplas sessões (bug ECCSJ82 08/07/2026) ──────────────────────
+// Equipe que reloga no dia gera 1 entrada por sessão em `teams`, e cada sessão
+// carrega no payload as MESMAS notas concluídas acumuladas. A mesma nota NÃO
+// pode contar 1x por sessão — senão a produção infla (era 18 notas → 143).
+
+test('_aggregate: mesma nota em 3 sessões da equipe conta 1x (não 3x)', () => {
+  const sessao = (sb) => ({
+    teamName: 'ECCSJ82', regional: 'SJC', sessionBegin: sb,
+    // as MESMAS 2 notas aparecem em todas as sessões (payload acumulado)
+    notasConcluidas: [
+      { id: 'nota-1', tipoCode: 'MD' },
+      { id: 'nota-2', tipoCode: 'MD' },
+    ],
+  });
+  const teams = [
+    sessao('2026-07-01T06:00:00'),
+    sessao('2026-07-01T10:30:00'),
+    sessao('2026-07-01T14:15:00'),
+  ];
+  const rows = _aggregateTeamDailyTotals(teams);
+  const md = rows.find(r => r.tipo_code === 'MD' && r.date === '2026-07-01');
+  assert.equal(md.count, 2, 'duas notas distintas, contadas 1x cada apesar de 3 sessões');
+});
+
+test('_aggregate: notas distintas entre sessões somam (dedup não apaga legítimas)', () => {
+  const teams = [
+    { teamName: 'E1', regional: 'GUA', sessionBegin: '2026-07-01T06:00:00',
+      notasConcluidas: [{ id: 'a', tipoCode: 'LN' }, { id: 'b', tipoCode: 'LN' }] },
+    { teamName: 'E1', regional: 'GUA', sessionBegin: '2026-07-01T13:00:00',
+      notasConcluidas: [{ id: 'b', tipoCode: 'LN' }, { id: 'c', tipoCode: 'LN' }] }, // b repete, c nova
+  ];
+  const rows = _aggregateTeamDailyTotals(teams);
+  const ln = rows.find(r => r.tipo_code === 'LN');
+  assert.equal(ln.count, 3, 'a, b, c = 3 distintas (b não conta 2x)');
+});
+
+test('_aggregate: dedup é por equipe — mesma nota em equipes diferentes conta em cada', () => {
+  // Nota transferida entre equipes: conta na produção de ambas (visão individual).
+  const teams = [
+    { teamName: 'E1', regional: 'GUA', sessionBegin: '2026-07-01T06:00:00',
+      notasConcluidas: [{ id: 'x', tipoCode: 'MD' }] },
+    { teamName: 'E2', regional: 'GUA', sessionBegin: '2026-07-01T06:00:00',
+      notasConcluidas: [{ id: 'x', tipoCode: 'MD' }] },
+  ];
+  const rows = _aggregateTeamDailyTotals(teams);
+  assert.equal(rows.length, 2);
+  assert.equal(rows.every(r => r.count === 1), true);
+});
+
+test('_aggregate: rows não vazam campo interno _ids', () => {
+  const rows = _aggregateTeamDailyTotals([{
+    teamName: 'E1', regional: 'GUA', sessionBegin: '2026-07-01T06:00:00',
+    notasConcluidas: [{ id: 'a', tipoCode: 'LN' }],
+  }]);
+  assert.equal('_ids' in rows[0], false, '_ids é auxiliar — não pode ir pro upsert');
+  assert.deepEqual(Object.keys(rows[0]).sort(),
+    ['count', 'date', 'regional', 'sector_id', 'team_name', 'tipo_code']);
+});
