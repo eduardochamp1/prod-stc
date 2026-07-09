@@ -49,6 +49,7 @@
 | P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
 | P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
 | P2-10 | Persistir estado do `_reclassifyJob` | Backend | pending |
+| P2-11 | Andamento por equipe contava nota já concluída (dupla contagem) | Frontend/Dados | **done** (fc2170d, 09/07) |
 | P3-1 | Dividir `routes/index.js` por domínio | Backend | pending |
 | P3-2 | Split incremental do `index.html` (JS por aba) | Frontend | pending |
 | P3-3 | Error handler central do Express | Backend | pending |
@@ -890,6 +891,45 @@ feita em PR separado depois dos testes.
 - **Esforço:** 3-4h.
 - **Rollback:** Reverter.
 - **Depende de:** nada.
+
+---
+
+## P2-11 — Andamento por equipe contava nota já concluída (dupla contagem)
+
+- **Status:** **done** (fc2170d, 09/07/2026)
+- **Categoria:** Frontend/Dados
+- **Reportado por:** José Zouain (09/07/2026): "temos equipes executando
+  mais de uma nota ao mesmo tempo, isso está gerando dúvida na
+  acertividade dos números que estamos mostrando".
+- **Evidência:** query em EPICO30 devolveu `andamento=3, também_concluídas=1,
+  concluídas=2` — 1 das 3 "em andamento" já estava em `notasConcluidas`.
+  Código: `index.html` card por equipe contava `(t.notasExecutadas||[])`
+  cru, sem excluir ids já concluídos/rejeitados. O card AGREGADO
+  (`renderMetrics`) já excluía concluídas; o card por equipe,
+  `carteiraInicialDe` e a aba de detalhe do modal, não.
+- **Causa raiz:** o WPA acumula em `notasExecutadas` toda nota que a equipe
+  abriu no dispositivo — inclusive as já concluídas na mesma sessão. Uma
+  nota em transição (executando → concluída) aparecia em 2 buckets, violando
+  a invariante "cada UUID em exatamente 1 estado".
+- **Impacto:** card por equipe e carteira inicial daquela equipe inflados;
+  gerava desconfiança na acertividade. **NÃO afetava produtividade reportada
+  à EDP** (essa conta só `notasConcluidas` via `_aggregateTeamDailyTotals`).
+- **Ação (feita):**
+  1. Helper `_notasEmAndamento(t)` como fonte única: `notasExecutadas`
+     menos ids já em concluídas/rejeitadas (estados terminais).
+  2. `_andamentoReal(t,de,ate)` aplica o range por cima. Usado no card por
+     equipe e em `carteiraInicialDe` (que somava andamento inflado).
+  3. Card agregado passou a excluir também rejeitadas (antes só concluídas).
+  4. Aba "Em Andamento" do modal + `renderNotas('executada')` usam a lista
+     deduplicada — número da aba bate com o card.
+  5. Tooltip no card explicando o significado de "Andamento".
+- **Aceite:** ✅ card do EPICO30 mostra andamento=2 (as 2 realmente
+  iniciadas); ✅ suíte 196/196; ✅ equipe com N notas legítimas em curso
+  segue mostrando N (não mascara número real).
+- **Rollback:** `git revert fc2170d`.
+- **Nota de princípio:** não é manipulação de número — remove dupla
+  contagem de um estado terminal. Alinhado à regra 7 do CLAUDE.md
+  (aritmética fecha por construção; corrigir a origem, não a exibição).
 
 ---
 
