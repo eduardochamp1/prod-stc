@@ -109,6 +109,44 @@ mostrar timestamp novo.
 
 ## Backfills
 
+> ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**
+> Em 09/07/2026 um backfill como `for d in $(seq 0 60); do node -e ...; done`
+> (60 processos node paralelos, cada um abrindo um pool pg) **derrubou o
+> Postgres por OOM** — a VM tem 3.8GB e **zero swap**. Produção ficou sem banco
+> por ~2min. SEMPRE use 1 processo, sequencial, com pausa entre dias (script
+> abaixo). Ver P0-0 no BACKLOG.
+
+### Backfill de consolidação em massa (1 processo, seguro)
+
+Corrige `team_daily_totals`/`team_daily_subcat_totals` de um período inteiro.
+Ordem oldest→newest (cada dia é finalizado quando o seguinte consolida).
+**Não roda em horário de pico se puder** (o cron para às 20h — janela ideal
+é após 20h BRT).
+
+```bash
+node -e "
+require('dotenv').config();
+const dw = require('./services/dataWriter');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+(async () => {
+  const dt  = new Date('2026-05-09T12:00:00Z');   // início
+  const end = new Date('2026-07-08T12:00:00Z');    // fim (NÃO inclua hoje — é live)
+  for (; dt <= end; dt.setUTCDate(dt.getUTCDate()+1)) {
+    const dia = dt.toISOString().slice(0,10);
+    try { await dw.consolidateDay(dia); console.log(dia, 'ok'); }
+    catch (e) { console.error(dia, 'ERRO:', e && e.message); }
+    await sleep(400);   // respira — não sufoca o Postgres
+  }
+  process.exit(0);
+})();
+"
+```
+
+Validação após backfill (amostra 3 dias — todos devem dar `drift: false`):
+```bash
+node -e "require('dotenv').config(); const dw=require('./services/dataWriter'); (async()=>{ for (const d of ['2026-06-15','2026-06-30','2026-07-05']) { const r=await dw.detectDrift(d); console.log(d,'drift:',r.has_drift,'diff:',r.diff); } process.exit(0); })()"
+```
+
 ### Se um dia faltar em `team_daily_carteira` (aproveitamento)
 
 ```bash
@@ -276,6 +314,37 @@ Se retornar erro 401: `AUTH_USERS` da WPA está errado no `.env`. Se retornar
 3. Se ainda errado, comparar `snapshots.data` com o agregado (SQL manual).
 4. Ver comentário em `dataService.js:313-317` — pode ser variação do bug
    canc=904/294. Testar priorização de buckets.
+
+### "Postgres caiu / painel mostra db:error / ECONNREFUSED 5432"
+
+Sintoma: `/health` retorna `{"db":"error","reason":"Postgres inacessível"}`,
+ou `psql` dá `connection ... failed` / `ECONNREFUSED 127.0.0.1:5432`.
+
+1. Confirma o estado do cluster:
+   ```bash
+   pg_lsclusters          # procura status: down
+   psql -d wpa_monitor -c "SELECT 1;"
+   free -h                # checa se foi OOM (memória estava cheia?)
+   ```
+2. **Reiniciar o Postgres exige a TI da Engelmig** — o cluster é de sistema
+   (owner `postgres`) e `usr_jose` NÃO tem sudo. Comandos que a TI roda:
+   ```bash
+   sudo pg_ctlcluster 16 main start
+   # ou: sudo systemctl start postgresql@16-main
+   ```
+   Observação: em 09/07/2026 o systemd auto-recuperou o Postgres em ~2min sem
+   intervenção — pode ser que ele volte sozinho. Aguarde 2-3min e re-teste
+   `psql SELECT 1` antes de acionar a TI.
+3. Quando o banco voltar, o app precisa reconectar:
+   ```bash
+   psql -d wpa_monitor -c "SELECT 1;"     # confirma banco up
+   pm2 restart wpa-monitor
+   sleep 3 && curl -sS http://localhost:3002/health   # deve voltar db:ok
+   ```
+4. **Causa mais provável:** OOM por excesso de processos/conexões. O que
+   derrubou em 09/07 foi um backfill em 60 processos paralelos (ver aviso na
+   seção Backfills). VM sem swap não perdoa. Se recorrer, é P0-0 (pedir swap +
+   auto-restart à TI).
 
 ### "Login não funciona pra ninguém"
 

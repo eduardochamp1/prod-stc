@@ -22,6 +22,7 @@
 
 | # | Item | Categoria | Status |
 |---|---|---|---|
+| P0-0 | VM sem swap + Postgres sem auto-restart confiável (INCIDENTE 09/07) | Ops/Infra | pending |
 | P0-1 | Continuidade humana (bus factor 1) | Governança | pending |
 | P0-2 | Backup offsite (Postgres) | Ops | pending |
 | P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
@@ -31,7 +32,7 @@
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
 | P1-4 | SSRF em `/api/wpa/probe` vaza token EDP | Segurança | **done** (bbc5129, 08/07) |
-| P1-5 | Rate limit em `/auth/login` + scrypt | Segurança | pending |
+| P1-5 | Rate limit em `/auth/login` + scrypt | Segurança | **done** (fa62e12, 08/07) |
 | P1-6 | Git hook `pre-push` roda `node --test` | Qualidade | **done** (e4dc4c8, 08/07) |
 | P1-7 | Retry natural pra MD/SF/rejeições | Dados | **done** (4a8e369, 08/07) — subcat MD/SF/DD; rejeições ver nota |
 | P1-8 | ~~`consolidateDay` transacional~~ (duplicata de P1-11) | Dados | — ver P1-11 |
@@ -62,6 +63,51 @@
 ---
 
 # P0 — Existencial (fazer nas próximas 2 semanas)
+
+## P0-0 — VM sem swap + Postgres sem auto-restart confiável
+
+- **Categoria:** Ops / Infra
+- **Status:** pending
+- **Fonte:** INCIDENTE de 09/07/2026 (Postgres caiu em produção).
+- **Evidência:** `free -h` mostra `Swap: 0B`. Cluster Postgres é de sistema
+  (`pg_lsclusters`: `16 main ... down`, owner `postgres`, sem sudo pro usr_jose
+  iniciar — `sudo pg_ctlcluster` retornou "user usr_jose is not allowed").
+- **O que aconteceu (registro do incidente):** um backfill rodado como **60
+  processos node paralelos** (loop `for d in $(seq 0 60); do node -e ...`), cada
+  um abrindo um pool pg (~10 conexões), estourou memória/conexões numa VM de
+  3.8GB **sem swap**. O Postgres foi derrubado (OOM). Ficou `down` por ~2min até
+  o systemd reerguer sozinho. Durante a janela, o painel ficou `db:error`
+  (produção sem dados). Recuperou 100% após o auto-restart + `pm2 restart` +
+  re-consolidação do histórico. **Se o dev não estivesse online, teria ficado
+  fora até alguém perceber** — exatamente o risco do P0-1.
+- **Impacto:** VM sem swap = qualquer pico de memória mata processos direto,
+  sem margem. Postgres é o único estado do sistema; se cair e não reerguer,
+  o contrato EDP fica sem reporte. O auto-restart funcionou desta vez, mas com
+  delay e sem garantia — e ninguém foi alertado (o watchdog do P1-1 ainda não
+  está com a config humana feita).
+- **Ação (precisa da TI da Engelmig — não é código):**
+  1. **Adicionar swap na VM** (2-4GB). Sem sudo o usr_jose não cria swap de
+     sistema; pedir à TI: `fallocate -l 4G /swapfile && mkswap && swapon` +
+     entrada no `/etc/fstab`. Dá margem contra OOM.
+  2. **Garantir auto-restart do Postgres**: confirmar que
+     `postgresql@16-main.service` tem `Restart=on-failure` e
+     `RestartSec` baixo. Pedir à TI.
+  3. **Watchdog alertar em `db:error`** (liga com P1-1): o `/health` já
+     retorna `db:error` quando o Postgres cai — o watchdog (quando configurado)
+     deve disparar alerta imediato nesse caso, não só em snapshot velho.
+  4. **Disciplina de backfill** (código/processo): NUNCA rodar backfill em N
+     processos. Sempre 1 processo, sequencial, com pausa. Já documentado no
+     RUNBOOK; considerar criar `scripts/backfill-consolidate.js` oficial pra
+     não improvisar `node -e` em loop de shell.
+- **Aceite:**
+  - [ ] `free -h` mostra swap > 0 na VM.
+  - [ ] `systemctl show postgresql@16-main -p Restart` = `on-failure` (ou similar).
+  - [ ] Watchdog dispara alerta quando `/health` retorna `db:error`.
+  - [ ] `scripts/backfill-consolidate.js` existe (1 processo, pausa entre dias).
+- **Esforço:** swap + auto-restart = pedido à TI (minutos deles). Script de
+  backfill = 1h. Watchdog db:error = incluído no P1-1.
+- **Rollback:** N/A (adições de infra/config).
+- **Depende de:** acesso da TI da Engelmig (swap/systemd exigem root).
 
 ## P0-1 — Continuidade humana (bus factor 1)
 
@@ -991,9 +1037,32 @@ Ao concluir um item, mova pra cá com data + hash do commit:
     com staging ou janela de manutenção supervisionada + teste de crash.
   - Suíte 158→180.
 
-**Restam em P0:** P0-1 (continuidade humana — ação organizacional, não código)
-e P0-2 (backup offsite — precisa rclone + OneDrive na VM). Ambos exigem ação
-sua na VM/organização; não são executáveis por AI sozinha.
+- **2026-07-08/09 · `bbc5129`, `e4dc4c8`, `c62bf4a`, `4a8e369`, `fa62e12`, `d2970da`**
+  — Sequência de P1 concluída: `/health` real + SSRF `/wpa/probe` + remoção de
+  stack trace (P1-2/4/10); snapshot_last_ok + git hook pre-push + watchdog
+  script (P1-1/3/6); vendorização Leaflet+Roboto (P1-9); retry natural
+  MD/SF/DD (P1-7); rate limit + scrypt com compat (P1-5). E `d2970da`:
+  `detectDrift` passou a usar `_aggregateTeamDailyTotals` (dedup por note-id +
+  `_notaDate`) — antes contava ocorrências infladas e gerava drift fantasma.
+
+- **2026-07-09 · INCIDENTE (Postgres down) + recuperação completa** — Ver P0-0.
+  Resumo: backfill rodado como **60 processos node paralelos** derrubou o
+  Postgres por OOM (VM 3.8GB sem swap). Banco ficou `down` ~2min, auto-recuperou
+  via systemd. Produção restaurada (`pm2 restart` + reconexão). **Bug de
+  over-counting confirmado e corrigido**: equipe que reloga carrega as mesmas
+  concluídas em cada sessão → produtividade inflava ~8x (ECCSJ82: 18 notas
+  reais → 143). O fix de dedup (já em código) + `detectDrift` alinhado (d2970da)
+  zeraram o drift. **Todo o histórico 09/05→08/07 re-consolidado** com backfill
+  de **1 processo, sequencial** (30s, sem incidente). Validação: 01/07 diff
+  1810→854→0; amostras 15/06, 30/06, 05/07 todas `has_drift: false`. Números
+  reportados à EDP agora corretos. Abriu **P0-0** (swap + auto-restart + backfill
+  discipline). Lição no RUNBOOK: NUNCA backfill em N processos.
+
+**Restam em P0:** P0-0 (swap + auto-restart — pedido à TI), P0-1 (continuidade
+humana — organizacional), P0-2 (backup offsite — rclone + OneDrive). Todos
+exigem ação na VM/organização; não são executáveis por AI sozinha.
+
+**P1 restante:** P1-11 (`consolidateDay` transacional — requer staging).
 
 - **2026-07-08 · `bbc5129`** — **P1-2, P1-4, P1-10**. `/health` movido pra antes
   do catch-all + check real (SELECT 1 + idade do snapshot, 503 se degradado).
