@@ -32,7 +32,7 @@
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
 | P1-4 | SSRF em `/api/wpa/probe` vaza token EDP | Segurança | **done** (bbc5129, 08/07) |
-| P1-5 | Rate limit em `/auth/login` + scrypt | Segurança | **done** (fa62e12, 08/07) |
+| P1-5 | Rate limit em `/auth/login` + scrypt | Segurança | **código done** (fa62e12) — falta migrar `.env` de prod pra scrypt |
 | P1-6 | Git hook `pre-push` roda `node --test` | Qualidade | **done** (e4dc4c8, 08/07) |
 | P1-7 | Retry natural pra MD/SF/rejeições | Dados | **done** (4a8e369, 08/07) — subcat MD/SF/DD; rejeições ver nota |
 | P1-8 | ~~`consolidateDay` transacional~~ (duplicata de P1-11) | Dados | — ver P1-11 |
@@ -433,7 +433,13 @@
 ## P1-5 — Rate limit em `/auth/login` + scrypt
 
 - **Categoria:** Segurança
-- **Status:** pending
+- **Status:** CÓDIGO done (fa62e12, 08/07) — **falta só a migração operacional do
+  `.env` de produção** (passo 6 abaixo). Rate limit, scrypt, compat retroativa e
+  o script `rehash-users.js` já estão no ar. Enquanto o `.env` não migra, a
+  produção segue em SHA-256 legado (login funciona pelos dois formatos; o boot
+  loga o aviso `AUTH_USERS usa hash SHA-256 legado`). Verificado em 14/07: os 4
+  testes de login/rate-limit passam (test/routes.test.js), incluindo o 429 na
+  11ª tentativa.
 - **Fonte:** Auditoria de segurança 2026-07-08
 - **Evidência:** `routes/index.js:34-51` rota de login sem limitador.
   `server.js:15-18` nenhum middleware de rate limit. `middleware/auth.js:97-108`
@@ -457,13 +463,20 @@
      warning quando cair no legacy.
   5. Script `scripts/rehash-users.js` que lê AUTH_USERS atual e imprime
      versão com scrypt (dev roda uma vez, cola no .env).
+  6. **[PENDENTE — único passo que falta]** Migrar o `.env` de produção na VM:
+     precisa das senhas em texto (estão no cofre — ver P0-1). Procedimento:
+     `cd ~/prod-stc && node scripts/rehash-users.js` (modo interativo pergunta
+     a senha de cada user e imprime a linha `AUTH_USERS=` em scrypt) → colar no
+     `.env` → `pm2 delete wpa-monitor && pm2 start ecosystem.config.js &&
+     pm2 save` → testar login de sjc/guarapari/cachoeiro/admin. Guardar backup
+     da linha antiga antes (rollback = colar de volta; SHA-256 ainda valida).
 - **Aceite:**
-  - [ ] 11 tentativas de login errado no mesmo user em 1min retornam 429.
-  - [ ] Login válido continua funcionando.
-  - [ ] Novo formato scrypt validado em `test/auth.test.js`.
-  - [ ] Compat retroativa: hash SHA-256 antigo ainda valida com warn.
-  - [ ] `.env` da produção migrado pro formato novo.
-- **Esforço:** meio dia.
+  - [x] 11 tentativas de login errado no mesmo user em 1min retornam 429.
+  - [x] Login válido continua funcionando.
+  - [x] Novo formato scrypt validado em `test/auth.test.js`.
+  - [x] Compat retroativa: hash SHA-256 antigo ainda valida com warn.
+  - [ ] `.env` da produção migrado pro formato novo. **← só isto falta**
+- **Esforço:** meio dia (código feito; resta ~15min de migração operacional).
 - **Rollback:** Reverter o commit. `.env` volta ao formato antigo (guardar
   backup do `.env` no cofre P0-1 antes de mudar).
 - **Depende de:** P0-1 (cofre pra backup do `.env`).
