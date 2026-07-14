@@ -146,17 +146,24 @@ async function getSerieHoraria(dias = 7, classificacao = 'todas', regionais = nu
   return r.rows;
 }
 
-async function getNotasDeEquipe(equipe) {
+// regionais opcional: quando fornecido, restringe ao escopo do usuário
+// (fix vazamento 14/07/2026 — antes retornava notas de equipe de QUALQUER
+// regional só pelo nome, sem checar o escopo do token).
+async function getNotasDeEquipe(equipe, regionais = null) {
   const pool = _getPool();
+  const rg = _regionalParam(regionais, 2);
+  const params = [equipe];
+  if (rg.param) params.push(rg.param);
   const sql = `
     SELECT nota_number, tipo, conclusion_date, conclusion_status, regional,
            EXTRACT(EPOCH FROM (now() - conclusion_date))/86400 AS dias_parada
       FROM notas_snapshots
      WHERE snapshot_ts = (SELECT max(snapshot_ts) FROM notas_snapshots)
        AND equipe = $1
+       ${rg.clause}
      ORDER BY conclusion_date ASC NULLS LAST
   `;
-  const r = await pool.query(sql, [equipe]);
+  const r = await pool.query(sql, params);
   return r.rows;
 }
 

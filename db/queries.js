@@ -117,12 +117,23 @@ function diasUteisAte(year, month, dia) {
 
 // ── METAS ──────────────────────────────────────────────────────────────────────
 
-async function getMetas() {
+// regionals opcional (array de siglas): quando fornecido, filtra e inicializa
+// SÓ as regionais no escopo. Sem arg → todas (uso interno legado). O escopo é
+// aplicado nas ROTAS via req.scope.regionals (correção do vazamento regional,
+// 14/07/2026 — GET /metas devolvia metas de todas as regionais a qualquer user).
+async function getMetas(regionals = null) {
   const sb = getClient();
-  const { data, error } = await sb.from('metas').select('regional, data');
+  const escopo = (Array.isArray(regionals) && regionals.length) ? regionals : null;
+  let q = sb.from('metas').select('regional, data');
+  if (escopo) q = inRegionals(q, escopo);
+  const { data, error } = await q;
   if (error) throw error;
-  const result = { GUA: {}, CAC: {}, SJC: {} };
-  (data || []).forEach(row => { result[row.regional] = row.data || {}; });
+  const result = {};
+  (escopo || ['GUA', 'CAC', 'SJC']).forEach(r => { result[r] = {}; });
+  (data || []).forEach(row => {
+    if (escopo && !escopo.includes(row.regional)) return;   // defesa em profundidade
+    result[row.regional] = row.data || {};
+  });
   return result;
 }
 
@@ -137,7 +148,7 @@ async function setMetas(obj) {
  * Retorna metas mensais com cálculos de meta diária, semanal e progresso.
  * yearMonth: 'YYYY-MM'
  */
-async function getMetasCalculadas(yearMonth) {
+async function getMetasCalculadas(yearMonth, regionals = null) {
   const [year, month] = yearMonth.split('-').map(Number);
   const hoje          = new Date();
   const isAtual       = hoje.getFullYear() === year && (hoje.getMonth() + 1) === month;
@@ -147,10 +158,12 @@ async function getMetasCalculadas(yearMonth) {
   const decorridos   = diasUteisAte(year, month, diaRef);
   const semanaAtual  = Math.ceil(diaRef / 7);
 
-  const [metas, totais] = await Promise.all([getMetas(), getMonthTotals(yearMonth)]);
+  // Escopo regional (fix vazamento 14/07/2026): sem arg → todas (legado).
+  const escopo = (Array.isArray(regionals) && regionals.length) ? regionals : ['GUA', 'CAC', 'SJC'];
+  const [metas, totais] = await Promise.all([getMetas(escopo), getMonthTotals(yearMonth, escopo)]);
 
   const regionais = {};
-  for (const regional of ['GUA', 'CAC', 'SJC']) {
+  for (const regional of escopo) {
     regionais[regional] = {};
     const metasReg  = metas[regional]  || {};
     const totaisReg = totais[regional] || {};
@@ -358,16 +371,25 @@ async function getTeamsByDateFromSnapshots(de, ate, regionals) {
 
 // ── HISTÓRICO REGIONAL ─────────────────────────────────────────────────────────
 
-async function getMonthTotals(yearMonth) {
+// regionals opcional: quando fornecido, filtra no banco e devolve SÓ o escopo.
+// Escopo aplicado nas rotas via req.scope.regionals (fix vazamento 14/07/2026).
+async function getMonthTotals(yearMonth, regionals = null) {
   const sb = getClient();
+  const escopo = (Array.isArray(regionals) && regionals.length) ? regionals : null;
   // Lê do nível por-equipe (paginado) e filtra pela whitelist antes de agregar
-  const data = await _selectAll(() => filterByMonth(
-    sb.from('team_daily_totals').select('team_name, regional, tipo_code, count'),
-    yearMonth
-  ));
+  const data = await _selectAll(() => {
+    let q = filterByMonth(
+      sb.from('team_daily_totals').select('team_name, regional, tipo_code, count'),
+      yearMonth
+    );
+    if (escopo) q = inRegionals(q, escopo);
+    return q;
+  });
 
-  const totais = { GUA: {}, CAC: {}, SJC: {} };
+  const totais = {};
+  (escopo || ['GUA', 'CAC', 'SJC']).forEach(r => { totais[r] = {}; });
   _onlyOficiais(data, 'team_name').forEach(row => {
+    if (escopo && !escopo.includes(row.regional)) return;   // defesa em profundidade
     if (!totais[row.regional]) totais[row.regional] = {};
     totais[row.regional][row.tipo_code] =
       (totais[row.regional][row.tipo_code] || 0) + row.count;
@@ -375,17 +397,27 @@ async function getMonthTotals(yearMonth) {
   return totais;
 }
 
-async function getDailyHistory(yearMonth) {
+async function getDailyHistory(yearMonth, regionals = null) {
   const sb = getClient();
-  const data = await _selectAll(() => filterByMonth(
-    sb.from('team_daily_totals').select('date, team_name, regional, tipo_code, count'),
-    yearMonth
-  ).order('date'));
+  const escopo = (Array.isArray(regionals) && regionals.length) ? regionals : null;
+  const data = await _selectAll(() => {
+    let q = filterByMonth(
+      sb.from('team_daily_totals').select('date, team_name, regional, tipo_code, count'),
+      yearMonth
+    ).order('date');
+    if (escopo) q = inRegionals(q, escopo);
+    return q;
+  });
 
+  const baseRegs = escopo || ['GUA', 'CAC', 'SJC'];
   const byDate = {};
   _onlyOficiais(data, 'team_name').forEach(row => {
+    if (escopo && !escopo.includes(row.regional)) return;   // defesa em profundidade
     const d = row.date;
-    if (!byDate[d]) byDate[d] = { date: d, GUA: {}, CAC: {}, SJC: {} };
+    if (!byDate[d]) {
+      byDate[d] = { date: d };
+      baseRegs.forEach(r => { byDate[d][r] = {}; });
+    }
     if (!byDate[d][row.regional]) byDate[d][row.regional] = {};
     byDate[d][row.regional][row.tipo_code] =
       (byDate[d][row.regional][row.tipo_code] || 0) + row.count;

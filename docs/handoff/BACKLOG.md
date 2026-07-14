@@ -39,6 +39,7 @@
 | P1-9 | Vendorizar Leaflet + fonte Roboto | Frontend | **done** (c62bf4a, 08/07) |
 | P1-10 | Remover vazamento de stack trace | Segurança | **done** (bbc5129, 08/07) |
 | P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending (requer staging) |
+| P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
@@ -631,6 +632,61 @@ feita em PR separado depois dos testes.
 - **Rollback:** Reverter o commit. `consolidateDay` volta ao não-atômico
   (coberto pelo drift-sweep).
 - **Depende de:** staging (idealmente) ou janela de manutenção supervisionada.
+
+---
+
+## P1-12 — Vazamento regional em 7 rotas que ignoravam `req.scope.regionals`
+
+- **Status:** **done** (14/07/2026)
+- **Categoria:** Segurança
+- **Reportado por:** José Zouain (14/07/2026): "revisar a parte de acesso de
+  cada usuário: sjc, guarapari e cachoeiro". Auditoria rota-a-rota do escopo.
+- **Evidência (código à época):** `applyScope`/`requireAdmin` são globais
+  (`routes/index.js:92-98`) e populam `req.scope.regionals` (interseção
+  `?regionals` × token). Mas 7 rotas **não usavam** `req.scope`, devolvendo
+  dados de TODAS as regionais a qualquer usuário logado:
+  1. `GET /metas` → `db/queries.js getMetas()` sem filtro.
+  2. `GET /metas/calculadas` → `getMetasCalculadas` iterava `['GUA','CAC','SJC']`
+     hardcoded (metas + progresso de todas).
+  3. `GET /historico/mes` → `getMonthTotals(ym)` sem filtro (totais mensais
+     reportados à EDP, todas as regionais).
+  4. `GET /historico/diario` → `getDailyHistory(ym)` sem filtro.
+  5. `GET /notas/kpis|serie|serie-horaria|por-equipe` → helper `_regionais(req)`
+     lia `req.query.regionais` CRU (validava só contra `_REG_VALIDAS`, nunca
+     contra o token). Sem param → `null` = "todas" na query. Um user GUA podia
+     passar `?regionais=SJC` e ver SJC.
+  6. `GET /notas/equipe/:nome` → `getNotasDeEquipe(nome)` sem regional nenhuma.
+  7. `GET /teams/:teamId` → `getTeamDetail` (`services/dataService.js:495`)
+     varria TODOS os setores casando por id/sigla/nome, sem checar regional —
+     expunha notas + colaboradores (ângulo LGPD) de equipe de qualquer regional.
+  Contraste que prova ser descuido, não design: `/historico/subcats/*`,
+  `/deslocamentos/*`, `/rejeicoes/*`, `/carteira/equipes`, `/totais/*`,
+  `/ranking/equipes` TODOS já usavam `req.scope.regionals` corretamente, e
+  `db/queries.js` já tinha o padrão `_assertRegionals` + `inRegionals`.
+- **Impacto:** leitura cross-regional (não corrompe/grava dado). Viola o
+  isolamento regional que P0-4/P0-5/#28 estabeleceram. Decisão do usuário
+  (14/07): metas também são confidenciais por regional → escopar tudo.
+- **Ação (feita):**
+  1. `_regionais(req)` passou a derivar de `req.scope.regionals` (autoritativo),
+     nunca mais de `req.query` cru.
+  2. `getMetas`, `getMonthTotals`, `getDailyHistory`, `getMetasCalculadas`
+     (`db/queries.js`) e `getNotasDeEquipe` (`db/notasQueries.js`) ganharam
+     param `regionals` opcional + filtro `inRegionals`/`_regionalParam` +
+     defesa em profundidade (descarta linha fora do escopo).
+  3. Rotas passam `req.scope.regionals`; `GET`/`POST /metas` respondem escopado
+     (admin recebe todas; regional só as suas — inclusive no corpo do POST e no
+     fallback `_metasMemory` via `_scopeMetasMemory`).
+  4. `GET /teams/:teamId`: 404 (não 403, pra não revelar existência) quando a
+     regional da equipe está fora do escopo do user não-admin.
+- **Aceite:** ✅ suíte 200/200; ✅ teste novo: `guarapari` pedindo
+  `?regionals=SJC` → 403 (applyScope zera interseção); ✅ `GET /metas` de
+  `guarapari` devolve só GUA, admin devolve as 3, admin `?regionals=SJC`
+  recorta pra SJC. Cobertura 200-path das rotas DB-dependentes fica pro P2-1
+  (harness roda sem Postgres).
+- **Rollback:** `git revert <hash>`.
+- **Nota:** os 3 usuários citados (sjc/guarapari/cachoeiro) presumem-se
+  `role=user` com 1 regional cada (SJC/GUA/CAC). Se algum for admin, vê tudo
+  por design — checar `AUTH_USERS` no `.env`.
 
 ---
 

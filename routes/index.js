@@ -114,6 +114,15 @@ function sbq() {
 // Fallback em memória para metas (apenas no modo mock)
 let _metasMemory = { GUA: {}, CAC: {} };
 
+// Recorta o fallback em memória pelo escopo do usuário (fix vazamento 14/07/2026).
+function _scopeMetasMemory(req) {
+  const scope = (req.scope && Array.isArray(req.scope.regionals)) ? req.scope.regionals : null;
+  if (!scope) return _metasMemory;
+  const out = {};
+  scope.forEach(r => { out[r] = _metasMemory[r] || {}; });
+  return out;
+}
+
 // Cron: carregamento lazy — em modo supabase (Vercel) node-cron não está disponível
 function cron() {
   try { return require('../services/cronService'); }
@@ -294,6 +303,15 @@ router.get('/teams/:teamId', async (req, res) => {
   try {
     const team = await getTeamDetail(req.params.teamId);
     if (!team) return res.status(404).json({ error: 'Equipe não encontrada.' });
+    // Escopo regional (fix vazamento 14/07/2026): getTeamDetail varre TODOS os
+    // setores e casava por id/sigla/nome sem checar regional — um user GUA podia
+    // ler o detalhe (notas + colaboradores) de equipe SJC só sabendo a sigla.
+    // 404 (não 403) pra não revelar a existência de equipe fora do escopo.
+    const userRegs = req.user && req.user.regionals;
+    const teamReg  = String(team.regional || '').toUpperCase();
+    if (Array.isArray(userRegs) && userRegs.length && teamReg && !userRegs.includes(teamReg)) {
+      return res.status(404).json({ error: 'Equipe não encontrada.' });
+    }
     res.json(team);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -328,11 +346,12 @@ router.get('/status', (req, res) => {
 router.get('/metas', async (req, res) => {
   try {
     const sq    = sbq();
-    const metas = sq ? await sq.getMetas() : _metasMemory;
+    // Escopo regional: user só vê metas das suas regionais (fix 14/07/2026).
+    const metas = sq ? await sq.getMetas(req.scope.regionals) : _scopeMetasMemory(req);
     res.json(metas);
   } catch (err) {
     console.error('[API] getMetas:', err.message);
-    res.json(_metasMemory);
+    res.json(_scopeMetasMemory(req));
   }
 });
 
@@ -375,12 +394,14 @@ router.post('/metas', async (req, res) => {
     const sq = sbq();
     if (sq) {
       await sq.setMetas(payload);
-      const metas = await sq.getMetas();
+      // Resposta escopada (fix 14/07/2026): não-admin recebe de volta só as suas
+      // regionais — antes getMetas() devolvia todas no corpo do POST.
+      const metas = await sq.getMetas(isAdmin ? null : req.scope.regionals);
       res.json({ ok: true, metas, updated: Object.keys(payload) });
     } else {
       // Modo mock: mescla pra não apagar outras regionais
       _metasMemory = { ..._metasMemory, ...payload };
-      res.json({ ok: true, metas: _metasMemory, updated: Object.keys(payload) });
+      res.json({ ok: true, metas: isAdmin ? _metasMemory : _scopeMetasMemory(req), updated: Object.keys(payload) });
     }
   } catch (err) {
     console.error('[API] setMetas:', err.message);
@@ -588,8 +609,12 @@ router.get('/historico/mes', async (req, res) => {
   try {
     const sq = sbq();
     const ym = _parseYearMonth(req, res); if (!ym) return;
-    if (!sq) return res.json({ mes: ym, totais: { GUA: {}, CAC: {} } });
-    const totais = await sq.getMonthTotals(ym);
+    if (!sq) {
+      const empty = {};
+      req.scope.regionals.forEach(r => { empty[r] = {}; });
+      return res.json({ mes: ym, totais: empty });
+    }
+    const totais = await sq.getMonthTotals(ym, req.scope.regionals);
     res.json({ mes: ym, totais });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -632,7 +657,7 @@ router.get('/historico/diario', async (req, res) => {
     const sq = sbq();
     const ym = _parseYearMonth(req, res); if (!ym) return;
     if (!sq) return res.json({ mes: ym, dias: [] });
-    const dias = await sq.getDailyHistory(ym);
+    const dias = await sq.getDailyHistory(ym, req.scope.regionals);
     res.json({ mes: ym, dias });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -699,7 +724,7 @@ router.get('/metas/calculadas', async (req, res) => {
     const sq = sbq();
     const ym = _parseYearMonth(req, res); if (!ym) return;
     if (!sq) return res.json({ mes: ym, regionais: {} });
-    const resultado = await sq.getMetasCalculadas(ym);
+    const resultado = await sq.getMetasCalculadas(ym, req.scope.regionals);
     res.json(resultado);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2787,10 +2812,14 @@ function _classif(req) {
 }
 
 const _REG_VALIDAS = new Set(['GUA', 'CAC', 'SJC']);
+// Escopo regional AUTORITATIVO para as rotas /notas/*.
+// Usa req.scope.regionals — já intersectado por applyScope com o token do user.
+// NUNCA ler req.query.regionais cru aqui: era o vetor de vazamento (14/07/2026)
+// que deixava um user GUA passar ?regionais=SJC e ver dados de outra regional,
+// ou omitir o param e receber TODAS (null virava "sem filtro" na query).
 function _regionais(req) {
-  const raw = (req.query.regionais || '').trim();
-  if (!raw) return null;
-  const arr = raw.split(',').map(s => s.trim().toUpperCase()).filter(s => _REG_VALIDAS.has(s));
+  const scope = (req.scope && Array.isArray(req.scope.regionals)) ? req.scope.regionals : [];
+  const arr = scope.map(s => String(s).toUpperCase()).filter(s => _REG_VALIDAS.has(s));
   return arr.length ? arr : null;
 }
 
@@ -2819,7 +2848,7 @@ router.get('/notas/por-equipe', async (req, res) => {
 });
 
 router.get('/notas/equipe/:nome', async (req, res) => {
-  try { res.json(await notasQueries.getNotasDeEquipe(req.params.nome)); }
+  try { res.json(await notasQueries.getNotasDeEquipe(req.params.nome, _regionais(req))); }
   catch (err) { console.error('[notas/equipe]', err.message); res.status(500).json({ error: err.message }); }
 });
 

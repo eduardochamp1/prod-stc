@@ -171,3 +171,57 @@ test('P1-5: login OK zera o contador de tentativas', async () => {
   const { status } = await post('/api/auth/login', { username: 'admin', password: 'errada' });
   assert.equal(status, 401);
 });
+
+// ── VAZAMENTO REGIONAL (14/07/2026) ───────────────────────────────────────────
+// Rotas que ignoravam req.scope.regionals e devolviam dados de TODAS as
+// regionais a qualquer user logado (GET /metas, /metas/calculadas, /historico/mes,
+// /historico/diario, família /notas/*, /teams/:teamId). O escopo agora é sempre
+// aplicado. Em DATA_MODE=mock estas rotas caem no branch !sq, que recorta pelo
+// req.scope.regionals — suficiente pra travar a regra contra regressão.
+
+test('vazamento: guarapari pedindo ?regionals=SJC é bloqueado (403) pelo applyScope', async () => {
+  const token = await loginAs('guarapari', 'guapass');
+  // guarapari só tem GUA — pedir SJC zera a interseção → 403. Fecha o bypass
+  // antigo do /notas/* que lia ?regionais cru sem intersectar com o token.
+  const { status } = await get('/api/metas?regionals=SJC', token);
+  assert.equal(status, 403, `esperado 403, veio ${status}`);
+});
+
+test('vazamento: GET /metas de guarapari devolve SÓ a regional dele (não CAC/SJC)', async () => {
+  const adminTok = await loginAs('admin', 'adminpass');
+  // admin popula as 3 regionais (mock: _metasMemory)
+  await post('/api/metas', { GUA: { LN: 10 }, CAC: { LN: 20 }, SJC: { LN: 30 } }, adminTok);
+
+  const guaTok = await loginAs('guarapari', 'guapass');
+  const { status, json } = await get('/api/metas', guaTok);
+  assert.equal(status, 200);
+  assert.deepEqual(Object.keys(json).sort(), ['GUA'],
+    `guarapari não pode ver metas de outras regionais — veio ${JSON.stringify(Object.keys(json))}`);
+});
+
+test('vazamento: GET /metas de admin devolve todas as regionais', async () => {
+  const adminTok = await loginAs('admin', 'adminpass');
+  await post('/api/metas', { GUA: { LN: 10 }, CAC: { LN: 20 }, SJC: { LN: 30 } }, adminTok);
+  const { status, json } = await get('/api/metas', adminTok);
+  assert.equal(status, 200);
+  assert.ok(['GUA', 'CAC', 'SJC'].every(r => r in json),
+    `admin deve ver as 3 regionais — veio ${JSON.stringify(Object.keys(json))}`);
+});
+
+test('vazamento: admin ?regionals=SJC recorta a resposta só pra SJC', async () => {
+  const adminTok = await loginAs('admin', 'adminpass');
+  await post('/api/metas', { GUA: { LN: 10 }, CAC: { LN: 20 }, SJC: { LN: 30 } }, adminTok);
+  const { status, json } = await get('/api/metas?regionals=SJC', adminTok);
+  assert.equal(status, 200);
+  assert.deepEqual(Object.keys(json).sort(), ['SJC'],
+    `escopo explícito deve recortar — veio ${JSON.stringify(Object.keys(json))}`);
+});
+
+// NOTA: rotas DB-dependentes (/historico/mes, /historico/diario, /metas/calculadas,
+// /notas/*, /teams/:teamId) não têm teste de resposta 200 aqui porque o harness
+// roda sem Postgres (sq real → fetch failed → 500). O escopo dessas rotas é
+// garantido por: (1) applyScope global bloqueando ?regionals fora do token — ver
+// teste do 403 acima; (2) as queries agora exigem/aplicam o array de regionais
+// (getMonthTotals/getDailyHistory/getMetasCalculadas/getNotasDeEquipe em
+// db/queries.js e db/notasQueries.js). Cobertura 200-path fica pro P2-1 (fixtures
+// de DB no backlog).
