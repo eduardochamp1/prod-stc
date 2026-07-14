@@ -12,8 +12,14 @@ const JWT_SECRET      = process.env.JWT_SECRET || _DEFAULT_SECRET;
 const SESSION_SECS    = 8 * 3600; // 8 horas
 
 // Bloqueia boot se o secret padrão for usado em produção.
-// DATA_MODE=wpa é o indicador de "estamos no servidor real com WPA".
-if (JWT_SECRET === _DEFAULT_SECRET && process.env.DATA_MODE === 'wpa') {
+// Dois indicadores de "produção real": DATA_MODE=wpa (servidor que ingere da
+// WPA) e NODE_ENV=production (setado pelo ecosystem.config.js do PM2). Gatear
+// nos dois é defesa em profundidade — cobre o caso de produção rodar com outro
+// DATA_MODE (ex.: só servindo Postgres). NUNCA aborta em NODE_ENV=test, pra não
+// derrubar o runner do `node --test`.
+if (JWT_SECRET === _DEFAULT_SECRET
+    && process.env.NODE_ENV !== 'test'
+    && (process.env.DATA_MODE === 'wpa' || process.env.NODE_ENV === 'production')) {
   console.error('[AUTH] FATAL: JWT_SECRET não configurado! Defina JWT_SECRET no .env antes de iniciar em produção.');
   process.exit(1);
 } else if (JWT_SECRET === _DEFAULT_SECRET) {
