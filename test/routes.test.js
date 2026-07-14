@@ -21,6 +21,9 @@ const crypto = require('crypto');
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 // ── Env de teste ANTES de importar o app (middleware/auth lê no load) ─────────
+// NODE_ENV=test desliga o override:true do dotenv em server.js — sem isso o .env
+// de produção da VM sobrescreve estas credenciais e todo teste de rota dá 401.
+process.env.NODE_ENV    = 'test';
 process.env.DATA_MODE   = 'mock';
 process.env.JWT_SECRET  = 'test-secret-routes';
 process.env.CRON_SECRET = 'test-cron-secret';

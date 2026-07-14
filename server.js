@@ -2,7 +2,13 @@
 // systemd, ou shell). Sem isso, ambiente herdado de outro projeto/sessão
 // derruba o .env corrente — visto em 08/06/2026 quando AUTH_USERS e
 // DATABASE_URL ficavam com valor antigo apesar do .env atualizado.
-require('dotenv').config({ override: true });
+//
+// Exceção NODE_ENV=test: aqui o override é DESLIGADO pra não deixar o .env de
+// produção da VM sobrescrever os usuários/segredos que test/routes.test.js
+// injeta em process.env antes de require('../server'). Sem isso, `node --test`
+// na VM dava 401 em todo teste de rota (o .env real clobbava as credenciais de
+// teste). Em produção NODE_ENV não é 'test' → comportamento acima intacto.
+require('dotenv').config({ override: process.env.NODE_ENV !== 'test' });
 
 const crypto   = require('crypto');
 const { exec } = require('child_process');
