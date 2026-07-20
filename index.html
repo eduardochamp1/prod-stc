@@ -6093,7 +6093,12 @@
           ? MultiSelect.getValues('notas-regional-select')
           : ['ALL'];
         if (!vals || !vals.length || vals.includes('ALL')) return '';
-        return '&regionais=' + encodeURIComponent(vals.join(','));
+        // Param DEVE ser 'regionals' (inglês) — é o que applyScope lê
+        // (middleware/auth.js). Era 'regionais' (pt), que o applyScope ignorava:
+        // o admin selecionava uma regional e o filtro não aplicava (o escopo caía
+        // em "todas do user"). Bug reportado 20/07/2026. As outras abas já usavam
+        // 'regionals'. Contas regionais nunca vazaram (req.scope trava no token).
+        return '&regionals=' + encodeURIComponent(vals.join(','));
       } catch { return ''; }
     }
 
