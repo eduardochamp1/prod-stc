@@ -397,7 +397,7 @@ async function upsertSubcatTotals(teams, _date) {
  * Consolida os snapshots do dia em `daily_totals` e `team_daily_totals` (chamado às 20:30).
  * Usa o snapshot mais recente de cada equipe como resultado final do dia.
  */
-async function consolidateDay(date) {
+async function consolidateDay(date, opts = {}) {
   const sb = getClient();
   date = date || _hojeBRT();
 
@@ -444,6 +444,11 @@ async function consolidateDay(date) {
         sectorId: s.sector_id,
         notasExecutadas: t.notasExecutadas || [],
         notasConcluidas: t.notasConcluidas || [],
+        // notasRejeitadas é ESSENCIAL: _aggregateTeamDailyTotals/upsertSubcatTotals
+        // excluem concluídas rejeitadas (rejeitada > concluída, 20/07/2026). Sem
+        // carregar aqui, a consolidação diária re-inflava a produtividade. Enriquecido
+        // abaixo com note_rejections (WPA limpa do payload após horas).
+        notasRejeitadas: t.notasRejeitadas || [],
         sessionBegin: t.sessionBegin,
       };
     }
@@ -456,6 +461,45 @@ async function consolidateDay(date) {
   }
 
   log.info('consolidate_start', { date, teams: teams.length });
+
+  // ── ENRIQUECE REJEITADAS com note_rejections (fonte autoritativa) ──────
+  // O WPA limpa notasRejeitadas do payload após algumas horas, então o snapshot
+  // subconta. note_rejections (cron de rejectionService) persiste os UUIDs.
+  // Sem isso, uma nota rejeitada cujo payload já foi limpo voltaria a contar
+  // como produção na reconsolidação (rejeitada > concluída, 20/07/2026). Mesma
+  // união que _buildDiaSummary faz na view "hoje".
+  try {
+    const { data: rejRows } = await sb
+      .from('note_rejections')
+      .select('note_id, team_name, session_date')
+      .in('session_date', [dayMinus1, date]);
+    if (Array.isArray(rejRows) && rejRows.length) {
+      const byTeamDate = new Map();
+      for (const r of rejRows) {
+        const k = `${r.session_date}|${r.team_name}`;
+        if (!byTeamDate.has(k)) byTeamDate.set(k, new Set());
+        byTeamDate.get(k).add(r.note_id);
+      }
+      for (const tm of teams) {
+        const sd = _sessionDate(tm);
+        const extra = byTeamDate.get(`${sd}|${tm.teamName}`);
+        if (!extra) continue;
+        const have = new Set((tm.notasRejeitadas || []).map(n => n && n.id).filter(Boolean));
+        for (const id of extra) if (!have.has(id)) tm.notasRejeitadas.push({ id });
+      }
+    }
+  } catch (errRej) {
+    log.warn('consolidate_rejections_enrich_failed', { date, msg: errRej.message });
+  }
+
+  // Modo dry-run: calcula o que a produtividade SERIA (sem wipe, sem gravar) e
+  // retorna. Usado por scripts/reconsolidar-produtividade.js pra medir o impacto
+  // da regra rejeitada > concluída antes de aplicar no histórico.
+  if (opts.dryRun) {
+    const rows = _aggregateTeamDailyTotals(teams);
+    const newCount = rows.reduce((s, r) => s + r.count, 0);
+    return { date, teams: teams.length, newCount, rows };
+  }
 
   // ── RESET ─────────────────────────────────────────────────────────────
   // Wipa date E date-1 — cobre notas migradas pelo _notaDate (notas executadas
