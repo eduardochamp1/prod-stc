@@ -75,8 +75,14 @@ async function main() {
     try {
       const antes = await currentCount(date);
       // dryRun calcula o "depois" sem gravar (mesma lógica do apply).
+      // IMPORTANTE: consolidateDay processa sessões de D e D-1 e gera linhas pra
+      // VÁRIOS notaDate (D-2..D). Pra comparar maçã com maçã, o "depois" é só a
+      // soma das linhas cuja data === D (mesmo recorte que o `antes`). Somar
+      // dry.newCount (todas as datas) daria um total inflado e enganoso.
       const dry = await consolidateDay(date, { dryRun: true });
-      const depois = dry ? dry.newCount : 0;
+      const depois = dry ? (dry.rows || [])
+        .filter(r => r.date === date)
+        .reduce((s, r) => s + r.count, 0) : 0;
       const equipes = dry ? dry.teams : 0;
       const diff = depois - antes;
       totAntes += antes; totDepois += depois;
