@@ -311,10 +311,16 @@ async function _buildDiaSummary(siglasFiltro) {
     }
 
     // Classificação única por UUID — cada nota fica em EXATAMENTE 1 bucket
-    // final. Prioridade: concluida > rejeitada > andamento > atual.
-    // Sem isso, a aritmética inflava 'canceladas' (UUIDs em 2 buckets
+    // final. Sem isso, a aritmética inflava 'canceladas' (UUIDs em 2 buckets
     // sobrepostos eram contados 2x na soma, mas só 1x na união) — bug
     // reportado em 11/06/2026 (esperado canc=294, retornava 904).
+    //
+    // Prioridade: rejeitada > concluída > andamento > atual (decisão 20/07/2026,
+    // José). Uma nota concluída pela equipe E rejeitada pela EDP conta SÓ como
+    // rejeitada — não é produção válida. O WPA mantém a nota nas duas fontes, e
+    // sem esta prioridade a produtividade reportada inflava (ECTSJ83: 17
+    // executadas sendo 14 rejeitadas). Deve bater com _aggregateTeamDailyTotals
+    // e detectDrift em dataWriter.js.
     const finalAtual      = new Set();
     const finalAndamento  = new Set();
     const finalConcluidas = new Set();
@@ -323,8 +329,8 @@ async function _buildDiaSummary(siglasFiltro) {
       ...atualRaw, ...andamentoRaw, ...concluidasRaw, ...rejeitadasRaw,
     ]);
     for (const u of todasRastreadas) {
-      if      (concluidasRaw.has(u))  finalConcluidas.add(u);
-      else if (rejeitadasRaw.has(u))  finalRejeitadas.add(u);
+      if      (rejeitadasRaw.has(u))  finalRejeitadas.add(u);
+      else if (concluidasRaw.has(u))  finalConcluidas.add(u);
       else if (andamentoRaw.has(u))   finalAndamento.add(u);
       else                            finalAtual.add(u);
     }
@@ -531,7 +537,12 @@ async function getSummary(filters = {}) {
       equipesAtivas:   teams.filter(t => !t.sessionEnd).length,
       totalBaixadas:   teams.reduce((s, t) => s + (t.notasBaixadas   || []).length, 0),
       totalExecutadas: teams.reduce((s, t) => s + (t.notasExecutadas || []).length, 0),
-      totalConcluidas: teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0),
+      // Concluídas rejeitadas pela EDP não contam como produção (rejeitada >
+      // concluída, decisão 20/07/2026 — ver _aggregateTeamDailyTotals).
+      totalConcluidas: teams.reduce((s, t) => {
+        const rej = new Set((t.notasRejeitadas || []).map(n => n && n.id).filter(Boolean));
+        return s + (t.notasConcluidas || []).filter(n => !(n && n.id && rej.has(n.id))).length;
+      }, 0),
       totalRejeitadas: teams.reduce((s, t) => s + (t.notasRejeitadas || []).length, 0),
     };
   }));

@@ -154,6 +154,21 @@ test('_aggregate: mesma nota em 3 sessões da equipe conta 1x (não 3x)', () => 
   assert.equal(md.count, 2, 'duas notas distintas, contadas 1x cada apesar de 3 sessões');
 });
 
+test('_aggregate: nota concluída E rejeitada NÃO conta como produção (rejeitada > concluída)', () => {
+  // Decisão 20/07/2026: o WPA mantém a nota em Concluded[] mesmo após a EDP
+  // rejeitar. Produção reportada à EDP não pode incluir nota rejeitada.
+  const rows = _aggregateTeamDailyTotals([{
+    teamName: 'ECTSJ83', regional: 'SJC', sessionBegin: '2026-07-20T07:00:00',
+    notasConcluidas: [
+      { id: 'a', tipoCode: 'LN' },
+      { id: 'b', tipoCode: 'LN' },  // também em rejeitadas → NÃO conta
+    ],
+    notasRejeitadas: [{ id: 'b', tipoCode: 'LN' }],
+  }]);
+  const ln = rows.find(r => r.tipo_code === 'LN');
+  assert.equal(ln.count, 1, 'só "a" conta; "b" foi rejeitada pela EDP');
+});
+
 test('_aggregate: notas distintas entre sessões somam (dedup não apaga legítimas)', () => {
   const teams = [
     { teamName: 'E1', regional: 'GUA', sessionBegin: '2026-07-01T06:00:00',

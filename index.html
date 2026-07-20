@@ -8238,10 +8238,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
         // Todas as notas da equipe contam pra sessDate (sem filtrar por
         // conclusionDate da nota — a regra é por sessão).
-        // Produtividade do dia = SÓ notasConcluidas. Notas em andamento ainda
-        // podem virar rejeitadas — não são "produção feita". Alinhado com cron
-        // (services/dataWriter.js upsertSubcatTotals).
-        const realizadas = t.notasConcluidas || [];
+        // Produtividade do dia = notasConcluidas que NÃO foram rejeitadas
+        // (rejeitada > concluída, decisão 20/07/2026). Notas em andamento ainda
+        // podem virar rejeitadas, e concluída rejeitada pela EDP não é "produção
+        // feita". Alinhado com cron (services/dataWriter.js upsertSubcatTotals).
+        const realizadas = _notasConcluidasReais(t);
 
         realizadas.forEach(n => {
           const tipo = n.tipoCode;
@@ -10026,6 +10027,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
       return (t.notasExecutadas || []).filter(n => !(n && n.id && doneIds.has(n.id)));
     }
 
+    /**
+     * Notas EXECUTADAS reais de uma equipe = notasConcluidas que NÃO foram
+     * rejeitadas. Prioridade rejeitada > concluída (decisão 20/07/2026): o WPA
+     * mantém a nota em Concluded[] mesmo depois de a EDP rejeitar, então uma nota
+     * concluída-e-rejeitada aparecia nas duas contagens e inflava a produção. Uma
+     * nota rejeitada não é produção válida — conta só em Rejeitadas.
+     */
+    function _notasConcluidasReais(t) {
+      const rejIds = new Set((t.notasRejeitadas || []).map(n => n && n.id).filter(Boolean));
+      return (t.notasConcluidas || []).filter(n => !(n && n.id && rejIds.has(n.id)));
+    }
+
     function _andamentoReal(t, de, ate) {
       if (t.sessionEnd) return 0;
       return _notasEmAndamento(t).filter(n => notaPertenceAoRange(n, de, ate)).length;
@@ -10048,7 +10061,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
     function carteiraInicialDe(t, de, ate) {
       const atual = _carteiraPendentes(t);
       const and   = _andamentoReal(t, de, ate);
-      const conc  = (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
+      // conc usa a versão REAL (sem as rejeitadas) — senão a nota concluída-e-
+      // rejeitada entraria 2x na soma (em conc E em rej), inflando a inicial.
+      const conc  = _notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, de, ate)).length;
       const rej   = (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, de, ate)).length;
       return atual + and + conc + rej;
     }
@@ -10117,10 +10132,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
             }).length;
           }, 0);
 
-      // Concluidas no dia
+      // Concluidas no dia — exclui rejeitadas (rejeitada > concluída). dia.concluidas
+      // (via _buildDiaSummary) já aplica a mesma prioridade no lado do banco.
       const concluidasLive = useDia ? dia.concluidas
         : teamsAll.reduce((s, t) =>
-            s + (t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
+            s + _notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, de, ate)).length, 0);
 
       // Rejeitadas no dia
       const rejeitadas = useDia ? dia.rejeitadas
@@ -10464,7 +10480,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         //   apareciam fora do chip enquanto EXECUTADAS continuava contando, gerando
         //   discrepância. Chips agora batem por construção.
         const subcatCont = {};
-        (t.notasConcluidas || []).forEach(n => {
+        _notasConcluidasReais(t).forEach(n => {
           if (!notaPertenceAoRange(n, _rngDe, _rngAte)) return;
           if (selectedTipos.size > 0 && !selectedTipos.has(n.tipoCode)) return;
           const sc = window._subcatMap?.[n.id];
@@ -10520,7 +10536,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
                 <div class="os-lbl">Carteira</div>
               </div>
               <div class="os-cell" title="Notas iniciadas e ainda NÃO concluídas/rejeitadas. Uma equipe pode ter várias abertas ao mesmo tempo; notas já concluídas não contam aqui (cada nota em 1 só estado)."><div class="os-num executada">${sessaoAberta ? _andamentoReal(t, _rngDe, _rngAte) : 0}</div><div class="os-lbl">Andamento</div></div>
-              <div class="os-cell"><div class="os-num concluida">${(t.notasConcluidas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
+              <div class="os-cell" title="Notas concluídas e ACEITAS. Nota rejeitada pela EDP não conta aqui (conta só em Rejeitadas) — não é produção válida."><div class="os-num concluida">${_notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
               <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
             ${tiposHtml ? `<div class="tipos-row">${tiposHtml}</div>` : ''}
@@ -10656,7 +10672,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         <div class="notas-tabs" id="notas-tabs">
           <button class="nota-tab" onclick="switchNotaTab('baixada',this)">Em Carteira (${t.carteiraCount || 0})</button>
           <button class="nota-tab" onclick="switchNotaTab('executada',this)">Em Andamento (${_notasEmAndamento(t).length})</button>
-          <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Executadas (${(t.notasConcluidas || []).length})</button>
+          <button class="nota-tab active-concluida" onclick="switchNotaTab('concluida',this)">Executadas (${_notasConcluidasReais(t).length})</button>
           <button class="nota-tab" onclick="switchNotaTab('rejeitada',this)">Rejeitadas (${(t.notasRejeitadas || []).length})</button>
         </div>
         <div class="notas-list" id="notas-list"></div>
@@ -10679,7 +10695,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
       if (!t) return;
       const map = {
         baixada: t.notasBaixadas || [], executada: _notasEmAndamento(t),
-        concluida: t.notasConcluidas || [], rejeitada: t.notasRejeitadas || [],
+        concluida: _notasConcluidasReais(t), rejeitada: t.notasRejeitadas || [],
       };
       const notas = map[tipo] || [];
       const el = document.getElementById('notas-list');

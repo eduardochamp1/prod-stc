@@ -136,6 +136,22 @@ test('_buildDiaSummary: prioridade rejeitada > andamento > atual', async () => {
   assertInvariante(s);
 });
 
+test('_buildDiaSummary: nota concluída E rejeitada → conta só rejeitada (rejeitada > concluída)', async () => {
+  // Decisão 20/07/2026 (José): o WPA mantém a nota em Concluded[] mesmo depois de
+  // a EDP rejeitar, então 'x' aparece em concluidas E rejeitadas. Não é produção
+  // válida — prioridade rejeitada > concluída. Sem isso, 'x' contava como executada
+  // (produtividade inflada — ECTSJ83: 17 exec sendo 14 rejeitadas).
+  pgShim._setPool(fakePool({
+    first: [teamRow('E1', { baixadas: ['x'] })],
+    last:  [teamRow('E1', { concluidas: ['x'], rejeitadas: ['x'] })],
+  }));
+  const s = await _buildDiaSummary(null);
+  assert.equal(s.rejeitadas, 1);
+  assert.equal(s.concluidas, 0, 'nota rejeitada não conta como concluída');
+  assert.equal(s.canceladas, 0);
+  assertInvariante(s);
+});
+
 test('_buildDiaSummary: cenário misto grande — invariante fecha', async () => {
   pgShim._setPool(fakePool({
     first: [

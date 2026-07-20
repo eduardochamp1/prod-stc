@@ -207,9 +207,15 @@ async function upsertDailyTotals(_teams, _date) {
  * FUNÇÃO PURA (testável sem DB): agrega notasConcluidas das equipes em rows
  * de team_daily_totals. Chave (notaDate, team_name, tipo_code).
  *
- * Produtividade do dia = SÓ notasConcluidas. Notas em andamento ainda podem
- * virar rejeitadas (não são "produção feita"). Regra alinhada com o card
- * OS EXECUTADAS do Monitor e com upsertSubcatTotals.
+ * Produtividade do dia = notasConcluidas que NÃO foram rejeitadas. Notas em
+ * andamento ainda podem virar rejeitadas (não são "produção feita"); e nota
+ * concluída que a EDP REJEITOU também não é produção válida. Regra de negócio
+ * (decisão 20/07/2026, José): prioridade rejeitada > concluída — uma nota que
+ * está em notasConcluidas E notasRejeitadas conta SÓ como rejeitada. O WPA
+ * mantém a nota nas duas fontes (Concluded[] e /rejected), então sem esta
+ * exclusão a produção reportada à EDP inflava (diagnóstico 20/07: ~30 equipes,
+ * ECTSJ83 mostrava 17 executadas sendo 14 rejeitadas). Regra alinhada com o
+ * card OS EXECUTADAS do Monitor, upsertSubcatTotals, _buildDiaSummary e detectDrift.
  *
  * @param {Array} teams
  * @returns {Array<{date, team_name, regional, sector_id, tipo_code, count}>}
@@ -220,9 +226,14 @@ function _aggregateTeamDailyTotals(teams) {
     const sessDate = _sessionDate(t);
     if (!sessDate) return;
     const teamName = t.teamName || t.sigla;
+    const rejIds = new Set(
+      (t.notasRejeitadas || []).map(n => n && (n.id || n.noteId)).filter(Boolean)
+    );
     (t.notasConcluidas || []).forEach(n => {
       const code = n.tipoCode || n.tipo_code;
       if (!code) return;
+      // rejeitada > concluída: nota rejeitada não conta como produção
+      if (n.id && rejIds.has(n.id)) return;
       const notaDate = _notaDate(n, sessDate, t.sessionBegin);
       const key = `${notaDate}|${teamName}|${code}`;
       if (!acc[key]) {
@@ -287,10 +298,14 @@ async function upsertSubcatTotals(teams, _date) {
     if (!teamName || !t.regional) return;
     const sessDate = _sessionDate(t);
     if (!sessDate) return;                          // sem sessão → descarta
-    // Produtividade do dia = SÓ notasConcluidas. Notas em andamento (executadas)
-    // ainda podem virar rejeitadas — não são "produção feita". Regra de negócio
-    // alinhada com o card OS EXECUTADAS.
-    const realizadas = t.notasConcluidas || [];
+    // Produtividade do dia = notasConcluidas que NÃO foram rejeitadas. Notas em
+    // andamento ainda podem virar rejeitadas, e concluída rejeitada pela EDP não
+    // é "produção feita". Prioridade rejeitada > concluída (decisão 20/07/2026 —
+    // ver _aggregateTeamDailyTotals). Alinhada com o card OS EXECUTADAS.
+    const _rejIds = new Set(
+      (t.notasRejeitadas || []).map(n => n && (n.id || n.noteId)).filter(Boolean)
+    );
+    const realizadas = (t.notasConcluidas || []).filter(n => !(n && n.id && _rejIds.has(n.id)));
     realizadas.forEach(n => {
       if (!n.id) return;
       const tipo = (n.tipoCode || n.tipo_code || '').toUpperCase();
@@ -683,9 +698,12 @@ async function upsertTeamDailyCarteira(date) {
 
     const todas = new Set([...atualRaw, ...andamentoRaw, ...concluidasRaw, ...rejeitadasRaw]);
     let atual = 0, andamento = 0, concluidas = 0, rejeitadas = 0;
+    // Prioridade rejeitada > concluída > andamento > atual (decisão 20/07/2026):
+    // nota rejeitada pela EDP não é produção, mesmo que também esteja concluída.
+    // Precisa bater com _aggregateTeamDailyTotals, senão o drift dispara falso.
     for (const u of todas) {
-      if      (concluidasRaw.has(u))  concluidas++;
-      else if (rejeitadasRaw.has(u))  rejeitadas++;
+      if      (rejeitadasRaw.has(u))  rejeitadas++;
+      else if (concluidasRaw.has(u))  concluidas++;
       else if (andamentoRaw.has(u))   andamento++;
       else                            atual++;
     }
