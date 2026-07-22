@@ -714,9 +714,16 @@ feita em PR separado depois dos testes.
   09/05→22/07):** recuperável TOTAL só +7% (45.394→48.613). CONCENTRADO EM JULHO:
   mai +4%, jun −1% (ok — NÃO tocar), **jul +21% (+2.877 OS)** = mês dos deploys
   pesados (restarts zeraram o _acc). Hoje 22/07 (código novo o dia todo) deu Δ≈0 =
-  fix validado. **FALTA:** re-consolidar SÓ julho (01→22) via
-  `reconsolidar-produtividade.js --apply`, após checar o outlier 07-16 (+77%). ⚠️
-  re-consolidar SOBE a produção reportada — recupera produção real subnotificada.
+  fix validado. **RE-CONSOLIDAÇÃO HISTÓRICA: NÃO APLICADA (decisão 22/07).** O
+  check do outlier 07-16 mostrou que os números NÃO reconciliam com confiança:
+  concluídas brutas subiram a 2171 (17h), caíram pra ~1493 e ficaram (provável
+  restart+poda no código antigo); armazenado=623, união=1105, último-bruto=1493,
+  pico=2171 — filtros entrelaçados (oficial/rejeitadas/_notaDate/augmentado) impedem
+  um modelo fechado do passado. Aplicar um "+21%" não reconciliado violaria "zero
+  manipulação de números" (CLAUDE.md regra 7); e subnotificar é o erro SEGURO p/
+  empreiteira. Portanto: histórico fica como está; código protege daqui pra frente.
+  Retomar SÓ se houver reconciliação por-nota (raw × união × stored com todos os
+  filtros explícitos) que dê confiança — investigação maior, não trivial.
 - **Fonte:** Investigação do EPJAC34 na auditoria de 22/07/2026.
 - **Evidência:** EPJAC34 (1 sessão, sem relogin) teve **13 concluídas distintas**
   ao longo dos snapshots do dia, mas o **último snapshot só tinha 5**. Como os
