@@ -268,7 +268,13 @@ async function main() {
       continue;
     }
 
-    const bw = buckets({ conc: w.conc, exec: new Set([...w.exec, ...w.downAndamento]), rej: w.rej });
+    // Sessão encerrada (V2 offline): notes/executed retorna as CONCLUÍDAS da
+    // sessão (cookbook: fluxo histórico), não "em andamento". Sem este ajuste,
+    // toda equipe deslogada virava exec=0/andamento=N no lado WPA — artefato do
+    // método, não erro do painel (visto na rodada de 22/07: ECLSJ80, EPCIT30…).
+    const wpaConc = w.v2Online ? w.conc : new Set([...w.conc, ...w.exec]);
+    const wpaExec = w.v2Online ? new Set([...w.exec, ...w.downAndamento]) : new Set(w.downAndamento);
+    const bw = buckets({ conc: wpaConc, exec: wpaExec, rej: w.rej });
     const bp = buckets(p);
 
     ['executadas', 'andamento', 'rejeitadas'].forEach(k => {
@@ -279,11 +285,16 @@ async function main() {
     const dE = diffSets(bw.executadas, bp.executadas);
     const dA = diffSets(bw.andamento,  bp.andamento);
     const dR = diffSets(bw.rejeitadas, bp.rejeitadas);
-    // Confronto das DUAS definições de rejeitada (só válido com V2 online,
-    // senão não temos os campos do Concluded[]): campo "rejeit*" × endpoint.
-    const dDef = w.v2Online ? diffSets(w.concRejPorCampo, w.rej) : null;
+    // NOTA (descoberta na rodada de 22/07/2026): o confronto "rejeitada por
+    // CAMPO × por ENDPOINT" foi removido — os payloads de lista NÃO trazem o
+    // "Status de execução" (Executada/Rejeitada) como texto. ConclusionStatus
+    // ali é PONTUALIDADE ('ok'|'late' vs Conclusão Desejada) e Status é código
+    // numérico. A distinção rejeitada vem mesmo do endpoint notes/rejected +
+    // note_rejections (que é AUTORITATIVA: o endpoint PODA rejeições antigas
+    // após ~horas — provado com ECGPR51 22/07: notas 015001784811/015001785127
+    // exibidas "Rejeitada" no portal às 14:51 e ausentes do endpoint às 15:12).
 
-    if (dE.igual && dA.igual && dR.igual && (!dDef || dDef.igual)) {
+    if (dE.igual && dA.igual && dR.igual) {
       iguais++;
       if (!SO_DIFF) detalhes.push(
         `  ✅ ${name}: exec ${bw.executadas.size} · and ${bw.andamento.size} · rej ${bw.rejeitadas.size}  (bate por UUID)${oficial}`);
@@ -302,11 +313,10 @@ async function main() {
     if (!dE.igual) detalhes.push(`       EXECUTADAS  wpa=${bw.executadas.size} painel=${bp.executadas.size}  ${fmt(dE, w)}`);
     if (!dA.igual) detalhes.push(`       ANDAMENTO   wpa=${bw.andamento.size} painel=${bp.andamento.size}  ${fmt(dA, w)}`);
     if (!dR.igual) detalhes.push(`       REJEITADAS  wpa=${bw.rejeitadas.size} painel=${bp.rejeitadas.size}  ${fmt(dR, w)}`);
-    if (dDef && !dDef.igual) detalhes.push(
-      `       DEF. REJEITADA  por-CAMPO=${w.concRejPorCampo.size} por-ENDPOINT=${w.rej.size}  ` +
-      `${dDef.soA.length ? `só-campo [${dDef.soA.slice(0, 3).map(id => num(w, id)).join(', ')}] ` : ''}` +
-      `${dDef.soB.length ? `só-endpoint [${dDef.soB.slice(0, 3).map(id => num(w, id)).join(', ')}]` : ''}` +
-      `  ⟵ as duas definições de rejeitada DIVERGEM nesta equipe`);
+    // painel com MAIS rejeitadas que a WPA ao vivo geralmente = poda do endpoint
+    // (rejeições antigas somem após ~horas; note_rejections preserva) — painel certo.
+    if (!dR.igual && dR.soB.length > 0 && dR.soA.length === 0) detalhes.push(
+      `       ↳ provável PODA do endpoint (rejeições antigas) — note_rejections preserva; painel confere com o portal`);
   }
 
   console.log('\n▶ Comparação por equipe (por UUID):\n');
@@ -329,10 +339,11 @@ async function main() {
     console.log(`    ${String(n).padStart(5)}×  ${k}`);
   });
   console.log('');
-  console.log('  ↑ Use esta tabela pra mapear o "Status de execução" do portal (Executada/');
-  console.log('  Rejeitada) pros campos do JSON. Se Concluded[] trouxer um campo com');
-  console.log('  "Rejeitada", a linha DEF. REJEITADA de cada equipe confronta as duas');
-  console.log('  definições (campo × endpoint notes/rejected).');
+  console.log('  ↑ Vocabulário decodificado (22/07/2026): ConclusionStatus = PONTUALIDADE');
+  console.log('  (ok=no prazo, late=fora da Conclusão Desejada); Status é código numérico.');
+  console.log('  O "Status de execução" (Executada/Rejeitada) do portal NÃO vem nas listas —');
+  console.log('  a distinção é dada pelo endpoint notes/rejected + note_rejections (autoritativa;');
+  console.log('  o endpoint PODA rejeições antigas após ~horas).');
   console.log('');
   console.log('  Leitura: Δ pequeno + divergências explicadas por timing (snapshot de');
   console.log('  até 15min atrás; nota concluída/rejeitada nesse intervalo) = painel');
