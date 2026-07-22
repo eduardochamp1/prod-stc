@@ -40,7 +40,7 @@
 | P1-10 | Remover vazamento de stack trace | Segurança | **done** (bbc5129, 08/07) |
 | P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending (requer staging) |
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
-| P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | pending |
+| P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
@@ -706,7 +706,14 @@ feita em PR separado depois dos testes.
 ## P1-13 — `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy
 
 - **Categoria:** Dados (afeta produção reportada à EDP)
-- **Status:** pending
+- **Status:** **CÓDIGO done** (22/07/2026) — 2 frentes: (1) `_acc` upgrade de estado
+  (commit 47c68cc, P3-11) corrige o AO VIVO daqui pra frente; (2) `consolidateDay`
+  agora agrega da UNIÃO de todos os snapshots do dia via `_unionTeamsFromSnapshots`
+  (função pura, `test/unionSnapshots.test.js`, 8 testes) — recupera concluídas
+  rotacionadas/perdidas. **FALTA:** rodar `reconsolidar-produtividade.js` (dry-run
+  mede o quanto sobe; `--apply` grava) nos dias afetados. Medição de 22/07 estimou
+  subnotificação de ~30-40% no histórico. ⚠️ re-consolidar SOBE a produção reportada
+  — decidir alcance com o José.
 - **Fonte:** Investigação do EPJAC34 na auditoria de 22/07/2026.
 - **Evidência:** EPJAC34 (1 sessão, sem relogin) teve **13 concluídas distintas**
   ao longo dos snapshots do dia, mas o **último snapshot só tinha 5**. Como os

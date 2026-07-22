@@ -397,6 +397,61 @@ async function upsertSubcatTotals(teams, _date) {
  * Consolida os snapshots do dia em `daily_totals` e `team_daily_totals` (chamado às 20:30).
  * Usa o snapshot mais recente de cada equipe como resultado final do dia.
  */
+/**
+ * FUNÇÃO PURA (testável): consolida os snapshots de um dia em `teams`, UNINDO as
+ * notas concluídas/rejeitadas de TODOS os snapshots de cada (equipe, sessão) —
+ * não só do último. Robusto a: rotação do `Concluded[]` da WPA ao longo do dia,
+ * reset do acumulador `_acc` por restart do PM2, e o bug pré-P3-11 (nota
+ * executada→concluída que ficava congelada). Sem a união, a consolidação usava
+ * só o ÚLTIMO snapshot e SUBNOTIFICAVA a produção (~30-40%, medido 22/07/2026 —
+ * P1-13).
+ *
+ * `notasExecutadas` (andamento) vem do snapshot MAIS RECENTE (estado transiente,
+ * não entra na produtividade). O `conclusionDate` de cada nota é preservado, então
+ * `_notaDate` segue atribuindo cada uma ao dia correto. `notasRejeitadas` também é
+ * unida (a exclusão rejeitada > concluída é aplicada por _aggregateTeamDailyTotals).
+ *
+ * @param {Array}  snaps      rows {team_name, regional, sector_id, captured_at, data},
+ *                            ORDENADOS por captured_at DESC (1ª ocorrência = a mais recente).
+ * @param {string} date       'YYYY-MM-DD' BRT
+ * @param {string} dayMinus1  'YYYY-MM-DD' BRT (D-1)
+ */
+function _unionTeamsFromSnapshots(snaps, date, dayMinus1) {
+  const acc = {};
+  (snaps || []).forEach(s => {
+    const t = s.data;
+    if (!t) return;
+    const sd = _sessionDate(t);
+    if (sd !== date && sd !== dayMinus1) return;
+    const key = `${s.team_name}|${t.sessionBegin}`;
+    if (!acc[key]) {
+      acc[key] = {
+        teamName: s.team_name,
+        regional: s.regional,
+        sectorId: s.sector_id,
+        sessionBegin: t.sessionBegin,
+        notasExecutadas: t.notasExecutadas || [],   // do mais recente (DESC → 1ª ocorrência)
+        _conc: new Map(),
+        _rej:  new Map(),
+      };
+    }
+    const e = acc[key];
+    (t.notasConcluidas || []).forEach(n => {
+      const id = n && (n.id || n.codigo);
+      if (id && !e._conc.has(id)) e._conc.set(id, n);
+    });
+    (t.notasRejeitadas || []).forEach(n => {
+      const id = n && (n.id || n.codigo);
+      if (id && !e._rej.has(id)) e._rej.set(id, n);
+    });
+  });
+  return Object.values(acc).map(({ _conc, _rej, ...rest }) => ({
+    ...rest,
+    notasConcluidas: [..._conc.values()],
+    notasRejeitadas: [..._rej.values()],
+  }));
+}
+
 async function consolidateDay(date, opts = {}) {
   const sb = getClient();
   date = date || _hojeBRT();
@@ -430,31 +485,12 @@ async function consolidateDay(date, opts = {}) {
   // suas notas (conclusionDate < date-1) podem migrar pra date-2 — mas o foco
   // principal é processar AMBAS as datas date-1 e date numa rodada só, pra
   // que o wipe + reagregação não percam linhas legítimas.
-  const latest = {};
-  snaps.forEach(s => {
-    const t = s.data;
-    if (!t) return;
-    const sd = _sessionDate(t);
-    if (sd !== date && sd !== dayMinus1) return;
-    const key = `${s.team_name}|${t.sessionBegin}`;
-    if (!latest[key]) {
-      latest[key] = {
-        teamName: s.team_name,
-        regional: s.regional,
-        sectorId: s.sector_id,
-        notasExecutadas: t.notasExecutadas || [],
-        notasConcluidas: t.notasConcluidas || [],
-        // notasRejeitadas é ESSENCIAL: _aggregateTeamDailyTotals/upsertSubcatTotals
-        // excluem concluídas rejeitadas (rejeitada > concluída, 20/07/2026). Sem
-        // carregar aqui, a consolidação diária re-inflava a produtividade. Enriquecido
-        // abaixo com note_rejections (WPA limpa do payload após horas).
-        notasRejeitadas: t.notasRejeitadas || [],
-        sessionBegin: t.sessionBegin,
-      };
-    }
-  });
-
-  const teams = Object.values(latest);
+  // UNIÃO de todos os snapshots do dia por (equipe, sessão) — não só o último.
+  // Recupera concluídas/rejeitadas que a WPA rotacionou pra fora do Concluded[]
+  // ao longo do dia (ou que o _acc perdeu num restart do PM2). Ver
+  // _unionTeamsFromSnapshots. Antes usava só o último snapshot e subnotificava
+  // ~30-40% da produção (P1-13, medido 22/07/2026).
+  const teams = _unionTeamsFromSnapshots(snaps, date, dayMinus1);
   if (teams.length === 0) {
     log.info('consolidate_no_session', { date });
     return;
@@ -782,4 +818,5 @@ module.exports = {
   cleanOldSnapshots, cleanOldNoteDetails,
   // Exportadas pra teste (P0-3) — funções puras da regra de agregação.
   _sessionDate, _notaDate, _aggregateTeamDailyTotals,
+  _unionTeamsFromSnapshots,   // P1-13 — união dos snapshots do dia
 };
