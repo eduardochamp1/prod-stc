@@ -40,6 +40,7 @@
 | P1-10 | Remover vazamento de stack trace | Segurança | **done** (bbc5129, 08/07) |
 | P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending (requer staging) |
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
+| P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | pending |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
@@ -701,6 +702,42 @@ feita em PR separado depois dos testes.
 - **Nota:** os 3 usuários citados (sjc/guarapari/cachoeiro) presumem-se
   `role=user` com 1 regional cada (SJC/GUA/CAC). Se algum for admin, vê tudo
   por design — checar `AUTH_USERS` no `.env`.
+
+## P1-13 — `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy
+
+- **Categoria:** Dados (afeta produção reportada à EDP)
+- **Status:** pending
+- **Fonte:** Investigação do EPJAC34 na auditoria de 22/07/2026.
+- **Evidência:** EPJAC34 (1 sessão, sem relogin) teve **13 concluídas distintas**
+  ao longo dos snapshots do dia, mas o **último snapshot só tinha 5**. Como os
+  snapshots são `_acc`-augmentados (`getTeamsBySector` retorna `augmented` de
+  `_accApply`, wpaService.js:1220-1225; `saveSnapshot(teams)` recebe isso),
+  a contagem só poderia CAIR se o `_acc` fosse zerado no meio do dia — e foi:
+  fizemos ~4 `pm2 restart` (deploys) hoje. `_acc` é in-memory e **não é
+  rehidratado no boot** (`_accReset` só limpa; não lê snapshots do dia).
+- **Mecanismo do dano:** (1) `upsertTeamDailyTotals` grava com `upsert onConflict`
+  = SUBSTITUI o count; pós-restart os ciclos gravam contagem menor e sobrescrevem
+  a maior. (2) `consolidateDay` (20:30) re-agrega do ÚLTIMO snapshot por sessão —
+  se diminuído por restart, subnotifica. Resultado: **todo dia com deploy mid-day
+  pode reportar produção abaixo do real** (a diferença = conclusões que já haviam
+  saído da janela ao vivo da WPA e só viviam no `_acc`).
+- **Impacto:** MÉDIO-ALTO — number EDP-facing, mas só em dias de deploy no
+  expediente; não corrompe (snapshots retidos, reconstruível). Subnotifica (nunca
+  infla).
+- **Ação (recomendada):** rehidratar o `_acc` no boot a partir dos snapshots de
+  HOJE (reconstrói `_acc.notes` e `_acc.carteiras`), pra um restart não perder a
+  acumulação do dia. Alternativa/complemento robusto: `consolidateDay` reconstruir
+  concluídas/rejeitadas pela **UNIÃO de TODOS os snapshots do dia** (dedup por UUID),
+  não só o último — imune a restart E à rotação do `Concluded[]` da WPA.
+- **Aceite:** após restart mid-day, o snapshot seguinte mantém a contagem
+  acumulada do dia (não cai); `audit-indicadores` estável antes/depois de restart;
+  re-consolidação de um dia com restart conhecido recupera o número correto.
+- **Esforço:** 4-6h (rehidratação) ou 3-4h (união no consolidateDay) — de
+  preferência os dois.
+- **Rollback:** reverter o commit.
+- **⚠️ Nota:** ao implementar a UNIÃO no consolidateDay, a re-consolidação de
+  julho/junho pode AUMENTAR a produção de dias que tiveram deploy (recupera
+  conclusões subnotificadas). Rever com o José antes de aplicar em massa.
 
 ---
 
