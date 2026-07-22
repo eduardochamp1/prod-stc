@@ -20,6 +20,15 @@
  *   EXECUTADAS  = Concluded − rejeitadas          (rejeitada > concluída)
  *   ANDAMENTO   = (executed ∪ Downloaded 3/6/7) − concluídas − rejeitadas
  *
+ * REGRA DE NEGÓCIO confirmada pelo José (22/07/2026, tela Gestão Online):
+ * "as notas que temos que contar como rejeitadas são as que aparecem com
+ * status de execução Rejeitada". O portal distingue rejeitada por um CAMPO
+ * da nota dentro da lista Concluídas; nosso painel distingue pela presença
+ * no endpoint notes/rejected. Esta auditoria também CONFRONTA as duas
+ * definições (campo × endpoint) pra provar que são equivalentes — e coleta
+ * empiricamente os campos de status brutos (ExecutionStatus/ConclusionStatus/
+ * Status) de cada bucket, já que normalizarNotaV2 descarta ConclusionStatus.
+ *
  * READ-ONLY: só GETs na WPA (mesma carga de 1 ciclo do cron) e SELECTs no
  * Postgres local. Não escreve nada. Rodar na VM:
  *
@@ -75,9 +84,22 @@ async function getV2(sector) {
   } catch { return []; }
 }
 
+// Tally global dos campos de status brutos por origem (Concluded/rejected/executed)
+// — vocabulário empírico pra mapear o "Status de execução" do portal.
+const statusCombos = new Map();
+function tallyStatus(origem, n) {
+  const key = `${origem} | ExecutionStatus=${n.ExecutionStatus ?? '—'} | ConclusionStatus=${n.ConclusionStatus ?? '—'} | Status=${n.Status ?? '—'}`;
+  statusCombos.set(key, (statusCombos.get(key) || 0) + 1);
+}
+// "Rejeitada" pelo CAMPO da nota (regra de negócio do portal): qualquer campo
+// de status textual contendo 'rejeit'.
+function ehRejeitadaPorCampo(n) {
+  return /rejeit/i.test(String(n.ConclusionStatus ?? '')) || /rejeit/i.test(String(n.Status ?? ''));
+}
+
 async function coletaWpa() {
   // teamName → { sector, sessions:[{id,end}], conc:Set, exec:Set, rej:Set,
-  //              downAndamento:Set, v2Online:bool, numeroPorId:Map }
+  //              concRejPorCampo:Set, downAndamento:Set, v2Online:bool, numeroPorId:Map }
   const teams = new Map();
 
   for (const sector of SECTORS) {
@@ -94,6 +116,7 @@ async function coletaWpa() {
       if (!teams.has(name)) {
         teams.set(name, {
           sector, sessions: [], conc: new Set(), exec: new Set(), rej: new Set(),
+          concRejPorCampo: new Set(),
           downAndamento: new Set(), v2Online: false, numeroPorId: new Map(),
           fetchErros: 0,
         });
@@ -114,7 +137,12 @@ async function coletaWpa() {
       if (!item) continue;
       t.v2Online = true;
       (item.Concluded || []).forEach(n => {
-        if (n?.Id) { t.conc.add(n.Id); t.numeroPorId.set(n.Id, `${n.Number || ''}/${n.Type || ''}`); }
+        if (n?.Id) {
+          t.conc.add(n.Id);
+          t.numeroPorId.set(n.Id, `${n.Number || ''}/${n.Type || ''}`);
+          tallyStatus('Concluded[]', n);
+          if (ehRejeitadaPorCampo(n)) t.concRejPorCampo.add(n.Id);
+        }
       });
       (item.Downloaded || []).forEach(n => {
         if (n?.Id && ES_ANDAMENTO.has(n.ExecutionStatus)) {
@@ -143,8 +171,8 @@ async function coletaWpa() {
         fetchNotesSession(job.sessId, 'executed'),
       ]);
       if (!rej.ok || !exec.ok) job.t.fetchErros++;
-      rej.notes.forEach(n => { if (n?.Id) { job.t.rej.add(n.Id); job.t.numeroPorId.set(n.Id, `${n.Number || ''}/${n.Type || ''}`); } });
-      exec.notes.forEach(n => { if (n?.Id) { job.t.exec.add(n.Id); job.t.numeroPorId.set(n.Id, `${n.Number || ''}/${n.Type || ''}`); } });
+      rej.notes.forEach(n => { if (n?.Id) { job.t.rej.add(n.Id); job.t.numeroPorId.set(n.Id, `${n.Number || ''}/${n.Type || ''}`); tallyStatus('notes/rejected', n); } });
+      exec.notes.forEach(n => { if (n?.Id) { job.t.exec.add(n.Id); job.t.numeroPorId.set(n.Id, `${n.Number || ''}/${n.Type || ''}`); tallyStatus('notes/executed', n); } });
       await sleep(150);
     }
   }
@@ -251,8 +279,11 @@ async function main() {
     const dE = diffSets(bw.executadas, bp.executadas);
     const dA = diffSets(bw.andamento,  bp.andamento);
     const dR = diffSets(bw.rejeitadas, bp.rejeitadas);
+    // Confronto das DUAS definições de rejeitada (só válido com V2 online,
+    // senão não temos os campos do Concluded[]): campo "rejeit*" × endpoint.
+    const dDef = w.v2Online ? diffSets(w.concRejPorCampo, w.rej) : null;
 
-    if (dE.igual && dA.igual && dR.igual) {
+    if (dE.igual && dA.igual && dR.igual && (!dDef || dDef.igual)) {
       iguais++;
       if (!SO_DIFF) detalhes.push(
         `  ✅ ${name}: exec ${bw.executadas.size} · and ${bw.andamento.size} · rej ${bw.rejeitadas.size}  (bate por UUID)${oficial}`);
@@ -271,6 +302,11 @@ async function main() {
     if (!dE.igual) detalhes.push(`       EXECUTADAS  wpa=${bw.executadas.size} painel=${bp.executadas.size}  ${fmt(dE, w)}`);
     if (!dA.igual) detalhes.push(`       ANDAMENTO   wpa=${bw.andamento.size} painel=${bp.andamento.size}  ${fmt(dA, w)}`);
     if (!dR.igual) detalhes.push(`       REJEITADAS  wpa=${bw.rejeitadas.size} painel=${bp.rejeitadas.size}  ${fmt(dR, w)}`);
+    if (dDef && !dDef.igual) detalhes.push(
+      `       DEF. REJEITADA  por-CAMPO=${w.concRejPorCampo.size} por-ENDPOINT=${w.rej.size}  ` +
+      `${dDef.soA.length ? `só-campo [${dDef.soA.slice(0, 3).map(id => num(w, id)).join(', ')}] ` : ''}` +
+      `${dDef.soB.length ? `só-endpoint [${dDef.soB.slice(0, 3).map(id => num(w, id)).join(', ')}]` : ''}` +
+      `  ⟵ as duas definições de rejeitada DIVERGEM nesta equipe`);
   }
 
   console.log('\n▶ Comparação por equipe (por UUID):\n');
@@ -287,6 +323,16 @@ async function main() {
     const a = totais.wpa[k], b = totais.painel[k];
     console.log(`  ${k.toUpperCase().padEnd(14)} ${String(a).padStart(8)}  ${String(b).padStart(8)}  ${String(b - a).padStart(5)}`);
   });
+  console.log('');
+  console.log('  VOCABULÁRIO DE STATUS OBSERVADO (campos brutos por origem):');
+  [...statusCombos.entries()].sort((a, b) => b[1] - a[1]).forEach(([k, n]) => {
+    console.log(`    ${String(n).padStart(5)}×  ${k}`);
+  });
+  console.log('');
+  console.log('  ↑ Use esta tabela pra mapear o "Status de execução" do portal (Executada/');
+  console.log('  Rejeitada) pros campos do JSON. Se Concluded[] trouxer um campo com');
+  console.log('  "Rejeitada", a linha DEF. REJEITADA de cada equipe confronta as duas');
+  console.log('  definições (campo × endpoint notes/rejected).');
   console.log('');
   console.log('  Leitura: Δ pequeno + divergências explicadas por timing (snapshot de');
   console.log('  até 15min atrás; nota concluída/rejeitada nesse intervalo) = painel');
