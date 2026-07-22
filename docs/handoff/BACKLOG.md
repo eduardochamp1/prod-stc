@@ -710,10 +710,13 @@ feita em PR separado depois dos testes.
   (commit 47c68cc, P3-11) corrige o AO VIVO daqui pra frente; (2) `consolidateDay`
   agora agrega da UNIÃO de todos os snapshots do dia via `_unionTeamsFromSnapshots`
   (função pura, `test/unionSnapshots.test.js`, 8 testes) — recupera concluídas
-  rotacionadas/perdidas. **FALTA:** rodar `reconsolidar-produtividade.js` (dry-run
-  mede o quanto sobe; `--apply` grava) nos dias afetados. Medição de 22/07 estimou
-  subnotificação de ~30-40% no histórico. ⚠️ re-consolidar SOBE a produção reportada
-  — decidir alcance com o José.
+  rotacionadas/perdidas. **MEDIÇÃO do contrato (22/07, dry-run união, 75 dias
+  09/05→22/07):** recuperável TOTAL só +7% (45.394→48.613). CONCENTRADO EM JULHO:
+  mai +4%, jun −1% (ok — NÃO tocar), **jul +21% (+2.877 OS)** = mês dos deploys
+  pesados (restarts zeraram o _acc). Hoje 22/07 (código novo o dia todo) deu Δ≈0 =
+  fix validado. **FALTA:** re-consolidar SÓ julho (01→22) via
+  `reconsolidar-produtividade.js --apply`, após checar o outlier 07-16 (+77%). ⚠️
+  re-consolidar SOBE a produção reportada — recupera produção real subnotificada.
 - **Fonte:** Investigação do EPJAC34 na auditoria de 22/07/2026.
 - **Evidência:** EPJAC34 (1 sessão, sem relogin) teve **13 concluídas distintas**
   ao longo dos snapshots do dia, mas o **último snapshot só tinha 5**. Como os
