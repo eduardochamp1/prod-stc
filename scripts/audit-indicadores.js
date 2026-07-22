@@ -121,7 +121,7 @@ async function coletaWpa() {
           fetchErros: 0,
         });
       }
-      teams.get(name).sessions.push({ id: s.Id, end: s.EndTime || null });
+      teams.get(name).sessions.push({ id: s.Id, end: s.EndTime || null, begin: s.BeginTime || null });
     }
 
     // V2 (1 chamada por setor): Concluded + Downloaded por equipe
@@ -261,7 +261,22 @@ async function main() {
     const p = painel.get(name);
     const oficial = isOficial(name) ? '' : '  [NÃO-OFICIAL: fora do painel]';
 
-    if (w && !p) { soWpa++; detalhes.push(`  ⚠️  ${name}: só na WPA (sem snapshot hoje)${oficial}`); continue; }
+    if (w && !p) {
+      // Sessão VIRA-NOITE: Sessions/today devolve sessões que TERMINARAM hoje
+      // mesmo tendo começado ontem. O painel atribui a produção ao dia do
+      // sessionBegin (regra _sessionDate) — ausência no snapshot de HOJE é
+      // correta, a equipe está no histórico de ontem. Descoberto em 22/07/2026
+      // (EPGPR30/EPMRT30/EPCIT32/EPCIT33/EPVGA31, turmas noturnas de poda).
+      const viraNoite = w.sessions.length > 0 &&
+        w.sessions.every(s => (s.begin || '').slice(0, 10) < hoje);
+      if (viraNoite) {
+        detalhes.push(`  ℹ️  ${name}: vira-noite (começou ${w.sessions[0].begin?.slice(0, 10)}) — produção atribuída ao dia anterior; ausência hoje é correta${oficial}`);
+      } else {
+        soWpa++;
+        detalhes.push(`  ⚠️  ${name}: só na WPA (sem snapshot hoje; 1ª sessão ${w.sessions[0]?.begin || '?'})${oficial}`);
+      }
+      continue;
+    }
     if (!w && p) {
       soPainel++;
       if (p.sessaoAberta) detalhes.push(`  ⚠️  ${name}: só no painel (sessão aberta sem sessão WPA hoje?)${oficial}`);
