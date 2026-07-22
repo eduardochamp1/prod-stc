@@ -783,18 +783,25 @@ function _accRecord(teams) {
     ];
     todasRealizadas.forEach(n => {
       const chave = n.id || n.codigo;
-      if (chave && !_acc.notes.has(chave)) {
-        _acc.notes.set(chave, {
-          id:       n.id || null,
-          codigo:   n.codigo,
-          tipoCode: n.tipoCode,
-          tipoNome: n.tipoNome || n.tipoCode,
-          teamName: t.teamName,
-          regional: t.regional,
-          status:   n.status,  // 'executada' | 'concluida' | 'rejeitada'
-          conclusionDate: n.conclusionDate || null,
-        });
-      }
+      if (!chave) return;
+      // SOBRESCREVE (não só first-write, como era antes): mantém o status
+      // acumulado alinhado ao ÚLTIMO estado visto ao vivo. Como todasRealizadas
+      // vem na ordem executadas→concluidas→rejeitadas, se a nota estiver em mais
+      // de um bucket no mesmo payload, o mais terminal vence (rejeitada >
+      // concluida > executada). Sem isso, uma nota que avançava de andamento pra
+      // concluída/rejeitada ficava congelada como 'executada' e (a) sumia da
+      // produção se a fonte podasse concluidas/rejeitadas, (b) voltava pra
+      // andamento indevidamente. (P3-11, 22/07/2026)
+      _acc.notes.set(chave, {
+        id:       n.id || null,
+        codigo:   n.codigo,
+        tipoCode: n.tipoCode,
+        tipoNome: n.tipoNome || n.tipoCode,
+        teamName: t.teamName,
+        regional: t.regional,
+        status:   n.status,  // 'executada' | 'concluida' | 'rejeitada'
+        conclusionDate: n.conclusionDate || null,
+      });
     });
 
     // Acumula carteira inicial: TODA nota que apareceu na carteira da equipe hoje
@@ -852,7 +859,18 @@ function _accApply(teams) {
       ...(t.notasConcluidas || []).map(n => n.id || n.codigo),
       ...(t.notasRejeitadas || []).map(n => n.id || n.codigo),
     ]);
-    const novasExec = (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
+    // ANDAMENTO é estado AO VIVO: pra equipe presente com payload ÍNTEGRO, a
+    // lista atual de executadas É a verdade — não re-injeta andamento acumulado,
+    // pois seriam notas transferidas/canceladas pela EDP no meio do dia (P3-11).
+    // Só re-injeta como FALLBACK quando o payload veio 100% vazio (provável
+    // falha de coleta transitória), pra não zerar andamento por erro. Concluídas
+    // e rejeitadas SEMPRE re-injetam (produção + rejeições podadas pela API têm
+    // que persistir — comportamento load-bearing validado na auditoria 22/07).
+    const payloadIntegro = ((t.notasBaixadas || []).length + (t.notasExecutadas || []).length
+      + (t.notasConcluidas || []).length + (t.notasRejeitadas || []).length) > 0 || !!t.sessionEnd;
+    const novasExec = payloadIntegro
+      ? []
+      : (extrasExec[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
     const novasConc = (extrasConc[t.teamName] || []).filter(n => !existentes.has(n.id || n.codigo));
     const novasRej  = (extrasRej[t.teamName]  || []).filter(n => !existentes.has(n.id || n.codigo));
     // Carteira inicial: total cumulativo de notas distintas que passaram pela
@@ -1280,4 +1298,6 @@ module.exports = {
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)
   REGIONAL_MAP,
+  // Exportados pra teste (P3-11) — acumulador diário.
+  _accRecord, _accApply, _acc,
 };

@@ -61,7 +61,7 @@
 | P3-8 | Remover código morto Vercel/Supabase-remote | Backend | pending |
 | P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
 | P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
-| P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | pending |
+| P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | **done** (22/07) |
 
 ---
 
@@ -1122,7 +1122,13 @@ feita em PR separado depois dos testes.
 ## P3-11 — "Andamento" ao vivo retém notas transferidas/canceladas no meio do dia
 
 - **Categoria:** Dados/Frontend
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — `_accRecord` passou a sobrescrever o status
+  acumulado (upgrade executada→concluida→rejeitada, nunca congela) e `_accApply`
+  só re-injeta andamento acumulado quando o payload da equipe veio VAZIO (fallback
+  de falha de coleta); com payload íntegro, andamento = ao vivo. Concluídas/
+  rejeitadas seguem re-injetando sempre (produção + poda de rejeição preservadas).
+  Coberto por `test/accumulator.test.js` (7 testes: transferida sai do andamento,
+  guard de payload vazio, upgrade de estado, poda de rejeição, no-dup relogin).
 - **Fonte:** Auditoria de veracidade 22/07/2026 (`scripts/audit-indicadores.js`,
   2 rodadas independentes).
 - **Evidência:** ~8 notas (em 111 equipes) apareciam em "andamento" no painel
