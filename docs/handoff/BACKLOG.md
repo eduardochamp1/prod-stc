@@ -24,7 +24,7 @@
 |---|---|---|---|
 | P0-0 | VM sem swap + Postgres sem auto-restart confiável (INCIDENTE 09/07) | Ops/Infra | pending |
 | P0-1 | Continuidade humana (bus factor 1) | Governança | pending |
-| P0-2 | Backup offsite (Postgres) | Ops | **script+doc done** — falta setup rclone/OAuth na VM (José) |
+| P0-2 | Backup offsite (Postgres) | Ops | **local OK (cron ativo)** — falta só offsite (SFTP→OneDrive manual OU rclone) |
 | P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
 | P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | **done** (a8dcbab, 08/07) |
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
@@ -162,8 +162,13 @@
   de integridade, + retenção offsite 30d), opt-in com degradação segura (sem
   rclone configurado, segue backup local sem quebrar). Setup passo a passo (install
   sem sudo + OAuth headless do OneDrive + crontab + teste de restore) documentado
-  no RUNBOOK.md ("Backup offsite (P0-2)"). **FALTA (José, na VM):** rodar o setup do
-  rclone (OAuth precisa do navegador) + re-copiar o script pra ~ + validar o aceite.
+  no RUNBOOK.md ("Backup offsite (P0-2)"). **REALIDADE constatada 22/07:** o backup
+  LOCAL já rodava automático (cron 03:01, 15 dumps presentes Jul 8→22, ~600M/dia,
+  integridade OK, retenção 14d) — a camada mais crítica já estava de pé. **FALTA só
+  o OFFSITE.** Caminho leve escolhido: **SFTP→OneDrive manual** (arrastar o dump mais
+  recente ~1×/semana; sem rclone). O rclone (automação) ficou opcional/adiado — o
+  OAuth headless travou o José (precisa de rclone no Windows). Atenção disco: 8.1G
+  em backups; se apertar, baixar RETENTION_DAYS pra 7.
 - **Fonte:** CTO review 2026-07-08; auditoria de operação
 - **Evidência:** `scripts/backup-wpa-monitor.sh:30` — `BACKUP_DIR=$HOME/backups/wpa_monitor`
   na própria VM. `POSTGRES-MIGRATION.md:262` até reconhece "copie os backups

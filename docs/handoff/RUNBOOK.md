@@ -177,9 +177,25 @@ Se `has_drift: true`, considere rodar `consolidateDay`.
 
 ## Backup offsite (P0-2)
 
-O `scripts/backup-wpa-monitor.sh` faz o dump local **e** copia pro OneDrive
-corporativo via `rclone` (se configurado). Sem o rclone, o backup fica só local
-(degradação segura — o script nunca aborta por causa disso). Setup **uma vez**:
+**Estado (22/07/2026):** o backup **LOCAL** já roda automático via cron (03:01
+diário, dumps `-Fc` em `~/backups/wpa_monitor/`, integridade verificada, retenção
+14 dias) — confirmado com 15 dumps presentes. Isso já protege contra corrupção,
+migração ruim e deleção acidental (as falhas mais comuns). Falta só o **OFFSITE**
+(cópia fora da VM, pro caso de o disco/VM morrer).
+
+### Offsite SIMPLES (recomendado se não quiser mexer com rclone)
+
+Pelo **SFTP** (Termius ou qualquer cliente), copie periodicamente (semanal cobre)
+o `.dump` mais recente de `~/backups/wpa_monitor/` pra uma pasta do **OneDrive**
+no Windows. 1 arquivo (~600M), sem OAuth, sem config. Resolve o cenário de disco
+morto. É "offsite manual" — suficiente enquanto o rclone não for prioridade.
+
+### Offsite AUTOMÁTICO via rclone (opcional — automatiza o acima)
+
+O `scripts/backup-wpa-monitor.sh` já tem a etapa: se o `rclone` estiver
+configurado, copia o dump pro OneDrive após a verificação de integridade (retenção
+offsite 30d). Sem rclone, degrada pra local sem quebrar. Setup **uma vez** (o
+ponto chato é o OAuth headless — precisa de rclone no Windows p/ `rclone authorize`):
 
 ### 1. Instalar rclone no usuário (SEM sudo — binário único em ~/bin)
 
