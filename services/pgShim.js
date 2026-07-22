@@ -33,19 +33,40 @@ const { Pool } = require('pg');
 
 let _pool = null;
 
-function _getPool() {
-  if (_pool) return _pool;
-  const cs = process.env.DATABASE_URL;
+/**
+ * Monta o config do `new Pool()` a partir do env. Função PURA (não cria pool
+ * nem conecta) — separada de _getPool pra ser testável sem banco.
+ *
+ * statement_timeout (P2-6, 22/07/2026): aborta no servidor qualquer query que
+ * passar de N ms (default 60s). Sem isso, um SELECT pesado (export mensal,
+ * range grande na aba Deslocamentos) pode segurar as `max` conexões por
+ * minutos e travar o cron de escrita em cascata. É aplicado via libpq
+ * `options` (-c), então vale pra TODA conexão do pool desde o startup.
+ * Scripts de backfill que precisam de query longa devem exportar
+ * PG_STATEMENT_TIMEOUT_MS=0 (0 = sem limite, semântica do Postgres).
+ */
+function _buildPoolConfig(env = process.env) {
+  const cs = env.DATABASE_URL;
   if (!cs) {
     throw new Error('DATABASE_URL não configurada — defina no .env (ex: postgresql://user:pass@localhost:5432/wpa_monitor)');
   }
-  _pool = new Pool({
+  const stmtTimeout = parseInt(env.PG_STATEMENT_TIMEOUT_MS || '60000', 10);
+  const cfg = {
     connectionString: cs,
-    max:              parseInt(process.env.PG_POOL_MAX  || '10', 10),
-    idleTimeoutMillis: parseInt(process.env.PG_IDLE_MS || '30000', 10),
+    max:              parseInt(env.PG_POOL_MAX  || '10', 10),
+    idleTimeoutMillis: parseInt(env.PG_IDLE_MS || '30000', 10),
     // Aceita conexões internas sem SSL; ative se conectar em Supabase ou em PG remoto.
-    ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
-  });
+    ssl: env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  };
+  if (Number.isFinite(stmtTimeout) && stmtTimeout > 0) {
+    cfg.options = `-c statement_timeout=${stmtTimeout}`;
+  }
+  return cfg;
+}
+
+function _getPool() {
+  if (_pool) return _pool;
+  _pool = new Pool(_buildPoolConfig());
   _pool.on('error', err => console.error('[pgShim] pool error:', err.message));
   return _pool;
 }
@@ -337,4 +358,4 @@ class Client {
   from(table) { return new Query(table); }
 }
 
-module.exports = { Client, Query, _getPool, _setPool };
+module.exports = { Client, Query, _getPool, _setPool, _buildPoolConfig };

@@ -9,7 +9,7 @@
 
 const { test } = require('node:test');
 const assert   = require('node:assert');
-const { Client, _setPool } = require('../services/pgShim');
+const { Client, _setPool, _buildPoolConfig } = require('../services/pgShim');
 
 /**
  * Fake pool: registra a última query executada e retorna rows pré-definidos.
@@ -218,4 +218,43 @@ test('erro de query é envelopado em { error }, não rejeita promise', async () 
   assert.equal(res.data, null);
   assert.equal(res.error.code, '42P01');
   assert.match(res.error.message, /relation not exist/);
+});
+
+// ── POOL CONFIG / statement_timeout (P2-6) ──────────────────────────────────
+// _buildPoolConfig é pura: monta o config do new Pool() sem conectar. Trava o
+// contrato do statement_timeout (aborta query > N ms → protege as conexões).
+
+test('statement_timeout: default 60s presente no options do pool', () => {
+  const cfg = _buildPoolConfig({ DATABASE_URL: 'postgresql://u:p@localhost:5432/db' });
+  assert.equal(cfg.options, '-c statement_timeout=60000');
+});
+
+test('statement_timeout: PG_STATEMENT_TIMEOUT_MS customizado é respeitado', () => {
+  const cfg = _buildPoolConfig({
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+    PG_STATEMENT_TIMEOUT_MS: '90000',
+  });
+  assert.equal(cfg.options, '-c statement_timeout=90000');
+});
+
+test('statement_timeout: 0 desliga (sem options) — escape hatch p/ backfill', () => {
+  const cfg = _buildPoolConfig({
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+    PG_STATEMENT_TIMEOUT_MS: '0',
+  });
+  assert.equal(cfg.options, undefined, 'sem statement_timeout quando 0');
+});
+
+test('_buildPoolConfig: sem DATABASE_URL lança erro claro', () => {
+  assert.throws(() => _buildPoolConfig({}), /DATABASE_URL não configurada/);
+});
+
+test('_buildPoolConfig: PG_POOL_MAX / PG_IDLE_MS / SSL respeitados', () => {
+  const cfg = _buildPoolConfig({
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+    PG_POOL_MAX: '20', PG_IDLE_MS: '15000', PG_SSL: 'true',
+  });
+  assert.equal(cfg.max, 20);
+  assert.equal(cfg.idleTimeoutMillis, 15000);
+  assert.deepEqual(cfg.ssl, { rejectUnauthorized: false });
 });

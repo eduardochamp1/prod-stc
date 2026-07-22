@@ -46,7 +46,7 @@
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
 | P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
 | P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | **done** (22/07) |
-| P2-6 | `statement_timeout` no pool Postgres | Dados | pending |
+| P2-6 | `statement_timeout` no pool Postgres | Dados | **done** (22/07) |
 | P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | pending |
 | P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
 | P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
@@ -963,7 +963,7 @@ feita em PR separado depois dos testes.
 ## P2-6 — `statement_timeout` no pool Postgres
 
 - **Categoria:** Dados
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de dados 2026-07-08
 - **Evidência:** `services/pgShim.js:42-48` — pool configurado sem timeout.
   Query pesada em JSONB pode segurar as 10 conexões.
@@ -977,6 +977,25 @@ feita em PR separado depois dos testes.
 - **Esforço:** 5min.
 - **Rollback:** Trivial.
 - **Depende de:** nada.
+- **Feito em:** 22/07/2026.
+  - Config do pool extraída pra `_buildPoolConfig(env)` (função PURA, testável
+    sem banco) e `statement_timeout` aplicado via libpq `options`
+    (`-c statement_timeout=<ms>`) — vale pra TODA conexão do pool desde o
+    startup. Default **60000ms**, configurável por `PG_STATEMENT_TIMEOUT_MS`.
+  - **Escape hatch:** `PG_STATEMENT_TIMEOUT_MS=0` desliga o limite (semântica
+    do Postgres) — necessário pra scripts de backfill/reconsolidação que
+    rodam queries longas de propósito e usam o mesmo pool. Documentado no
+    jsdoc de `_buildPoolConfig`.
+  - **Testes:** +5 em `test/pgShim.test.js` (default 60s presente; custom
+    respeitado; 0 desliga; erro claro sem DATABASE_URL; max/idle/ssl). Suíte:
+    227/227. Validação end-to-end (pg_sleep) fica como passo manual na VM
+    (ver abaixo) — não dá pra testar timeout real sem banco.
+  - **Validação na VM** (o `SET` local do psql NÃO reflete o pool da app; para
+    provar o mecanismo do servidor, rode direto na conexão):
+    `psql "$DATABASE_URL" -c "SET statement_timeout=2000; SELECT pg_sleep(5);"`
+    → deve abortar com `canceling statement due to statement timeout`.
+  - **Deploy:** só código (`services/pgShim.js`), sem migração. `git pull` +
+    PM2. Rollback trivial (reverter o commit).
 
 ## P2-7 — Schema drift: `pg_dump --schema-only` no git
 
