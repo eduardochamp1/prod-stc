@@ -56,18 +56,34 @@ function _onlyOficiais(rows, key = 'team_name') {
  * Executa uma query Supabase paginando até buscar todos os registros.
  * Contorna o limite de 1000 linhas/req do PostgREST.
  *
+ * DETERMINISMO DE PAGINAÇÃO (P2-5, 22/07/2026): sem uma ordem TOTAL, nem o
+ * Postgres nem o PostgREST garantem a MESMA ordem entre as chamadas .range()
+ * de páginas distintas — linhas na fronteira de página podem DUPLICAR ou
+ * SUMIR entre páginas. O risco é real aqui: um batch do cron insere ~60
+ * equipes com o MESMO `captured_at` (snapshots), e os agregados empatam em
+ * `date` (team_daily_totals). Por isso aplicamos, em toda página, um
+ * tie-breaker por PK como ÚLTIMA chave de ordenação — o que garante ordem
+ * total estável. Como a PK da maioria das tabelas é `id` (BIGSERIAL), o
+ * default é 'id'; tabelas cuja PK tem outro nome passam o correto
+ * (ex.: note_rejections → 'note_id'). tieBreaker=null desliga (use só se a
+ * query já tiver ordem total própria).
+ *
  * @param {() => any} queryFactory  fábrica que devolve um query builder NOVO
  *                                  (sem .range() aplicado) — chamado a cada página
  * @param {number} pageSize         tamanho da página (default 1000)
+ * @param {string|null} tieBreaker  coluna PK de desempate (default 'id')
  * @returns {Promise<any[]>}        array completo de rows
  */
-async function _selectAll(queryFactory, pageSize = 1000) {
+async function _selectAll(queryFactory, pageSize = 1000, tieBreaker = 'id') {
   let allRows = [];
   let page = 0;
   // Limite de segurança: 200 páginas × 1000 = 200k linhas (impede loop infinito)
   const MAX_PAGES = 200;
   while (page < MAX_PAGES) {
-    const q = queryFactory().range(page * pageSize, (page + 1) * pageSize - 1);
+    let q = queryFactory();
+    // Tie-breaker por PK como ÚLTIMA chave → ordem total estável entre páginas.
+    if (tieBreaker) q = q.order(tieBreaker);
+    q = q.range(page * pageSize, (page + 1) * pageSize - 1);
     const { data, error } = await q;
     if (error) throw error;
     if (!data || data.length === 0) break;
@@ -1347,7 +1363,7 @@ async function _fetchRejeicoes({ de, ate, regionais, team, teams, tipos, somente
     else if (team && team !== 'ALL')                            q = q.eq('team_name', team);
     if (Array.isArray(tipos) && tipos.length > 0)               q = q.in('tipo', tipos);
     return q;
-  });
+  }, 1000, 'note_id'); // PK de note_rejections é note_id (UUID), não 'id'
 
   let filtered = _onlyOficiais(rows, 'team_name');
 
@@ -1635,4 +1651,5 @@ module.exports = {
   getNotasIndividuais,
   getMapaEquipe,
   getRejeicoesTotais, getRejeicoesLista, getRejeicoesMotivos,
+  _selectAll, // exportado p/ teste de paginação (P2-5) — não usar fora de testes
 };

@@ -45,7 +45,7 @@
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
 | P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
-| P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | pending |
+| P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | **done** (22/07) |
 | P2-6 | `statement_timeout` no pool Postgres | Dados | pending |
 | P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | pending |
 | P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
@@ -917,7 +917,7 @@ feita em PR separado depois dos testes.
 ## P2-5 — Tie-breaker `.order('id')` em queries paginadas
 
 - **Categoria:** Dados
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de dados 2026-07-08
 - **Evidência:** `db/queries.js:236`, `:622`, `:954` — paginam sobre
   `captured_at` DESC apenas. `dataWriter.js:45` insere ~60 equipes num
@@ -932,6 +932,33 @@ feita em PR separado depois dos testes.
 - **Esforço:** 30min.
 - **Rollback:** Reverter (ordem instável volta).
 - **Depende de:** nada.
+- **Feito em:** 22/07/2026.
+  - **Escopo REVISADO na execução (maior que o do plano, de propósito).** Ao
+    validar, o `.order()` das 3 queries de `snapshots` era só a ponta: das **16
+    factories** que passam por `_selectAll`, **10** ou não tinham `.order()`
+    nenhum (paginar com `.range()` sem `ORDER BY` = ordem arbitrária entre
+    páginas no Postgres → mesma classe de bug) ou ordenavam só por `date`
+    (não-única). Várias dessas alimentam **agregados reportados à EDP**
+    (`team_daily_totals`), então eram tão ou mais críticas que as de snapshot.
+    Corrigir só 3 deixaria a classe aberta — contra a filosofia "aritmética
+    por construção". Não corrigi em silêncio: está aqui e no commit.
+  - **Fix por construção:** o tie-breaker foi centralizado no próprio
+    `_selectAll(queryFactory, pageSize=1000, tieBreaker='id')` — ele aplica
+    `.order(tieBreaker)` como ÚLTIMA chave em TODA página, garantindo ordem
+    total estável em todas as 16 paginações de uma vez. PKs auditadas em
+    `supabase/schema.sql`: `snapshots`, `team_daily_totals`,
+    `team_daily_subcat_totals`, `daily_totals`, `daily_subcat_totals` têm
+    `id BIGSERIAL` (default). `note_rejections` tem PK `note_id` (UUID) → o
+    caller passa `tieBreaker='note_id'`. `metas` não pagina via `_selectAll`.
+  - **Testes:** `_selectAll` agora é **exportado** e `test/pagination.test.js`
+    importa o REAL (antes copiava a impl — podia driftar). +5 testes: aplica
+    `id` por página; tie-breaker é a última chave após a ordem do factory;
+    `note_id` custom; `null` desliga; e paginação estável com `captured_at`
+    todos iguais (2500 UUIDs, nenhum perde/duplica). Suíte: 222/222.
+  - **Deploy:** só código (`db/queries.js`), sem migração. `git pull` + PM2.
+    Risco de quebra contido: única forma de erro seria tabela sem `id`, e todas
+    as paginadas foram auditadas (a única exceção, `note_rejections`, tem
+    override). Rollback: reverter o commit.
 
 ## P2-6 — `statement_timeout` no pool Postgres
 
