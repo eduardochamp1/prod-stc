@@ -175,6 +175,73 @@ node -e "require('./services/dataWriter').detectDrift('2026-07-10').then(r => co
 Retorna JSON com `snapshot_count`, `table_count`, `diff`, `has_drift`.
 Se `has_drift: true`, considere rodar `consolidateDay`.
 
+## Backup offsite (P0-2)
+
+O `scripts/backup-wpa-monitor.sh` faz o dump local **e** copia pro OneDrive
+corporativo via `rclone` (se configurado). Sem o rclone, o backup fica só local
+(degradação segura — o script nunca aborta por causa disso). Setup **uma vez**:
+
+### 1. Instalar rclone no usuário (SEM sudo — binário único em ~/bin)
+
+```bash
+mkdir -p ~/bin && cd /tmp
+curl -fSL -o rclone.zip https://downloads.rclone.org/rclone-current-linux-amd64.zip
+unzip -o rclone.zip
+cp rclone-*-linux-amd64/rclone ~/bin/rclone && chmod +x ~/bin/rclone
+grep -q 'HOME/bin' ~/.bashrc || echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/bin:$PATH"
+rclone version   # confirma
+```
+
+> Se o Fortinet bloquear o download de rclone.org: baixe o zip na sua máquina
+> Windows e suba pro servidor via `scp`, ou peça o binário à TI. É 1 arquivo.
+
+### 2. Autorizar o OneDrive (OAuth headless — servidor não tem navegador)
+
+Na VM: `rclone config` → `n` (new remote) → nome **`onedrive`** → tipo
+**`onedrive`** (Microsoft OneDrive) → deixe client_id/secret em branco →
+quando perguntar "Use auto config?" responda **`N`** (headless). O rclone imprime
+um comando `rclone authorize "onedrive" ...`.
+
+Na sua **máquina Windows** (com rclone instalado): rode esse comando, faça login
+com `jose.zouain@engelmig.com.br`, autorize, e **copie o token JSON** que aparece.
+Cole de volta no prompt da VM. Escolha a conta (Business/SharePoint) e confirme.
+
+```bash
+rclone listremotes            # deve listar "onedrive:"
+rclone lsd onedrive:          # lista as pastas do OneDrive corporativo
+rclone mkdir onedrive:wpa-backups
+```
+
+### 3. Rodar e conferir
+
+```bash
+~/backup-wpa-monitor.sh                       # dump + integridade + offsite
+tail -20 ~/backups/wpa_monitor/backup.log      # deve ter "✓ Offsite OK"
+rclone lsl onedrive:wpa-backups/               # dump do dia lá
+```
+
+O crontab (passo 4 da instalação do script) já cobre o agendamento diário 03h.
+Retenção: **14 dias local**, **30 dias offsite** (sobrescrevível via
+`OFFSITE_RETENTION_DAYS`).
+
+### 4. Teste de restore a partir do OFFSITE (fecha o aceite)
+
+```bash
+# baixa o dump do OneDrive e restaura num banco de teste (NÃO toca produção)
+rclone copy onedrive:wpa-backups/ /tmp/rtest/ --include "*_$(date +%Y-%m-%d)_*.dump"
+createdb -h 127.0.0.1 -U wpa_app wpa_monitor_test 2>/dev/null || true
+PGPASSWORD="$APP_PASS" pg_restore -h 127.0.0.1 -U wpa_app -d wpa_monitor_test \
+  --clean --if-exists /tmp/rtest/wpa_monitor_*.dump
+PGPASSWORD="$APP_PASS" psql -h 127.0.0.1 -U wpa_app -d wpa_monitor_test \
+  -c "SELECT count(*) FROM snapshots;"   # sanidade
+dropdb -h 127.0.0.1 -U wpa_app wpa_monitor_test
+```
+
+**Aceite:** `rclone version` roda sem sudo ✓ · `rclone lsd onedrive:` lista ✓ ·
+backup diário grava em `onedrive:wpa-backups/` ✓ · restore do dump offsite
+funciona ✓.
+
 ## Restore de backup
 
 ### Verificar backup mais recente
