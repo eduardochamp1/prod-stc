@@ -44,7 +44,7 @@
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
-| P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | pending |
+| P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
 | P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | pending |
 | P2-6 | `statement_timeout` no pool Postgres | Dados | pending |
 | P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | pending |
@@ -856,7 +856,7 @@ feita em PR separado depois dos testes.
 ## P2-4 — Escapar dados EDP em `innerHTML`
 
 - **Categoria:** Segurança / Frontend
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em" no fim do item.
 - **Fonte:** Auditoria de segurança + frontend 2026-07-08
 - **Evidência:** 133 usos de `innerHTML` em `index.html`. `escapeHtml`
   usado só 13 vezes e definido **em duplicidade** (`index.html:5862` e `:7327`).
@@ -879,13 +879,40 @@ feita em PR separado depois dos testes.
      (unsafe-inline ainda necessário porque tem onclick inline; remover
      depois do P3-2).
 - **Aceite:**
-  - [ ] `escapeHtml` definido 1 vez, usado em pontos críticos.
-  - [ ] Payload de teste com `<script>alert(1)</script>` no nome de OS
+  - [x] `escapeHtml` definido 1 vez, usado em pontos críticos.
+  - [x] Payload de teste com `<script>alert(1)</script>` no nome de OS
     renderiza como texto.
-  - [ ] Header CSP presente em resposta.
+  - [x] Header CSP presente em resposta.
 - **Esforço:** meio dia.
 - **Rollback:** Reverter commit.
 - **Depende de:** nada.
+- **Feito em:** 22/07/2026.
+  1. `escapeHtml` agora tem **1 única definição** (global hoisted em
+     `index.html:7328`). A duplicata local do IIFE `MultiSelect` (antigo
+     `:5862`) foi removida — os call-sites do IIFE (`refresh()`) resolvem pra
+     global por hoisting + execução diferida (comentário no lugar explica).
+  2. `escapeHtml()` aplicado nos pontos críticos de free-text da EDP:
+     `nota.comentarios`; bloco cliente/endereço (nome, unidade, telefone,
+     tensão, tarifa, logradouro, bairro, cidade, CEP); modal e histórico de
+     colaborador (nome, cargo, matrícula); logradouro na aba Mapa; observação
+     e `team_name` da rejeição. Coordenadas em `href` de mapa via
+     `encodeURIComponent`. Total: 23 usos.
+  3. **CSP + headers de segurança** em `server.js` (middleware após `cors()`).
+     O CSP ficou **mais amplo** que o mínimo do plano original, de propósito,
+     pra NÃO quebrar produção — libera só os hosts externos legítimos
+     validados por grep: tiles Leaflet (`*.tile.openstreetmap.org` em
+     `img-src`), proxy OSRM (`osrm-proxy.jose-zouain.workers.dev` em
+     `connect-src`), e `data:` (ícones/logos base64 + fotos WPA em `img-src`).
+     `'unsafe-inline'` em script/style continua necessário (onclick e estilos
+     inline do monólito) — só remove depois do P3-2. Também setados
+     `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`.
+  - **Nota (dívida remanescente):** a ação (3) do plano — trocar `onclick`
+    interpolado por `data-*` + listener delegado — **não** foi feita; é
+    refactor grande do monólito e fica acoplada ao **P3-2**. O escaping cobre
+    o vetor de dados; a CSP com `'unsafe-inline'` é o mitigador até lá.
+  - **Deploy:** só código (`index.html` + `server.js`), sem migração. Após
+    `git pull`, reiniciar PM2 (`delete + start`) e conferir o header CSP na
+    resposta (`curl -sI https://<painel>/ | grep -i content-security`).
 
 ## P2-5 — Tie-breaker `.order('id')` em queries paginadas
 

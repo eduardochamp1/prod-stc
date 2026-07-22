@@ -5857,14 +5857,11 @@
         if (disabled) inst.wrap.classList.remove('open');
       }
 
-      // Helper local de escape (evita depender do escapeHtml global que pode
-      // não estar definido neste ponto do parse).
-      function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, c => ({
-          '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-        }[c]));
-      }
-
+      // escapeHtml (usado em refresh(), acima) resolve pra definição GLOBAL única
+      // e hoisted — função declarada no mesmo escopo <script>, chamada só em
+      // runtime. A duplicata local que existia aqui foi removida no P2-4
+      // (22/07/2026); o comentário antigo sobre "não estar definido no parse" não
+      // se aplicava: hoisting + execução diferida garantem a global no call-site.
       return { init, refresh, getValues, setAll, setValues, setDisabled };
     })();
 
@@ -6686,7 +6683,7 @@
         const labels = r.motivo_textos || [];
         // Observação aparece como tooltip no Motivo (texto livre do operador)
         const obsTitle = r.observacao
-          ? `Observação: ${String(r.observacao).slice(0, 300).replace(/"/g, '&quot;')}`
+          ? `Observação: ${String(r.observacao).slice(0, 300)}`
           : 'Sem observação';
         const motivos = codes.length === 0
           ? `<span class="rej-no-motivo" title="${escapeHtml(obsTitle)}">sem motivo registrado</span>`
@@ -6705,7 +6702,7 @@
           : '';
         return `<tr>
           <td>${fmtDateBR(r.session_date)}</td>
-          <td title="${escapeHtml(colabs)}"><strong>${r.team_name}</strong></td>
+          <td title="${escapeHtml(colabs)}"><strong>${escapeHtml(r.team_name)}</strong></td>
           <td>${r.regional || ''}</td>
           <td>${r.tipo}</td>
           <td>${r.numero || ''}</td>
@@ -9206,8 +9203,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const colabHtml = colabCount > 0
           ? (r.collaborators || []).map(c => `
             <div class="hist-colab-item">
-              <span class="hist-matricula">${c.matricula}</span>
-              <span class="hist-colab-nome">${c.nome}</span>
+              <span class="hist-matricula">${escapeHtml(c.matricula)}</span>
+              <span class="hist-colab-nome">${escapeHtml(c.nome)}</span>
             </div>`).join('')
           : '<span style="font-size:12px;color:var(--cinza3)">Sem registro de colaboradores</span>';
 
@@ -10667,8 +10664,8 @@ ${equipes.length > 0 ? `<div class="perf-section">
         <div style="display:flex;flex-direction:column;gap:6px">
           ${colabs.map(c => `
             <div style="display:flex;align-items:center;gap:10px;background:var(--cinza1);border-radius:6px;padding:8px 12px;font-size:13px">
-              <div style="width:30px;height:30px;border-radius:50%;background:var(--verde);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">${c.nome.charAt(0)}</div>
-              <div><div style="font-weight:500">${c.nome}</div><div style="font-size:11px;color:var(--text2)">${c.cargo} · Mat. ${c.matricula}</div></div>
+              <div style="width:30px;height:30px;border-radius:50%;background:var(--verde);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0">${escapeHtml(String(c.nome || '').charAt(0))}</div>
+              <div><div style="font-weight:500">${escapeHtml(c.nome)}</div><div style="font-size:11px;color:var(--text2)">${escapeHtml(c.cargo)} · Mat. ${escapeHtml(c.matricula)}</div></div>
             </div>`).join('')}
         </div>
       </div>
@@ -10899,22 +10896,22 @@ ${equipes.length > 0 ? `<div class="perf-section">
 
       // ── Comentários ──────────────────────────────────────────────────
       const comentHtml = nota.comentarios
-        ? `<pre style="font-size:12px;white-space:pre-wrap;color:var(--text2);background:var(--cinza1);padding:10px;border-radius:6px;margin:0">${nota.comentarios}</pre>`
+        ? `<pre style="font-size:12px;white-space:pre-wrap;color:var(--text2);background:var(--cinza1);padding:10px;border-radius:6px;margin:0">${escapeHtml(nota.comentarios)}</pre>`
         : '<span style="font-size:13px;color:var(--text2)">Sem comentários.</span>';
 
       document.getElementById('nota-modal-body').innerHTML = `
       <div class="modal-section">
         <div class="modal-section-title">Cliente e endereço</div>
         <div class="nota-info-grid">
-          <div class="nota-info-item"><div class="nota-info-lbl">Cliente</div><div class="nota-info-val">${nota.cliente?.nome || '—'}</div></div>
-          <div class="nota-info-item"><div class="nota-info-lbl">Unidade Consumidora</div><div class="nota-info-val">${nota.cliente?.unidade || '—'}</div></div>
-          <div class="nota-info-item"><div class="nota-info-lbl">Endereço</div><div class="nota-info-val">${nota.endereco?.logradouro || '—'}${nota.endereco?.bairro ? ', ' + nota.endereco.bairro : ''}</div></div>
-          <div class="nota-info-item"><div class="nota-info-lbl">Cidade / CEP</div><div class="nota-info-val">${nota.endereco?.cidade || '—'}${nota.endereco?.cep ? ' — ' + nota.endereco.cep : ''}</div></div>
-          <div class="nota-info-item"><div class="nota-info-lbl">Telefone</div><div class="nota-info-val">${nota.cliente?.telefone || '—'}</div></div>
-          <div class="nota-info-item"><div class="nota-info-lbl">Tensão / Tarifa</div><div class="nota-info-val">${nota.cliente?.tensao || '—'} · ${nota.cliente?.tarifaCategoria || '—'}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Cliente</div><div class="nota-info-val">${escapeHtml(nota.cliente?.nome || '—')}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Unidade Consumidora</div><div class="nota-info-val">${escapeHtml(nota.cliente?.unidade || '—')}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Endereço</div><div class="nota-info-val">${escapeHtml(nota.endereco?.logradouro || '—')}${nota.endereco?.bairro ? ', ' + escapeHtml(nota.endereco.bairro) : ''}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Cidade / CEP</div><div class="nota-info-val">${escapeHtml(nota.endereco?.cidade || '—')}${nota.endereco?.cep ? ' — ' + escapeHtml(nota.endereco.cep) : ''}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Telefone</div><div class="nota-info-val">${escapeHtml(nota.cliente?.telefone || '—')}</div></div>
+          <div class="nota-info-item"><div class="nota-info-lbl">Tensão / Tarifa</div><div class="nota-info-val">${escapeHtml(nota.cliente?.tensao || '—')} · ${escapeHtml(nota.cliente?.tarifaCategoria || '—')}</div></div>
         </div>
         ${nota.endereco?.latitude && nota.endereco?.longitude
-          ? `<div style="margin-top:8px"><a href="https://maps.google.com/?q=${nota.endereco.latitude},${nota.endereco.longitude}" target="_blank" style="font-size:12px;color:var(--verde);text-decoration:none">🗺 Ver endereço no mapa</a></div>`
+          ? `<div style="margin-top:8px"><a href="https://maps.google.com/?q=${encodeURIComponent(nota.endereco.latitude)},${encodeURIComponent(nota.endereco.longitude)}" target="_blank" style="font-size:12px;color:var(--verde);text-decoration:none">🗺 Ver endereço no mapa</a></div>`
           : ''}
       </div>
       <div class="modal-section">
@@ -12434,7 +12431,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
               ${nota.tipo} · ${nota.numero}
             </div>
             ${nota.subCategoria ? `<div style="color:#555;margin-bottom:3px">${nota.subCategoria}</div>` : ''}
-            ${nota.endereco?.logradouro ? `<div style="font-size:11px;color:#666;margin-bottom:4px">📍 ${nota.endereco.logradouro}</div>` : ''}
+            ${nota.endereco?.logradouro ? `<div style="font-size:11px;color:#666;margin-bottom:4px">📍 ${escapeHtml(nota.endereco.logradouro)}</div>` : ''}
             <div style="font-size:11px;color:#666">${tempoPercurso}</div>
             <div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee;font-size:11px;color:var(--verde);font-weight:700;cursor:pointer"
                  onclick="mapaToggleNotaFilter('${nota.id}')">

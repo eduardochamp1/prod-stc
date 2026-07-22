@@ -23,6 +23,36 @@ const PORT = process.env.PORT || 3002;
 
 app.use(cors());
 
+// ── Security headers (P2-4) ───────────────────────────────────────────────────
+// CSP é defesa-em-profundidade: o escaping de dados EDP (escapeHtml no front) é a
+// defesa primária contra XSS; aqui limitamos o estrago caso algo escape.
+// Fontes externas LEGÍTIMAS do front (validadas por grep em 22/07/2026):
+//   • tiles do mapa Leaflet → https://{s}.tile.openstreetmap.org  (img-src)
+//   • proxy OSRM (deslocamentos) → osrm-proxy.jose-zouain.workers.dev (connect-src)
+//   • ícones/logos base64 (data:) e fotos WPA (data:)              (img-src data:)
+// 'unsafe-inline' é necessário: index.html tem <script> e onclick inline + estilos
+// inline. Endurecer isso (nonces) exigiria refatorar o monólito — ver H11/backlog.
+// NÃO adicione CDNs aqui: Fortinet bloqueia CDN em prod (tudo é vendorizado).
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https://*.tile.openstreetmap.org",
+  "connect-src 'self' https://osrm-proxy.jose-zouain.workers.dev",
+  "font-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+].join('; ');
+
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  next();
+});
+
 // ── WEBHOOK DE DEPLOY (antes do JSON parser para preservar raw body) ──────────
 
 app.post('/webhook/deploy', express.raw({ type: 'application/json' }), (req, res) => {
