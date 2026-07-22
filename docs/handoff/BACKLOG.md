@@ -47,7 +47,7 @@
 | P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
 | P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | **done** (22/07) |
 | P2-6 | `statement_timeout` no pool Postgres | Dados | **done** (22/07) |
-| P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | pending |
+| P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | **done** (22/07) |
 | P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
 | P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
 | P2-10 | Persistir estado do `_reclassifyJob` | Backend | pending |
@@ -1000,7 +1000,7 @@ feita em PR separado depois dos testes.
 ## P2-7 — Schema drift: `pg_dump --schema-only` no git
 
 - **Categoria:** Ops / Dados
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de dados 2026-07-08
 - **Evidência:**
   - `team_daily_carteira` é escrita (`dataWriter.js:682-685`) e lida
@@ -1020,14 +1020,42 @@ feita em PR separado depois dos testes.
   4. Escrever migration incremental `db/migrations/YYYYMMDD-team_daily_carteira.sql`
      com o CREATE TABLE correto (já existe em algum comentário do repo).
 - **Aceite:**
-  - [ ] `db/schema-atual.sql` no git.
-  - [ ] Comparação (`diff schema-atual.sql supabase/schema.sql`) revela
-    todas as diferenças.
-  - [ ] Migração de `team_daily_carteira` versionada.
+  - [x] `db/schema-atual.sql` no git (commit `c7e023b`, 844 linhas, pg_dump da VM).
+  - [x] Comparação revela todas as diferenças (documentada em `db/README.md`).
+  - [x] Migração de `team_daily_carteira` versionada
+    (`supabase/migrations/011_team_daily_carteira.sql`).
 - **Esforço:** 2h.
 - **Rollback:** Reverter commit.
 - **Depende de:** P0-1 (senha `wpa_app` acessível — ou fazer com o próprio
   José antes do handoff).
+- **Feito em:** 22/07/2026 (com o próprio José, satisfazendo a dependência P0-1).
+  - **`db/schema-atual.sql`**: `pg_dump --schema-only` do banco vivo, commitado
+    (844 linhas). Regeneração documentada em `db/README.md`.
+  - **Drift auditado** (`db/schema-atual.sql` × `supabase/schema.sql`):
+    - **ZERO drift de coluna** nas 11 tabelas compartilhadas — a base bate 1:1
+      com o banco (inclui as críticas `snapshots`/`team_daily_totals`).
+    - 6 tabelas só no banco (fora da base): `equipes_oficiais`,
+      `notas_daily_agg`, `notas_snapshots`, `note_rejections`, `osrm_cache`,
+      `team_daily_carteira`. As 5 primeiras têm migração de origem; a 6ª era a
+      única **órfã** — agora versionada.
+    - Nenhuma tabela do design faltando no banco.
+    - Mapa completo migração→tabela em `db/README.md`.
+  - **`team_daily_carteira` versionada**: criado
+    `supabase/migrations/011_team_daily_carteira.sql` com o schema **conferido
+    contra o dump real** (11 colunas, PK `(date,team_name)`, índice
+    `idx_tdc_regional`). Reconstrução a partir do código (write/read) bateu 1:1
+    com o `pg_dump`.
+  - **Obsoleto removido**: `migrations/add_note_rejections.sql` deletado —
+    definia `reason_codes/reason_labels/rejected_at`, mas o banco real e o
+    código usam `motivo_codes/motivo_textos/rejection_date` (de
+    `supabase/migrations/008`, que evoluiu com `observacao/formulario/
+    collaborator_*`). Confirmado contra o dump antes de deletar.
+  - **Desvio do plano (transparente):** a migração foi pra
+    `supabase/migrations/011_…` (sequência numerada já existente e aplicada
+    pelo `migrate-from-supabase.sh`), **não** pra `db/migrations/` como o plano
+    sugeria — criar um 3º diretório de migração, que nenhum runner conhece,
+    deixaria a migração órfã de novo. Sem migração de dados; só arquivos SQL/docs
+    (nenhum restart necessário).
 
 ## P2-8 — Extrair CSS pra `css/app.css` (primeiro passo do split)
 
