@@ -61,6 +61,7 @@
 | P3-8 | Remover código morto Vercel/Supabase-remote | Backend | pending |
 | P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
 | P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
+| P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | pending |
 
 ---
 
@@ -1117,6 +1118,35 @@ feita em PR separado depois dos testes.
   `role="tablist"/tab` nas abas. Faça oportunisticamente ao mexer em cada
   aba pelo split (P3-2).
 - **Esforço:** distribuído ao longo do split.
+
+## P3-11 — "Andamento" ao vivo retém notas transferidas/canceladas no meio do dia
+
+- **Categoria:** Dados/Frontend
+- **Status:** pending
+- **Fonte:** Auditoria de veracidade 22/07/2026 (`scripts/audit-indicadores.js`,
+  2 rodadas independentes).
+- **Evidência:** ~8 notas (em 111 equipes) apareciam em "andamento" no painel
+  com UUIDs ausentes de TODAS as listas ao vivo da WPA do dia (ex.: equipes
+  ECGPR82, ECGPR90, EPANC30, EPGPR31/32, EPCIT30, EPPIU31 — UUIDs tipo
+  `9573b78a…`, `fffce16e…`, estáveis entre as duas rodadas). Causa: o acumulador
+  `_acc` (services/wpaService.js) preserva `notasExecutadas` vistas durante o
+  dia (necessário pra sobreviver a relogins), mas nada as remove quando a EDP
+  transfere/cancela a nota no meio do dia — ela some do payload e fica retida
+  como "andamento" até o dia virar.
+- **Impacto:** BAIXO — "andamento" é transiente e NÃO entra na produtividade
+  reportada à EDP (que conta só concluídas). Infla o card "Em andamento" em
+  ~1 nota nas equipes afetadas.
+- **Ação:** no merge do `_acc`, remover de `notasExecutadas` acumuladas as notas
+  que (a) não estão em nenhum bucket do payload atual E (b) não estão em
+  concluídas/rejeitadas — i.e., tratá-las como saída de carteira (transferida/
+  cancelada), espelhando o diff 1º/último snapshot do dia (`_buildDiaSummary`).
+  Cuidado pra NÃO remover em falha de coleta (payload vazio por erro ≠ nota
+  transferida) — só remover quando o payload da equipe veio íntegro.
+- **Aceite:** auditoria (`audit-indicadores.js`) sem UUIDs hex órfãos em
+  "andamento" em 2 rodadas consecutivas; nenhuma regressão em relogin
+  (teste ECCSJ82 continua verde).
+- **Esforço:** 2-4h (a parte difícil é o guard de payload íntegro).
+- **Rollback:** reverter o commit.
 
 ---
 
