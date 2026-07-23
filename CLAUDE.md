@@ -103,7 +103,8 @@ git push
 | `docs/` (fora de `handoff/`) | Knowledge base privado do dev (gitignored). Você não vê. |
 | `.claude/`, `_local/` | Workspace do dev (gitignored). |
 | `services/`, `db/`, `routes/`, `middleware/` | Backend. Comece por `services/regionals.js` (44 linhas, modelo do estilo). |
-| `public/index.html` (12.8k linhas) | Frontend monolítico. **Cuidado.** Ver risco H11 no backlog. (Movido pra `public/` no P2-3, 22/07 — o server serve SÓ `public/`.) |
+| `public/index.html` (~8.6k linhas) | Frontend monolítico. **Cuidado.** Ver risco H11 no backlog. (Movido pra `public/` no P2-3; CSS extraído pra `public/css/app.css` no P2-8 — ambos 22/07. O server serve SÓ `public/`.) |
+| `public/css/app.css` (~4.3k linhas) | CSS do painel (extraído do `<style>` do index.html no P2-8). |
 | `public/vendor/` | Bibliotecas 3rd-party servidas localmente (Fortinet mata CDN). |
 | `scripts/` | Backfills, diagnóstico, migrações. Muitos read-only. |
 | `test/` | 266 testes, `node --test`. Cobertura desigual (backend só). |

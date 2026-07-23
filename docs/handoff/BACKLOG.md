@@ -48,7 +48,7 @@
 | P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | **done** (22/07) |
 | P2-6 | `statement_timeout` no pool Postgres | Dados | **done** (22/07) |
 | P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | **done** (22/07) |
-| P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
+| P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | **done** (22/07) — falta validação visual sua |
 | P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
 | P2-10 | Persistir estado do `_reclassifyJob` | Backend | **done** (22/07) |
 | P2-11 | Andamento por equipe contava nota já concluída (dupla contagem) | Frontend/Dados | **done** (fc2170d, 09/07) |
@@ -1123,7 +1123,8 @@ feita em PR separado depois dos testes.
 ## P2-8 — Extrair CSS pra `css/app.css` (primeiro passo do split)
 
 - **Categoria:** Frontend
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — código feito; **falta você validar
+  visualmente** (ver "Feito em" + checklist do aceite).
 - **Fonte:** Auditoria de frontend 2026-07-08
 - **Evidência:** `index.html` linhas 20-4279 são `<style>` — 4.259 linhas
   de CSS num único arquivo com HTML e JS. Encolhe o monolito em 33% sem
@@ -1137,12 +1138,33 @@ feita em PR separado depois dos testes.
   3. Remover o `<style>` interno.
   4. Testar visualmente todas as abas.
 - **Aceite:**
-  - [ ] `index.html` encolheu ~4200 linhas.
+  - [x] `index.html` encolheu ~4200 linhas (12.886 → 8.628; CSS em
+    `public/css/app.css`, 4.264 linhas).
   - [ ] Zero regressão visual em Monitor, Rejeições, Gráficos, Ranking,
-    Mapa, Deslocamentos, Notas, Histórico, Metas.
+    Mapa, Deslocamentos, Notas, Histórico, Metas. **(validação visual do José
+    pendente — o teste automatizado só garante que o CSS é servido, não o
+    render de cada aba)**
 - **Esforço:** 2-3h.
 - **Rollback:** Reverter commit.
 - **Depende de:** P2-3 (`public/` criado).
+- **Feito em:** 22/07/2026.
+  - Extraído o bloco `<style>` grande do `<head>` (era `index.html:20-4279`,
+    4.258 linhas) pra `public/css/app.css`; substituído por
+    `<link rel="stylesheet" href="css/app.css" />` no `<head>`. `index.html`:
+    12.886 → 8.628 linhas.
+  - **Nenhum `url()` relativo nem `@import`** no bloco (conferido antes de
+    mover), então trocar a base pro `/css/` foi seguro. Servido de `public/`
+    (P2-3); CSP já libera (`style-src 'self'`), sem mudança.
+  - **Não movido de propósito:** os 4 blocos `<style>` PEQUENOS inline no body
+    (componentes) ficaram — o backlog pede só o bloco grande ("1º passo").
+    Split deles/do JS é o P3-2.
+  - +1 teste (`GET /css/app.css` → 200 `text/css` com `--verde`). Suíte 267/267.
+  - **⚠️ Validação visual (SUA):** o teste garante que o CSS é servido, mas não
+    o render. Depois do deploy, passe pelas abas Monitor, Rejeições, Gráficos,
+    Ranking, Mapa, Deslocamentos, Notas, Histórico, Metas e confirme que nada
+    ficou sem estilo. Se algo quebrar, é rollback trivial (reverter o commit).
+  - **Deploy:** arquivos (`public/index.html`, `public/css/app.css`), sem
+    migração. `git pull` + PM2.
 
 ## P2-9 — Watchdog externo (UptimeRobot/BetterStack)
 

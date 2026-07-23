@@ -277,6 +277,16 @@ test('P2-3: GET / → 200 HTML (painel continua servindo do public/)', async () 
   assert.match(res.headers.get('content-type') || '', /text\/html/);
 });
 
+// ── P2-8: CSS extraído pra public/css/app.css ────────────────────────────────
+
+test('P2-8: GET /css/app.css → 200 text/css com as variáveis de tema', async () => {
+  const res = await fetch(base + '/css/app.css');
+  assert.equal(res.status, 200, 'app.css tem que ser servido do public/');
+  assert.match(res.headers.get('content-type') || '', /text\/css/);
+  const body = await res.text();
+  assert.match(body, /--verde/, 'o CSS extraído deve conter as variáveis de tema');
+});
+
 // NOTA: rotas DB-dependentes (/historico/mes, /historico/diario, /metas/calculadas,
 // /notas/*, /teams/:teamId) não têm teste de resposta 200 aqui porque o harness
 // roda sem Postgres (sq real → fetch failed → 500). O escopo dessas rotas é
