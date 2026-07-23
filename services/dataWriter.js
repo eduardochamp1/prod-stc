@@ -5,6 +5,7 @@
 
 const { getClient } = require('./dbClient');
 const { dateBRT, dateBRTMinusDays } = require('./timeUtil');
+const { classifyBuckets } = require('./bucketMath');   // fonte única da aritmética de buckets (P2-2)
 const log = require('./logger').forModule('dataWriter');
 
 // Data operacional BRT (America/Sao_Paulo). Usar UTC daria a data errada após 21:00 BRT
@@ -776,27 +777,23 @@ async function upsertTeamDailyCarteira(date) {
     const concluidasRaw = ids(l.concluidas);
     const rejeitadasRaw = new Set([...ids(l.rejeitadas), ...(rejByTeam.get(team) || [])]);
 
-    const todas = new Set([...atualRaw, ...andamentoRaw, ...concluidasRaw, ...rejeitadasRaw]);
-    let atual = 0, andamento = 0, concluidas = 0, rejeitadas = 0;
     // Prioridade rejeitada > concluída > andamento > atual (decisão 20/07/2026):
     // nota rejeitada pela EDP não é produção, mesmo que também esteja concluída.
     // Precisa bater com _aggregateTeamDailyTotals, senão o drift dispara falso.
-    for (const u of todas) {
-      if      (rejeitadasRaw.has(u))  rejeitadas++;
-      else if (concluidasRaw.has(u))  concluidas++;
-      else if (andamentoRaw.has(u))   andamento++;
-      else                            atual++;
-    }
-    let canceladas = 0;
-    for (const u of inicial) if (!todas.has(u)) canceladas++;
-    let entradas = 0;
-    for (const u of todas) if (!inicial.has(u)) entradas++;
+    // FONTE ÚNICA: services/bucketMath.classifyBuckets — a MESMA que a visão
+    // "hoje" ao vivo (_buildDiaSummary) usa, pra histórico e ao-vivo nunca
+    // divergirem (P2-2).
+    const b = classifyBuckets({
+      inicial, atual: atualRaw, andamento: andamentoRaw,
+      concluidas: concluidasRaw, rejeitadas: rejeitadasRaw,
+    });
 
     rows.push({
       date, team_name: team, regional: f.regional,
-      carteira_inicial: inicial.size,
-      entradas_novas:   entradas,
-      atual, andamento, concluidas, rejeitadas, canceladas,
+      carteira_inicial: b.inicial,
+      entradas_novas:   b.entradas_novas,
+      atual: b.atual, andamento: b.andamento, concluidas: b.concluidas,
+      rejeitadas: b.rejeitadas, canceladas: b.canceladas,
       updated_at: new Date().toISOString(),
     });
   }

@@ -42,7 +42,7 @@
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
-| P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
+| P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
 | P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
 | P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | **done** (22/07) |
@@ -820,7 +820,7 @@ feita em PR separado depois dos testes.
 ## P2-2 — Extrair matemática de buckets em módulo único
 
 - **Categoria:** Dados
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de pipeline 2026-07-08 (admitido em comentário do
   próprio código).
 - **Evidência:** `services/dataWriter.js:592-596` — comentário: "Mesma
@@ -843,11 +843,34 @@ feita em PR separado depois dos testes.
   2. Refatorar `dataService.js:_buildDiaSummary` e `dataWriter.js:upsertTeamDailyCarteira`
      pra usar `classifyBuckets`.
   3. Criar `test/carteiraMath.test.js` (função pura, fixtures simples).
-- **Aceite:** Um único ponto de mudança pra regra de bucket. Testes verdes.
+- **Aceite:** Um único ponto de mudança pra regra de bucket. Testes verdes. ✓
 - **Esforço:** meio dia.
 - **Rollback:** Reverter commit (função pura, sem efeito colateral).
 - **Depende de:** P0-3 (testes cobrindo o comportamento atual antes de
   refatorar).
+- **Feito em:** 22/07/2026.
+  - Criado `services/bucketMath.js` com `classifyBuckets({inicial, atual,
+    andamento, concluidas, rejeitadas})` → contagens `{inicial, atual,
+    andamento, concluidas, rejeitadas, canceladas, entradas_novas}`. É a FONTE
+    ÚNICA da prioridade `rejeitada > concluída > andamento > atual` + cálculo de
+    canceladas/entradas. (Nome ficou `bucketMath`, não `carteiraMath` como o
+    plano sugeria — mais descritivo do que faz.)
+  - `dataService._buildDiaSummary` (ao vivo) e
+    `dataWriter.upsertTeamDailyCarteira` (histórico) agora **chamam a mesma
+    função** — a duplicata que causou o bug de 11/06 (canc 904 vs 294) sumiu.
+    Comentários datados da prioridade (20/07, ECTSJ83) preservados nos dois
+    call-sites.
+  - **Comportamento preservado** (refactor mecânico): os testes existentes
+    `diaSummary` e `dataWriter` — que assertam as contagens de saída — seguem
+    verdes sem alteração. +13 testes novos em `test/bucketMath.test.js`
+    (prioridade, dedup, canceladas/entradas, caso ECTSJ83, e a INVARIANTE
+    `atual+andamento+concluidas+rejeitadas+canceladas = inicial + entradas_novas`
+    em 5 cenários). Suíte 262/262.
+  - **Correção de doc:** o comentário antigo em `dataService` afirmava a
+    invariante `inicial = ... + entradas_novas` (imprecisa/errada — off por
+    `entradas`); o correto (o que o código sempre fez) está documentado em
+    `bucketMath.js` e travado em teste.
+  - **Deploy:** só código (services), sem migração. `git pull` + PM2.
 
 ## P2-3 — `public/` dedicado (parar de servir raiz do repo)
 

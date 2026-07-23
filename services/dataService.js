@@ -6,6 +6,7 @@
 const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/mockData');
 const { getTeamsBySector, REGIONAL_MAP } = require('./wpaService');
 const { isOficial, getMeta } = require('./equipesOficiais');
+const { classifyBuckets } = require('./bucketMath');   // fonte única da aritmética de buckets (P2-2)
 // Nota: regional agora é SEMPRE string[] de siglas reais (GUA/CAC/SJC).
 // Caller (route ou cron) responsável por garantir array válido.
 
@@ -321,46 +322,17 @@ async function _buildDiaSummary(siglasFiltro) {
     // sem esta prioridade a produtividade reportada inflava (ECTSJ83: 17
     // executadas sendo 14 rejeitadas). Deve bater com _aggregateTeamDailyTotals
     // e detectDrift em dataWriter.js.
-    const finalAtual      = new Set();
-    const finalAndamento  = new Set();
-    const finalConcluidas = new Set();
-    const finalRejeitadas = new Set();
-    const todasRastreadas = new Set([
-      ...atualRaw, ...andamentoRaw, ...concluidasRaw, ...rejeitadasRaw,
-    ]);
-    for (const u of todasRastreadas) {
-      if      (rejeitadasRaw.has(u))  finalRejeitadas.add(u);
-      else if (concluidasRaw.has(u))  finalConcluidas.add(u);
-      else if (andamentoRaw.has(u))   finalAndamento.add(u);
-      else                            finalAtual.add(u);
-    }
-
-    // Canceladas = inicial \ (todos os buckets do último snap).
-    // Notas que estavam no início mas sumiram (canceladas pelo EDP).
-    let canceladas = 0;
-    for (const u of inicialUUIDs) {
-      if (!todasRastreadas.has(u)) canceladas++;
-    }
-
-    // Invariante (verificável): inicial = atual + andamento + concluidas
-    //                                   + rejeitadas + canceladas + entradas_novas
-    // onde "entradas_novas" = UUIDs no último snap mas NÃO no primeiro snap
-    // (notas que entraram durante o dia, ex: equipe logou tarde com novas
-    // notas, ou EDP adicionou ao longo do dia).
-    let entradasNovas = 0;
-    for (const u of todasRastreadas) {
-      if (!inicialUUIDs.has(u)) entradasNovas++;
-    }
-
-    return {
-      inicial:    inicialUUIDs.size,
-      atual:      finalAtual.size,
-      andamento:  finalAndamento.size,
-      concluidas: finalConcluidas.size,
-      rejeitadas: finalRejeitadas.size,
-      canceladas,
-      entradas_novas: entradasNovas,
-    };
+    // A classificação por prioridade (acima) + canceladas/entradas agora vive na
+    // FONTE ÚNICA services/bucketMath.classifyBuckets (P2-2) — a mesma que o
+    // histórico persistido (dataWriter.upsertTeamDailyCarteira) usa, pra os dois
+    // nunca divergirem. Invariante e regra documentadas lá.
+    return classifyBuckets({
+      inicial:    inicialUUIDs,
+      atual:      atualRaw,
+      andamento:  andamentoRaw,
+      concluidas: concluidasRaw,
+      rejeitadas: rejeitadasRaw,
+    });
   } catch (err) {
     console.warn('[dataService] buildDiaSummary falhou:', err.message);
     return null;
