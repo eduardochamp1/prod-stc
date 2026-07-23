@@ -193,7 +193,7 @@ async function start() {
 // importado por um teste (require('./server')), NÃO faz listen nem start()
 // — permite testes de contrato de rota sem conflito de porta nem cron.
 // require.main === module é true só pro processo principal.
-if (require.main === module && !process.env.VERCEL) {
+if (require.main === module) {
   start().catch(err => {
     console.error('Erro fatal ao iniciar servidor:', err);
     process.exit(1);

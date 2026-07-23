@@ -97,7 +97,8 @@ router.use(applyScope);
 // também esconde botões pra não-admin, mas a API rejeita por sua conta).
 router.use('/admin', requireAdmin);
 
-// Supabase: carregado para todos os modos que não sejam mock
+// db/queries (leitura do Postgres): carregado em todos os modos que não sejam
+// mock. (O nome sbq é legado — antes "supabase queries"; hoje é o pg shim.)
 let _sbq = null;
 function sbq() {
   if (_sbq) return _sbq;
@@ -123,11 +124,11 @@ function _scopeMetasMemory(req) {
   return out;
 }
 
-// Cron: carregamento lazy — em modo supabase (Vercel) node-cron não está disponível
+// Cron: carregamento lazy (mantém o require tolerante a falha de carga).
 function cron() {
   try { return require('../services/cronService'); }
   catch (err) {
-    console.warn('[CRON] cronService indisponível (esperado em Vercel/supabase):', err.message);
+    console.warn('[CRON] cronService indisponível:', err.message);
     return null;
   }
 }
@@ -137,14 +138,9 @@ function cron() {
 // GET /api/teams?regional=GUA&sectorId=DESG
 router.get('/teams', async (req, res) => {
   try {
-    let teams;
-    if (MODE === 'supabase') {
-      // Vercel: lê último snapshot do Supabase
-      teams = await sbq().getTeamsFromSupabase({ ...req.query, regionals: req.scope.regionals });
-    } else {
-      // wpa / mock: dados ao vivo da API WPA ou mock
-      teams = await getTeams({ ...req.query, regionals: req.scope.regionals });
-    }
+    // wpa / mock: dados ao vivo da API WPA ou mock. O caminho Supabase (Vercel)
+    // foi removido na Fase 4 — ver specs/aposentar-vercel-supabase-remote.md.
+    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals });
 
     // ── Summary do dia (UUID-aware, deduplicado, com canceladas) ──────────
     // Compara PRIMEIRO e ÚLTIMO snapshot do dia de cada equipe pra detectar:
@@ -832,7 +828,7 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     try {
       const sq = sbq();
       if (sq) {
-        const all = await sq.getTeamsFromSupabase({});
+        const all = await sq.getTeamsCurrent({});
         outer: for (const t of all) {
           for (const k of ['notasConcluidas','notasExecutadas','notasBaixadas','notasRejeitadas']) {
             for (const n of (t[k] || [])) {
@@ -1366,7 +1362,7 @@ router.get('/admin/health', async (_req, res) => {
 
     // teams_current → quem está logado agora (whitelist apenas)
     try {
-      const teams = await sq.getTeamsFromSupabase({});
+      const teams = await sq.getTeamsCurrent({});
       const loggedSiglas = new Set(
         teams
           .map(t => (t.sigla || t.teamName || '').toUpperCase().trim())
@@ -2244,8 +2240,6 @@ router.get('/admin/wpa-diag', async (_req, res) => {
     WPA_USERNAME:  process.env.WPA_USERNAME  ? '✓ setado (' + process.env.WPA_USERNAME.length + ' chars)' : '✗ NÃO CONFIGURADO',
     WPA_PASSWORD:  process.env.WPA_PASSWORD  ? '✓ setado (' + process.env.WPA_PASSWORD.length + ' chars)' : '✗ NÃO CONFIGURADO',
     DATA_MODE:     process.env.DATA_MODE     || '(undefined → mock)',
-    VERCEL:        process.env.VERCEL        ? '✓ rodando no Vercel' : '✗ rodando local',
-    VERCEL_REGION: process.env.VERCEL_REGION || 'desconhecida',
   };
 
   out.runtime = {

@@ -157,7 +157,7 @@ routes/
   index.js                   # 2.755 linhas / ~60 rotas / 12 domínios (god-file — H6)
   cron.js                    # webhook /cron/tick (auth por CRON_SECRET)
 services/
-  dbClient.js                # getClient() → pgShim ou supabase-js (legado)
+  dbClient.js                # getClient() → pgShim (Postgres local; exige DATABASE_URL)
   pgShim.js                  # Shim compatível com API supabase-js sobre pg
   regionals.js               # ★ 44 linhas, modelo de estilo (small, testado, único)
   dataService.js             # Reads agregados: getTeams, _buildDiaSummary

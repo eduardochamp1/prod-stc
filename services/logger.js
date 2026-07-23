@@ -7,7 +7,7 @@
  * Logs, Datadog, Logtail, etc). Eles parseiam JSON automaticamente.
  *
  * Modo automático:
- *   - process.env.NODE_ENV === 'production' OU process.env.VERCEL → JSON
+ *   - process.env.NODE_ENV === 'production'   → JSON
  *   - caso contrário (dev local)              → texto colorido
  *
  * Uso:
@@ -29,7 +29,7 @@
 
 'use strict';
 
-const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 const MIN_LEVEL = LEVELS[process.env.LOG_LEVEL] || (IS_PROD ? LEVELS.info : LEVELS.debug);

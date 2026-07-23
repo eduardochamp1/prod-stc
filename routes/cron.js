@@ -1,17 +1,18 @@
 /**
- * routes/cron.js — endpoints para Vercel Cron Jobs
+ * routes/cron.js — endpoints HTTP para disparar o cron por fora (GET autenticado).
  *
- * Vercel é serverless e node-cron (cronService.js) NÃO executa em produção.
- * Estes endpoints são disparados pelo agendador nativo da Vercel via HTTP GET
- * (ver vercel.json → "crons").
+ * O agendamento em produção é o node-cron (services/cronService.js), que roda
+ * DENTRO do processo PM2 (startCron() no server.js quando DATA_MODE=wpa). Estes
+ * endpoints existem para disparo MANUAL/externo (ex.: rodar um tick sob demanda,
+ * ou um agendador externo). Originalmente serviam ao Vercel Cron — o Vercel foi
+ * aposentado na Fase 4 (22/07/2026); os endpoints ficaram por serem úteis.
  *
  * AUTENTICAÇÃO
  * ────────────
- * Vercel envia automaticamente "Authorization: Bearer ${CRON_SECRET}" em cada
- * chamada de cron. Validamos esse header — não usa o JWT de usuário (que essas
- * rotas não teriam como obter sem login interativo).
+ * Exige "Authorization: Bearer ${CRON_SECRET}" (não usa o JWT de usuário — essas
+ * rotas não teriam como obter um sem login interativo).
  *
- * Se rodando local sem o header, aceita também ?secret=... como fallback de teste.
+ * Rodando local sem o header, aceita também ?secret=... como fallback de teste.
  */
 
 const express = require('express');

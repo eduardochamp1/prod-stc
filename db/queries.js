@@ -1,6 +1,6 @@
 /**
  * db/queries.js
- * Queries de leitura usadas pelo Vercel (DATA_MODE=supabase) e pelos endpoints de histórico.
+ * Queries de leitura dos endpoints de histórico (Postgres via pgShim).
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * POLÍTICA DE PAGINAÇÃO (importante!)
@@ -208,15 +208,14 @@ async function getMetasCalculadas(yearMonth, regionals = null) {
 
 // ── EQUIPES ────────────────────────────────────────────────────────────────────
 
-async function getTeamsFromSupabase(filters = {}) {
+// Lê o snapshot mais recente por equipe da tabela teams_current (via pgShim).
+// Antes se chamava getTeamsFromSupabase; renomeada na Fase 4 (22/07/2026) — não
+// tem nada de Supabase, é o Postgres local. NÃO é o caminho do Monitor ao vivo
+// (esse usa services/dataService); é usada por rotas de tolerância/diagnóstico
+// (resolver código→UUID e listar quem está logado agora).
+async function getTeamsCurrent(filters = {}) {
   const sb = getClient();
-
-  // Sem filtro de data estrita: exibe todas as sessões abertas, inclusive de dias anteriores
-  // (equipes que esqueceram de encerrar a sessão ficam visíveis até encerrar no WPA).
-  // A data de início aparece no card do monitor para identificação visual.
-  //
-  // Janela de segurança: descarta registros com mais de 7 dias para não acumular
-  // lixo indefinidamente em casos extremos.
+  // Janela de segurança: descarta registros com mais de 7 dias.
   const cutoff7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
   let query = sb
@@ -230,7 +229,7 @@ async function getTeamsFromSupabase(filters = {}) {
 
   const { data, error } = await query.order('team_name');
   if (error) throw error;
-  // Filtra pela whitelist de equipes oficiais (sigla extraída de data.sigla ou data.teamName)
+  // Filtra pela whitelist de equipes oficiais (sigla de data.sigla ou data.teamName).
   return (data || [])
     .map(row => row.data)
     .filter(t => t && isOficial(t.sigla || t.teamName));
@@ -1639,7 +1638,7 @@ module.exports = {
   getNoteDetailCache, setNoteDetailCache, filtrarNotesNaoCacheadas,
   getSetting, setSetting,
   getMetas, setMetas, getMetasCalculadas,
-  getTeamsFromSupabase, getTeamsByDateFromSnapshots,
+  getTeamsCurrent, getTeamsByDateFromSnapshots,
   getMonthTotals, getDailyHistory,
   getSubcatMonthTotals, getSubcatDailyHistory, getSubcatTeamRanking,
   getTeamRanking, getTeamDailyHistory,

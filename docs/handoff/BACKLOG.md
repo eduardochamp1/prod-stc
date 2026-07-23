@@ -59,7 +59,7 @@
 | P3-5 | Cap de range em endpoints de histórico (evitar OOM) | Dados | pending |
 | P3-6 | Índice de expressão em `note_details` | Dados | pending |
 | P3-7 | `pg_advisory_xact_lock` no `pushTeams` | Dados | pending |
-| P3-8 | Remover código morto Vercel/Supabase-remote | Backend | pending |
+| P3-8 | Remover código morto Vercel/Supabase-remote | Backend | **done** (22/07) — junto com Fase 4 |
 | P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
 | P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
 | P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | **done** (22/07) |
@@ -1364,12 +1364,34 @@ feita em PR separado depois dos testes.
 ## P3-8 — Remover código morto Vercel/Supabase-remote
 
 - **Categoria:** Backend
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — feito junto com a **Fase 4** (cutover +
+  aposentadoria do Vercel). Spec: `specs/aposentar-vercel-supabase-remote.md`.
 - **Evidência:** `server.js:101-102` branch `VERCEL`; `vercel.json` na raiz;
   `routes/cron.js:1-15` doc de Vercel Cron; `dbClient.js:34-41` modo
   supabase; `@supabase/supabase-js` no `package.json`.
 - **Ação:** Remover. Historia fica no git.
 - **Esforço:** meio dia.
+- **Feito em:** 22/07/2026 (Fase 4 + P3-8, do spec via `/spec`).
+  - `vercel.json` deletado. Branches `process.env.VERCEL` removidos
+    (`server.js` guard, `logger.js` IS_PROD, campos VERCEL do endpoint de
+    diagnóstico, teste `IS_PROD com VERCEL=1`). Grep de `process.env.VERCEL` no
+    repo → zero.
+  - `dbClient.js` agora é **pg-only** (removido o branch supabase, o
+    `createClient` e a URL hardcoded do projeto Supabase); sem `DATABASE_URL` →
+    erro claro. Dependência `@supabase/supabase-js` removida do `package.json`
+    + lock + `node_modules` (`npm uninstall`; `npm ls` → empty).
+  - Modo `DATA_MODE=supabase` removido (branch no `/teams`); só `wpa`/`mock`
+    válidos. Comentários/headers de `sbq()`, `cron()`, `db/queries.js` e
+    `routes/cron.js` de-Vercelizados.
+  - Deletados os 2 scripts que batiam no Supabase remoto
+    (`scripts/migrate-supabase-to-local.js`, `scripts/diag-rejection-endpoints.js`).
+  - **Correção durante o build:** `getTeamsFromSupabase` NÃO era órfã (o grep
+    de aceite pegou 2 call-sites vivos que leem `teams_current` via pgShim);
+    em vez de deletar, foi **renomeada** `getTeamsCurrent` (nome honesto) e os
+    call-sites atualizados. Ver seção 10 do spec.
+  - **Deploy (VM):** `git pull` + `npm prune` (funciona na VM) + restart PM2.
+    `.env` (SUPABASE_*) fica pra limpar depois — inerte após esta mudança.
+  - Suíte 266/266.
 
 ## P3-9 — Constantes duplicadas em módulo único
 

@@ -96,15 +96,12 @@ describe('logger — modo produção (JSON)', () => {
     assert.equal(logger.IS_PROD, true);
   });
 
-  test('IS_PROD true com VERCEL=1', () => {
-    const logger = loadLogger({ VERCEL: '1', NODE_ENV: 'development' });
-    assert.equal(logger.IS_PROD, true);
-  });
+  // Nota: até 22/07/2026 havia um teste 'IS_PROD true com VERCEL=1' — removido
+  // na aposentadoria do Vercel (Fase 4). IS_PROD agora depende só de NODE_ENV.
 });
 
 describe('logger — modo dev (texto)', () => {
   test('formato dev tem timestamp + nível + módulo + evento', () => {
-    delete process.env.VERCEL;
     const logger = loadLogger({ NODE_ENV: 'development', LOG_LEVEL: 'debug' });
     const log = logger.forModule('mod');
     const { out } = captureStreams(() => log.info('event_x', { foo: 'bar' }));
@@ -115,7 +112,6 @@ describe('logger — modo dev (texto)', () => {
   });
 
   test('IS_PROD false em dev', () => {
-    delete process.env.VERCEL;
     const logger = loadLogger({ NODE_ENV: 'development' });
     assert.equal(logger.IS_PROD, false);
   });
