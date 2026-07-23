@@ -6154,6 +6154,72 @@ ${equipes.length > 0 ? `<div class="perf-section">
       } catch { }
     }
 
+    // ── MERGE DE SESSÕES POR EQUIPE (23/07/2026) ──────────────────────────
+    // O /teams ao vivo devolve 1 entrada por SESSÃO. Equipe que relogou / teve a
+    // sessão derrubada e logou de novo aparece 2x (1 encerrada + 1 em campo),
+    // duplicando o card e inflando "ativas no dia" / "X equipes". Aqui unimos por
+    // sigla num card só. NÃO afeta os KPIs de topo — esses vêm de summary.dia,
+    // dedupado por UUID no backend (renderMetrics usa `dia`, não este array).
+    //
+    // Regras (carteira = ESTADO ATUAL, decisão do José 23/07):
+    //   • base = sessão ABERTA (se houver); senão a última encerrada.
+    //   • carteira (baixadas) e andamento (executadas em progresso) = da base (agora).
+    //   • executadas (concluídas) e rejeitadas = UNIÃO deduped por UUID de TODAS
+    //     as sessões do dia (cumulativo — não perde a produção da 1ª sessão).
+    //   • estado "em campo" se qualquer sessão aberta; senão "encerrada".
+    //   • logon = 1º do dia; logoff = último; desconexões = nº sessões − 1 + relogins.
+    function _dedupById(arr) {
+      const seen = new Set(), out = [];
+      for (const n of (arr || [])) {
+        const id = n && n.id;
+        if (!id) { out.push(n); continue; }
+        if (seen.has(id)) continue;
+        seen.add(id); out.push(n);
+      }
+      return out;
+    }
+    function _mergeTeamSessions(sessions) {
+      const sorted = [...sessions].sort((a, b) =>
+        String(a.sessionBegin || '').localeCompare(String(b.sessionBegin || '')));
+      const abertas = sorted.filter(s => !s.sessionEnd);
+      const base = abertas.length ? abertas[abertas.length - 1] : sorted[sorted.length - 1];
+      const merged = { ...base };
+      // Cumulativo do dia (união deduped) — não perde a produção da sessão anterior.
+      merged.notasConcluidas = _dedupById(sorted.flatMap(s => s.notasConcluidas || []));
+      merged.notasRejeitadas = _dedupById(sorted.flatMap(s => s.notasRejeitadas || []));
+      // Estado atual (base) — o que a equipe tem/faz agora.
+      merged.notasBaixadas   = base.notasBaixadas   || [];
+      merged.notasExecutadas = base.notasExecutadas || [];
+      // Logon 1º do dia; logoff último (null se alguma aberta).
+      const begins     = sorted.map(s => s.sessionBegin).filter(Boolean).sort();
+      const beginsReal = sorted.map(s => s.sessionBeginReal).filter(Boolean).sort();
+      merged.sessionBegin     = begins[0] || base.sessionBegin;
+      merged.sessionBeginReal = beginsReal[0] || merged.sessionBegin;
+      merged.sessionEnd = abertas.length ? null
+        : (sorted.map(s => s.sessionEnd).filter(Boolean).sort().slice(-1)[0] || base.sessionEnd);
+      merged.isOnline = abertas.length ? base.isOnline : false;
+      // Desconexões: reconectou (nº sessões − 1) + relogins reportados nas sessões.
+      const relTot = sorted.reduce((s, x) => s + (Number(x.relogins) || 0), 0);
+      merged.relogins = (sorted.length - 1) + relTot;
+      merged.relogouNoDia = true;
+      merged._mergedSessions = sorted.length;
+      return merged;
+    }
+    function _mergeSessionsBySigla(list) {
+      const groups = new Map(); const singles = [];
+      for (const t of (list || [])) {
+        const key = (t.sigla || t.teamName || '').toUpperCase().trim();
+        if (!key) { singles.push(t); continue; }
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(t);
+      }
+      const out = [];
+      for (const sessions of groups.values()) {
+        out.push(sessions.length === 1 ? sessions[0] : _mergeTeamSessions(sessions));
+      }
+      return out.concat(singles);
+    }
+
     // ── RENDER CARDS ──────────────────────────────────────────────────────
     function renderAll() {
       const _rawTeams = getVisible();
@@ -6175,7 +6241,9 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (!t.sessionEnd && beg && beg <= _rangeAte) return true;
         return false;
       };
-      const teamsAll     = _rawTeams.filter(_tocaPeriodo);
+      // Une sessões da mesma equipe (relog / sessão derrubada) num card só e
+      // faz "ativas no dia"/"X equipes" contarem equipes distintas (23/07/2026).
+      const teamsAll     = _mergeSessionsBySigla(_rawTeams.filter(_tocaPeriodo));
       const teamsVisible = teamsAll;
       const teams        = teamsVisible;
       // Excluir ghosts do banner de alerta (não faz sentido alertar equipe encerrada)
