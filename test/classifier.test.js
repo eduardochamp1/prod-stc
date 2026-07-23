@@ -236,9 +236,12 @@ describe('classificarSF', () => {
 //  DD — Subs Ramal (C93) vs Substituição CS (BTZ013), com IsPrimary tiebreak
 // ═════════════════════════════════════════════════════════════════════════════
 describe('classificarDD', () => {
-  test('BTZ013 com Comments "TOTAL CLIENTES: 6" → quantidade=6 (caso real)', async () => {
-    // Caso real (nota 17160974, validado em prod 05/05/2026): Activity.Amount=1
-    // mas Comments tem "TOTAL CLIENTES: 6" — quantidade real = 6 CS substituídos.
+  test('BTZ013 → quantidade = Activity.Amount (portal WPA), IGNORA "TOTAL CLIENTES"', async () => {
+    // Regra CORRIGIDA 23/07/2026 (confirmada no portal WPA: "Atividade Principal
+    // — BTZ013 · Quantidade: 1"). Quantidade = a Quantidade da Atividade (Amount
+    // = nº de CS), NÃO o "TOTAL CLIENTES" do Comments (nº de clientes), que
+    // inflava o indicador. Nota real 000017309568: Amount=1, "TOTAL CLIENTES: 12"
+    // → aparecia 12; correto = 1.
     const id = 'dd-btz013-real';
     const { classificar } = loadClassifierWith({
       [`/api/notes/dd?noteId=${id}`]: dd('63', 'BF-CHAVE FUSIVEL'),
@@ -250,7 +253,7 @@ describe('classificarDD', () => {
     const r = await classificar(id, 'DD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'BTZ013');
     assert.equal(r.sub_categoria, 'Substituição CS');
-    assert.equal(r.quantidade,    6); // do Comments, não Activity.Amount
+    assert.equal(r.quantidade,    1); // Amount — NÃO os 6 "clientes" do Comments
     assert.equal(r.code_text,     'BF-CHAVE FUSIVEL');
   });
 
@@ -284,40 +287,17 @@ describe('classificarDD', () => {
     assert.equal(r.quantidade, 1); // fallback Activity.Amount
   });
 
-  test('BTZ013 com "TOTAL CLIENTES: 12" maior valor → quantidade=12', async () => {
-    const id = 'dd-btz013-12';
+  test('BTZ013 respeita Amount > 1 e ignora "TOTAL CLIENTES: 12"', async () => {
+    const id = 'dd-btz013-amount2';
     const { classificar } = loadClassifierWith({
       [`/api/notes/dd?noteId=${id}`]: dd(),
       [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details(
-        [activity('BTZ013', 1, true)],
+        [activity('BTZ013', 2, true)],
         '* @MANUTBTZERO | CS_CP: ... | TOTAL CLIENTES: 12 | @MANUTBTZERO'
       ),
     });
     const r = await classificar(id, 'DD', { sectorId: 'DESG' });
-    assert.equal(r.quantidade, 12);
-  });
-
-  test('BTZ013 com regex case-insensitive (Total Clientes / TOTAL  CLIENTES com espaços)', async () => {
-    for (const variant of ['TOTAL CLIENTES: 5', 'total clientes:5', 'Total  Clientes :  9', 'TotalClientes: 4']) {
-      const expected = parseInt(variant.match(/\d+/)[0], 10);
-      const id = 'dd-btz013-' + expected;
-      const { classificar } = loadClassifierWith({
-        [`/api/notes/dd?noteId=${id}`]: dd(),
-        [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: details(
-          [activity('BTZ013', 1, true)],
-          '* @MANUTBTZERO | ' + variant + ' | @MANUTBTZERO'
-        ),
-      });
-      const r = await classificar(id, 'DD', { sectorId: 'DESG' });
-      // 'TotalClientes' (sem espaço) NÃO casa o regex /TOTAL\s*CLIENTES\s*:/ —
-      // por design (mantém especificidade do template oficial)
-      const shouldMatch = /TOTAL\s*CLIENTES\s*:/i.test(variant);
-      if (shouldMatch) {
-        assert.equal(r.quantidade, expected, `falhou p/ variant "${variant}"`);
-      } else {
-        assert.equal(r.quantidade, 1, `variant "${variant}" deveria fazer fallback`);
-      }
-    }
+    assert.equal(r.quantidade, 2); // Amount (Quantidade da Atividade), não os 12 clientes
   });
 
   test('Activities com C93 IsPrimary=true → sub_code=C93, quantidade=Amount (decimal)', async () => {

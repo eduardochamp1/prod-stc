@@ -193,9 +193,9 @@ async function classificarDD(noteId, sectorId) {
 
   // Atividades do details/optimized (mais confiável quando presente, traz Amount)
   const activities = det?.Data?.Activities || [];
-  // Comments: contém metadados textuais como "TOTAL CLIENTES: N" usado pra
-  // determinar quantidade real de CS substituídos em BTZ013 (Activity.Amount
-  // sempre vem 1, representa "1 ação de manutenção" — não conta CS individuais).
+  // Comments: texto livre da nota (template @MANUTBTZERO em BTZ013). Guardado só
+  // como preview no raw (debug). NÃO é mais usado pra quantidade do BTZ013 — a
+  // quantidade agora vem de Activity.Amount (ver bloco BTZ013 abaixo; 23/07/2026).
   const comments = det?.Data?.Comments || '';
 
   // Address: regra de negócio EDP — só notas com "RAMAL BT" no endereço contam
@@ -224,12 +224,15 @@ async function classificarDD(noteId, sectorId) {
   } else if (ativBTZ013) {
     sub_code      = 'BTZ013';
     sub_categoria = 'Substituição CS';
-    // Pra BTZ013, Activity.Amount é sempre 1 (representa "1 ação de manutenção").
-    // O número real de CS trocados está no Comments com o padrão "TOTAL CLIENTES: N".
-    // Confirmado em prod (05/05/2026): nota 17160974 → Activity.Amount=1 mas
-    // Comments tem "TOTAL CLIENTES: 6" → 6 CS efetivamente substituídos.
-    quantidade = parseTotalClientes(comments);
-    if (quantidade == null) quantidade = ativBTZ013.Amount ?? null;  // fallback legado
+    // Quantidade = a "Quantidade" da Atividade no portal WPA = Activity.Amount
+    // (nº de CS substituídos; 1 por nota). CORRIGIDO 23/07/2026 — confirmado
+    // com o portal WPA (tela "Atividade Principal — BTZ013 · Quantidade: 1").
+    //
+    // HISTÓRICO (05/05/2026, SUPERSEDED em 23/07/2026): a regra anterior usava
+    // parseTotalClientes(Comments) ("TOTAL CLIENTES: N"), assumindo N = nº de CS.
+    // Estava ERRADO: "TOTAL CLIENTES" é o nº de CLIENTES ligados à CS, não a
+    // produção executada — inflava o indicador (1 CS aparecia como "12").
+    quantidade = ativBTZ013.Amount ?? 1;
   } else {
     sub_code      = 'OUTROS';
     sub_categoria = nomeFallback('DD');
@@ -247,8 +250,8 @@ async function classificarDD(noteId, sectorId) {
     } else if (c === 'BTZ013') {
       sub_code = 'BTZ013';
       sub_categoria = 'Substituição CS';
-      // Sem Activities → tenta extrair quantidade do Comments também
-      quantidade = parseTotalClientes(comments);
+      // Sem Activities pra ler o Amount → 1 CS por nota (ver bloco BTZ013 acima).
+      quantidade = ativBTZ013?.Amount ?? 1;
     }
   }
 
@@ -271,7 +274,7 @@ async function classificarDD(noteId, sectorId) {
     } else if (/^CAIXA\s+SECCION/.test(desc) || /^SUBSTITU.*\bCS\b/.test(desc)) {
       sub_code = 'BTZ013';
       sub_categoria = 'Substituição CS';
-      quantidade = parseTotalClientes(comments);
+      quantidade = ativBTZ013?.Amount ?? 1;   // sem Activities → 1 CS por nota
     }
   }
 
@@ -296,17 +299,10 @@ async function classificarDD(noteId, sectorId) {
   };
 }
 
-/**
- * Extrai número de "TOTAL CLIENTES: N" do Comments da nota.
- * Padrão observado em produção (template @MANUTBTZERO):
- *   "* @MANUTBTZERO | CS_CP: ... | ... | TOTAL CLIENTES: 6 | @MANUTBTZERO"
- * Retorna null se não casar — caller deve fazer fallback.
- */
-function parseTotalClientes(comments) {
-  if (!comments) return null;
-  const m = String(comments).match(/TOTAL\s*CLIENTES\s*:\s*(\d+)/i);
-  return m ? parseInt(m[1], 10) : null;
-}
+// (parseTotalClientes — extraía "TOTAL CLIENTES: N" do Comments pra quantidade
+//  do BTZ013 — REMOVIDA em 23/07/2026. Era a regra errada: "TOTAL CLIENTES" é
+//  nº de clientes, não de CS. Agora BTZ013.quantidade = Activity.Amount. Git
+//  guarda a implementação antiga.)
 
 // ── REJEIÇÃO (motivos canônicos da WPA) ──────────────────────────────────────
 
