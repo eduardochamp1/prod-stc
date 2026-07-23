@@ -220,6 +220,34 @@ test('vazamento: admin ?regionals=SJC recorta a resposta só pra SJC', async () 
     `escopo explícito deve recortar — veio ${JSON.stringify(Object.keys(json))}`);
 });
 
+// ── /metas-diarias (metas diárias da box Produtividade — separadas de /metas) ──
+
+test('metas-diarias: sem token → 401', async () => {
+  const { status } = await get('/api/metas-diarias');
+  assert.equal(status, 401);
+});
+
+test('metas-diarias: admin grava e GET devolve (por regional × card)', async () => {
+  const adminTok = await loginAs('admin', 'adminpass');
+  await post('/api/metas-diarias', { GUA: { LN: 8, C93: 3 }, SJC: { LN: 5 } }, adminTok);
+  const { status, json } = await get('/api/metas-diarias', adminTok);
+  assert.equal(status, 200);
+  assert.equal(json.GUA.LN, 8);
+  assert.equal(json.GUA.C93, 3);
+  assert.equal(json.SJC.LN, 5);
+});
+
+test('metas-diarias: guarapari só grava a dele; slot de OUTRA regional é ignorado', async () => {
+  const guaTok = await loginAs('guarapari', 'guapass');
+  // tenta gravar GUA (permitido) e SJC (fora do escopo) — SJC deve ser descartado
+  const { status, json } = await post('/api/metas-diarias', { GUA: { L0: 7 }, SJC: { L0: 99 } }, guaTok);
+  assert.equal(status, 200);
+  assert.deepEqual(json.updated, ['GUA'], `só GUA deve ser aceito — veio ${JSON.stringify(json.updated)}`);
+  // e o GET dele não vaza SJC
+  const r = await get('/api/metas-diarias', guaTok);
+  assert.deepEqual(Object.keys(r.json).sort(), ['GUA']);
+});
+
 // ── /teams: contrato de auth + escopo (P2-1) ─────────────────────────────────
 // Fecha os bullets literais do P2-1 pra /teams. O 200-path depende de DB (mock
 // não tem), então travamos só o contrato de segurança — que roda ANTES do

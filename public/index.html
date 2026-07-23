@@ -1099,6 +1099,31 @@
             <div class="metas-grid" id="metas-grid-SJC"></div>
           </div>
         </div>
+
+        <!-- ── Metas DIÁRIAS (box Produtividade) — separadas da meta mensal acima ── -->
+        <div id="metasdia-section" style="margin-top:26px;padding-top:18px;border-top:2px dashed var(--cinza2)">
+          <div style="font-size:14px;font-weight:700;margin-bottom:4px">🎯 Metas diárias — box "Produtividade do Dia"</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:16px;line-height:1.5">
+            Alvo <strong>por dia</strong> de cada card da box de produtividade, pra evidência de execução.
+            Ao filtrar N dias, o alvo mostrado é multiplicado por N. É <strong>independente</strong> da meta
+            mensal acima (essa só alimenta os Gráficos). Deixe em branco/0 para não exibir meta no card.
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px" id="metasdia-colunas">
+            <div id="metasdia-col-GUA">
+              <div style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">Guarapari</div>
+              <div class="metas-grid" id="metasdia-grid-GUA"></div>
+            </div>
+            <div id="metasdia-col-CAC">
+              <div style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">Cachoeiro</div>
+              <div class="metas-grid" id="metasdia-grid-CAC"></div>
+            </div>
+            <div id="metasdia-col-SJC">
+              <div style="font-size:13px;font-weight:700;color:var(--verde);border-bottom:2px solid var(--amarelo);padding-bottom:6px;margin-bottom:14px;text-transform:uppercase;letter-spacing:.07em">São José dos Campos</div>
+              <div class="metas-grid" id="metasdia-grid-SJC"></div>
+            </div>
+          </div>
+        </div>
+
         <div id="metas-readonly-note" style="display:none;margin-top:16px;padding:10px 14px;background:#fec40e22;border-left:3px solid var(--amarelo);border-radius:4px;font-size:12px;color:var(--text2)">
           🔒 Modo somente leitura. Para editar metas, contate um administrador.
         </div>
@@ -3812,6 +3837,26 @@ ${equipes.length > 0 ? `<div class="perf-section">
       } catch (err) { console.warn('[Metas] API indisponível:', err.message); }
     }
 
+    // ── METAS DIÁRIAS (box Produtividade) — SEPARADAS da meta mensal/Gráficos ──
+    // { regional: { PROD_LINHAS.key: metaDiaria } }. A meta exibida na box é a
+    // soma das regionais selecionadas × nº de dias corridos do filtro (23/07/2026).
+    let _metasDiarias = {};
+    async function fetchMetasDiarias() {
+      try {
+        const res = await fetch(`${API}/metas-diarias`);
+        if (res.ok) _metasDiarias = await res.json();
+      } catch (err) { console.warn('[MetasDiárias] indisponível:', err.message); }
+      return _metasDiarias;
+    }
+    async function saveMetasDiarias(obj) {
+      try {
+        const res = await fetch(`${API}/metas-diarias`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj),
+        });
+        if (res.ok) { const d = await res.json(); _metasDiarias = { ..._metasDiarias, ...(d.metas || obj) }; }
+      } catch (err) { console.warn('[MetasDiárias] API indisponível:', err.message); }
+    }
+
     // ── UTILS ─────────────────────────────────────────────────────────────────
     function fmt(iso) {
       if (!iso) return '—';
@@ -4023,6 +4068,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
     // (evita poluir a tela com "OBSOLETO 0/sem meta") — exceto OUTROS, que
     // sempre aparecem para dar visibilidade da catch-all category de cada tipo.
     function renderBlockRegional(totaisReg, qtdReg) {
+      // Meta diária (evidência): nº de dias CORRIDOS do filtro × soma das metas
+      // das regionais selecionadas. Fonte _metasDiarias (separada da meta mensal).
+      const { de: _mdDe, ate: _mdAte } = currentMonitorRange();
+      const _mdNDias = Math.max(1, Math.round((new Date(_mdAte + 'T12:00:00Z') - new Date(_mdDe + 'T12:00:00Z')) / 86400000) + 1);
       const linhasExibir = PROD_LINHAS.filter(l => {
         const realizado = totaisReg[l.key] || 0;
         // Filtro "Tipos" opera no nível do TIPO
@@ -4046,16 +4095,23 @@ ${equipes.length > 0 ? `<div class="perf-section">
       return `<div class="prod-grid">${linhasExibir.map(l => {
         const realizado = totaisReg[l.key] || 0;
         const qtdTotal = l.qtd ? (qtdReg[l.key] || 0) : 0;
-        // Card diário = só a contagem do que foi feito hoje (sem barra de meta).
-        // A soma desses realizados == OS Executadas por construção. Meta/progresso
-        // fica na aba Metas/Gráficos (mensal com rateio). Decisão 17/06/2026.
+        // A meta MENSAL/rateio continua só na aba Metas/Gráficos (decisão 17/06/2026).
+        // A meta DIÁRIA abaixo (23/07/2026) é OUTRA coisa: alvo diário de execução
+        // pra evidência, configurada na aba Metas (seção "Metas diárias"). Soma as
+        // regionais selecionadas × nº de dias corridos. Só aparece se > 0.
+        const metaDiaSum = (selectedRegionals || []).reduce(
+          (s, r) => s + (Number((_metasDiarias[r] || {})[l.key]) || 0), 0);
+        const metaTotal = metaDiaSum * _mdNDias;
+        const pct = metaTotal > 0 ? Math.round((realizado / metaTotal) * 100) : 0;
+        const metaCor = realizado >= metaTotal ? 'var(--verde)' : '#c49000';
         return `<div class="prod-item">
         <div class="prod-item-top">
           <span class="prod-tipo-badge">${l.tipo}</span>
-          <span class="prod-nums"><strong>${realizado}</strong></span>
+          <span class="prod-nums"><strong>${realizado}</strong>${metaTotal > 0 ? `<span style="font-size:12px;color:var(--text2);font-weight:400"> / ${metaTotal}</span>` : ''}</span>
         </div>
         <div style="font-size:11px;color:var(--text);margin-bottom:5px;font-weight:600">${l.nome}</div>
         ${l.qtd && qtdTotal > 0 ? `<div style="font-size:10px;color:var(--text2)">Qtd total: <strong>${qtdTotal}</strong></div>` : ''}
+        ${metaTotal > 0 ? `<div style="font-size:10px;margin-top:3px;color:${metaCor};font-weight:600">Meta: ${metaTotal} · ${pct}%${_mdNDias > 1 ? ` <span style="opacity:.6;font-weight:400">(${metaDiaSum}/dia×${_mdNDias}d)</span>` : ''}</div>` : ''}
       </div>`;
       }).join('')}</div>`;
     }
@@ -5150,6 +5206,30 @@ ${equipes.length > 0 ? `<div class="perf-section">
         }).join('');
       });
 
+      // ── Metas DIÁRIAS (box Produtividade) — mesma estrutura, valores de
+      // _metasDiarias, ids metadia-*. Independente da meta mensal acima.
+      REGIONAIS_ATIVAS.forEach(reg => {
+        const col = document.getElementById('metasdia-col-' + reg);
+        if (col) col.style.display = regsVisiveis.includes(reg) ? '' : 'none';
+      });
+      const colunasDia = document.getElementById('metasdia-colunas');
+      if (colunasDia) colunasDia.style.gridTemplateColumns = '1fr '.repeat(regsVisiveis.length).trim();
+      regsVisiveis.forEach(reg => {
+        const grid = document.getElementById('metasdia-grid-' + reg);
+        if (!grid) return;
+        const md = (_metasDiarias && _metasDiarias[reg]) || {};
+        const disabled = podeEditar ? '' : 'disabled';
+        grid.innerHTML = PROD_LINHAS.map(l => `
+        <div class="meta-item">
+          <label><span class="meta-badge">${l.tipo}</span>${l.nome}</label>
+          <input class="meta-input" type="number" min="0"
+                 id="metadia-${reg}-${l.key}"
+                 value="${md[l.key] || ''}"
+                 placeholder="0 = sem meta" ${disabled} />
+          <span class="meta-hint">alvo por dia</span>
+        </div>`).join('');
+      });
+
       // Botão Salvar e aviso read-only conforme permissão
       const btnSalvar = document.getElementById('metas-btn-salvar');
       const readonlyNote = document.getElementById('metas-readonly-note');
@@ -5188,6 +5268,19 @@ ${equipes.length > 0 ? `<div class="perf-section">
         });
       });
       await saveMetas(obj);
+
+      // Metas DIÁRIAS (box Produtividade) — inputs metadia-*. Slot {} vazio limpa
+      // a regional (permite zerar). Store separado de saveMetas (não interfere).
+      const objDia = {};
+      regsParaSalvar.forEach(reg => {
+        objDia[reg] = {};
+        PROD_LINHAS.forEach(l => {
+          const val = parseInt(document.getElementById(`metadia-${reg}-${l.key}`)?.value || '0');
+          if (val > 0) objDia[reg][l.key] = val;
+        });
+      });
+      await saveMetasDiarias(objDia);
+
       if (btn) { btn.textContent = 'Salvar Metas'; btn.disabled = false; }
       closeMetasDirect();
       renderProdutividade(getVisible());
@@ -5279,6 +5372,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
         const [res] = await Promise.all([
           fetch(url).then(r => r.json()),
           fetchMetas(),
+          fetchMetasDiarias(),
         ]);
 
         if (res.error) throw new Error(res.error);

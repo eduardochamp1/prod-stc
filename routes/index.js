@@ -124,6 +124,20 @@ function _scopeMetasMemory(req) {
   return out;
 }
 
+// ── METAS DIÁRIAS (produtividade — box do Monitor) ────────────────────────────
+// Separadas da tabela `metas` (aquela alimenta os Gráficos, mensal). Estas são a
+// meta DIÁRIA por card de produtividade, por regional, pra evidência de execução
+// (23/07/2026). Vivem em app_settings key 'metas_diarias' → { reg: { key: val } }.
+// Fallback em memória p/ modo mock (testes), espelhando _metasMemory.
+let _metasDiariasMemory = {};
+function _scopeMetasDiarias(all, regionals) {
+  const src = all || {};
+  if (!Array.isArray(regionals) || regionals.length === 0) return src;
+  const out = {};
+  for (const r of regionals) if (src[r]) out[r] = src[r];
+  return out;
+}
+
 // Cron: carregamento lazy (mantém o require tolerante a falha de carga).
 function cron() {
   try { return require('../services/cronService'); }
@@ -401,6 +415,57 @@ router.post('/metas', async (req, res) => {
     }
   } catch (err) {
     console.error('[API] setMetas:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/metas-diarias — metas diárias por card de produtividade, por regional.
+// Escopada às regionais do user. Fonte: app_settings 'metas_diarias'.
+router.get('/metas-diarias', async (req, res) => {
+  try {
+    const sq = sbq();
+    const all = sq ? ((await sq.getSetting('metas_diarias'))?.data || {}) : _metasDiariasMemory;
+    res.json(_scopeMetasDiarias(all, req.scope.regionals));
+  } catch (err) {
+    console.error('[API] getMetasDiarias:', err.message);
+    res.json(_scopeMetasDiarias(_metasDiariasMemory, req.scope.regionals));
+  }
+});
+
+// POST /api/metas-diarias — admin edita todas; regional edita só a sua. Mescla
+// no blob existente (não apaga outras regionais). Mesma regra de role do /metas.
+router.post('/metas-diarias', async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: 'Não autenticado', code: 'NO_TOKEN' });
+    const isAdmin = req.user.role === 'admin';
+    const incoming = req.body || {};
+
+    let allowedRegs;
+    if (isAdmin) {
+      allowedRegs = Object.keys(incoming);
+    } else {
+      const allowed = req.user.regionals;
+      if (!Array.isArray(allowed) || allowed.length === 0) {
+        return res.status(403).json({ error: 'Conta sem regional vinculada', code: 'NO_REGIONAL' });
+      }
+      allowedRegs = allowed.filter(r => incoming[r] !== undefined);
+      if (allowedRegs.length === 0) {
+        return res.status(400).json({ error: `Body deve conter pelo menos um dos slots: ${allowed.join(', ')}` });
+      }
+    }
+
+    const sq = sbq();
+    if (sq) {
+      const cur = (await sq.getSetting('metas_diarias'))?.data || {};
+      for (const r of allowedRegs) cur[r] = incoming[r];
+      await sq.setSetting('metas_diarias', cur);
+      res.json({ ok: true, metas: _scopeMetasDiarias(cur, isAdmin ? Object.keys(cur) : req.scope.regionals), updated: allowedRegs });
+    } else {
+      for (const r of allowedRegs) _metasDiariasMemory[r] = incoming[r];
+      res.json({ ok: true, metas: _scopeMetasDiarias(_metasDiariasMemory, isAdmin ? Object.keys(_metasDiariasMemory) : req.scope.regionals), updated: allowedRegs });
+    }
+  } catch (err) {
+    console.error('[API] setMetasDiarias:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
