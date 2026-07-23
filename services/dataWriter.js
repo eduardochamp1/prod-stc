@@ -567,7 +567,8 @@ async function consolidateDay(date, opts = {}) {
 /**
  * Compara o total de OS CONCLUÍDAS (produtividade do dia) em um dia entre as
  * duas fontes:
- *   - SNAPSHOTS: snapshot mais recente de cada equipe com sessionDate=date
+ *   - SNAPSHOTS: consolidateDay(date, {dryRun}) — UNIÃO de todos os snapshots do
+ *                dia (exatamente o que o write-path gravaria). Ver nota no corpo.
  *   - TABELA   : sum(count) de team_daily_totals para o mesmo date
  *
  * ⚠️ Ambos os lados contam SÓ notasConcluidas — team_daily_totals grava apenas
@@ -576,8 +577,9 @@ async function consolidateDay(date, opts = {}) {
  * métrica de execução contra métrica de produção → drift falso-positivo crônico
  * que o auto-reparo nunca zerava (mascarava drift real). Corrigido 17/06/2026.
  *
- * Drift positivo (snapshot > tabela) = consolidação atrasada / falha
- * Drift negativo (snapshot < tabela) = tabela inflada / wipe não rodou
+ * Drift positivo (dryRun > tabela) = tabela DESATUALIZADA vs a lógica atual
+ *   (dia não re-consolidado desde o P1-13 / regra rejeitada) → re-consolidar.
+ * Drift negativo (dryRun < tabela) = tabela inflada (wipe não rodou / dupla gravação).
  *
  * Não considera whitelist — se houver drift em equipes não-oficiais ainda
  * vale a pena saber (indica falha sistêmica).
@@ -589,43 +591,21 @@ async function detectDrift(date) {
   const sb = getClient();
   date = date || _hojeBRT();
 
-  // Snapshots: range date..date+1 (madrugada do dia seguinte conta pra date
-  // se sessionDate=date — mesma regra do consolidateDay).
-  const dPlus1 = new Date(date + 'T12:00:00Z');
-  dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
-  const dayPlus1 = dPlus1.toISOString().slice(0, 10);
-
-  const { data: snaps, error: e1 } = await sb
-    .from('snapshots')
-    .select('team_name, captured_at, data')
-    .in('date', [date, dayPlus1])
-    .order('captured_at', { ascending: false });
-  if (e1) throw e1;
-
-  // Reconstrói o que team_daily_totals DEVERIA ter pra `date` usando a MESMA
-  // função de gravação (_aggregateTeamDailyTotals): dedup por note id +
-  // atribuição por _notaDate. Antes o detector somava notasConcluidas.length
-  // por sessionDate sem dedup — pra equipes que relogam, contava a mesma nota
-  // várias vezes (ECCSJ82 = 143 ocorrências vs 18 reais) e comparava contra a
-  // tabela (já deduplicada), gerando drift fantasma que nenhum reparo zerava.
-  // Corrigido 08/07/2026.
+  // snapshot_count = o que a tabela DEVERIA ter pra `date`, calculado pela MESMA
+  // via do write-path: consolidateDay em dryRun (UNIÃO de todos os snapshots do
+  // dia + enriquecimento de rejeitadas via note_rejections + prioridade
+  // rejeitada>concluída, tudo deduplicado por UUID).
   //
-  // Um objeto-equipe por (team_name, sessionBegin), snapshot mais recente
-  // (snaps já vem ordenado por captured_at DESC). A janela [date, date+1]
-  // cobre todas as sessões que podem escrever em `date`: _notaDate empurra
-  // notas pra TRÁS, então uma sessão de date+1 pode ter nota com
-  // conclusionDate=date; sessões de date-1 nunca escrevem em date.
-  const seen = new Set();
-  const teams = [];
-  for (const s of (snaps || [])) {
-    const t = s.data;
-    if (!t || !t.sessionBegin) continue;
-    const key = `${s.team_name}|${t.sessionBegin}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    teams.push(t);
-  }
-  const snapshot_count = _aggregateTeamDailyTotals(teams)
+  // ALINHADO À UNIÃO em 23/07/2026: antes o detector usava só o ÚLTIMO snapshot
+  // por (team, sessionBegin). Mas o consolidateDay migrou pra UNIÃO no P1-13
+  // (22/07) — o último-snapshot subcontava (a WPA poda concluídas ao longo do
+  // dia) e o detector acusava drift FALSO crônico (tabela sempre "maior" que a
+  // régua velha). Agora as duas pontas usam a mesma união → drift só aparece
+  // quando a tabela está DE FATO desatualizada vs a lógica atual (dia não
+  // re-consolidado). (Histórico: dedup por note id 08/07; só concluídas — não
+  // executadas — 17/06; ambos preservados na união via _aggregateTeamDailyTotals.)
+  const dry = await consolidateDay(date, { dryRun: true });
+  const snapshot_count = (dry?.rows || [])
     .filter(r => r.date === date)
     .reduce((sum, r) => sum + r.count, 0);
 
