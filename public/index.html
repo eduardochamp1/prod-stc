@@ -5236,9 +5236,24 @@ ${equipes.length > 0 ? `<div class="perf-section">
       loadData();
     }
 
+    // Enquanto o fetch ao vivo (/teams) está em voo, a lista de equipes mostra
+    // "Carregando…" em vez de "Nenhuma equipe encontrada" (que parecia erro/vazio
+    // durante a demora do setor SJC/DSSJ). Genérico — vale pra qualquer
+    // regional/conta (ajuste 23/07/2026).
+    let _teamsLoading = false;
+
     async function loadData() {
       document.getElementById('sync-label').textContent = 'Atualizando...';
       document.getElementById('prod-periodo').textContent = mesAtual();
+      _teamsLoading = true;
+      // Só troca pra "Carregando" se a grid NÃO tem cards reais (tem .empty-state).
+      // Assim o auto-refresh de fundo (setInterval) não pisca uma lista já cheia.
+      {
+        const _grid = document.getElementById('teams-grid');
+        if (_grid && _grid.querySelector('.empty-state')) {
+          _grid.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando equipes…</div>';
+        }
+      }
 
       const de = document.getElementById('monitor-date-de')?.value || todayISO();
       const ate = document.getElementById('monitor-date-ate')?.value || todayISO();
@@ -5277,15 +5292,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
           : `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
 
         if (hist && allTeams.length === 0) {
+          _teamsLoading = false;
           document.getElementById('teams-grid').innerHTML =
             `<div class="empty-state">Nenhum snapshot encontrado para o período.<br><small>Execute o backfill para datas anteriores ao deploy.</small></div>`;
           renderMetrics([]);
           return;
         }
 
+        _teamsLoading = false;   // fetch resolveu → renderAll decide entre cards e "Nenhuma equipe"
         renderAll();
         enrichSubcategorias(allTeams); // enriquece subcats em background (cache no backend)
       } catch (err) {
+        _teamsLoading = false;
         document.getElementById('sync-label').textContent = 'Erro de conexão';
         document.getElementById('teams-grid').innerHTML =
           `<div class="empty-state">Não foi possível carregar os dados.<br><small>${err.message}</small></div>`;
@@ -6209,7 +6227,10 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }
 
       if (teams.length === 0) {
-        document.getElementById('teams-grid').innerHTML = `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
+        // Se ainda há fetch ao vivo em voo, "Carregando…" (não "Nenhuma equipe").
+        document.getElementById('teams-grid').innerHTML = _teamsLoading
+          ? `<div class="empty-state"><div class="spinner"></div><br>Carregando equipes…</div>`
+          : `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
         return;
       }
       // Range atual do monitor — usado pra filtrar contadores do card (Andamento,
