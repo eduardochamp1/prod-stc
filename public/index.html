@@ -4116,6 +4116,18 @@ ${equipes.length > 0 ? `<div class="perf-section">
       }).join('')}</div>`;
     }
 
+    // Soma os totais por chave (key→count) através de um conjunto de regionais.
+    // Usado no multi-select da box de produtividade: totaisLive só tem chaves
+    // ALL + siglas soltas, então pra um SUBCONJUNTO (ex.: GUA+CAC) a gente soma.
+    function _combineRegionais(byRegional, regionais) {
+      const out = {};
+      for (const r of (regionais || [])) {
+        const t = (byRegional && byRegional[r]) || {};
+        for (const k in t) out[k] = (out[k] || 0) + (Number(t[k]) || 0);
+      }
+      return out;
+    }
+
     async function renderProdutividade(teams) {
       const { de, ate } = currentMonitorRange();
 
@@ -4161,8 +4173,17 @@ ${equipes.length > 0 ? `<div class="perf-section">
         ? 'Produtividade do Dia'
         : (deTitle === ateTitle ? `Produtividade de ${fmtDateBR(deTitle)}` : `Produtividade do Período (${fmtDateBR(deTitle)} → ${fmtDateBR(ateTitle)})`);
       title.textContent = `${tituloPrefixo} — ${labelRegional}`;
-      const totaisReg = currentRegional === 'ALL' ? totaisLive.ALL : (totaisLive[currentRegional] || {});
-      const qtdReg    = currentRegional === 'ALL' ? qtdLive.ALL    : (qtdLive[currentRegional]    || {});
+      // currentRegional pode ser 'ALL', uma sigla ('GUA') ou CSV de várias
+      // ('GUA,CAC' — multi-select). totaisLive só tem chaves ALL + siglas soltas,
+      // então pra sigla única OU subconjunto a gente SOMA as regionais
+      // selecionadas (antes buscava a chave CSV 'GUA,CAC' inexistente → box
+      // zerava). Fix 23/07/2026. 'ALL' usa o agregado canônico do backend.
+      const totaisReg = currentRegional === 'ALL'
+        ? (totaisLive.ALL || {})
+        : _combineRegionais(totaisLive, selectedRegionals);
+      const qtdReg = currentRegional === 'ALL'
+        ? (qtdLive.ALL || {})
+        : _combineRegionais(qtdLive, selectedRegionals);
       grid.innerHTML = renderBlockRegional(totaisReg, qtdReg);
     }
 
