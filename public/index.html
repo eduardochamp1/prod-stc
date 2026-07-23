@@ -167,6 +167,12 @@
             </div>
           </div>
           <div class="metric-sub" id="m-ativas" style="display:none"></div>
+          <!-- Detalhamento por tipo de equipe: planejado (whitelist) / em campo agora.
+               Só aparece no modo ao vivo (hoje) — "em campo agora" não faz sentido
+               em histórico. Populado em renderMonitor (bloco /api/equipes). -->
+          <div id="m-tipos-breakdown"
+               style="display:none;margin-top:8px;border-top:1px solid var(--cinza2);padding-top:6px;font-size:10px;color:var(--text2);line-height:1.5"
+               title="Por tipo de equipe: planejado (equipes oficiais cadastradas) / em campo agora (sessão aberta)."></div>
         </div>
         <div class="metric-card accent-verde"
              title="OS concluídas no range (status finalizado). Fonte: notasConcluidas das equipes com sessão ativa + acumulador persistente (daily_totals) pra cobrir equipes deslogadas.">
@@ -6043,6 +6049,41 @@ ${equipes.length > 0 ? `<div class="perf-section">
         if (eqData?.equipes) {
           const oficiais = eqData.equipes.filter(e => e.ativo);
           document.getElementById('m-total').textContent = oficiais.length;
+
+          // Detalhamento por tipo de equipe: planejado (whitelist) / em campo agora.
+          // Só no modo ao vivo — "em campo agora" não faz sentido em histórico.
+          // A soma da coluna "campo" bate com o "em campo" do topo (mesma regra
+          // !sessionEnd && isOnline). Equipe em campo fora da whitelist não tem
+          // tipo → não entra (não é equipe "planejada").
+          const bd = document.getElementById('m-tipos-breakdown');
+          if (bd && isLiveToday) {
+            const planByTipo = {}, siglaToTipo = {};
+            for (const e of oficiais) {
+              const tp = (e.tipo || '—').toUpperCase();
+              planByTipo[tp] = (planByTipo[tp] || 0) + 1;
+              siglaToTipo[(e.sigla || '').toUpperCase().trim()] = tp;
+            }
+            const realByTipo = {};
+            for (const t of teamsVisible.filter(t => !t.sessionEnd && t.isOnline)) {
+              const tp = siglaToTipo[(t.sigla || t.teamName || '').toUpperCase().trim()];
+              if (tp) realByTipo[tp] = (realByTipo[tp] || 0) + 1;
+            }
+            const tipos = Object.keys(planByTipo)
+              .sort((a, b) => planByTipo[b] - planByTipo[a] || a.localeCompare(b));
+            bd.innerHTML = tipos.map(tp => {
+              const plan = planByTipo[tp], real = realByTipo[tp] || 0;
+              const realHtml = real > 0
+                ? `<b style="color:var(--verde)">${real}</b>`
+                : `<span style="opacity:.55">0</span>`;
+              return `<div style="display:flex;justify-content:space-between;gap:10px">`
+                + `<span style="text-transform:uppercase;letter-spacing:.03em">${escapeHtml(tp)}</span>`
+                + `<span><b>${plan}</b> <span style="opacity:.5">plan</span> · ${realHtml} <span style="opacity:.5">campo</span></span>`
+                + `</div>`;
+            }).join('');
+            bd.style.display = tipos.length ? '' : 'none';
+          } else if (bd) {
+            bd.style.display = 'none';
+          }
         }
         // Sub-texto: distingue "em campo agora" (29, mostrado inline) das equipes
         // que tocaram o dia (incluindo já encerradas). Sem isso, o user via "29
