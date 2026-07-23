@@ -11383,6 +11383,11 @@ ${equipes.length > 0 ? `<div class="perf-section">
           out.innerHTML = `<div style="color:var(--vermelho)">✗ Status do job indisponível</div>`;
         } else if (job.status === 'error') {
           out.innerHTML = `<div style="color:var(--vermelho)">✗ ${job.error || 'erro desconhecido'}</div>`;
+        } else if (job.status === 'interrupted') {
+          out.innerHTML = `<div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">
+              <div style="font-weight:600;color:var(--laranja,#c60);margin-bottom:6px">⚠ Reclassificação interrompida</div>
+              <div style="color:var(--text2)">O servidor reiniciou durante o job (restart do PM2 ou OOM). Processou <strong>${job.processed}/${job.total || '?'}</strong> antes de parar — dispare de novo pra concluir.</div>
+            </div>`;
         } else {
           out.innerHTML = `
             <div style="background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px;padding:12px;font-size:12px">

@@ -159,6 +159,18 @@ async function start() {
     console.log(`[CRON] Modo ${process.env.DATA_MODE || 'mock'} — cron desativado.`);
   }
 
+  // P2-10: reconcilia o job de reclassificação persistido. Se o processo caiu
+  // com um job 'running', marca 'interrupted' (best-effort — nunca derruba o boot).
+  try {
+    const reclassifyJobStore = require('./services/reclassifyJobStore');
+    const job = await reclassifyJobStore.reconcileOnBoot();
+    if (job && job.status === 'interrupted') {
+      console.warn(`[BOOT] reclassify job ${job.id} estava 'running' e foi marcado 'interrupted'.`);
+    }
+  } catch (err) {
+    console.warn('[BOOT] reconcile do reclassify job falhou (ignorado):', err.message);
+  }
+
   app.listen(PORT, () => {
     console.log(`\n  WPA Monitor — Engelmig Energia`);
     console.log(`  http://localhost:${PORT}`);

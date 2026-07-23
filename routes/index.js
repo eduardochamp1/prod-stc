@@ -1824,9 +1824,13 @@ router.get('/admin/subcat-trace', async (req, res) => {
 // pm2 era morto por OOM (300M) durante reclassifies grandes (notas DD baixam
 // /details/optimized de até 1.6MB cada), gerando HTTP 000 no cliente.
 //
-// Estado é mantido em memória (single job global). Se já houver um job em
+// Estado é mantido em memória (single job global) E espelhado em app_settings
+// via reclassifyJobStore (P2-10): o status sobrevive a restart do PM2/OOM e o
+// boot marca job 'running' órfão como 'interrupted'. A memória segue sendo a
+// fonte viva no processo; o banco é a cópia durável. Se já houver um job em
 // execução, retorna 409.
-let _reclassifyJob = null; // { id, status, date, tipo, started_at, finished_at, processed, total, deleted, classified_ok, classified_failed, saved, error }
+const reclassifyJobStore = require('../services/reclassifyJobStore');
+let _reclassifyJob = null; // { id, status, date, tipo, started_at, finished_at, processed, total, deleted, classified_ok, classified_failed, saved, error, last_batch_at }
 
 async function _runReclassifyBackground(jobState) {
   try {
@@ -1866,9 +1870,11 @@ async function _runReclassifyBackground(jobState) {
     }
 
     jobState.total = jobs.length;
+    await reclassifyJobStore.saveJob(jobState); // persiste total cedo (status já reflete o tamanho)
     if (jobs.length === 0) {
       jobState.status = 'done';
       jobState.finished_at = new Date().toISOString();
+      await reclassifyJobStore.saveJob(jobState);
       return;
     }
 
@@ -1896,6 +1902,8 @@ async function _runReclassifyBackground(jobState) {
       jobState.classified_failed += slice.length - (classifs ? classifs.length : 0);
       jobState.processed += slice.length;
       classifsAll.push(...classifs);
+      jobState.last_batch_at = new Date().toISOString();
+      await reclassifyJobStore.saveJob(jobState); // progresso durável a cada lote
     }
 
     // 4. Re-consolida o dia
@@ -1903,10 +1911,12 @@ async function _runReclassifyBackground(jobState) {
 
     jobState.status = 'done';
     jobState.finished_at = new Date().toISOString();
+    await reclassifyJobStore.saveJob(jobState);
   } catch (err) {
     jobState.status = 'error';
     jobState.error = err.message;
     jobState.finished_at = new Date().toISOString();
+    await reclassifyJobStore.saveJob(jobState);
   }
 }
 
@@ -1944,7 +1954,12 @@ router.post('/admin/subcat-reclassify', async (req, res) => {
     classified_failed: 0,
     saved: 0,
     error: null,
+    last_batch_at: null,
   };
+
+  // Persiste ANTES de disparar → status já sobrevive a restart mesmo que o
+  // processo caia no 1º lote.
+  await reclassifyJobStore.saveJob(_reclassifyJob);
 
   // Dispara em background — não await
   _runReclassifyBackground(_reclassifyJob);
@@ -1952,9 +1967,15 @@ router.post('/admin/subcat-reclassify', async (req, res) => {
   res.status(202).json({ ok: true, job: _reclassifyJob });
 });
 
-// GET /admin/subcat-reclassify/status — retorna estado do último job (ou null)
-router.get('/admin/subcat-reclassify/status', (req, res) => {
-  res.json({ job: _reclassifyJob });
+// GET /admin/subcat-reclassify/status — lê o estado persistido (sobrevive a
+// restart do PM2). Fallback pra memória se o banco estiver indisponível.
+router.get('/admin/subcat-reclassify/status', async (req, res) => {
+  try {
+    const job = await reclassifyJobStore.loadJob();
+    res.json({ job: job || _reclassifyJob || null });
+  } catch (e) {
+    res.json({ job: _reclassifyJob || null });
+  }
 });
 
 // GET /api/admin/note-trace?numero=035009000490 OU ?id=UUID

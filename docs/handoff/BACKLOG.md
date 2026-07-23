@@ -50,7 +50,7 @@
 | P2-7 | `pg_dump --schema-only` commitado + schema drift | Ops/Dados | **done** (22/07) |
 | P2-8 | Extrair CSS pra `css/app.css` (primeiro passo do split) | Frontend | pending |
 | P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
-| P2-10 | Persistir estado do `_reclassifyJob` | Backend | pending |
+| P2-10 | Persistir estado do `_reclassifyJob` | Backend | **done** (22/07) |
 | P2-11 | Andamento por equipe contava nota já concluída (dupla contagem) | Frontend/Dados | **done** (fc2170d, 09/07) |
 | P3-1 | Dividir `routes/index.js` por domínio | Backend | pending |
 | P3-2 | Split incremental do `index.html` (JS por aba) | Frontend | pending |
@@ -1108,7 +1108,7 @@ feita em PR separado depois dos testes.
 ## P2-10 — Persistir estado do `_reclassifyJob`
 
 - **Categoria:** Backend
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de backend 2026-07-08
 - **Evidência:** `routes/index.js:1733` — `_reclassifyJob` é variável de
   módulo em memória. `_runReclassifyBackground` roda ~80 linhas de pipeline
@@ -1123,10 +1123,32 @@ feita em PR separado depois dos testes.
      se `running=true` (ninguém retomou; requer intervenção manual).
   3. Endpoint `/admin/subcat-reclassify/status` lê do banco em vez da
      variável.
-- **Aceite:** Status persiste após restart do PM2.
+- **Aceite:** Status persiste após restart do PM2. ✓
 - **Esforço:** 3-4h.
 - **Rollback:** Reverter.
 - **Depende de:** nada.
+- **Feito em:** 22/07/2026.
+  - Novo `services/reclassifyJobStore.js`: espelha o job em `app_settings`
+    (key `reclassify_job`, JSONB) via `getSetting`/`setSetting`. Escrita
+    **best-effort** (try/catch — falha de persistência nunca derruba o pipeline
+    nem o boot). A memória segue sendo a fonte viva no processo; o banco é a
+    cópia durável.
+  - `_runReclassifyBackground` persiste em cada marco: ao calcular `total`, a
+    cada lote (com `last_batch_at`), e em done/error. A POST persiste ANTES de
+    disparar o background (status sobrevive mesmo se cair no 1º lote).
+  - `GET /admin/subcat-reclassify/status` agora lê do banco (fallback pra
+    memória se o banco cair) → **sobrevive a restart do PM2**.
+  - **Boot** (`server.js` start): `reconcileOnBoot()` lê o job persistido; se
+    estava `running` (ninguém retomou), marca `interrupted` — estado terminal,
+    exige novo disparo manual. Best-effort (não derruba o boot).
+  - Frontend (`index.html`): novo ramo pro status `interrupted` (mostra
+    progresso parcial + "dispare de novo"), senão um job interrompido apareceria
+    como "✓ concluída" — mentira sobre o resultado.
+  - **Testes:** +9 em `test/reclassifyJobStore.test.js` (`reconcileBootState`
+    puro: running→interrupted preservando progresso, done/error/interrupted
+    intactos, null; `reconcileOnBoot` com load/save injetados). Suíte: 236/236.
+  - **Deploy:** código (`routes/index.js`, `server.js`, `index.html`, novo
+    service), sem migração — usa a `app_settings` existente. `git pull` + PM2.
 
 ---
 
