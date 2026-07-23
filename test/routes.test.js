@@ -220,6 +220,40 @@ test('vazamento: admin ?regionals=SJC recorta a resposta só pra SJC', async () 
     `escopo explícito deve recortar — veio ${JSON.stringify(Object.keys(json))}`);
 });
 
+// ── /teams: contrato de auth + escopo (P2-1) ─────────────────────────────────
+// Fecha os bullets literais do P2-1 pra /teams. O 200-path depende de DB (mock
+// não tem), então travamos só o contrato de segurança — que roda ANTES do
+// handler tocar o banco (authMiddleware → applyScope).
+
+test('P2-1: GET /api/teams sem token → 401', async () => {
+  const { status } = await get('/api/teams');
+  assert.equal(status, 401);
+});
+
+test('P2-1: GET /api/teams?regionals=SJC com token GUA → 403 (applyScope)', async () => {
+  const token = await loginAs('guarapari', 'guapass');
+  const { status } = await get('/api/teams?regionals=SJC', token);
+  assert.equal(status, 403, `guarapari não pode pedir SJC — veio ${status}`);
+});
+
+// ── /health: JSON válido (P1-2 / P2-1) ────────────────────────────────────────
+// Robusto pros 2 ambientes: sem Postgres (dev/Windows) devolve 503 db:error;
+// com Postgres (VM) devolve 200 db:ok. Nos dois casos o CONTRATO do JSON é o
+// mesmo — é isso que travamos (nunca HTML/placebo, bug P1-2).
+
+test('P2-1: GET /health → JSON válido com shape esperado (200 ou 503)', async () => {
+  const { status, json } = await get('/health');
+  assert.ok(status === 200 || status === 503, `status inesperado: ${status}`);
+  assert.equal(typeof json.ok, 'boolean', 'ok deve ser boolean');
+  assert.equal(typeof json.ts, 'string', 'ts deve ser string ISO');
+  assert.ok(json.db === 'ok' || json.db === 'error', `db deve ser ok|error — veio ${json.db}`);
+  // Invariante firme: status espelha ok (handler faz res.status(ok?200:503)).
+  assert.equal(status === 200, json.ok === true, 'status deve espelhar json.ok');
+  // db:error SEMPRE implica não-ok (o contrário não vale: db:ok + snapshot velho
+  // também é não-ok — por isso não afirmamos o bicondicional com db).
+  if (json.db === 'error') assert.equal(json.ok, false, 'db:error tem que ser ok:false');
+});
+
 // NOTA: rotas DB-dependentes (/historico/mes, /historico/diario, /metas/calculadas,
 // /notas/*, /teams/:teamId) não têm teste de resposta 200 aqui porque o harness
 // roda sem Postgres (sq real → fetch failed → 500). O escopo dessas rotas é

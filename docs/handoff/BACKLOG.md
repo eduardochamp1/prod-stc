@@ -41,7 +41,7 @@
 | P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending (requer staging) |
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
-| P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | pending |
+| P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | pending |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
 | P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
@@ -785,7 +785,7 @@ feita em PR separado depois dos testes.
 ## P2-1 — Testes de contrato de rota (login, scope, health)
 
 - **Categoria:** Qualidade
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de qualidade + backend 2026-07-08
 - **Evidência:** `test/` não tem nenhum arquivo cobrindo `routes/*.js`.
   Composição `compatRegionalParam → applyScope → handler` nunca é
@@ -804,10 +804,18 @@ feita em PR separado depois dos testes.
      - `GET /api/teams?regionals=SJC` com token GUA → 403 ou array
        filtrado só de GUA
      - `GET /health` → JSON válido (após P1-2)
-- **Aceite:** 5+ testes de rota, todos verdes.
+- **Aceite:** 5+ testes de rota, todos verdes. ✓ (17 testes em `test/routes.test.js`)
 - **Esforço:** 1-2 dias.
 - **Rollback:** Trivial (testes novos).
 - **Depende de:** P1-2.
+- **Feito em:** 22/07/2026. `test/routes.test.js` (criado 14/07 como "adianta
+  P2-1") já cobria login (401/200 + regionals[]/v=2), guard sem token, escopo
+  regional (403 pra `?regionals` fora do token + recorte por regional), P0-5,
+  SSRF (P1-4) e rate-limit (P1-5). Hoje fechei os 2 bullets literais que
+  faltavam: **`GET /api/teams`** (sem token → 401; `?regionals=SJC` com token
+  GUA → 403 via applyScope) e **`GET /health`** (JSON válido, shape
+  `{ok,ts,db}`, invariante `status ⟺ ok` e `db:error ⟹ !ok`; robusto com e sem
+  Postgres). Total: **17 testes de rota**, todos verdes. Suíte 249/249.
 
 ## P2-2 — Extrair matemática de buckets em módulo único
 
