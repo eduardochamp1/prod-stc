@@ -12,7 +12,7 @@ consolida em métricas diárias por equipe/regional/tipo de serviço, e serve
 um painel web pra gestão operacional. Dados aqui são **reportados à EDP** —
 erro em número visível a cliente.
 
-- **Stack:** Node.js/Express, frontend vanilla em `index.html` monolítico,
+- **Stack:** Node.js/Express, frontend vanilla em `public/index.html` monolítico,
   Postgres local via `services/pgShim.js` (shim compatível com API supabase-js).
 - **Deploy:** VM Ubuntu 24.04 corporativa (~3.8GB RAM, **sem sudo**), atrás
   de Fortinet com TLS interception (bloqueia CDNs públicos), PM2 modo cluster
@@ -43,8 +43,8 @@ erro em número visível a cliente.
 4. **PM2 cluster mode é frágil com `--update-env`.** Sempre use
    `pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save`.
 5. **Fortinet bloqueia CDNs.** Bibliotecas de terceiros são vendorizadas em
-   `vendor/`. Não sugira `<script src="cdn...">` — vai quebrar em produção
-   sem aviso.
+   `public/vendor/`. Não sugira `<script src="cdn...">` — vai quebrar em
+   produção sem aviso.
 6. **Testes: `node --test`** (built-in do Node, sem framework). Suíte roda
    em ~0.8s. **Rode antes de propor merge** — foi ignorada 4 semanas em
    2026 e a suíte ficou vermelha sem ninguém saber.
@@ -103,10 +103,10 @@ git push
 | `docs/` (fora de `handoff/`) | Knowledge base privado do dev (gitignored). Você não vê. |
 | `.claude/`, `_local/` | Workspace do dev (gitignored). |
 | `services/`, `db/`, `routes/`, `middleware/` | Backend. Comece por `services/regionals.js` (44 linhas, modelo do estilo). |
-| `index.html` (12.8k linhas) | Frontend monolítico. **Cuidado.** Ver risco H11 no backlog. |
-| `vendor/` | Bibliotecas 3rd-party servidas localmente (Fortinet mata CDN). |
+| `public/index.html` (12.8k linhas) | Frontend monolítico. **Cuidado.** Ver risco H11 no backlog. (Movido pra `public/` no P2-3, 22/07 — o server serve SÓ `public/`.) |
+| `public/vendor/` | Bibliotecas 3rd-party servidas localmente (Fortinet mata CDN). |
 | `scripts/` | Backfills, diagnóstico, migrações. Muitos read-only. |
-| `test/` | 152 testes, `node --test`. Cobertura desigual (backend só). |
+| `test/` | 266 testes, `node --test`. Cobertura desigual (backend só). |
 | `ecosystem.config.js` | Config PM2. Não edite sem entender max_memory_restart. |
 
 ## Filosofia deste projeto (aprendida em incidente)

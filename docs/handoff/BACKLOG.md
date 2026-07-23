@@ -43,7 +43,7 @@
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
-| P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | pending |
+| P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
 | P2-4 | Escapar dados EDP em `innerHTML` (XSS) | Segurança | **done** (22/07) |
 | P2-5 | Tie-breaker `.order('id')` em queries paginadas | Dados | **done** (22/07) |
 | P2-6 | `statement_timeout` no pool Postgres | Dados | **done** (22/07) |
@@ -875,7 +875,7 @@ feita em PR separado depois dos testes.
 ## P2-3 — `public/` dedicado (parar de servir raiz do repo)
 
 - **Categoria:** Segurança / Frontend
-- **Status:** pending
+- **Status:** **done** (22/07/2026) — ver "Feito em".
 - **Fonte:** Auditoria de backend + frontend + segurança 2026-07-08
 - **Evidência:** `server.js:74` — `app.use(express.static(path.join(__dirname)))`
   serve raiz inteira: `server.js`, `services/*`, `ecosystem.config.js`,
@@ -888,12 +888,33 @@ feita em PR separado depois dos testes.
   3. `server.js:74` → `app.use(express.static(path.join(__dirname, 'public')))`.
   4. `server.js:77` → `sendFile(path.join(__dirname, 'public', 'index.html'))`.
 - **Aceite:**
-  - [ ] `curl http://localhost:3002/server.js` retorna 404.
-  - [ ] `curl http://localhost:3002/logs/out.log` retorna 404.
-  - [ ] Painel continua funcionando normalmente.
+  - [x] `curl http://localhost:3002/server.js` retorna 404. (travado em `test/routes.test.js`)
+  - [x] `curl http://localhost:3002/logs/out.log` retorna 404.
+  - [x] Painel continua funcionando normalmente. (`GET /` → 200 HTML, testado)
 - **Esforço:** 1-2h.
 - **Rollback:** Reverter commit (mover arquivos de volta).
 - **Depende de:** nada, mas coordena bem com P3-2 (split do frontend).
+- **Feito em:** 22/07/2026.
+  - Criado `public/` e movidos (via `git mv`, preserva histórico):
+    `index.html`, `vendor/`, `logo.png`, `logo.svg`. `server.js` agora faz
+    `express.static(__dirname/'public')` (era `__dirname` inteiro) — a raiz do
+    repo (server.js, services/, db/, logs/, migrations/, `.env`…) **deixou de
+    ser servível por HTTP**. Assets do cliente usam caminhos relativos
+    (`vendor/…`, `logo.png`) que resolvem do `public/`.
+  - Catch-all endurecido: SPA-fallback só pra rotas SEM extensão; caminho COM
+    extensão que não existe no `public/` retorna **404** (antes o `*` devolvia
+    o HTML com 200 pra qualquer coisa — `/server.js` viraria 200-HTML). Assim
+    `/server.js`, `/logs/*.log`, `/services/*.js` dão 404 de verdade.
+  - +4 testes em `test/routes.test.js` (server.js/logs/services → 404; `/` →
+    200 HTML). Suíte 266/266. CLAUDE.md atualizado (`public/index.html`,
+    `public/vendor/`).
+  - **Nota:** `vercel.json` (legado) ainda referencia `logo.png` na raiz —
+    intocado de propósito (Vercel está sendo aposentado, P3-8/Fase 4; prod é
+    VM/PM2). `Cabeçalho Engelmig Energia.png` (órfão) ficou na raiz e agora
+    simplesmente não é mais servido.
+  - **Deploy:** código + arquivos movidos, sem migração de dados. `git pull` +
+    PM2. Após subir, confira: `curl -sI http://172.25.3.154:3002/server.js`
+    deve dar `404`, e `curl -sI http://172.25.3.154:3002/` deve dar `200`.
 
 ## P2-4 — Escapar dados EDP em `innerHTML`
 

@@ -254,6 +254,29 @@ test('P2-1: GET /health → JSON válido com shape esperado (200 ou 503)', async
   if (json.db === 'error') assert.equal(json.ok, false, 'db:error tem que ser ok:false');
 });
 
+// ── P2-3: static só do public/ (não vaza a raiz do repo) ─────────────────────
+
+test('P2-3: GET /server.js → 404 (código-fonte não é servido)', async () => {
+  const res = await fetch(base + '/server.js');
+  assert.equal(res.status, 404, 'server.js não pode ser lido por HTTP');
+});
+
+test('P2-3: GET /logs/out.log → 404 (logs não são servidos)', async () => {
+  const res = await fetch(base + '/logs/out.log');
+  assert.equal(res.status, 404);
+});
+
+test('P2-3: GET /services/dataService.js → 404 (services não vazam)', async () => {
+  const res = await fetch(base + '/services/dataService.js');
+  assert.equal(res.status, 404);
+});
+
+test('P2-3: GET / → 200 HTML (painel continua servindo do public/)', async () => {
+  const res = await fetch(base + '/');
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') || '', /text\/html/);
+});
+
 // NOTA: rotas DB-dependentes (/historico/mes, /historico/diario, /metas/calculadas,
 // /notas/*, /teams/:teamId) não têm teste de resposta 200 aqui porque o harness
 // roda sem Postgres (sq real → fetch failed → 500). O escopo dessas rotas é

@@ -143,10 +143,18 @@ app.get('/health', async (_req, res) => {
   res.status(out.ok ? 200 : 503).json(out);
 });
 
-app.use(express.static(path.join(__dirname)));
+// Serve SÓ o public/ — nunca a raiz do repo (P2-3, 22/07/2026). Antes servia
+// __dirname inteiro, expondo server.js, services/*, db/*, logs/* e afins por
+// HTTP sem autenticação. Os assets do cliente (index.html, vendor/, logo.*)
+// vivem em public/. Arquivo fora do public/ simplesmente não é servível.
+app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api')) return next();
-  res.sendFile(path.join(__dirname, 'index.html'));
+  // Fallback SPA só pra rotas "de página" (sem extensão). Um caminho COM
+  // extensão que chega aqui é asset inexistente/fora do public/ → 404 — não
+  // devolve o HTML no lugar de um .js/.log, e /server.js, /logs/*.log dão 404.
+  if (path.extname(req.path)) return res.status(404).end();
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ── INICIALIZAÇÃO (apenas fora do Vercel) ─────────────────────────────────────
