@@ -22,7 +22,7 @@
 
 | # | Item | Categoria | Status |
 |---|---|---|---|
-| P0-0 | VM sem swap + Postgres sem auto-restart confiável (INCIDENTE 09/07) | Ops/Infra | pending |
+| P0-0 | VM sem swap + Postgres sem auto-restart confiável (INCIDENTE 09/07) | Ops/Infra | **script done** (22/07) — falta swap+systemd (TI) e watchdog (P1-1) |
 | P0-1 | Continuidade humana (bus factor 1) | Governança | pending |
 | P0-2 | Backup offsite (Postgres) | Ops | **local OK (cron ativo)** — falta só offsite (SFTP→OneDrive manual OU rclone) |
 | P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
@@ -104,14 +104,25 @@
      RUNBOOK; considerar criar `scripts/backfill-consolidate.js` oficial pra
      não improvisar `node -e` em loop de shell.
 - **Aceite:**
-  - [ ] `free -h` mostra swap > 0 na VM.
-  - [ ] `systemctl show postgresql@16-main -p Restart` = `on-failure` (ou similar).
-  - [ ] Watchdog dispara alerta quando `/health` retorna `db:error`.
-  - [ ] `scripts/backfill-consolidate.js` existe (1 processo, pausa entre dias).
+  - [ ] `free -h` mostra swap > 0 na VM. *(TI — pendente)*
+  - [ ] `systemctl show postgresql@16-main -p Restart` = `on-failure`. *(TI — pendente)*
+  - [ ] Watchdog dispara alerta quando `/health` retorna `db:error`. *(liga com P1-1 — config humana pendente)*
+  - [x] `scripts/backfill-consolidate.js` existe (1 processo, pausa entre dias). **(done 22/07)**
 - **Esforço:** swap + auto-restart = pedido à TI (minutos deles). Script de
   backfill = 1h. Watchdog db:error = incluído no P1-1.
 - **Rollback:** N/A (adições de infra/config).
 - **Depende de:** acesso da TI da Engelmig (swap/systemd exigem root).
+- **Status:** **pending** — o item de CÓDIGO (aceite #4) está feito em
+  22/07/2026; os outros 3 aceites dependem da TI da Engelmig (swap/systemd =
+  root) e da config humana do watchdog (P1-1). Não dá pra fechar por código.
+- **Feito em (parcial, 22/07/2026):** criado `scripts/backfill-consolidate.js`
+  — runner oficial de (re)consolidação, single-process e sequencial com pausa,
+  dry-run por padrão + `--apply`. Mata a causa raiz do incidente por
+  construção: pega um **advisory lock do Postgres** (`pg_try_advisory_lock`) no
+  início e RECUSA uma 2ª cópia concorrente (o incidente foram ~60 processos
+  node paralelos). O lock é por sessão → solta sozinho se o processo morrer.
+  RUNBOOK atualizado pra usar o script (em vez do `node -e` em loop). +10
+  testes (`parseArgs`/`rangeDatas`). Suíte 246/246.
 
 ## P0-1 — Continuidade humana (bus factor 1)
 

@@ -116,30 +116,29 @@ mostrar timestamp novo.
 > por ~2min. SEMPRE use 1 processo, sequencial, com pausa entre dias (script
 > abaixo). Ver P0-0 no BACKLOG.
 
-### Backfill de consolidação em massa (1 processo, seguro)
+### Backfill de consolidação em massa (script oficial — 1 processo, seguro)
 
 Corrige `team_daily_totals`/`team_daily_subcat_totals` de um período inteiro.
 Ordem oldest→newest (cada dia é finalizado quando o seguinte consolida).
 **Não roda em horário de pico se puder** (o cron para às 20h — janela ideal
 é após 20h BRT).
 
+Use o script oficial `scripts/backfill-consolidate.js` (NÃO improvise `node -e`
+em loop de shell — foi o que causou o incidente de 09/07). Ele é single-process,
+sequencial com pausa, e pega um **advisory lock do Postgres** que RECUSA uma 2ª
+cópia concorrente por construção.
+
 ```bash
-node -e "
-require('dotenv').config();
-const dw = require('./services/dataWriter');
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-(async () => {
-  const dt  = new Date('2026-05-09T12:00:00Z');   // início
-  const end = new Date('2026-07-08T12:00:00Z');    // fim (NÃO inclua hoje — é live)
-  for (; dt <= end; dt.setUTCDate(dt.getUTCDate()+1)) {
-    const dia = dt.toISOString().slice(0,10);
-    try { await dw.consolidateDay(dia); console.log(dia, 'ok'); }
-    catch (e) { console.error(dia, 'ERRO:', e && e.message); }
-    await sleep(400);   // respira — não sufoca o Postgres
-  }
-  process.exit(0);
-})();
-"
+cd ~/prod-stc
+
+# 1. DRY-RUN primeiro (só mede antes/depois por dia, não grava):
+node scripts/backfill-consolidate.js 2026-05-09 2026-07-08
+
+# 2. Se os números fizerem sentido, aplica (NÃO inclua o dia de hoje — é live):
+node scripts/backfill-consolidate.js 2026-05-09 2026-07-08 --apply
+
+# Opções: --pause=MS (default 800) · --force (ignora o lock; só se tiver CERTEZA
+# que não há outra cópia — anula a proteção anti-OOM).
 ```
 
 Validação após backfill (amostra 3 dias — todos devem dar `drift: false`):
