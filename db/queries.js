@@ -1073,7 +1073,12 @@ async function getNotasIndividuais(de, ate, regionals) {
     const sc = subcatMap[id] || {};
     const en = enderecoMap[id] || {};
     return {
-      data:          n.date,
+      // n.date vem da coluna DATE do snapshot; o driver pg devolve DATE como
+      // Date NATIVO, que quebra b.data.localeCompare() no sort abaixo (erro
+      // "localeCompare is not a function" no export do histórico) e ainda gera
+      // timestamp feio no XLSX. Normaliza pra 'YYYY-MM-DD' (mesmo padrão de
+      // session_date em _fetchRejeicoes). 23/07/2026.
+      data:          (n.date instanceof Date) ? n.date.toISOString().slice(0, 10) : String(n.date || '').slice(0, 10),
       numero:        n.numero,
       uuid:          n.uuid,
       equipe:        n.team_name,
