@@ -14,6 +14,17 @@ function _hojeBRT() {
   return dateBRT();
 }
 
+/**
+ * Soma `n` dias (pode ser negativo) a uma data 'YYYY-MM-DD', devolvendo
+ * 'YYYY-MM-DD'. Usa meio-dia UTC como âncora pra não escorregar de dia por
+ * fuso/DST. Função pura (testável).
+ */
+function _addDays(date, n) {
+  const d = new Date(date + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 // Lock simples para serializar execuções concorrentes de pushTeams.
 // Evita race condition onde upsert do ciclo A e delete do ciclo B se sobrepõem,
 // resultando na remoção de equipes recém-escritas.
@@ -461,13 +472,8 @@ async function consolidateDay(date, opts = {}) {
   //   - date+1: madrugada (equipe virando a noite, sessionBegin=date)
   //   - date-1: notas executadas no dia anterior carregadas na sessão atual
   //   - date: snapshots normais do dia
-  const dPlus1 = new Date(date + 'T12:00:00Z');
-  dPlus1.setUTCDate(dPlus1.getUTCDate() + 1);
-  const dayPlus1 = dPlus1.toISOString().slice(0, 10);
-
-  const dMinus1 = new Date(date + 'T12:00:00Z');
-  dMinus1.setUTCDate(dMinus1.getUTCDate() - 1);
-  const dayMinus1 = dMinus1.toISOString().slice(0, 10);
+  const dayPlus1  = _addDays(date, 1);
+  const dayMinus1 = _addDays(date, -1);
 
   const { data: snaps, error: e1 } = await sb
     .from('snapshots')
@@ -600,11 +606,22 @@ async function detectDrift(date) {
   // por (team, sessionBegin). Mas o consolidateDay migrou pra UNIÃO no P1-13
   // (22/07) — o último-snapshot subcontava (a WPA poda concluídas ao longo do
   // dia) e o detector acusava drift FALSO crônico (tabela sempre "maior" que a
-  // régua velha). Agora as duas pontas usam a mesma união → drift só aparece
-  // quando a tabela está DE FATO desatualizada vs a lógica atual (dia não
-  // re-consolidado). (Histórico: dedup por note id 08/07; só concluídas — não
+  // régua velha). (Histórico: dedup por note id 08/07; só concluídas — não
   // executadas — 17/06; ambos preservados na união via _aggregateTeamDailyTotals.)
-  const dry = await consolidateDay(date, { dryRun: true });
+  //
+  // ⚠️ RÉGUA = O PASSE DE D+1, não o de D (corrigido 25/07/2026).
+  // `consolidateDay(X)` monta equipes com sessão em {X-1, X} mas WIPA {X-1, X}.
+  // Logo, quem grava o valor FINAL de um dia D é o passe de D+1 (D entra nele
+  // como X-1, e a janela {D, D+1} inclui as sessões da manhã seguinte). Uma nota
+  // concluída em D e transmitida só numa sessão de D+1 (equipe que relogou) é
+  // vista pelo passe de D+1 e NÃO pelo de D.
+  // Usar o passe de D como régua subcontava ~6% e o auto-reparo então "corrigia"
+  // a tabela pra baixo, APAGANDO produção legítima: medido em 25/07/2026 no
+  // 07-13 (gravado 903 = passe D+1 904, contra 850 do passe de D — as 21 equipes
+  // com gap batiam 1:1 com o passe D+1) e o 07-22 chegou a perder 172 OS
+  // (1161 → 989) num sweep das 02:00. Ver scripts/diag-drift-team.js.
+  const repair_date = _addDays(date, 1);
+  const dry = await consolidateDay(repair_date, { dryRun: true });
   const snapshot_count = (dry?.rows || [])
     .filter(r => r.date === date)
     .reduce((sum, r) => sum + r.count, 0);
@@ -624,6 +641,10 @@ async function detectDrift(date) {
 
   return {
     date,
+    // Dia cujo passe de consolidação grava `date` — é o que o auto-reparo deve
+    // rodar (consolidateDay(repair_date)), NÃO consolidateDay(date). Ver a nota
+    // da régua acima: consolidateDay(date) escreveria o valor INCOMPLETO.
+    repair_date,
     snapshot_count,
     table_count,
     diff,
@@ -794,6 +815,7 @@ module.exports = {
   consolidateDay, detectDrift,
   cleanOldSnapshots, cleanOldNoteDetails,
   // Exportadas pra teste (P0-3) — funções puras da regra de agregação.
+  _addDays,
   _sessionDate, _notaDate, _aggregateTeamDailyTotals,
   _unionTeamsFromSnapshots,   // P1-13 — união dos snapshots do dia
 };

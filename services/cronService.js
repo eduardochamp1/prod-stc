@@ -960,7 +960,16 @@ async function runDriftCheck(date) {
         diff:     report.diff,
         threshold: report.threshold,
       });
-      await consolidateDay(date);
+      // ⚠️ REPARA VIA D+1, não via D (corrigido 25/07/2026).
+      // consolidateDay(X) monta equipes com sessão em {X-1, X} mas wipa {X-1, X}
+      // — logo quem grava o valor COMPLETO de um dia D é o passe de D+1 (a janela
+      // dele pega as sessões da manhã seguinte, que carregam notas concluídas em
+      // D por equipe que relogou). Rodar consolidateDay(D) aqui gravava o valor
+      // INCOMPLETO e o "reparo" APAGAVA produção legítima: o 07-22 perdeu 172 OS
+      // (1161 → 989) num sweep das 02:00, e o 07-13 media 850 pela régua de D
+      // contra 903 reais. `report.repair_date` é o D+1. Ver detectDrift e
+      // scripts/diag-drift-team.js.
+      await consolidateDay(report.repair_date);
 
       // Re-verifica após reparo
       const after = await detectDrift(date);
@@ -996,7 +1005,7 @@ async function runDriftCheck(date) {
   }
 }
 
-// Wrapper para o cron diário: varre D-1 até D-7 (janela completa da semana).
+// Wrapper para o cron diário: varre D-7 até D-1 (janela completa da semana).
 //
 // Antes verificava só D-1 e D-7, deixando D-2..D-6 órfãos: se o
 // consolidateDay de um desses dias falhasse ou fosse interrompido no meio
@@ -1004,10 +1013,19 @@ async function runDriftCheck(date) {
 // dados parciais/zerados indefinidamente (risco P0-3 do backlog). Varrer a
 // semana inteira é barato (7 detectDrift; só consolida quem tem drift real)
 // e fecha esse buraco. Sequencial pra não competir por conexões do pool.
+//
+// ⚠️ ORDEM CRESCENTE (mais ANTIGO primeiro) — obrigatório desde 25/07/2026.
+// O reparo de um dia D roda consolidateDay(D+1), que wipa {D, D+1}: grava D
+// completo e D+1 INCOMPLETO (a janela de D+1 não vê as sessões de D+2). Indo do
+// mais antigo pro mais novo, a iteração seguinte sempre conserta o colateral da
+// anterior; o único dia que sobra incompleto é HOJE, coberto pela consolidação
+// das 20:30, pelo cron intraday e pelo sweep de amanhã (como D-1). Na ordem
+// inversa (como era antes) o reparo do dia mais antigo estragava o dia seguinte
+// já corrigido, e o sweep nunca convergia.
 async function runDailyDriftSweep() {
   const today = dateBRT();
   const base = new Date(today + 'T12:00:00Z');
-  for (let d = 1; d <= 7; d++) {
+  for (let d = 7; d >= 1; d--) {
     const dia = new Date(base);
     dia.setUTCDate(dia.getUTCDate() - d);
     await runDriftCheck(dia.toISOString().slice(0, 10));

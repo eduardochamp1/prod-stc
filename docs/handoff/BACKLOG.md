@@ -28,6 +28,7 @@
 | P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
 | P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | **done** (a8dcbab, 08/07) |
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
+| P0-6 | Auto-reparo do drift APAGAVA produção legítima toda noite (07-22 perdeu 172 OS) | Dados | **código done** (25/07) — falta re-consolidar 07-17..07-24 |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -327,6 +328,60 @@
 - **Esforço:** 30min.
 - **Rollback:** Reverter o commit. Regressão volta.
 - **Depende de:** nada.
+
+## P0-6 — Auto-reparo do drift APAGAVA produção legítima toda noite
+
+- **Categoria:** Dados
+- **Status:** **código done** (25/07) — falta re-consolidar os dias já danificados
+- **Fonte:** Validação do efeito colateral do CS (+1571 de julho), 25/07/2026.
+  Ferramenta: `scripts/diag-drift-team.js`.
+- **Evidência:**
+  - Assimetria de janela: `consolidateDay(X)` monta equipes com sessão em
+    `{X-1, X}` (`dataWriter.js:_unionTeamsFromSnapshots`) mas **wipa** `{X-1, X}`
+    (`dataWriter.js` — `datesToWipe`). Logo quem grava o valor COMPLETO de um dia
+    D é o passe de **D+1**: a janela dele inclui as sessões da manhã seguinte, que
+    carregam notas concluídas em D por equipe que relogou (`_notaDate` devolve a
+    nota pro dia da conclusão quando `conclusionDate < sessDate`).
+  - `detectDrift(D)` usava como régua o passe de **D** — que não vê essas sessões
+    → subcontava ~6% e acusava a tabela de "inflada". O `runDriftCheck` então
+    rodava `consolidateDay(D)`, gravando o valor INCOMPLETO. Auto-reparo destrutivo.
+  - Medido no **07-13** (fora da janela do sweep, portanto intacto):
+    gravado **903**, passe de D+1 **904**, passe de D **850**. As 21 equipes com
+    gap batiam **1:1** com o passe de D+1 (ex.: ECCSJ80 13 gravado = 13 por D+1,
+    contra 2 pela régua de D).
+  - Dano já consumado no **07-22**: era **1161**, o sweep das 02:00 de 25/07
+    "reparou" pra **989** — **−172 OS reais perdidas**.
+  - Agravante: `runDailyDriftSweep` varria D-1→D-7 (ordem decrescente), então o
+    reparo de um dia estragava o dia seguinte já corrigido — nunca convergia.
+- **Impacto:** **Subnotificação silenciosa e recorrente de produção reportável à
+  EDP**, atingindo os últimos 7 dias a cada 02:00. Pior classe de bug do projeto:
+  o "monitor de integridade" era a própria fonte da corrupção, e o número caía
+  sozinho depois de já ter sido reportado. Explica por que o resíduo de julho
+  parecia "tabela inflada" — era o contrário.
+- **Ação:**
+  1. ✅ `detectDrift` passa a usar a régua do write-path: dryRun de **D+1**
+     recortado por `r.date === date`. Expõe `repair_date` (= D+1).
+  2. ✅ `runDriftCheck` repara via `consolidateDay(report.repair_date)`, não
+     `consolidateDay(date)`.
+  3. ✅ `runDailyDriftSweep` varre em ordem **crescente** (D-7 → D-1), pra cada
+     iteração consertar o colateral da anterior. Só HOJE sobra incompleto —
+     coberto pela consolidação das 20:30, pelo cron intraday e pelo sweep de amanhã.
+  4. ✅ `_addDays` extraído como helper puro + `test/driftWindow.test.js` (6 casos)
+     travando a invariante `passe D+1 >= passe D` e o dedup por UUID (o risco do
+     fix seria a janela mais larga inflar — travado por teste).
+  5. ⬜ **Re-consolidar os dias danificados** (janela dos sweeps de 24 e 25/07,
+     ≈ 07-17..07-24): `node scripts/backfill-consolidate.js 2026-07-17 2026-07-24 --apply`.
+     Com o fix no ar o sweep também restaura sozinho, mas conferir é mais rápido.
+- **Aceite:**
+  - [x] `node --test` 268 → 274 verdes.
+  - [x] `diag-drift-team.js` no 07-13 dá veredito "HIPÓTESE CONFIRMADA".
+  - [ ] Após deploy: `diag-drift-team.js 2026-07-22` volta a ~1161 (hoje 989).
+  - [ ] Log do próximo sweep das 02:00 sem `drift_detected` em cascata nos 7 dias.
+- **Esforço:** fix 2h (feito). Re-consolidação ~10min.
+- **Rollback:** Reverter o commit do fix. ⚠️ Reverter **devolve** o auto-reparo
+  destrutivo — se precisar reverter, desligue o sweep das 02:00 junto.
+- **Depende de:** nada. **Relacionado:** P1-13 (a união que criou a assimetria),
+  P1-11 (transação — um crash no meio do reparo ainda zera o dia).
 
 ---
 
