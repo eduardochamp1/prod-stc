@@ -53,6 +53,7 @@
 | P2-9 | Watchdog externo (UptimeRobot/BetterStack) | Ops | pending |
 | P2-10 | Persistir estado do `_reclassifyJob` | Backend | **done** (22/07) |
 | P2-11 | Andamento por equipe contava nota já concluída (dupla contagem) | Frontend/Dados | **done** (fc2170d, 09/07) |
+| P2-12 | Coluna DIAS/MÉDIA dos Gráficos contava linhas (Date-objeto no Set), não dias | Dados | **done** (28/07) — só leitura, sem re-consolidação |
 | P3-1 | Dividir `routes/index.js` por domínio | Backend | pending |
 | P3-2 | Split incremental do `index.html` (JS por aba) | Frontend | pending |
 | P3-3 | Error handler central do Express | Backend | pending |

@@ -53,6 +53,32 @@ function _onlyOficiais(rows, key = 'team_name') {
 }
 
 /**
+ * Normaliza um valor de coluna DATE do Postgres para 'YYYY-MM-DD'.
+ * O driver `pg` devolve DATE como OBJETO `Date` (o pgShim não registra parser
+ * pro OID 1082). Comparar/deduplicar Date por identidade é armadilha — dois
+ * `Date` do MESMO dia são objetos distintos. Vários pontos deste arquivo já
+ * faziam essa normalização inline (linhas ~277, ~680, ~1081); centralizada aqui.
+ */
+function _ymd(v) {
+  return v instanceof Date ? v.toISOString().slice(0, 10) : String(v || '').slice(0, 10);
+}
+
+/**
+ * Conta DIAS-CALENDÁRIO distintos a partir de valores DATE crus (Date ou string).
+ *
+ * bug reportado em 28/07/2026: a coluna "DIAS" do detalhamento dos Gráficos
+ * mostrava 2/3 mesmo filtrando 1 dia só. Causa: getPerformanceEquipes fazia
+ * `new Set().add(row.date)` com row.date sendo objeto Date → o Set nunca colapsa
+ * linhas do mesmo dia (cada Date é um objeto distinto), então "dias" virava o
+ * nº de linhas (date × tipo_code) = nº de tipos da equipe. Isso inflava MÉDIA/dia
+ * (total/dias) e desordenava o ranking. Normalizar pra 'YYYY-MM-DD' antes de
+ * deduplicar resolve.
+ */
+function _diasTrabalhados(dateValues) {
+  return new Set((dateValues || []).map(_ymd)).size;
+}
+
+/**
  * Executa uma query Supabase paginando até buscar todos os registros.
  * Contorna o limite de 1000 linhas/req do PostgREST.
  *
@@ -1141,20 +1167,20 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
         sector_id:  row.sector_id,
         total:      0,
         por_tipo:   {},
-        dates:      new Set(),
+        dates:      [],   // valores DATE crus; dias distintos via _diasTrabalhados (bug 28/07/2026)
         tipo_equipe: upper.startsWith('EC') ? 'COMERCIAL'
                    : upper.startsWith('EP') ? 'PLANTAO'
                    : 'OPERACIONAL',
       };
     }
     teams[name].total += row.count;
-    teams[name].dates.add(row.date);
+    teams[name].dates.push(row.date);
     teams[name].por_tipo[row.tipo_code] =
       (teams[name].por_tipo[row.tipo_code] || 0) + row.count;
   });
 
   const lista = Object.values(teams).map(t => {
-    const dias = t.dates.size;
+    const dias = _diasTrabalhados(t.dates);
     return {
       team_name:        t.team_name,
       regional:         t.regional,
@@ -1656,4 +1682,5 @@ module.exports = {
   getMapaEquipe,
   getRejeicoesTotais, getRejeicoesLista, getRejeicoesMotivos,
   _selectAll, // exportado p/ teste de paginação (P2-5) — não usar fora de testes
+  _ymd, _diasTrabalhados, // exportados p/ teste (bug DIAS 28/07/2026)
 };
