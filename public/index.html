@@ -3807,16 +3807,20 @@
           ...ORDEM.filter(t => presentes.has(t)),
           ...[...presentes].filter(t => !ORDEM.includes(t)).sort(),
         ];
-        // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL + um grupo por tipo.
-        const grpHead = ['<th class="mtx-grp" colspan="2" title="Soma de todos os tipos">TOTAL</th>']
+        // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL (destacado) + um grupo por tipo.
+        const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="2" title="Soma de todos os tipos">TOTAL</th>']
           .concat(tipos.map(t => `<th class="mtx-grp" colspan="2">${t}</th>`)).join('');
-        // 2ª linha: EXEC/REJE repetido por grupo.
-        const subHead = ['<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th>']
+        // 2ª linha: EXEC/REJE repetido por grupo (o par do TOTAL leva mtx-total).
+        const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th>']
           .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th>')).join('');
-        const cell = (v, cls) => `<td class="${cls}" style="text-align:center">${v ? v : '—'}</td>`;
+        // Célula: número real, ou "—" bem apagado (classe mtx-zero) quando vazio.
+        // REJE > 0 ganha mtx-rej-hot pra saltar (vermelho da marca).
+        const cell = (v, cls) => v
+          ? `<td class="${cls}${/rej/.test(cls) ? ' mtx-rej-hot' : ''}">${v}</td>`
+          : `<td class="${cls} mtx-zero">—</td>`;
         const bodyRows = eqs.map(e => {
           const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC' : e.tipo_equipe === 'PLANTAO' ? 'EP' : 'OP';
-          const cells = [cell(e.total_exec, 'mtx-exec'), cell(e.total_rej, 'mtx-rej')]
+          const cells = [cell(e.total_exec, 'mtx-exec mtx-total'), cell(e.total_rej, 'mtx-rej mtx-total')]
             .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej')])).join('');
           return `<tr>
   <td class="mtx-team"><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
@@ -3826,7 +3830,7 @@
         // Linha de total (rodapé): soma por coluna.
         const somaExec = (t) => eqs.reduce((s, e) => s + (t ? (e.exec?.[t] || 0) : e.total_exec), 0);
         const somaRej  = (t) => eqs.reduce((s, e) => s + (t ? (e.rej?.[t]  || 0) : e.total_rej), 0);
-        const footCells = [cell(somaExec(null), 'mtx-exec'), cell(somaRej(null), 'mtx-rej')]
+        const footCells = [cell(somaExec(null), 'mtx-exec mtx-total'), cell(somaRej(null), 'mtx-rej mtx-total')]
           .concat(tipos.flatMap(t => [cell(somaExec(t), 'mtx-exec'), cell(somaRej(t), 'mtx-rej')])).join('');
         return `
 <div class="perf-section">

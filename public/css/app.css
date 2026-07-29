@@ -4248,40 +4248,75 @@
     .perf-tipo-table tr:last-child td { border-bottom: none; }
     .perf-tipo-table tr:hover td { background: var(--cinza1); }
 
-    /* ── Matriz EQUIPE × TIPO (EXEC × REJE por tipo, aba Gráficos) ─────────── */
-    .mtx-table { border-collapse: collapse; }
-    .mtx-table thead th { text-align: center; white-space: nowrap; position: sticky; }
-    .mtx-table thead tr:first-child th { top: 0; }
-    .mtx-table thead tr:nth-child(2) th { top: 28px; }
-    /* Cabeçalho de grupo (TOTAL / cada tipo) — barra superior. */
+    /* ── Matriz EQUIPE × TIPO — estilo Engelmig, responsiva, com scroll fixo ── */
+    /* border-collapse: separate pra as bordas acompanharem as células sticky. */
+    .mtx-table { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+    .mtx-table th, .mtx-table td { border-bottom: 1px solid var(--cinza2); }
+
+    /* Cabeçalho de 2 linhas, ambas fixas ao rolar pra baixo (grupo em cima,
+       EXEC/REJE embaixo — offset = altura da linha de grupo). */
+    .mtx-table thead th { position: sticky; text-align: center; white-space: nowrap; z-index: 1; }
+    .mtx-table thead tr:first-child th { top: 0; height: 30px; }
+    .mtx-table thead tr:nth-child(2) th { top: 30px; }
+
+    /* Linha de grupo: verde da marca; grupo TOTAL destacado em amarelo. */
     .mtx-table th.mtx-grp {
+      background: var(--verde); color: #fff;
+      font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 6px 10px;
+      border-left: 2px solid rgba(255,255,255,.25);
+    }
+    .mtx-table th.mtx-grp-total { background: var(--amarelo); color: var(--preto); }
+
+    /* Sub-cabeçalho EXEC/REJE: verde escuro (amarelo no grupo TOTAL). */
+    .mtx-table thead tr:nth-child(2) th {
+      background: var(--verde2); color: #fff;
+      font-size: 10px; font-weight: 600; letter-spacing: .06em; padding: 4px 8px;
+    }
+    .mtx-table thead tr:nth-child(2) th.mtx-total { background: var(--amarelo2); color: var(--preto); }
+
+    /* Divisória vertical no início de cada grupo (par EXEC|REJE). */
+    .mtx-table td.mtx-exec, .mtx-table thead tr:nth-child(2) th.mtx-exec {
       border-left: 2px solid var(--cinza2);
-      background: var(--cinza1);
-      font-size: 11px;
     }
-    /* Início de cada grupo: linha vertical separando os pares EXEC|REJE. */
-    .mtx-table th.mtx-exec, .mtx-table td.mtx-exec { border-left: 2px solid var(--cinza2); }
-    .mtx-table th.mtx-rej, .mtx-table td.mtx-rej { color: var(--text2); }
-    .mtx-table th.mtx-exec, .mtx-table th.mtx-rej {
-      font-size: 10px; letter-spacing: .04em; padding: 4px 8px;
-      border-bottom: 2px solid var(--cinza2);
-    }
-    .mtx-table td { padding: 6px 8px; font-size: 12px; text-align: center; }
-    /* Coluna Equipe fixa à esquerda ao rolar horizontalmente. */
+
+    /* Corpo: EXEC em verde, REJE cinza; REJE > 0 salta em vermelho; "—" apagado. */
+    .mtx-table td { padding: 6px 9px; text-align: center; }
+    .mtx-table td.mtx-exec { color: var(--verde2); font-weight: 600; }
+    .mtx-table td.mtx-rej { color: var(--text2); }
+    .mtx-table td.mtx-rej-hot { color: var(--vermelho); font-weight: 700; }
+    .mtx-table td.mtx-zero { color: var(--cinza3); opacity: .4; }
+
+    /* Grupo TOTAL: leve tom amarelo + negrito. */
+    .mtx-table td.mtx-total { background: #fff9e6; font-weight: 700; }
+
+    /* Coluna Equipe fixa à esquerda ao rolar na horizontal. */
     .mtx-table .mtx-team {
       position: sticky; left: 0; z-index: 2;
-      text-align: left; white-space: nowrap;
+      text-align: left; white-space: nowrap; font-weight: 600;
       background: var(--branco); border-right: 2px solid var(--cinza2);
     }
-    .mtx-table thead .mtx-team { z-index: 3; background: var(--cinza1); }
-    .mtx-table tr:hover td { background: var(--cinza1); }
-    .mtx-table tr:hover td.mtx-team { background: var(--cinza1); }
-    /* Rodapé de totais. */
+    /* Canto (cabeçalho × Equipe): acima de tudo, no verde da marca. */
+    .mtx-table thead .mtx-team { z-index: 4; background: var(--verde); color: #fff; }
+
+    /* Hover: tom verde bem leve, preservando as colunas fixas opacas. */
+    .mtx-table tbody tr:hover td { background: #f0f7f2; }
+    .mtx-table tbody tr:hover td.mtx-team { background: #e6f2ea; }
+    .mtx-table tbody tr:hover td.mtx-total { background: #fbf3d6; }
+
+    /* Rodapé de totais fixo embaixo. */
     .mtx-table tfoot .mtx-foot td {
-      font-weight: 700;
-      border-top: 2px solid var(--cinza2);
-      background: var(--cinza1);
-      position: sticky; bottom: 0;
+      position: sticky; bottom: 0; z-index: 2;
+      font-weight: 700; background: var(--cinza1);
+      border-top: 2px solid var(--verde);
+    }
+    .mtx-table tfoot .mtx-foot td.mtx-team { z-index: 3; }
+    .mtx-table tfoot .mtx-foot td.mtx-total { background: #fdf3d0; }
+
+    /* Responsivo: aperta fonte/padding em telas estreitas (mantém scroll horizontal). */
+    @media (max-width: 900px) {
+      .mtx-table { font-size: 11px; }
+      .mtx-table td, .mtx-table th.mtx-grp { padding: 4px 6px; }
+      .mtx-table thead tr:nth-child(2) th { padding: 3px 5px; }
     }
     .perf-tipo-badge {
       display: inline-block;
