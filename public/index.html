@@ -3223,30 +3223,54 @@
       loadGraficos();
     }
 
-    // Cache do dropdown de equipes (populado 1x no primeiro load)
-    let _grafEquipesPopuladas = false;
+    // Lista COMPLETA de equipes (fetch 1x). A exibição no dropdown é refiltrada
+    // por regional + tipo de equipe a cada mudança — ver _grafRefiltrarEquipes.
+    let _grafAllEquipes = null;
     async function _popularDropdownEquipes() {
-      if (_grafEquipesPopuladas) return;
       const sel = document.getElementById('graf-equipe-select');
       if (!sel) return;
-      try {
-        const res = await fetch(`${API}/equipes`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const eqs = (data.equipes || []).filter(e => e.ativo).sort((a, b) =>
-          a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla)
-        );
-        // Agrupa por regional via optgroup pra ficar mais legível (todas as 3 regionais)
-        sel.innerHTML = `
-          <option value="ALL">Todas as equipes</option>
-          ${regionalOptgroups(eqs, e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`, true)}
-        `;
-        _grafEquipesPopuladas = true;
-      } catch (err) {
-        console.warn('Falha ao popular dropdown de equipes:', err.message);
+      if (!_grafAllEquipes) {
+        try {
+          const res = await fetch(`${API}/equipes`);
+          if (!res.ok) return;
+          const data = await res.json();
+          _grafAllEquipes = (data.equipes || []).filter(e => e.ativo);
+        } catch (err) {
+          console.warn('Falha ao popular dropdown de equipes:', err.message);
+          return;
+        }
       }
-      // Após popular o <select> original, inicializa/refresca o multi-select
       _grafEnsureMultiSelect();
+      _grafRefiltrarEquipes();
+    }
+
+    // Regionais EFETIVAS do filtro (expande grupos tipo ES→GUA,CAC e restringe
+    // ao userRegionals — defesa em profundidade; backend revalida).
+    function _grafRegionaisEfetivas() {
+      const sel = MultiSelect.getValues('graf-regional-select') || [];
+      if (sel.length === 0 || sel.includes('ALL')) return [...userRegionals];
+      return sel.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
+    }
+
+    // Reconstrói a lista do multi-select de equipes respeitando o REGIONAL e o
+    // TIPO DE EQUIPE (Comercial=EC* / Plantão=EP*) selecionados. Equipes fora do
+    // escopo somem; a seleção ainda válida é preservada (MultiSelect.refresh não
+    // dispara onChange, então não recarrega os gráficos em cascata).
+    function _grafRefiltrarEquipes() {
+      const sel = document.getElementById('graf-equipe-select');
+      if (!sel || !_grafAllEquipes) return;
+      const scope   = new Set(_grafRegionaisEfetivas());
+      const tipoSel = MultiSelect.getValues('graf-tipo-select') || [];
+      const tipoEq  = tipoSel.length === 1 ? tipoSel[0] : 'TODAS';
+      const prefixo = tipoEq === 'COMERCIAL' ? 'EC' : tipoEq === 'PLANTAO' ? 'EP' : null;
+
+      const eqs = _grafAllEquipes
+        .filter(e => scope.has(e.regional))
+        .filter(e => !prefixo || String(e.sigla).toUpperCase().startsWith(prefixo))
+        .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
+
+      sel.innerHTML = `<option value="ALL">Todas as equipes</option>` +
+        regionalOptgroups(eqs, e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`, true);
       MultiSelect.refresh('graf-equipe-select');
     }
 
@@ -3256,10 +3280,11 @@
       MultiSelect.init('graf-regional-select', {
         onChange: () => {
           syncRegionalDropdowns('graf-regional-select', MultiSelect.getValues('graf-regional-select'));
+          _grafRefiltrarEquipes();   // regional mudou → refiltra as equipes disponíveis
           loadGraficos();
         },
       });
-      MultiSelect.init('graf-tipo-select',     { onChange: () => loadGraficos() });
+      MultiSelect.init('graf-tipo-select',     { onChange: () => { _grafRefiltrarEquipes(); loadGraficos(); } });
       MultiSelect.init('graf-equipe-select',   { onChange: () => loadGraficos() });
       const sess = getStoredSession();
       if (sess && sess.regional && sess.regional !== 'ALL') {
