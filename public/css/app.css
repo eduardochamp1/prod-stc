@@ -4247,6 +4247,42 @@
     }
     .perf-tipo-table tr:last-child td { border-bottom: none; }
     .perf-tipo-table tr:hover td { background: var(--cinza1); }
+
+    /* ── Matriz EQUIPE × TIPO (EXEC × REJE por tipo, aba Gráficos) ─────────── */
+    .mtx-table { border-collapse: collapse; }
+    .mtx-table thead th { text-align: center; white-space: nowrap; position: sticky; }
+    .mtx-table thead tr:first-child th { top: 0; }
+    .mtx-table thead tr:nth-child(2) th { top: 28px; }
+    /* Cabeçalho de grupo (TOTAL / cada tipo) — barra superior. */
+    .mtx-table th.mtx-grp {
+      border-left: 2px solid var(--cinza2);
+      background: var(--cinza1);
+      font-size: 11px;
+    }
+    /* Início de cada grupo: linha vertical separando os pares EXEC|REJE. */
+    .mtx-table th.mtx-exec, .mtx-table td.mtx-exec { border-left: 2px solid var(--cinza2); }
+    .mtx-table th.mtx-rej, .mtx-table td.mtx-rej { color: var(--text2); }
+    .mtx-table th.mtx-exec, .mtx-table th.mtx-rej {
+      font-size: 10px; letter-spacing: .04em; padding: 4px 8px;
+      border-bottom: 2px solid var(--cinza2);
+    }
+    .mtx-table td { padding: 6px 8px; font-size: 12px; text-align: center; }
+    /* Coluna Equipe fixa à esquerda ao rolar horizontalmente. */
+    .mtx-table .mtx-team {
+      position: sticky; left: 0; z-index: 2;
+      text-align: left; white-space: nowrap;
+      background: var(--branco); border-right: 2px solid var(--cinza2);
+    }
+    .mtx-table thead .mtx-team { z-index: 3; background: var(--cinza1); }
+    .mtx-table tr:hover td { background: var(--cinza1); }
+    .mtx-table tr:hover td.mtx-team { background: var(--cinza1); }
+    /* Rodapé de totais. */
+    .mtx-table tfoot .mtx-foot td {
+      font-weight: 700;
+      border-top: 2px solid var(--cinza2);
+      background: var(--cinza1);
+      position: sticky; bottom: 0;
+    }
     .perf-tipo-badge {
       display: inline-block;
       font-size: 10px;

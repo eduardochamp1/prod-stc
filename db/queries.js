@@ -1197,6 +1197,107 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
 }
 
 /**
+ * FUNÇÃO PURA (testável): monta a matriz EQUIPE × TIPO com EXEC (concluídas) e
+ * REJE (rejeitadas). Assume que as linhas JÁ vêm filtradas pela whitelist
+ * (execRows via _onlyOficiais no wrapper; rejRows via _fetchRejeicoes).
+ *
+ * @param execRows  linhas de team_daily_totals {team_name, regional, sector_id, tipo_code, count}
+ * @param rejRows   linhas de note_rejections {team_name, regional, sector_id, tipo} (1 linha = 1 rejeição)
+ * @param tipoEquipe 'TODAS' | 'COMERCIAL' (EC*) | 'PLANTAO' (EP*)
+ * @returns {{ equipes: Array, tipos: string[] }}
+ *   equipes: [{ team_name, regional, sector_id, tipo_equipe, exec:{tipo:n}, rej:{tipo:n}, total_exec, total_rej }]
+ *   tipos: união dos códigos de tipo presentes (EXEC ∪ REJE)
+ */
+function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS') {
+  const teams = {};
+  const passaTipo = (name) => {
+    const u = String(name).toUpperCase();
+    if (tipoEquipe === 'COMERCIAL' && !u.startsWith('EC')) return false;
+    if (tipoEquipe === 'PLANTAO'   && !u.startsWith('EP')) return false;
+    return true;
+  };
+  const ensure = (name, regional, sector_id) => {
+    if (!teams[name]) {
+      const u = String(name).toUpperCase();
+      teams[name] = {
+        team_name: name, regional, sector_id,
+        exec: {}, rej: {}, total_exec: 0, total_rej: 0,
+        tipo_equipe: u.startsWith('EC') ? 'COMERCIAL' : u.startsWith('EP') ? 'PLANTAO' : 'OPERACIONAL',
+      };
+    }
+    return teams[name];
+  };
+
+  for (const r of (execRows || [])) {
+    if (!r || !r.team_name || !passaTipo(r.team_name)) continue;
+    const t = ensure(r.team_name, r.regional, r.sector_id);
+    const code = r.tipo_code || '—';
+    const n = Number(r.count) || 0;
+    t.exec[code] = (t.exec[code] || 0) + n;
+    t.total_exec += n;
+  }
+  // rejRows: cada linha é 1 rejeição (cruas — inclui legítimas, exclui as
+  // "baixa via sistema" que o _fetchRejeicoes já descarta). Conta ocorrências.
+  for (const r of (rejRows || [])) {
+    if (!r || !r.team_name || !passaTipo(r.team_name)) continue;
+    const t = ensure(r.team_name, r.regional, r.sector_id);
+    const code = r.tipo || '—';
+    t.rej[code] = (t.rej[code] || 0) + 1;
+    t.total_rej += 1;
+  }
+
+  const equipes = Object.values(teams).sort((a, b) =>
+    (b.total_exec + b.total_rej) - (a.total_exec + a.total_rej) ||
+    a.team_name.localeCompare(b.team_name));
+
+  const tipos = new Set();
+  for (const t of equipes) {
+    Object.keys(t.exec).forEach(k => tipos.add(k));
+    Object.keys(t.rej).forEach(k => tipos.add(k));
+  }
+  return { equipes, tipos: [...tipos] };
+}
+
+/**
+ * Matriz EQUIPE × TIPO (EXEC concluídas + REJE rejeitadas) para a aba Gráficos.
+ * EXEC vem de team_daily_totals (produção, mesma fonte da tabela de
+ * detalhamento); REJE vem de note_rejections CRU (inclui legítimas/conta-paga,
+ * exclui só as "baixa via sistema" que _fetchRejeicoes já filtra). Mesmos
+ * filtros do resto dos Gráficos (data, regional, tipo de equipe, equipe).
+ */
+async function getEquipeTipoMatrix(de, ate, regionals, tipo, team) {
+  _assertRegionals(regionals, 'getEquipeTipoMatrix');
+  const sb = getClient();
+  const _csv = (v) => v && v !== 'ALL' && String(v).includes(',')
+    ? String(v).split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  const teamsArr = _csv(team);
+
+  // EXEC: concluídas por (equipe, tipo_code) — mesma seleção do getPerformanceEquipes.
+  const execRows = await _selectAll(() => {
+    let q = sb.from('team_daily_totals')
+      .select('team_name, regional, sector_id, tipo_code, count, date');
+    if (de)                          q = q.gte('date', de);
+    if (ate)                         q = q.lte('date', ate);
+    q = inRegionals(q, regionals);
+    if (teamsArr)                    q = q.in('team_name', teamsArr);
+    else if (team && team !== 'ALL') q = q.eq('team_name', team);
+    return q;
+  });
+
+  // REJE: rejeitadas cruas (sem o filtro de legítimas — este vive fora do
+  // _fetchRejeicoes, em getRejeicoesTotais).
+  const rejRows = await _fetchRejeicoes({
+    de, ate, regionais: regionals,
+    team:  teamsArr ? undefined : team,
+    teams: teamsArr || undefined,
+  });
+
+  const { equipes, tipos } = _buildEquipeTipoMatrix(_onlyOficiais(execRows, 'team_name'), rejRows, tipo);
+  return { equipes, tipos, de, ate };
+}
+
+/**
  * Retorna notas com checkpoints GPS de uma equipe em um dia específico.
  * Busca o snapshot mais recente do dia, extrai todas as notas (concluídas,
  * rejeitadas, executadas, baixadas), e enriquece com `note_details` (checkpoints).
@@ -1677,6 +1778,7 @@ module.exports = {
   getTeamSessionHistory,
   getDailySubcatTotals,
   getPerformanceEquipes,
+  getEquipeTipoMatrix, _buildEquipeTipoMatrix,
   getExportData,
   getNotasIndividuais,
   getMapaEquipe,

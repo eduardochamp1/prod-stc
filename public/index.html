@@ -3476,10 +3476,11 @@
         // Fetch separado com range específico — outros gauges seguem range global.
         const cs = grafCsCicloRange();
 
-        const [subcatRes, equipeRes, csRes] = await Promise.all([
+        const [subcatRes, equipeRes, csRes, matrizRes] = await Promise.all([
           fetch(`${API}/totais/subcat?de=${de}&ate=${ate}&regionals=${regionalsCsv}${teamQs}`),
           fetch(`${API}/performance/equipes?de=${de}&ate=${ate}&regionals=${regionalsCsv}&tipo=${tipo}${teamQs}`),
           fetch(`${API}/totais/subcat?de=${cs.de}&ate=${cs.ate}&regionals=${regionalsCsv}${teamQs}`),
+          fetch(`${API}/performance/equipes-matriz?de=${de}&ate=${ate}&regionals=${regionalsCsv}&tipo=${tipo}${teamQs}`),
         ]);
         const subcatData = subcatRes.ok
           ? await subcatRes.json()
@@ -3491,9 +3492,10 @@
             })();
         const equipeData = equipeRes.ok ? await equipeRes.json() : { equipes: [] };
         const csData     = csRes.ok     ? await csRes.json()     : null;
+        const matrizData = matrizRes && matrizRes.ok ? await matrizRes.json() : { equipes: [], tipos: [] };
 
         const metas = getMetas();
-        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, cs);
+        cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, cs, matrizData);
         // O contador agora vive DENTRO do graf-content (entre KPIs e gauges),
         // então é recriado a cada render — popula logo após.
         loadContadorTransgressao();
@@ -3548,7 +3550,7 @@
 </svg>`;
     }
 
-    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, csRange) {
+    function renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, csRange, matrizData) {
       const reg       = (regional === 'ALL') ? 'ALL' : regional;
       const totais    = subcatData.totais?.[reg]     || subcatData.totais?.ALL     || {};
       const quantidades = subcatData.quantidades?.[reg] || subcatData.quantidades?.ALL || {};
@@ -3766,6 +3768,57 @@
   </table>
 </div>`;
 
+      // ── Matriz EQUIPE × TIPO (EXEC + REJE por tipo, com grupo TOTAL) ────────
+      // Dados do endpoint /performance/equipes-matriz (matrizData). Colunas de
+      // tipo em ordem canônica (PROD_LINHAS top-level) + quaisquer extras
+      // presentes no período (ex.: SM/VL). EXEC = concluídas; REJE = rejeitadas
+      // cruas. Uma sub-coluna EXEC e uma REJE por grupo, começando pelo TOTAL.
+      const matrizHTML = (() => {
+        const eqs = (matrizData && matrizData.equipes) || [];
+        if (eqs.length === 0) return '';
+        const ORDEM = ['LN','LE','DL','MD','SF','RL','UG','DD','II','PO','SO','RD'];
+        const presentes = new Set((matrizData.tipos || []));
+        const tipos = [
+          ...ORDEM.filter(t => presentes.has(t)),
+          ...[...presentes].filter(t => !ORDEM.includes(t)).sort(),
+        ];
+        // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL + um grupo por tipo.
+        const grpHead = ['<th class="mtx-grp" colspan="2" title="Soma de todos os tipos">TOTAL</th>']
+          .concat(tipos.map(t => `<th class="mtx-grp" colspan="2">${t}</th>`)).join('');
+        // 2ª linha: EXEC/REJE repetido por grupo.
+        const subHead = ['<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th>']
+          .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th>')).join('');
+        const cell = (v, cls) => `<td class="${cls}" style="text-align:center">${v ? v : '—'}</td>`;
+        const bodyRows = eqs.map(e => {
+          const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC' : e.tipo_equipe === 'PLANTAO' ? 'EP' : 'OP';
+          const cells = [cell(e.total_exec, 'mtx-exec'), cell(e.total_rej, 'mtx-rej')]
+            .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej')])).join('');
+          return `<tr>
+  <td class="mtx-team"><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
+  ${cells}
+</tr>`;
+        }).join('');
+        // Linha de total (rodapé): soma por coluna.
+        const somaExec = (t) => eqs.reduce((s, e) => s + (t ? (e.exec?.[t] || 0) : e.total_exec), 0);
+        const somaRej  = (t) => eqs.reduce((s, e) => s + (t ? (e.rej?.[t]  || 0) : e.total_rej), 0);
+        const footCells = [cell(somaExec(null), 'mtx-exec'), cell(somaRej(null), 'mtx-rej')]
+          .concat(tipos.flatMap(t => [cell(somaExec(t), 'mtx-exec'), cell(somaRej(t), 'mtx-rej')])).join('');
+        return `
+<div class="perf-section">
+  <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe</div>
+  <div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:560px">
+    <table class="perf-tipo-table mtx-table">
+      <thead>
+        <tr><th class="mtx-team" rowspan="2">Equipe</th>${grpHead}</tr>
+        <tr>${subHead}</tr>
+      </thead>
+      <tbody>${bodyRows}</tbody>
+      <tfoot><tr class="mtx-foot"><td class="mtx-team">Total</td>${footCells}</tr></tfoot>
+    </table>
+  </div>
+</div>`;
+      })();
+
       return `
 <div class="perf-section">
   ${kpisHTML}
@@ -3794,6 +3847,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
   <div class="perf-section-title">Detalhamento por Equipe e Tipo de Nota</div>
   ${tipoTableHTML}
 </div>` : ''}
+${matrizHTML}
 `;
     }
 

@@ -561,6 +561,27 @@ router.get('/performance/equipes', async (req, res) => {
   }
 });
 
+// GET /api/performance/equipes-matriz?de=&ate=&regionals=&tipo=&team=
+// Matriz EQUIPE × TIPO com EXEC (concluídas) + REJE (rejeitadas cruas). Alimenta
+// a tabela "Notas Atendidas por Tipo" da aba Gráficos. Mesmos filtros/escopo da
+// /performance/equipes.
+router.get('/performance/equipes-matriz', async (req, res) => {
+  try {
+    const sq = sbq();
+    const today = dateBRT();
+    const de       = req.query.de       || today;
+    const ate      = req.query.ate      || de;
+    const tipo     = req.query.tipo     || 'TODAS';
+    const team     = req.query.team     || null;
+    if (!(await enforceTeamRegional(req, res, team))) return;
+    if (!sq) return res.json({ equipes: [], tipos: [], de, ate });
+    const result = await sq.getEquipeTipoMatrix(de, ate, req.scope.regionals, tipo, team);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── APP SETTINGS (preferências compartilhadas) ────────────────────────────────
 
 // GET /api/settings/:key  → retorna { data, updated_at } ou {} se não existe
