@@ -638,6 +638,8 @@
     }
     /* Visão tabela: o grid vira bloco pra a tabela ocupar a largura toda. */
     .teams-grid.as-table { display: block; }
+    /* Card de equipe deslogada (última sessão) — acento cinza-azulado sutil. */
+    .team-card.deslogada { border-left: 3px solid #b0bec5; }
 
     /* ── Alternador Cards ⇄ Tabela ─────────────────────────────────────────── */
     .view-toggle {
@@ -697,6 +699,8 @@
     .mon-sit.sit-mutuo { background: #fff8e1; color: #c49000; }
     .mon-sit.sit-pend  { background: #fdf0e0; color: #c0392b; }
     .mon-sit.sit-enc   { background: #f0f0ee; color: var(--text2); }
+    .mon-sit.sit-desl  { background: #eceff1; color: #607d8b; }
+    .mon-badge-desl { background: #eceff1; color: #607d8b; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 8px; margin-left: 5px; }
     @media (max-width: 900px) {
       .mon-table { font-size: 11px; }
       .mon-table td, .mon-table thead th { padding: 5px 6px; }

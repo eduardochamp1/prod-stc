@@ -232,6 +232,12 @@
           <span class="section-count" id="section-count"></span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <!-- Escopo: só as logadas agora (Ativas) ou o roster todo (Todas, com
+               a última sessão das deslogadas). Só em modo ao-vivo (hoje). -->
+          <div class="view-toggle" id="monitor-scope-toggle">
+            <button type="button" class="vt-btn" data-scope="ativas" onclick="setMonitorScope('ativas')" title="Só equipes logadas agora">● Ativas</button>
+            <button type="button" class="vt-btn" data-scope="todas" onclick="setMonitorScope('todas')" title="Roster completo — deslogadas mostram a última sessão">◍ Todas</button>
+          </div>
           <!-- Alternador Cards ⇄ Tabela (visão do Monitor). Só apresentação —
                os dois modos usam o MESMO array de equipes já filtrado. -->
           <div class="view-toggle" id="monitor-view-toggle">
@@ -5818,6 +5824,35 @@ ${matrizHTML}
       renderAll();
     }
 
+    // ── Escopo do Monitor: Ativas (logadas agora) ⇄ Todas (roster + deslogadas)
+    // 'todas' busca a última sessão das deslogadas em /api/teams/deslogadas.
+    // Só faz sentido no modo ao-vivo (hoje); em histórico o toggle é ocultado.
+    let _monitorScope = localStorage.getItem('wpa-monitor-scope') === 'todas' ? 'todas' : 'ativas';
+    let _deslogadas = null;            // cache; null = ainda não buscado
+    let _deslogadasLoading = false;
+    function _syncScopeToggle() {
+      document.querySelectorAll('#monitor-scope-toggle .vt-btn').forEach(b =>
+        b.classList.toggle('active', b.getAttribute('data-scope') === _monitorScope));
+    }
+    async function _fetchDeslogadas() {
+      if (_deslogadasLoading) return;
+      _deslogadasLoading = true;
+      try {
+        const res = await fetch(`${API}/teams/deslogadas`);
+        if (res.ok) { const d = await res.json(); _deslogadas = d.teams || []; }
+      } catch (_) { /* mantém cache anterior */ }
+      finally { _deslogadasLoading = false; }
+    }
+    function setMonitorScope(v) {
+      _monitorScope = (v === 'todas') ? 'todas' : 'ativas';
+      try { localStorage.setItem('wpa-monitor-scope', _monitorScope); } catch (_) {}
+      _syncScopeToggle();
+      if (_monitorScope === 'todas' && _deslogadas === null) {
+        _fetchDeslogadas().then(() => renderAll());
+      }
+      renderAll();
+    }
+
     /**
      * Sincroniza o filtro de regional entre TODOS os dropdowns de tabs.
      * Quando um tab muda, propaga pro estado global + outros dropdowns.
@@ -5919,7 +5954,11 @@ ${matrizHTML}
     }
 
     function getVisible() {
-      return allTeams.filter(t => {
+      // No escopo 'todas' (ao-vivo), soma as deslogadas (última sessão) ao pool.
+      const pool = (_monitorScope === 'todas' && Array.isArray(_deslogadas))
+        ? allTeams.concat(_deslogadas)
+        : allTeams;
+      return pool.filter(t => {
         const regionalOk = _regionalMatch(t.regional);
         const filterOk = !currentFilter ||
           (t.sigla || t.teamName || '').toLowerCase().includes(currentFilter) ||
@@ -6453,6 +6492,7 @@ ${matrizHTML}
       // passa quem teve qualquer atividade dentro do range.
       const { de: _rangeDe, ate: _rangeAte } = currentMonitorRange();
       const _tocaPeriodo = t => {
+        if (t.deslogada) return true;   // última sessão (dia anterior) — sempre passa
         if (t._ghostFromAcc) return true;
         const beg = (t.sessionBegin || '').slice(0, 10);
         const end = (t.sessionEnd   || '').slice(0, 10);
@@ -6464,12 +6504,31 @@ ${matrizHTML}
       };
       // Une sessões da mesma equipe (relog / sessão derrubada) num card só e
       // faz "ativas no dia"/"X equipes" contarem equipes distintas (23/07/2026).
-      const teamsAll     = _mergeSessionsBySigla(_rawTeams.filter(_tocaPeriodo));
-      const teamsVisible = teamsAll;
-      const teams        = teamsVisible;
-      // Excluir ghosts do banner de alerta (não faz sentido alertar equipe encerrada)
-      const teamsForAlert = teamsVisible.filter(t => !t._ghostFromAcc);
-      renderMetrics(teamsAll, teamsVisible);
+      const _liveHoje = _rangeDe === todayISO() && _rangeAte === todayISO();
+      // O toggle Ativas/Todas só faz sentido no ao-vivo (hoje); some em histórico.
+      _syncScopeToggle();
+      const _scopeToggleEl = document.getElementById('monitor-scope-toggle');
+      if (_scopeToggleEl) _scopeToggleEl.style.display = _liveHoje ? '' : 'none';
+
+      // KPIs/produtividade: SEMPRE só as equipes de HOJE (nunca deslogadas nem o
+      // recorte de escopo) — números do dia estáveis. Ver SPEC §4.5.
+      const teamsAll = _mergeSessionsBySigla(_rawTeams.filter(t => !t.deslogada).filter(_tocaPeriodo));
+
+      // Lista RENDERIZADA conforme o escopo (só no ao-vivo):
+      //   ativas → só logadas agora (sessão aberta)
+      //   todas  → tudo do dia + deslogadas (última sessão)
+      let teams;
+      if (!_liveHoje) {
+        teams = teamsAll;                                     // histórico: como antes
+      } else if (_monitorScope === 'ativas') {
+        teams = teamsAll.filter(t => !t.sessionEnd);          // só logadas agora
+      } else {
+        teams = teamsAll.concat(_rawTeams.filter(t => t.deslogada));
+      }
+      const teamsVisible = teams;
+      // Ghosts e deslogadas fora do banner de alerta (não são sessões de hoje).
+      const teamsForAlert = teamsVisible.filter(t => !t._ghostFromAcc && !t.deslogada);
+      renderMetrics(teamsAll, teamsAll);
       renderProdutividade(teamsAll);
       document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
 
@@ -6594,14 +6653,26 @@ ${matrizHTML}
         const tiposHtml = Object.entries(subcatCont).map(([label, { count, qtdTotal }]) =>
           `<span class="tipo-chip"><span class="tipo-chip-code">${label}</span><span class="tipo-chip-num">${count}${qtdTotal > 0 ? ` · ${qtdTotal}m` : ''}</span></span>`
         ).join('');
+        // Deslogada (roster que não logou hoje): estado próprio + métricas já
+        // prontas (não passam pelo filtro de range de hoje — SPEC §3.2b).
+        const _desl = !!t.deslogada;
+        const _headerClsF = _desl ? 'inativa' : headerCls;
+        const _badgeClsF  = _desl ? 'status-encerrada' : badgeCls;
+        const _ultimaBR   = (_desl && t.ultimaSessaoDate) ? t.ultimaSessaoDate.split('-').reverse().slice(0, 2).join('/') : '';
+        const _badgeTxtF  = _desl ? `⏸ Deslogada${_ultimaBR ? ' · ' + _ultimaBR : ''}` : badgeTxt;
+        const _mExec = _desl ? (t.metrics ? t.metrics.executadas : 0) : _notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length;
+        const _mRej  = _desl ? (t.metrics ? t.metrics.rejeitadas : 0) : (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length;
+        const _mAnd  = _desl ? (t.metrics ? t.metrics.andamento  : 0) : (sessaoAberta ? _andamentoReal(t, _rngDe, _rngAte) : 0);
+        const _mAtu  = _desl ? (t.metrics ? t.metrics.atual : 0) : _carteiraPendentes(t);
+        const _mIni  = _desl ? (t.metrics ? t.metrics.inicial : 0) : carteiraInicialDe(t, _rngDe, _rngAte);
         return `
-        <div class="team-card${isStale ? ' stale' : ''}" onclick="openModal('${t.id}')">
-          <div class="team-card-header ${headerCls}">
+        <div class="team-card${isStale ? ' stale' : ''}${_desl ? ' deslogada' : ''}" onclick="openModal('${t.id}')">
+          <div class="team-card-header ${_headerClsF}">
             <div>
               <div class="team-card-sigla">${t.sigla || t.teamName}</div>
               <div class="team-card-meta">${regionalNome} · ${t.sectorId || '—'}</div>
             </div>
-            <span class="team-status-badge ${badgeCls}">${badgeTxt}</span>
+            <span class="team-status-badge ${_badgeClsF}">${_badgeTxtF}</span>
           </div>
           <div class="team-card-body">
             <div class="team-row"><span class="team-row-label">Placa</span><span class="tag-placa">${t.vehiclePlate || '—'}</span></div>
@@ -6627,19 +6698,15 @@ ${matrizHTML}
             <div class="team-row"><span class="team-row-label">Re-logins</span><span class="relogin-badge ${reloginCls}">${reloginsCount} ${reloginsCount === 1 ? 'desconexão' : 'desconexões'}</span></div>
             <div class="os-row">
               <div class="os-cell">
-                ${(() => {
-                  const _atu = _carteiraPendentes(t);
-                  const _ini = carteiraInicialDe(t, _rngDe, _rngAte);
-                  return `<div class="os-num" title="Atual / Inicial — Atual: notas pendentes (sem contar andamento). Inicial: Atual + Andamento + Executadas + Rejeitadas. Aritmética sempre fecha.">
-                    ${_atu}
-                    ${_ini > _atu ? `<span style="font-size:11px;color:var(--text2);font-weight:400"> / ${_ini}</span>` : ''}
-                  </div>`;
-                })()}
+                <div class="os-num" title="Atual / Inicial — Atual: notas pendentes (sem contar andamento). Inicial: Atual + Andamento + Executadas + Rejeitadas.">
+                  ${_mAtu}
+                  ${_mIni > _mAtu ? `<span style="font-size:11px;color:var(--text2);font-weight:400"> / ${_mIni}</span>` : ''}
+                </div>
                 <div class="os-lbl">Carteira</div>
               </div>
-              <div class="os-cell" title="Notas iniciadas e ainda NÃO concluídas/rejeitadas. Uma equipe pode ter várias abertas ao mesmo tempo; notas já concluídas não contam aqui (cada nota em 1 só estado)."><div class="os-num executada">${sessaoAberta ? _andamentoReal(t, _rngDe, _rngAte) : 0}</div><div class="os-lbl">Andamento</div></div>
-              <div class="os-cell" title="Notas concluídas e ACEITAS. Nota rejeitada pela EDP não conta aqui (conta só em Rejeitadas) — não é produção válida."><div class="os-num concluida">${_notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Executadas</div></div>
-              <div class="os-cell"><div class="os-num rejeitada">${(t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, _rngDe, _rngAte)).length}</div><div class="os-lbl">Rejeitadas</div></div>
+              <div class="os-cell" title="Notas iniciadas e ainda NÃO concluídas/rejeitadas. Uma equipe pode ter várias abertas ao mesmo tempo; notas já concluídas não contam aqui (cada nota em 1 só estado)."><div class="os-num executada">${_mAnd}</div><div class="os-lbl">Andamento</div></div>
+              <div class="os-cell" title="Notas concluídas e ACEITAS. Nota rejeitada pela EDP não conta aqui (conta só em Rejeitadas) — não é produção válida."><div class="os-num concluida">${_mExec}</div><div class="os-lbl">Executadas</div></div>
+              <div class="os-cell"><div class="os-num rejeitada">${_mRej}</div><div class="os-lbl">Rejeitadas</div></div>
             </div>
             ${tiposHtml ? `<div class="tipos-row">${tiposHtml}</div>` : ''}
           </div>
@@ -6659,19 +6726,22 @@ ${matrizHTML}
         const emCampo  = sessaoAberta && t.isOnline && !ehUsoMutuo;
         const usoMutuo = sessaoAberta && ehUsoMutuo;
         const pendente = sessaoAberta && !t.isOnline && !ehUsoMutuo;
-        const dot = emCampo ? 'var(--verde3)' : usoMutuo ? 'var(--amarelo)' : pendente ? 'var(--vermelho)' : 'var(--cinza3)';
-        const sitTxt = emCampo ? 'Em campo' : usoMutuo ? 'Uso mútuo' : pendente ? 'Pendente' : 'Encerrada';
-        const sitCls = emCampo ? 'sit-campo' : usoMutuo ? 'sit-mutuo' : pendente ? 'sit-pend' : 'sit-enc';
-        const isAnt = sessaoAnterior(_refLogon(t));
+        const desl = !!t.deslogada;
+        const dot = desl ? 'var(--cinza3)' : emCampo ? 'var(--verde3)' : usoMutuo ? 'var(--amarelo)' : pendente ? 'var(--vermelho)' : 'var(--cinza3)';
+        const sitTxt = desl ? 'Deslogada' : emCampo ? 'Em campo' : usoMutuo ? 'Uso mútuo' : pendente ? 'Pendente' : 'Encerrada';
+        const sitCls = desl ? 'sit-desl' : emCampo ? 'sit-campo' : usoMutuo ? 'sit-mutuo' : pendente ? 'sit-pend' : 'sit-enc';
+        const isAnt = !desl && sessaoAnterior(_refLogon(t));
         const reloginsCount = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);
         const regionalNome = REGIONAIS_NOMES[t.regional] || t.regional || '—';
+        const ultimaBR = (desl && t.ultimaSessaoDate) ? t.ultimaSessaoDate.split('-').reverse().slice(0, 2).join('/') : '';
 
-        // Métricas — MESMOS helpers e range dos cards.
-        const atual      = _carteiraPendentes(t);
-        const inicial    = carteiraInicialDe(t, rngDe, rngAte);
-        const andamento  = sessaoAberta ? _andamentoReal(t, rngDe, rngAte) : 0;
-        const executadas = _notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, rngDe, rngAte)).length;
-        const rejeitadas = (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, rngDe, rngAte)).length;
+        // Métricas — deslogada usa t.metrics prontas (não filtra por range de
+        // hoje); ativas usam os mesmos helpers e range dos cards.
+        const atual      = desl ? (t.metrics ? t.metrics.atual : 0)      : _carteiraPendentes(t);
+        const inicial    = desl ? (t.metrics ? t.metrics.inicial : 0)    : carteiraInicialDe(t, rngDe, rngAte);
+        const andamento  = desl ? (t.metrics ? t.metrics.andamento : 0)  : (sessaoAberta ? _andamentoReal(t, rngDe, rngAte) : 0);
+        const executadas = desl ? (t.metrics ? t.metrics.executadas : 0) : _notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, rngDe, rngAte)).length;
+        const rejeitadas = desl ? (t.metrics ? t.metrics.rejeitadas : 0) : (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, rngDe, rngAte)).length;
         // Consumo = mesma definição do KPI "% da carteira trabalhada".
         const trabalhada = executadas + andamento + rejeitadas + atual;
         const consumo = trabalhada > 0 ? Math.round(100 * executadas / trabalhada) : 0;
@@ -6680,7 +6750,8 @@ ${matrizHTML}
         const colabsHtml = colabs.length
           ? colabs.map(n => `<div>${escapeHtml(String(n))}</div>`).join('')
           : '<span class="mon-muted">—</span>';
-        const badges = `${isAnt ? '<span class="mon-badge-ant" title="Sessão de dia anterior">📅 dia ant.</span>' : ''}`
+        const badges = `${desl && ultimaBR ? `<span class="mon-badge-desl" title="Última sessão">⏸ ${ultimaBR}</span>` : ''}`
+                     + `${isAnt ? '<span class="mon-badge-ant" title="Sessão de dia anterior">📅 dia ant.</span>' : ''}`
                      + `${t.relogouNoDia ? '<span class="mon-badge-rel" title="Relogou no dia — detalhe no card">⚠ relogou</span>' : ''}`;
         const escala = (t.escala_inicio || t.escala_fim)
           ? `${(t.escala_inicio || '').slice(0, 5)}–${(t.escala_fim || '').slice(0, 5)}`
@@ -6719,7 +6790,8 @@ ${matrizHTML}
     let activeNotaTab = 'concluida';
 
     function openModal(teamId) {
-      const t = allTeams.find(x => x.id === teamId);
+      const t = allTeams.find(x => x.id === teamId)
+             || (Array.isArray(_deslogadas) ? _deslogadas.find(x => x.id === teamId) : null);
       if (!t) return;
       const nomeRegional = REGIONAIS_NOMES[t.regional] || t.regional || '—';
       document.getElementById('modal-title').textContent = t.sigla || t.teamName;

@@ -69,6 +69,28 @@ Preferência (Ativas/Todas) é **pessoal**, salva em `localStorage`
 6. Enriquecer com escala (`getMeta`) se disponível.
 7. Só equipes oficiais (`_onlyOficiais`).
 
+### 3.2b Métricas pré-computadas (IMPORTANTE)
+
+Os cards/tabela calculam exec/andam/carteira/reje filtrando as notas pelo
+**range do Monitor (hoje)** via `notaPertenceAoRange`. As notas de uma deslogada
+são de um **dia anterior** → seriam **zeradas** por esse filtro. Por isso o
+backend anexa `metrics` já prontas na deslogada, e o front usa `t.metrics.*`
+quando `t.deslogada` (sem passar pelo filtro de range):
+
+```
+t.metrics = {
+  executadas: <união concluidas>.length,
+  rejeitadas: <união rejeitadas>.length,
+  andamento:  <último snapshot notasExecutadas>.length,
+  inicial:    <último snapshot notasBaixadas>.length,   // carteira do dia
+  atual:      max(0, inicial - executadas - rejeitadas - andamento),
+}
+```
+
+Aproximação honesta: `inicial`/`atual` reconstruídos da carteira baixada do dia
+(visão informativa da última sessão, não número reportável). Exec/reje vêm da
+UNIÃO (fiéis). O caminho das equipes ativas fica **intocado**.
+
 ### 3.3 Função pura testável
 
 `_reconstruirDeslogada(teamUnido, metaSnapshot, meta, ultimaSessaoDate)` →
@@ -89,10 +111,8 @@ sessão/placa vindas do snapshot final.
   - se 'todas' e ainda não temos deslogadas → dispara o fetch (§4.2);
   - `renderAll()`.
 
-> **Nota de migração:** hoje (sem filtro) o Monitor mostra em-campo + encerradas
-> de hoje. Com o filtro, o **default 'ativas' mostra menos** que hoje (só
-> em-campo). Confirmar com o José se o default deve ser 'ativas' ou 'todas do
-> dia' pra não surpreender. (Decisão pendente — ver §7.)
+> **Default = 'ativas'** (decidido pelo José, 29/07): abre mostrando só quem
+> está em campo agora. Encerradas/deslogadas aparecem ao clicar em "Todas".
 
 ### 4.2 Fetch das deslogadas
 
@@ -150,10 +170,9 @@ Dedup por sigla: se uma sigla estiver em `allTeams` (ativa/encerrada hoje) E em
   - Dedup: sigla ativa hoje não vira deslogada.
 - Suíte deve subir e ficar 100% verde.
 
-## 7. Decisões pendentes (confirmar antes/junto do build)
+## 7. Decisões (resolvidas)
 
-1. **Default do filtro:** 'ativas' (mostra só em-campo, menos que hoje) OU
-   'todas do dia' pra manter o que o usuário já vê hoje? (§4.1)
+1. **Default do filtro:** ✅ **'ativas'** (José, 29/07) — abre só com em-campo.
 
 ## 8. Não-objetivos (YAGNI)
 

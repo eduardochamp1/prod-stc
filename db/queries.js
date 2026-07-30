@@ -1298,6 +1298,104 @@ async function getEquipeTipoMatrix(de, ate, regionals, tipo, team) {
 }
 
 /**
+ * Reconstrói uma equipe DESLOGADA (não logou hoje) a partir da sua ÚLTIMA
+ * sessão no histórico. FUNÇÃO PURA (testável). Ver SPEC-monitor-deslogadas.
+ *  - notas concluídas/rejeitadas: da UNIÃO dos snapshots do último dia (fiéis).
+ *  - sessão/placa/colaboradores/andamento: do snapshot MAIS RECENTE daquele dia.
+ *  - metrics: pré-calculadas — o front NÃO pode filtrar por range de hoje (as
+ *    notas são de outro dia); ele lê t.metrics.* quando t.deslogada (SPEC §3.2b).
+ */
+function _reconstruirDeslogada(unido, ultimoData, meta, ultimaSessaoDate) {
+  const sigla = unido.teamName;
+  const conc = unido.notasConcluidas || [];
+  const rej  = unido.notasRejeitadas || [];
+  const u = ultimoData || {};
+  const andando  = u.notasExecutadas || [];
+  const baixadas = u.notasBaixadas   || [];
+  const executadas = conc.length, rejeitadas = rej.length, andamento = andando.length;
+  const inicial = baixadas.length;
+  const atual = Math.max(0, inicial - executadas - rejeitadas - andamento);
+  const m = meta || {};
+  return {
+    id: 'deslog:' + sigla,
+    sigla, teamName: sigla,
+    regional:  unido.regional || m.regional || null,
+    sectorId:  unido.sectorId || null,
+    tipo:      m.tipo || u.tipo || null,
+    vehiclePlate: u.vehiclePlate || m.placa || null,
+    collaborators: u.collaborators || [],
+    sessionBegin:     u.sessionBegin || unido.sessionBegin || null,
+    sessionBeginReal: unido.sessionBegin || u.sessionBegin || null,
+    sessionEnd:       u.sessionEnd || null,
+    escala_inicio: m.escala_inicio || null,
+    escala_fim:    m.escala_fim || null,
+    notasConcluidas: conc, notasRejeitadas: rej,
+    notasExecutadas: andando, notasBaixadas: baixadas,
+    isOnline: false, relogins: 0,
+    deslogada: true, ultimaSessaoDate,
+    date: ultimaSessaoDate,
+    metrics: { executadas, rejeitadas, andamento, inicial, atual },
+  };
+}
+
+/**
+ * Última sessão das equipes DESLOGADAS (roster oficial que NÃO logou hoje).
+ * Read-only sobre `snapshots`. Alimenta o modo "Todas" do Monitor. Não toca em
+ * KPI/produção. Ver SPEC-monitor-deslogadas-2026-07-29.
+ */
+async function getDeslogadasUltimaSessao(regionals) {
+  _assertRegionals(regionals, 'getDeslogadasUltimaSessao');
+  const hoje = dateBRT();
+  let pool;
+  try { pool = require('../services/pgShim')._getPool(); } catch (_) { pool = null; }
+  if (!pool) return { teams: [], date: hoje };
+  const { getOficiais, getMeta } = require('../services/equipesOficiais');
+  const { _unionTeamsFromSnapshots, _addDays } = require('../services/dataWriter');
+
+  const roster = getOficiais(null).filter(e => regionals.includes(e.regional));
+  const siglas = roster.map(e => e.sigla);
+  if (siglas.length === 0) return { teams: [], date: hoje };
+
+  // 1) quem tem snapshot HOJE → é ativa/encerrada-hoje, vem do /api/teams.
+  const { rows: hojeRows } = await pool.query(
+    'SELECT DISTINCT team_name FROM snapshots WHERE team_name = ANY($1::text[]) AND date = $2::date',
+    [siglas, hoje]);
+  const ativasHoje = new Set(hojeRows.map(r => r.team_name));
+  const deslog = siglas.filter(s => !ativasHoje.has(s));
+  if (deslog.length === 0) return { teams: [], date: hoje };
+
+  // 2) último dia ativo de cada deslogada (DISTINCT ON — precisa de SQL cru).
+  const { rows: lastRows } = await pool.query(
+    `SELECT DISTINCT ON (team_name) team_name, date
+       FROM snapshots WHERE team_name = ANY($1::text[])
+       ORDER BY team_name, captured_at DESC`, [deslog]);
+  const lastDate = new Map();
+  for (const r of lastRows) lastDate.set(r.team_name, _ymd(r.date));
+  if (lastDate.size === 0) return { teams: [], date: hoje };
+
+  // 3) snapshots do último dia (+ dia-1, vira-noite) das deslogadas, DESC.
+  const teamNames = [...lastDate.keys()];
+  const datas = [...new Set([...lastDate.values()].flatMap(d => [d, _addDays(d, -1)]))];
+  const { rows: snapRows } = await pool.query(
+    `SELECT team_name, regional, sector_id, captured_at, data
+       FROM snapshots WHERE team_name = ANY($1::text[]) AND date = ANY($2::date[])
+       ORDER BY captured_at DESC`, [teamNames, datas]);
+
+  const out = [];
+  for (const [sigla, dia] of lastDate.entries()) {
+    const diaM1 = _addDays(dia, -1);
+    const snaps = snapRows.filter(r => r.team_name === sigla);
+    if (snaps.length === 0) continue;
+    const unidos = _unionTeamsFromSnapshots(snaps, dia, diaM1);
+    const unido = unidos.find(x => x.teamName === sigla) || unidos[0];
+    if (!unido) continue;
+    const ultimoData = (snaps[0] && snaps[0].data) || {};
+    out.push(_reconstruirDeslogada(unido, ultimoData, getMeta(sigla) || {}, dia));
+  }
+  return { teams: _onlyOficiais(out, 'teamName'), date: hoje };
+}
+
+/**
  * Retorna notas com checkpoints GPS de uma equipe em um dia específico.
  * Busca o snapshot mais recente do dia, extrai todas as notas (concluídas,
  * rejeitadas, executadas, baixadas), e enriquece com `note_details` (checkpoints).
@@ -1779,6 +1877,7 @@ module.exports = {
   getDailySubcatTotals,
   getPerformanceEquipes,
   getEquipeTipoMatrix, _buildEquipeTipoMatrix,
+  getDeslogadasUltimaSessao, _reconstruirDeslogada,
   getExportData,
   getNotasIndividuais,
   getMapaEquipe,

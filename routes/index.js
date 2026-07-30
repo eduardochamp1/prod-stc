@@ -582,6 +582,20 @@ router.get('/performance/equipes-matriz', async (req, res) => {
   }
 });
 
+// GET /api/teams/deslogadas?regionals=
+// Última sessão das equipes do roster que NÃO logaram hoje (modo "Todas" do
+// Monitor). Read-only sobre snapshots; não afeta KPI/produção.
+router.get('/teams/deslogadas', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({ teams: [], date: dateBRT() });
+    const result = await sq.getDeslogadasUltimaSessao(req.scope.regionals);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── APP SETTINGS (preferências compartilhadas) ────────────────────────────────
 
 // GET /api/settings/:key  → retorna { data, updated_at } ou {} se não existe
