@@ -85,16 +85,17 @@ Testável isolada, sem I/O.
 Objetivo secundário (o número é o primário). Duas frentes:
 
 - **Modal / histórico de conexões:** mostrar a noite como 1 turno — início 20:05,
-  relogin às 01:10 (gap "desconectado por 2 min"). Isso exige que o objeto team
-  do dia 29/07 conheça a sessão B. No caminho **consolidado/persistido** isso sai
-  de graça (a produção já estará em 29). No **ao-vivo** (WPA do dia), a sessão B
-  aparece no dia 30 e o front não tem a A — aceitar essa limitação no ao-vivo e
-  resolver na visão consolidada, OU (fase 2) o backend anexar as sessões linkadas.
-- **Não** duplicar a equipe entre 29 e 30 na lista.
+  relogin às 01:10 (gap "desconectado por 2 min").
 
-> **Faseamento:** Fase 1 = atribuição na consolidação + re-consolidação (fecha o
-> número reportável). Fase 2 = polimento da exibição ao-vivo. Entregar a Fase 1
-> primeiro, validada, antes de mexer no front ao-vivo.
+> **Fase 2 IMPLEMENTADA (30/07):** `dataService._enrichComEscalaELogonReal`
+> passou a buscar a ÚLTIMA sessão de ONTEM por equipe e, via a função pura
+> `_linkViraNoite` (gap ≤ `RECONEXAO_MAX_GAP_MIN`), quando o 1º logon de hoje é
+> reconexão dela, sobrescreve `sessionBeginReal` = begin de ontem (20:05), marca
+> `relogouNoDia`/`turnoViraNoite`, e popula `t.sessions=[ontem, hoje]` — o modal
+> já renderiza `t.sessions` (início 20:05, relogin 01:10, gap). Só ativa no caso
+> de reconexão; equipes normais ficam intactas. Testes em
+> `test/logonRelogin.test.js` (5 casos de `_linkViraNoite`). Suíte → 323 verde.
+> Não testável no demo (precisa de snapshots reais de ontem); validar em prod.
 
 ## 5. Re-consolidação (move número — disciplina P1-13)
 

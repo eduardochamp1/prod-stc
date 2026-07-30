@@ -12,7 +12,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { _resolveLogon } = require('../services/dataService');
+const { _resolveLogon, _linkViraNoite } = require('../services/dataService');
 
 const P = '2026-07-29T07:00:00-03:00';   // primeiro login do dia
 const A1 = '2026-07-29T08:00:00-03:00';  // relogin 1h depois
@@ -55,4 +55,34 @@ test('gap exatamente no limite conta como relogin (<=)', () => {
 
 test('maxGap negativo é tratado como sem limite', () => {
   assert.deepEqual(_resolveLogon(P, A9, -1), { sessionBeginReal: P, relogouNoDia: true });
+});
+
+// ── _linkViraNoite (P1-14 Fase 2: exibir turno vira-noite como 1) ─────────────
+
+const O_BEGIN = '2026-07-29T20:05:00';   // última sessão de ontem
+const O_END   = '2026-07-30T01:08:00';
+const H_FIRST = '2026-07-30T01:10:00';   // 1º logon de hoje (2 min depois)
+
+test('_linkViraNoite: reconexão vira-noite (gap 2min) linka, início = o de ontem', () => {
+  const r = _linkViraNoite(H_FIRST, O_BEGIN, O_END, 60);
+  assert.equal(r.linked, true);
+  assert.equal(r.sessionBeginReal, O_BEGIN);
+  assert.equal(r.ontemEnd, O_END);
+});
+
+test('_linkViraNoite: gap acima do limite não linka', () => {
+  const tarde = '2026-07-30T02:30:00'; // 82 min após o end de ontem
+  assert.equal(_linkViraNoite(tarde, O_BEGIN, O_END, 60).linked, false);
+});
+
+test('_linkViraNoite: ontem sem end (sessão aberta) não linka', () => {
+  assert.equal(_linkViraNoite(H_FIRST, O_BEGIN, null, 60).linked, false);
+});
+
+test('_linkViraNoite: sem sessão de ontem não linka', () => {
+  assert.equal(_linkViraNoite(H_FIRST, null, null, 60).linked, false);
+});
+
+test('_linkViraNoite: gap negativo (hoje antes do fim de ontem) não linka', () => {
+  assert.equal(_linkViraNoite('2026-07-30T01:00:00', O_BEGIN, O_END, 60).linked, false);
 });

@@ -57,6 +57,26 @@ function _resolveLogon(primeiro, atual, maxGapHoras = 0) {
 }
 
 /**
+ * FUNÇÃO PURA (testável): decide se o 1º logon de HOJE é uma RECONEXÃO da última
+ * sessão de ONTEM (turno que virou a noite), pra exibir a noite como UM turno
+ * (P1-14 Fase 2). Linka quando o gap entre o `end` de ontem e o `begin` de hoje
+ * está em [0, gapMin]. Ontem sem `end` (sessão ainda aberta) ou gap fora da
+ * janela → não linka (conservador — e a sessão contínua já mostra o begin certo).
+ *
+ * @param {string|null} primeiroHoje  1º sessionBegin de hoje (ISO)
+ * @param {string|null} ontemBegin    begin da última sessão de ontem (ISO)
+ * @param {string|null} ontemEnd      end   da última sessão de ontem (ISO)
+ * @param {number} gapMin             limite em minutos
+ * @returns {{linked:boolean, sessionBeginReal?:string, ontemBegin?:string, ontemEnd?:string}}
+ */
+function _linkViraNoite(primeiroHoje, ontemBegin, ontemEnd, gapMin) {
+  if (!primeiroHoje || !ontemBegin || !ontemEnd) return { linked: false };
+  const gap = (new Date(primeiroHoje) - new Date(ontemEnd)) / 60000;
+  if (!Number.isFinite(gap) || gap < 0 || gap > gapMin) return { linked: false };
+  return { linked: true, sessionBeginReal: ontemBegin, ontemBegin, ontemEnd };
+}
+
+/**
  * Enriquecer teams com:
  *   - escala_inicio / escala_fim (turno configurado em equipes_oficiais)
  *   - sessionBeginReal: sessionBegin do PRIMEIRO snapshot do dia (não o atual).
@@ -109,8 +129,34 @@ async function _enrichComEscalaELogonReal(teams) {
       page++;
     }
 
+    // ÚLTIMA sessão de ONTEM por equipe (mais recente) — pra detectar turno
+    // vira-noite (P1-14 Fase 2). Snapshots de ontem DESC → 1º = mais recente.
+    const ontem = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+    const ontemUltima = {};
+    let pageO = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from('snapshots')
+        .select('team_name, data, captured_at')
+        .eq('date', ontem)
+        .in('team_name', siglas)
+        .order('captured_at', { ascending: false })
+        .range(pageO * 1000, (pageO + 1) * 1000 - 1);
+      if (error) break;
+      if (!data || data.length === 0) break;
+      data.forEach(r => {
+        if (ontemUltima[r.team_name]) return;           // já temos a mais recente
+        const b = r.data?.sessionBegin || r.data?.session_begin || null;
+        const e = r.data?.sessionEnd   || r.data?.session_end   || null;
+        if (b) ontemUltima[r.team_name] = { begin: b, end: e };
+      });
+      if (data.length < 1000) break;
+      pageO++;
+    }
+
     // Guarda de gap (default 0 = desligado → comportamento idêntico ao anterior).
     const maxGap = parseFloat(process.env.RELOGIN_MAX_GAP_HORAS || '0');
+    const gapViraNoite = parseInt(process.env.RECONEXAO_MAX_GAP_MIN || '60', 10) || 60;
     teams.forEach(t => {
       const nome = t.teamName || t.sigla;
       const primeiro = primeiroSessionBegin[nome];
@@ -119,6 +165,22 @@ async function _enrichComEscalaELogonReal(teams) {
       const r = _resolveLogon(primeiro, t.sessionBegin, maxGap);
       t.sessionBeginReal = r.sessionBeginReal;
       t.relogouNoDia     = r.relogouNoDia;
+
+      // P1-14 Fase 2: se o 1º logon de hoje é reconexão da última sessão de
+      // ontem (turno vira-noite), mostra a noite como UM turno — início = o de
+      // ontem, e o histórico de conexões lista as duas sessões. Só ativa nesse
+      // caso; equipes normais ficam intactas.
+      const ont = ontemUltima[nome];
+      const link = _linkViraNoite(primeiro || t.sessionBegin, ont && ont.begin, ont && ont.end, gapViraNoite);
+      if (link.linked) {
+        t.sessionBeginReal = link.sessionBeginReal;     // logon real = 20:05 (ontem)
+        t.relogouNoDia     = true;
+        t.turnoViraNoite   = true;
+        t.sessions = [
+          { begin: link.ontemBegin, end: link.ontemEnd },
+          { begin: t.sessionBegin,  end: t.sessionEnd || null },
+        ];
+      }
     });
   } catch (err) {
     console.warn('[dataService] enrich logon real falhou:', err.message);
@@ -555,4 +617,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon };
+module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite };
