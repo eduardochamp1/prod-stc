@@ -5955,6 +5955,8 @@ ${matrizHTML}
 
     function getVisible() {
       // No escopo 'todas' (ao-vivo), soma as deslogadas (última sessão) ao pool.
+      // O dedup contra as equipes REALMENTE ativas hoje é feito em renderAll
+      // (contra teamsAll, pós-_tocaPeriodo) — aqui só junta ao pool.
       const pool = (_monitorScope === 'todas' && Array.isArray(_deslogadas))
         ? allTeams.concat(_deslogadas)
         : allTeams;
@@ -6523,7 +6525,11 @@ ${matrizHTML}
       } else if (_monitorScope === 'ativas') {
         teams = teamsAll.filter(t => !t.sessionEnd);          // só logadas agora
       } else {
-        teams = teamsAll.concat(_rawTeams.filter(t => t.deslogada));
+        // Dedup: se a sigla já está ativa hoje (logou desde o fetch das
+        // deslogadas), a versão ATIVA vence — evita linha duplicada (SPEC §4.3).
+        const _ativasSiglas = new Set(teamsAll.map(t => t.sigla || t.teamName));
+        const _desl = _rawTeams.filter(t => t.deslogada && !_ativasSiglas.has(t.sigla || t.teamName));
+        teams = teamsAll.concat(_desl);
       }
       const teamsVisible = teams;
       // Ghosts e deslogadas fora do banner de alerta (não são sessões de hoje).
