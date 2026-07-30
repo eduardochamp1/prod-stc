@@ -6105,6 +6105,43 @@ ${matrizHTML}
       return { de, ate, isLiveToday: de === ate && de === hoje };
     }
 
+    // Ajusta o TAMANHO do número de cada KPI ao espaço LIVRE do seu card:
+    // cards lotados mantêm o número no tamanho base (clamp do CSS); cards com
+    // pouca info (muito vazio) crescem o número pra preencher. Reage a mudança
+    // de conteúdo (dia/condições) e de largura. (Ajuste 30/07/2026.)
+    function _fitKPINumbers() {
+      const cards = [...document.querySelectorAll('.summary-grid .metric-card')];
+      if (!cards.length) return;
+      // 1) reseta pro tamanho base (clamp do CSS) e força reflow.
+      cards.forEach(c => c.querySelectorAll('.metric-value').forEach(v => { v.style.fontSize = ''; }));
+      void document.body.offsetHeight;
+      // 2) MEDE todos ANTES de crescer — crescer um muda a altura da linha do
+      //    grid (compartilhada), então medir+crescer intercalado dá lixo.
+      const plan = cards.map(card => {
+        const vals = card.querySelectorAll('.metric-value');
+        if (!vals.length) return null;
+        const cs = getComputedStyle(card);
+        const avail = card.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+        const kids = [...card.children].filter(ch => ch.getBoundingClientRect().height > 0);
+        if (!kids.length) return null;
+        const contentH = kids[kids.length - 1].getBoundingClientRect().bottom - kids[0].getBoundingClientRect().top;
+        const base = parseFloat(getComputedStyle(vals[0]).fontSize) || 28;
+        return { vals, slack: avail - contentH, base };
+      });
+      // 3) APLICA (só writes, sem ler layout no meio). Cresce ~55% da folga,
+      //    teto 52px — fica abaixo da altura da linha, não empurra o grid.
+      plan.forEach(p => {
+        if (!p || p.slack <= 28) return;   // só cresce quem tem folga real (card cheio fica no base)
+        const grown = Math.min(p.base + p.slack * 0.45, 48);   // cresce ~45% da folga, teto 48px
+        p.vals.forEach(v => { v.style.fontSize = grown + 'px'; });
+      });
+    }
+    let _fitKPIResizeT = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(_fitKPIResizeT);
+      _fitKPIResizeT = setTimeout(_fitKPINumbers, 150);
+    });
+
     async function renderMetrics(teamsAll, teamsVisible) {
       // Compat: se chamado com 1 argumento, usa o mesmo array para ambos
       teamsVisible = teamsVisible || teamsAll;
@@ -6535,6 +6572,7 @@ ${matrizHTML}
       // Ghosts e deslogadas fora do banner de alerta (não são sessões de hoje).
       const teamsForAlert = teamsVisible.filter(t => !t._ghostFromAcc && !t.deslogada);
       renderMetrics(teamsAll, teamsAll);
+      _fitKPINumbers();   // ajusta o tamanho dos números ao espaço livre de cada card
       renderProdutividade(teamsAll);
       document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
 
