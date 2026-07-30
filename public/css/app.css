@@ -515,11 +515,16 @@
     }
 
     /* ── METRIC CARDS ── */
+    /* KPIs: 6 cards fixos → reflow em divisores de 6 (6→3→2) pra linhas sempre
+       cheias, sem "5+1" torto. minmax(0,1fr) evita overflow de conteúdo longo. */
     .summary-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 18px;
+    }
+    @media (max-width: 1100px) {
+      .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
 
     .metric-card {
@@ -568,7 +573,7 @@
     }
 
     .metric-value {
-      font-size: 26px;
+      font-size: 26px;   /* sobrescrito pela regra "mais respiro" (clamp) mais abaixo */
       font-weight: 700;
       color: var(--text);
       line-height: 1;
@@ -1970,9 +1975,7 @@
         padding: 16px 16px;
       }
 
-      .summary-grid {
-        grid-template-columns: repeat(2, 1fr);
-      }
+      /* .summary-grid: 3 colunas herdadas do breakpoint 1100px (não força 2 aqui) */
 
       .teams-grid {
         grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -2016,16 +2019,12 @@
       }
 
       .summary-grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
       }
 
       .metric-card {
         padding: 12px 14px;
-      }
-
-      .metric-value {
-        font-size: 22px;
       }
 
       .teams-grid {
@@ -2083,11 +2082,7 @@
 
     @media (max-width: 480px) {
       .summary-grid {
-        grid-template-columns: 1fr 1fr;
-      }
-
-      .metric-value {
-        font-size: 20px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
       .prod-grid {
@@ -3357,7 +3352,9 @@
     .metric-card.accent-preto::after    { background: var(--preto); }
 
     .metric-value {
-      font-size: 32px;
+      /* Número adaptável: acompanha a largura, teto 32px (desktop) e piso 24px
+       * (mobile legível). Substitui o 32px fixo + o override de 26px do @720. */
+      font-size: clamp(24px, 2.5vw, 32px);
       letter-spacing: -0.02em;
     }
 
@@ -3915,10 +3912,6 @@
       .metric-card {
         padding: 14px 16px;
         border-radius: 12px;
-      }
-
-      .metric-value {
-        font-size: 26px;
       }
 
       .login-card {
