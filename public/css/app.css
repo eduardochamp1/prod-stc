@@ -673,6 +673,14 @@
     .mon-muted, .mon-zero { color: var(--cinza3); }
     .mon-colabs { color: var(--text2); line-height: 1.35; }
     .mon-colabs div { white-space: nowrap; }
+    /* Placa na tabela: neutra (o estilo "placa preta/amarela" dos cards fica
+       pesado na tabela densa). Monospace pra alinhar caracteres. */
+    .mon-placa {
+      font-family: monospace; font-size: 11px; font-weight: 700;
+      letter-spacing: .04em; color: var(--text2);
+      background: var(--cinza1); border: 1px solid var(--cinza2);
+      border-radius: 4px; padding: 2px 7px; white-space: nowrap;
+    }
     .mon-num { text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .mon-exec { color: var(--verde2); font-weight: 700; }
     .mon-and  { color: #c49000; font-weight: 600; }
