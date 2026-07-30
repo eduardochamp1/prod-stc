@@ -114,11 +114,10 @@ Objetivo secundário (o número é o primário). Duas frentes:
 - Re-atribuir carteira/subcats fora do que a re-consolidação já refaz.
 - Fase 2 (exibição ao-vivo) não bloqueia a Fase 1.
 
-## 8. Decisões pendentes (confirmar antes/durante)
+## 8. Decisões (resolvidas)
 
-1. **LIMITE de gap:** 60 min OK, ou você prefere outro (30? 120?)? O caso real
-   foi 2 min, então qualquer valor generoso resolve; a questão é não linkar
-   turnos distintos.
+1. **LIMITE de gap:** ✅ **60 min** (José, 30/07). `RECONEXAO_MAX_GAP_MIN=60`
+   default. Configurável via env se precisar ajustar sem deploy de código.
 
 ## 9. Rollback
 
