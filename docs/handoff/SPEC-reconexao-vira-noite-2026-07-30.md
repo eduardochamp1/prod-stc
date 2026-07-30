@@ -2,7 +2,16 @@
 
 > Data: 2026-07-30 · Decisão de negócio travada (José): a continuação de um
 > turno após reconexão que cruza a meia-noite pertence ao **dia do início do
-> turno**. Status: **a implementar (spec em revisão)**.
+> turno**. Status: **Fase 1 (consolidação) IMPLEMENTADA + testada** — falta
+> re-consolidar o histórico (dry-run → revisar → aplicar) e a Fase 2 (exibição).
+>
+> **Fase 1 (feita, `_effectiveSessionDates` + wiring, `test/reconexaoViraNoite.test.js`
+> 10 casos):** `_unionTeamsFromSnapshots` passou a aceitar sessões de date+1,
+> carregar `sessionEnd`, calcular o dia efetivo (linkagem) e filtrar por ele;
+> `_aggregateTeamDailyTotals` e `upsertSubcatTotals` atribuem por `_effDate`
+> (fallback `_sessionDate` no intraday). Threshold `RECONEXAO_MAX_GAP_MIN=60`.
+> Suíte 308→318 verde (núcleo P1-13/P0-6/invariantes intactos). **Ainda NÃO
+> re-consolidado — o histórico só muda quando rodar o backfill.**
 
 ## 1. Problema (evidência EPGPR30, 29–30/07/2026)
 

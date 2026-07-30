@@ -199,6 +199,57 @@ function _notaDate(n, sessDate, sessionBegin) {
   return sessDate;
 }
 
+// Gap máximo (minutos) entre o logoff de uma sessão e o logon da seguinte pra
+// tratar a segunda como RECONEXÃO da mesma noite (P1-14). Default 60min;
+// ajustável sem deploy via env RECONEXAO_MAX_GAP_MIN.
+const RECONEXAO_MAX_GAP_MIN = (() => {
+  const n = parseInt(process.env.RECONEXAO_MAX_GAP_MIN || '60', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 60;
+})();
+
+/**
+ * FUNÇÃO PURA (testável): data operacional EFETIVA de cada sessão, linkando
+ * reconexões vira-noite ao dia do INÍCIO DO TURNO (P1-14, decisão José 30/07/2026).
+ *
+ * Regra: ordenando as sessões de cada equipe por begin, uma sessão cujo begin
+ * está dentro de `gapMin` minutos após o `end` da anterior é uma reconexão e
+ * HERDA o dia efetivo da anterior (encadeia). Gap negativo ou `end` ausente não
+ * linka (conservador). Caso clássico: turno 20:05→01:08, reconexão 01:10→04:00
+ * (gap 2min) → toda a noite fica no dia do 20:05.
+ *
+ * Edge conhecido (raro): cadeia de reconexões cruzando 2+ meia-noites pode
+ * divergir na borda da janela de 3 dias do consolidateDay. Turno real < 24h
+ * nunca cai nisso. Ver SPEC-reconexao-vira-noite-2026-07-30.md §4.1.
+ *
+ * @param {Array} entries  sessões {teamName, sessionBegin, sessionEnd}
+ * @param {number} gapMin  limite em minutos (default RECONEXAO_MAX_GAP_MIN)
+ * @returns {Map<string, string>}  `${teamName}|${sessionBegin}` → 'YYYY-MM-DD'
+ */
+function _effectiveSessionDates(entries, gapMin = RECONEXAO_MAX_GAP_MIN) {
+  const byTeam = new Map();
+  for (const e of (entries || [])) {
+    if (!e || !e.sessionBegin) continue;
+    if (!byTeam.has(e.teamName)) byTeam.set(e.teamName, []);
+    byTeam.get(e.teamName).push(e);
+  }
+  const out = new Map();
+  for (const [team, list] of byTeam) {
+    list.sort((a, b) => String(a.sessionBegin).localeCompare(String(b.sessionBegin)));
+    let prevEnd = null, prevEff = null;
+    for (const e of list) {
+      let eff = _sessionDate(e);
+      if (prevEnd && prevEff) {
+        const gap = (new Date(e.sessionBegin) - new Date(prevEnd)) / 60000;
+        if (Number.isFinite(gap) && gap >= 0 && gap <= gapMin) eff = prevEff;
+      }
+      out.set(`${team}|${e.sessionBegin}`, eff);
+      prevEnd = e.sessionEnd || null;
+      prevEff = eff;
+    }
+  }
+  return out;
+}
+
 /**
  * Atualiza `daily_totals` por regional/tipo (intraday — visão da regional).
  */
@@ -235,7 +286,10 @@ async function upsertDailyTotals(_teams, _date) {
 function _aggregateTeamDailyTotals(teams) {
   const acc = {};
   teams.forEach(t => {
-    const sessDate = _sessionDate(t);
+    // _effDate: dia operacional efetivo (reconexão vira-noite herda o dia do
+    // início do turno — P1-14). Ausente no caminho intraday (teams ao vivo) →
+    // cai no _sessionDate, comportamento idêntico ao anterior.
+    const sessDate = t._effDate || _sessionDate(t);
     if (!sessDate) return;
     const teamName = t.teamName || t.sigla;
     const rejIds = new Set(
@@ -308,7 +362,9 @@ async function upsertSubcatTotals(teams, _date) {
   teams.forEach(t => {
     const teamName = t.teamName || t.sigla;
     if (!teamName || !t.regional) return;
-    const sessDate = _sessionDate(t);
+    // _effDate: reconexão vira-noite herda o dia do início do turno (P1-14).
+    // Consistente com _aggregateTeamDailyTotals. Ausente intraday → _sessionDate.
+    const sessDate = t._effDate || _sessionDate(t);
     if (!sessDate) return;                          // sem sessão → descarta
     // Produtividade do dia = notasConcluidas que NÃO foram rejeitadas. Notas em
     // andamento ainda podem virar rejeitadas, e concluída rejeitada pela EDP não
@@ -428,13 +484,18 @@ async function upsertSubcatTotals(teams, _date) {
  * @param {string} date       'YYYY-MM-DD' BRT
  * @param {string} dayMinus1  'YYYY-MM-DD' BRT (D-1)
  */
-function _unionTeamsFromSnapshots(snaps, date, dayMinus1) {
+function _unionTeamsFromSnapshots(snaps, date, dayMinus1, opts = {}) {
+  const dayPlus1 = _addDays(date, 1);
+  const gapMin = Number.isFinite(opts.reconexaoGapMin) ? opts.reconexaoGapMin : RECONEXAO_MAX_GAP_MIN;
   const acc = {};
   (snaps || []).forEach(s => {
     const t = s.data;
     if (!t) return;
     const sd = _sessionDate(t);
-    if (sd !== date && sd !== dayMinus1) return;
+    // Aceita date-1, date E date+1. O date+1 entra porque pode ser uma
+    // RECONEXÃO que cruza a meia-noite e herda o dia anterior (P1-14) — o filtro
+    // final por _effDate decide se fica. Antes só {date, dayMinus1}.
+    if (sd !== date && sd !== dayMinus1 && sd !== dayPlus1) return;
     const key = `${s.team_name}|${t.sessionBegin}`;
     if (!acc[key]) {
       acc[key] = {
@@ -442,6 +503,7 @@ function _unionTeamsFromSnapshots(snaps, date, dayMinus1) {
         regional: s.regional,
         sectorId: s.sector_id,
         sessionBegin: t.sessionBegin,
+        sessionEnd: t.sessionEnd || null,           // do mais recente (DESC → 1ª ocorrência)
         notasExecutadas: t.notasExecutadas || [],   // do mais recente (DESC → 1ª ocorrência)
         _conc: new Map(),
         _rej:  new Map(),
@@ -457,11 +519,18 @@ function _unionTeamsFromSnapshots(snaps, date, dayMinus1) {
       if (id && !e._rej.has(id)) e._rej.set(id, n);
     });
   });
-  return Object.values(acc).map(({ _conc, _rej, ...rest }) => ({
+  const entries = Object.values(acc).map(({ _conc, _rej, ...rest }) => ({
     ...rest,
     notasConcluidas: [..._conc.values()],
     notasRejeitadas: [..._rej.values()],
   }));
+  // Data operacional EFETIVA: linka reconexões vira-noite ao dia do início do
+  // turno (P1-14). Mantém só as sessões cujo dia efetivo cai na janela que o
+  // consolidateDay grava ({date, dayMinus1}); uma sessão de date+1 que NÃO
+  // linka fica pro consolidateDay do próprio date+1.
+  const effMap = _effectiveSessionDates(entries, gapMin);
+  for (const e of entries) e._effDate = effMap.get(`${e.teamName}|${e.sessionBegin}`) || _sessionDate(e);
+  return entries.filter(e => e._effDate === date || e._effDate === dayMinus1);
 }
 
 async function consolidateDay(date, opts = {}) {
@@ -818,4 +887,5 @@ module.exports = {
   _addDays,
   _sessionDate, _notaDate, _aggregateTeamDailyTotals,
   _unionTeamsFromSnapshots,   // P1-13 — união dos snapshots do dia
+  _effectiveSessionDates,     // P1-14 — reconexão vira-noite herda o dia do turno
 };
