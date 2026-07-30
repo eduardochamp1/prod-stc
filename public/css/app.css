@@ -3008,12 +3008,14 @@
       --ring-verde: 0 0 0 3px rgba(8, 103, 56, 0.15);
     }
 
-    /* Body: superfície mais respirável + raio sutil mantido */
+    /* Body: fundo cinza claro-médio pra os cards brancos DESTACAREM (ajuste
+       30/07 — antes #f7f7f4, quase branco, os cards sumiam no fundo). Raio +
+       gradiente verde mantidos. Se quiser mais claro/escuro, é só esta cor. */
     body {
-      background: #f7f7f4;
+      background: #dcdad2;
       background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cpath d='M55,8 L36,44 L46,44 L28,82 L66,40 L54,40 Z' fill='%23FEC40E' opacity='0.045'/%3E%3C/svg%3E"),
-        radial-gradient(ellipse 800px 400px at 0% 0%, rgba(8, 103, 56, 0.04) 0%, transparent 70%);
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90'%3E%3Cpath d='M55,8 L36,44 L46,44 L28,82 L66,40 L54,40 Z' fill='%23FEC40E' opacity='0.05'/%3E%3C/svg%3E"),
+        radial-gradient(ellipse 800px 400px at 0% 0%, rgba(8, 103, 56, 0.05) 0%, transparent 70%);
       background-size: 90px 90px, 100% 100%;
     }
 
