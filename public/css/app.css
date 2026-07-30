@@ -636,6 +636,63 @@
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
       gap: 14px;
     }
+    /* Visão tabela: o grid vira bloco pra a tabela ocupar a largura toda. */
+    .teams-grid.as-table { display: block; }
+
+    /* ── Alternador Cards ⇄ Tabela ─────────────────────────────────────────── */
+    .view-toggle {
+      display: inline-flex; border: 1px solid var(--cinza2);
+      border-radius: 8px; overflow: hidden;
+    }
+    .view-toggle .vt-btn {
+      border: none; background: var(--branco); color: var(--text2);
+      padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .view-toggle .vt-btn + .vt-btn { border-left: 1px solid var(--cinza2); }
+    .view-toggle .vt-btn.active { background: var(--verde); color: #fff; }
+
+    /* ── Monitor · tabela de equipes (estilo Engelmig, sticky, responsiva) ──── */
+    .mon-table-wrap {
+      background: var(--branco); border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm); overflow: auto; max-height: 70vh;
+    }
+    .mon-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; color: var(--text); }
+    .mon-table thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--verde); color: #fff; text-align: left;
+      font-size: 10px; letter-spacing: .05em; font-weight: 700;
+      padding: 8px 10px; white-space: nowrap;
+    }
+    .mon-table td { padding: 8px 10px; border-bottom: 1px solid var(--cinza2); vertical-align: middle; }
+    .mon-table tbody tr { cursor: pointer; }
+    .mon-table tbody tr:hover td { background: #f0f7f2; }
+    .mon-table tbody tr:last-child td { border-bottom: none; }
+    .mon-team { white-space: nowrap; }
+    .mon-nowrap { white-space: nowrap; color: var(--text2); font-size: 11px; }
+    .mon-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+    .mon-muted, .mon-zero { color: var(--cinza3); }
+    .mon-colabs { color: var(--text2); line-height: 1.35; }
+    .mon-colabs div { white-space: nowrap; }
+    .mon-num { text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .mon-exec { color: var(--verde2); font-weight: 700; }
+    .mon-and  { color: #c49000; font-weight: 600; }
+    .mon-rej  { color: var(--vermelho); font-weight: 700; }
+    .mon-consumo { min-width: 120px; }
+    .mon-consumo-inner { display: flex; align-items: center; gap: 8px; }
+    .mon-bar { flex: 1; height: 6px; min-width: 46px; background: var(--cinza2); border-radius: 4px; overflow: hidden; }
+    .mon-bar-fill { height: 100%; background: var(--verde); }
+    .mon-consumo span { font-size: 11px; color: var(--text2); white-space: nowrap; }
+    .mon-badge-ant { background: #fdecea; color: #c0392b; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 8px; margin-left: 5px; }
+    .mon-badge-rel { background: #fff8e1; color: #c49000; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 8px; border: 1px solid #ffe082; margin-left: 5px; }
+    .mon-sit { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+    .mon-sit.sit-campo { background: #e6f2ea; color: var(--verde); }
+    .mon-sit.sit-mutuo { background: #fff8e1; color: #c49000; }
+    .mon-sit.sit-pend  { background: #fdf0e0; color: #c0392b; }
+    .mon-sit.sit-enc   { background: #f0f0ee; color: var(--text2); }
+    @media (max-width: 900px) {
+      .mon-table { font-size: 11px; }
+      .mon-table td, .mon-table thead th { padding: 5px 6px; }
+    }
 
     .team-card {
       background: #fff;

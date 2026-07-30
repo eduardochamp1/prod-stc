@@ -25,6 +25,38 @@ function _hojeBRT() {
 }
 
 /**
+ * Decide o logon de REFERÊNCIA (o mais antigo do dia) e se houve RELOGIN, com
+ * uma guarda de intervalo (gap). FUNÇÃO PURA (testável).
+ *
+ * observação 29/07/2026: até então QUALQUER diferença entre o primeiro
+ * sessionBegin do dia e o atual contava como relogin, sem limite. Se uma equipe
+ * logar de novo após um intervalo GRANDE (um turno separado, não uma
+ * reconexão), isso poderia (a) inflar o "relogou" e (b) ancorar o logon num
+ * horário muito antigo. `RELOGIN_MAX_GAP_HORAS` (env, default 0 = DESLIGADO)
+ * define o limite: acima dele, a sessão atual é tratada como NOVA — não é
+ * relogin e o logon de referência passa a ser o da própria sessão atual.
+ *
+ * Default 0 preserva EXATAMENTE o comportamento anterior (nunca caímos na
+ * condição de gap grande até hoje — mantido intencionalmente).
+ *
+ * @param   {string|null} primeiro  sessionBegin do 1º snapshot do dia (ISO)
+ * @param   {string|null} atual     sessionBegin da sessão atual (ISO)
+ * @param   {number} maxGapHoras    limite em horas; 0/negativo = sem limite
+ * @returns {{ sessionBeginReal: string|null, relogouNoDia: boolean }}
+ */
+function _resolveLogon(primeiro, atual, maxGapHoras = 0) {
+  if (!primeiro || !atual || primeiro === atual) {
+    return { sessionBeginReal: primeiro || atual || null, relogouNoDia: false };
+  }
+  const gapH = Math.abs(new Date(atual) - new Date(primeiro)) / 3600000;
+  const semLimite = !maxGapHoras || maxGapHoras <= 0;
+  const dentroDoLimite = semLimite || (Number.isFinite(gapH) && gapH <= maxGapHoras);
+  return dentroDoLimite
+    ? { sessionBeginReal: primeiro, relogouNoDia: true }   // reconexão do mesmo turno
+    : { sessionBeginReal: atual,    relogouNoDia: false };  // gap grande → sessão nova
+}
+
+/**
  * Enriquecer teams com:
  *   - escala_inicio / escala_fim (turno configurado em equipes_oficiais)
  *   - sessionBeginReal: sessionBegin do PRIMEIRO snapshot do dia (não o atual).
@@ -77,13 +109,16 @@ async function _enrichComEscalaELogonReal(teams) {
       page++;
     }
 
+    // Guarda de gap (default 0 = desligado → comportamento idêntico ao anterior).
+    const maxGap = parseFloat(process.env.RELOGIN_MAX_GAP_HORAS || '0');
     teams.forEach(t => {
       const nome = t.teamName || t.sigla;
       const primeiro = primeiroSessionBegin[nome];
-      // Se há um primeiro snapshot e seu sessionBegin é DIFERENTE do atual,
-      // a equipe relogou. Salva o primeiro como sessionBeginReal e marca o flag.
-      t.sessionBeginReal = primeiro || t.sessionBegin || null;
-      t.relogouNoDia     = !!(primeiro && t.sessionBegin && primeiro !== t.sessionBegin);
+      // sessionBeginReal = logon mais antigo do dia; relogouNoDia = reconexão.
+      // A regra (com guarda de gap) vive em _resolveLogon — testada isoladamente.
+      const r = _resolveLogon(primeiro, t.sessionBegin, maxGap);
+      t.sessionBeginReal = r.sessionBeginReal;
+      t.relogouNoDia     = r.relogouNoDia;
     });
   } catch (err) {
     console.warn('[dataService] enrich logon real falhou:', err.message);
@@ -520,4 +555,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary };
+module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon };

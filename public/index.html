@@ -231,8 +231,16 @@
           <span class="section-title">Equipes</span>
           <span class="section-count" id="section-count"></span>
         </div>
-        <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..."
-          oninput="filterCards(this.value)" />
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <!-- Alternador Cards ⇄ Tabela (visão do Monitor). Só apresentação —
+               os dois modos usam o MESMO array de equipes já filtrado. -->
+          <div class="view-toggle" id="monitor-view-toggle">
+            <button type="button" class="vt-btn" data-view="cards" onclick="setMonitorView('cards')" title="Ver em cards">▦ Cards</button>
+            <button type="button" class="vt-btn" data-view="tabela" onclick="setMonitorView('tabela')" title="Ver em tabela">≣ Tabela</button>
+          </div>
+          <input class="search-input" type="text" placeholder="Buscar equipe ou colaborador..."
+            oninput="filterCards(this.value)" />
+        </div>
       </div>
 
       <div id="alert-stale-sessions"></div>
@@ -5795,6 +5803,21 @@ ${matrizHTML}
 
     function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
 
+    // ── Visão do Monitor: Cards ⇄ Tabela ──────────────────────────────────
+    // Preferência PESSOAL (por navegador) — não muda dado de ninguém. As duas
+    // visões renderizam o MESMO array de equipes já filtrado (mesmos números).
+    let _monitorView = localStorage.getItem('wpa-monitor-view') === 'tabela' ? 'tabela' : 'cards';
+    function _syncViewToggle() {
+      document.querySelectorAll('#monitor-view-toggle .vt-btn').forEach(b =>
+        b.classList.toggle('active', b.getAttribute('data-view') === _monitorView));
+    }
+    function setMonitorView(v) {
+      _monitorView = (v === 'tabela') ? 'tabela' : 'cards';
+      try { localStorage.setItem('wpa-monitor-view', _monitorView); } catch (_) {}
+      _syncViewToggle();
+      renderAll();
+    }
+
     /**
      * Sincroniza o filtro de regional entre TODOS os dropdowns de tabs.
      * Quando um tab muda, propaga pro estado global + outros dropdowns.
@@ -6505,7 +6528,15 @@ ${matrizHTML}
       // notas concluídas em dias anteriores), e o usuário não conseguia bater
       // a soma dos cards com o KPI "OS Rejeitadas".
       const { de: _rngDe, ate: _rngAte } = currentMonitorRange();
-      document.getElementById('teams-grid').innerHTML = teams.map(t => {
+      _syncViewToggle();
+      // Visão TABELA: mesma lista já filtrada, outra forma de renderizar.
+      const _grid = document.getElementById('teams-grid');
+      _grid.classList.toggle('as-table', _monitorView === 'tabela');
+      if (_monitorView === 'tabela') {
+        _grid.innerHTML = renderTeamsTabela(teams, _rngDe, _rngAte);
+        return;
+      }
+      _grid.innerHTML = teams.map(t => {
         // 4 estados (alinhado com WPA Gestão Online + tipo da equipe):
         //   emCampo  = sessão aberta + app online       → "● Em campo"      (cabeçalho preto/amarelo)
         //   usoMutuo = sessão aberta + USO MÚTUO        → "● Uso mútuo"     (cabeçalho preto/amarelo, info)
@@ -6614,6 +6645,74 @@ ${matrizHTML}
           </div>
         </div>`;
       }).join('');
+    }
+
+    // ── VISÃO EM TABELA (alterna com os cards) ────────────────────────────
+    // Renderiza a MESMA lista de equipes já filtrada, em linha. Reusa os mesmos
+    // helpers de cálculo dos cards (_carteiraPendentes, _andamentoReal, etc.) →
+    // números idênticos por construção. Clicar na linha abre o mesmo modal.
+    function renderTeamsTabela(teams, rngDe, rngAte) {
+      const linhas = teams.map(t => {
+        const sessaoAberta = !t.sessionEnd;
+        const ehUsoMutuo = String(t.tipo || '').toUpperCase().includes('USO MUTUO')
+                        || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
+        const emCampo  = sessaoAberta && t.isOnline && !ehUsoMutuo;
+        const usoMutuo = sessaoAberta && ehUsoMutuo;
+        const pendente = sessaoAberta && !t.isOnline && !ehUsoMutuo;
+        const dot = emCampo ? 'var(--verde3)' : usoMutuo ? 'var(--amarelo)' : pendente ? 'var(--vermelho)' : 'var(--cinza3)';
+        const sitTxt = emCampo ? 'Em campo' : usoMutuo ? 'Uso mútuo' : pendente ? 'Pendente' : 'Encerrada';
+        const sitCls = emCampo ? 'sit-campo' : usoMutuo ? 'sit-mutuo' : pendente ? 'sit-pend' : 'sit-enc';
+        const isAnt = sessaoAnterior(_refLogon(t));
+        const reloginsCount = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);
+        const regionalNome = REGIONAIS_NOMES[t.regional] || t.regional || '—';
+
+        // Métricas — MESMOS helpers e range dos cards.
+        const atual      = _carteiraPendentes(t);
+        const inicial    = carteiraInicialDe(t, rngDe, rngAte);
+        const andamento  = sessaoAberta ? _andamentoReal(t, rngDe, rngAte) : 0;
+        const executadas = _notasConcluidasReais(t).filter(n => notaPertenceAoRange(n, rngDe, rngAte)).length;
+        const rejeitadas = (t.notasRejeitadas || []).filter(n => notaPertenceAoRange(n, rngDe, rngAte)).length;
+        // Consumo = mesma definição do KPI "% da carteira trabalhada".
+        const trabalhada = executadas + andamento + rejeitadas + atual;
+        const consumo = trabalhada > 0 ? Math.round(100 * executadas / trabalhada) : 0;
+
+        const colabs = (t.collaborators || []).map(c => c.nome || c.name || c).filter(Boolean);
+        const colabsHtml = colabs.length
+          ? colabs.map(n => `<div>${escapeHtml(String(n))}</div>`).join('')
+          : '<span class="mon-muted">—</span>';
+        const badges = `${isAnt ? '<span class="mon-badge-ant" title="Sessão de dia anterior">📅 dia ant.</span>' : ''}`
+                     + `${t.relogouNoDia ? '<span class="mon-badge-rel" title="Relogou no dia — detalhe no card">⚠ relogou</span>' : ''}`;
+        const escala = (t.escala_inicio || t.escala_fim)
+          ? `${(t.escala_inicio || '').slice(0, 5)}–${(t.escala_fim || '').slice(0, 5)}`
+          : '<span class="mon-muted">—</span>';
+        const z = (v) => v ? String(v) : '<span class="mon-zero">0</span>';
+
+        return `<tr onclick="openModal('${t.id}')">
+          <td class="mon-team"><span class="mon-dot" style="background:${dot}"></span><strong>${t.sigla || t.teamName}</strong> <span class="mon-muted">· ${t.sectorId || '—'}</span>${badges}</td>
+          <td>${regionalNome}</td>
+          <td class="mon-colabs">${colabsHtml}</td>
+          <td>${t.vehiclePlate ? `<span class="tag-placa">${t.vehiclePlate}</span>` : '<span class="mon-muted">—</span>'}</td>
+          <td class="mon-nowrap">${escala}</td>
+          <td class="mon-nowrap">${isAnt ? '<span class="mon-badge-ant">📅</span> ' : ''}${_horaLogon(t)}</td>
+          <td class="mon-num">${reloginsCount}</td>
+          <td class="mon-num mon-exec">${z(executadas)}</td>
+          <td class="mon-num mon-and">${z(andamento)}</td>
+          <td class="mon-num">${atual}${inicial > atual ? `<span class="mon-muted">/${inicial}</span>` : ''}</td>
+          <td class="mon-num ${rejeitadas ? 'mon-rej' : ''}">${z(rejeitadas)}</td>
+          <td class="mon-consumo"><div class="mon-consumo-inner"><div class="mon-bar"><div class="mon-bar-fill" style="width:${consumo}%"></div></div><span>${consumo}%</span></div></td>
+          <td><span class="mon-sit ${sitCls}">${sitTxt}</span></td>
+        </tr>`;
+      }).join('');
+
+      return `<div class="mon-table-wrap"><table class="mon-table">
+        <thead><tr>
+          <th>Equipe</th><th>Regional</th><th>Colaboradores</th><th>Placa</th><th>Escala</th>
+          <th>Logon</th><th title="Nº de reconexões no dia — detalhe ao abrir o card">Re-log.</th>
+          <th>Exec</th><th>Andam</th><th title="Atual / Inicial">Carteira</th><th>Reje</th>
+          <th title="Executadas ÷ carteira trabalhada (mesma definição do KPI)">Consumo</th><th>Situação</th>
+        </tr></thead>
+        <tbody>${linhas}</tbody>
+      </table></div>`;
     }
 
     // ── MODAL EQUIPE ──────────────────────────────────────────────────────
