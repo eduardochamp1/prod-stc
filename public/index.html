@@ -108,6 +108,14 @@
               <option value="SJC">São José dos Campos</option>
             </select>
           </div>
+          <div class="filter-group">
+            <span class="filter-label">Equipe</span>
+            <!-- Multi-select (checkbox + busca) — mesmo componente das outras
+                 abas. Populado por _monPopularEquipes e refiltrado pelo regional. -->
+            <select class="filter-select" id="mon-equipe-select" onchange="renderAll()" style="min-width:150px">
+              <option value="ALL">Todas as equipes</option>
+            </select>
+          </div>
           <div class="tipos-filter-wrap" id="tipos-filter-wrap">
             <button class="tipos-filter-btn" id="tipos-filter-btn" onclick="toggleTiposPanel(event)">
               🔧 Tipos <span class="tipos-filter-badge" id="tipos-badge"></span>
@@ -5513,6 +5521,7 @@ ${matrizHTML}
 
         _teamsLoading = false;   // fetch resolveu → renderAll decide entre cards e "Nenhuma equipe"
         renderAll();
+        _monPopularEquipes();          // popula/refresca o filtro de equipes (cacheado)
         enrichSubcategorias(allTeams); // enriquece subcats em background (cache no backend)
       } catch (err) {
         _teamsLoading = false;
@@ -5803,6 +5812,7 @@ ${matrizHTML}
       _syncCurrentRegional();
       const sel = document.getElementById('regional-select');
       if (sel && sel.value !== currentRegional) sel.value = currentRegional;
+      _monRefiltrarEquipes();   // regional mudou → refiltra as equipes do filtro
       saveFilters();
       renderAll();
     }
@@ -5851,6 +5861,54 @@ ${matrizHTML}
         _fetchDeslogadas().then(() => renderAll());
       }
       renderAll();
+    }
+
+    // ── FILTRO DE EQUIPES DO MONITOR (multi-select com checkbox + busca) ────
+    // Mesmo componente MultiSelect das outras abas. A lista respeita o filtro
+    // de REGIONAL (equipe fora do escopo não aparece). Só apresentação: filtra
+    // quais equipes são exibidas; não muda nenhum número/agregado.
+    let _monAllEquipes = null;
+    let _monEquipeMSInit = false;
+    async function _monPopularEquipes() {
+      const sel = document.getElementById('mon-equipe-select');
+      if (!sel) return;
+      if (!_monAllEquipes) {
+        try {
+          const res = await fetch(`${API}/equipes`);
+          if (!res.ok) return;
+          const data = await res.json();
+          _monAllEquipes = (data.equipes || []).filter(e => e.ativo);
+        } catch (err) {
+          console.warn('[monitor] falha ao popular filtro de equipes:', err.message);
+          return;
+        }
+      }
+      if (!_monEquipeMSInit) {
+        MultiSelect.init('mon-equipe-select', { onChange: () => renderAll() });
+        _monEquipeMSInit = true;
+      }
+      _monRefiltrarEquipes();
+    }
+
+    // Reconstrói a lista respeitando o REGIONAL selecionado. MultiSelect.refresh
+    // preserva a seleção ainda válida e NÃO dispara onChange (sem render duplo).
+    function _monRefiltrarEquipes() {
+      const sel = document.getElementById('mon-equipe-select');
+      if (!sel || !_monAllEquipes || !_monEquipeMSInit) return;
+      const escopo = new Set(selectedRegionals.length ? selectedRegionals : userRegionals);
+      const eqs = _monAllEquipes
+        .filter(e => escopo.has(e.regional))
+        .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
+      sel.innerHTML = `<option value="ALL">Todas as equipes</option>` +
+        regionalOptgroups(eqs, e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`, true);
+      MultiSelect.refresh('mon-equipe-select');
+    }
+
+    // Siglas selecionadas no filtro; null = todas (sem filtro).
+    function _monEquipesSelecionadas() {
+      if (!_monEquipeMSInit) return null;
+      const vals = MultiSelect.getValues('mon-equipe-select') || [];
+      return vals.length ? new Set(vals) : null;   // [] = todas
     }
 
     /**
@@ -5960,12 +6018,15 @@ ${matrizHTML}
       const pool = (_monitorScope === 'todas' && Array.isArray(_deslogadas))
         ? allTeams.concat(_deslogadas)
         : allTeams;
+      // Filtro de equipes (multi-select). null = todas.
+      const equipesSel = _monEquipesSelecionadas();
       return pool.filter(t => {
         const regionalOk = _regionalMatch(t.regional);
+        const equipeOk = !equipesSel || equipesSel.has(t.sigla || t.teamName);
         const filterOk = !currentFilter ||
           (t.sigla || t.teamName || '').toLowerCase().includes(currentFilter) ||
           (t.collaborators || []).some(c => c.nome.toLowerCase().includes(currentFilter));
-        return regionalOk && filterOk;
+        return regionalOk && equipeOk && filterOk;
       });
     }
 
