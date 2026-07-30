@@ -42,6 +42,7 @@
 | P1-11 | `consolidateDay` transacional (rebaixado de P0-3) | Dados | pending (requer staging) |
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
+| P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | pending — decisão travada (dia do início do turno) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -833,6 +834,50 @@ feita em PR separado depois dos testes.
 - **⚠️ Nota:** ao implementar a UNIÃO no consolidateDay, a re-consolidação de
   julho/junho pode AUMENTAR a produção de dias que tiveram deploy (recupera
   conclusões subnotificadas). Rever com o José antes de aplicar em massa.
+
+## P1-14 — Reconexão vira-noite parte a produção do turno em 2 dias
+
+- **Categoria:** Dados (afeta produção reportada à EDP)
+- **Status:** pending — **decisão de negócio TRAVADA** (José, 30/07/2026):
+  a continuação pertence ao **DIA DO INÍCIO DO TURNO**.
+- **Evidência (EPGPR30, plantão, escala 20:00–05:00, `scripts/diag-sessao-equipe`
+  ou o one-liner de snapshots):**
+  - Sessão A: `begin 2026-07-29T20:05` → `end 2026-07-30T01:08` · 6 concluídas ·
+    gravada em `date=2026-07-29`.
+  - Sessão B: `begin 2026-07-30T01:10` → `end 2026-07-30T04:00` · 3 concluídas ·
+    gravada em `date=2026-07-30`.
+  - Gap A→B = **2 minutos** (01:08→01:10). É UMA reconexão da mesma noite, mas
+    como o `sessionBegin` da B caiu depois da meia-noite, a atribuição por data
+    de início de sessão (`_sessionDate`) jogou a B (e suas 3 concluídas) pro dia
+    30/07. No modal de 30/07 aparece "início 01:10" — o rabo da noite, não o
+    início real (20:05). O José confirmou: é enganoso e a produção deveria ser
+    de uma noite só.
+- **Impacto:** produção de um turno noturno com reconexão pós-meia-noite fica
+  PARTIDA entre 2 dias. Número reportável à EDP. Sistêmico p/ times noturnos
+  (EP plantão, e qualquer escala que cruze 00:00) sempre que houver relogin
+  depois da virada. Também confunde o operador no Monitor.
+- **Ação proposta (a spec'ar — NÃO fazer edit rápido):**
+  1. Regra de **linkagem de sessão**: uma sessão S_nova cujo `sessionBegin` está
+     dentro de um gap curto (`RELOGIN_MAX_GAP_HORAS`, já existe em dataService)
+     após o `sessionEnd` de uma S_anterior da MESMA equipe é uma **reconexão** —
+     herda o dia operacional da S_anterior (mesmo cruzando a meia-noite).
+  2. Aplicar a regra em: (a) `_unionTeamsFromSnapshots`/`_sessionDate` (consolidação,
+     onde a produção é atribuída ao dia); (b) `_mergeSessionsBySigla` + modal
+     (front, pra mostrar a noite inteira como 1 sessão com relogin, início 20:05);
+     (c) garantir que o histórico de conexões do modal liste as 2 conexões.
+  3. **Função pura testável** pra decisão de linkagem (gap, cross-midnight) +
+     `node --test`. Reusar/estender `_resolveLogon` (hoje só same-day).
+  4. **Re-consolidar** os dias afetados após o fix (move produção entre dias) —
+     medir com dry-run ANTES, revisar com o José (mesma disciplina do P1-13).
+- **Aceite:**
+  - [ ] Caso EPGPR30 (29–30/07) volta a mostrar a noite como 1 turno (início 20:05,
+    relogin 01:10) e as 3 concluídas contam em 29/07.
+  - [ ] Teste puro da regra de linkagem (same-day, cross-midnight dentro/fora do gap).
+  - [ ] Dry-run da re-consolidação medido e revisado antes de aplicar.
+- **Esforço:** 1–2 dias (toca agregação central + re-consolidação + front + testes).
+- **Rollback:** reverter commits; re-consolidar os dias de volta (dry-run guarda o antes).
+- **Relacionado:** P1-13 (união), P0-6 (janela de consolidação), regra de relogin
+  (`_resolveLogon`, dataService, `RELOGIN_MAX_GAP_HORAS`).
 
 ---
 
