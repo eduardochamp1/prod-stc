@@ -5521,7 +5521,8 @@ ${matrizHTML}
 
         _teamsLoading = false;   // fetch resolveu → renderAll decide entre cards e "Nenhuma equipe"
         renderAll();
-        _monPopularEquipes();          // popula/refresca o filtro de equipes (cacheado)
+        // popula/refresca o filtro de equipes (cacheado). Falha aqui é ignorada.
+        Promise.resolve().then(_monPopularEquipes).catch(() => {});
         enrichSubcategorias(allTeams); // enriquece subcats em background (cache no backend)
       } catch (err) {
         _teamsLoading = false;
@@ -5812,7 +5813,9 @@ ${matrizHTML}
       _syncCurrentRegional();
       const sel = document.getElementById('regional-select');
       if (sel && sel.value !== currentRegional) sel.value = currentRegional;
-      _monRefiltrarEquipes();   // regional mudou → refiltra as equipes do filtro
+      // regional mudou → refiltra as equipes do filtro. try/catch: não pode
+      // quebrar a troca de regional nem o render (incidente 30/07/2026).
+      try { _monRefiltrarEquipes(); } catch (e) { console.warn('[monitor] refiltro de equipes:', e && e.message); }
       saveFilters();
       renderAll();
     }
@@ -5867,8 +5870,10 @@ ${matrizHTML}
     // Mesmo componente MultiSelect das outras abas. A lista respeita o filtro
     // de REGIONAL (equipe fora do escopo não aparece). Só apresentação: filtra
     // quais equipes são exibidas; não muda nenhum número/agregado.
-    let _monAllEquipes = null;
-    let _monEquipeMSInit = false;
+    // var (não let): hoisted, sem TDZ — _monRefiltrarEquipes/_monEquipesSelecionadas
+    // podem ser chamados por selectRegional/getVisible antes desta linha rodar.
+    var _monAllEquipes = null;
+    var _monEquipeMSInit = false;
     async function _monPopularEquipes() {
       const sel = document.getElementById('mon-equipe-select');
       if (!sel) return;
@@ -5906,9 +5911,16 @@ ${matrizHTML}
 
     // Siglas selecionadas no filtro; null = todas (sem filtro).
     function _monEquipesSelecionadas() {
-      if (!_monEquipeMSInit) return null;
-      const vals = MultiSelect.getValues('mon-equipe-select') || [];
-      return vals.length ? new Set(vals) : null;   // [] = todas
+      // Blindado: este filtro é APRESENTAÇÃO. Qualquer falha aqui não pode
+      // impedir o Monitor de renderizar (incidente 30/07/2026) → null = todas.
+      try {
+        if (!_monEquipeMSInit) return null;
+        const vals = MultiSelect.getValues('mon-equipe-select') || [];
+        return vals.length ? new Set(vals) : null;   // [] = todas
+      } catch (e) {
+        console.warn('[monitor] filtro de equipes ignorado:', e && e.message);
+        return null;
+      }
     }
 
     /**
@@ -6715,7 +6727,8 @@ ${matrizHTML}
       // Ghosts e deslogadas fora do banner de alerta (não são sessões de hoje).
       const teamsForAlert = teamsVisible.filter(t => !t._ghostFromAcc && !t.deslogada);
       renderMetrics(teamsAll, teamsAll);
-      _fitKPINumbers();   // ajusta o tamanho dos números ao espaço livre de cada card
+      // Ajuste cosmético do tamanho dos números — nunca pode abortar o render.
+      try { _fitKPINumbers(); } catch (e) { console.warn('[monitor] fit KPI:', e && e.message); }
       renderProdutividade(teamsAll);
       document.getElementById('section-count').textContent = `${teams.length} equipe${teams.length !== 1 ? 's' : ''}`;
 

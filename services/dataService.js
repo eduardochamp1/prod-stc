@@ -111,9 +111,11 @@ async function _enrichComEscalaELogonReal(teams) {
     const primeiroSessionBegin = {};
     let page = 0;
     while (true) {
+      // SELECT ENXUTO: só a coluna session_begin (não o jsonb `data`) — reduz
+      // drasticamente o payload desta varredura. Ver nota do incidente abaixo.
       const { data, error } = await sb
         .from('snapshots')
-        .select('team_name, data, captured_at')
+        .select('team_name, session_begin, captured_at')
         .eq('date', hoje)
         .in('team_name', siglas)
         .order('captured_at', { ascending: true })
@@ -122,8 +124,7 @@ async function _enrichComEscalaELogonReal(teams) {
       if (!data || data.length === 0) break;
       data.forEach(r => {
         if (primeiroSessionBegin[r.team_name]) return; // já temos o primeiro
-        const sb1 = r.data?.sessionBegin || r.data?.session_begin || null;
-        if (sb1) primeiroSessionBegin[r.team_name] = sb1;
+        if (r.session_begin) primeiroSessionBegin[r.team_name] = r.session_begin;
       });
       if (data.length < 1000) break;
       page++;
@@ -133,11 +134,16 @@ async function _enrichComEscalaELogonReal(teams) {
     // vira-noite (P1-14 Fase 2). Snapshots de ontem DESC → 1º = mais recente.
     const ontem = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
     const ontemUltima = {};
+    // ⚠️ SELECT ENXUTO (colunas, NÃO o jsonb `data`) — incidente 30/07/2026: a
+    // 1ª versão desta query trazia `data` (o payload inteiro da equipe) de TODOS
+    // os snapshots de ontem × 45 equipes = dezenas de MB por request, e o
+    // /api/teams passou a demorar/travar o Monitor. As colunas session_begin /
+    // session_end da própria tabela têm o que precisamos. NÃO voltar a pedir `data` aqui.
     let pageO = 0;
     while (true) {
       const { data, error } = await sb
         .from('snapshots')
-        .select('team_name, data, captured_at')
+        .select('team_name, session_begin, session_end, captured_at')
         .eq('date', ontem)
         .in('team_name', siglas)
         .order('captured_at', { ascending: false })
@@ -146,9 +152,7 @@ async function _enrichComEscalaELogonReal(teams) {
       if (!data || data.length === 0) break;
       data.forEach(r => {
         if (ontemUltima[r.team_name]) return;           // já temos a mais recente
-        const b = r.data?.sessionBegin || r.data?.session_begin || null;
-        const e = r.data?.sessionEnd   || r.data?.session_end   || null;
-        if (b) ontemUltima[r.team_name] = { begin: b, end: e };
+        if (r.session_begin) ontemUltima[r.team_name] = { begin: r.session_begin, end: r.session_end || null };
       });
       if (data.length < 1000) break;
       pageO++;
