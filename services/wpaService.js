@@ -990,7 +990,35 @@ function normalizarColaborador(c) {
  *   3. Cruza os dois por Team.Id (fallback por Team.Name)
  *   4. Aplica acumulador diário como segurança
  */
-async function getTeamsBySector(sectorId) {
+// ── SINGLE-FLIGHT por setor (incidente 30/07/2026) ───────────────────────────
+// Uma coleta de setor custa ~60 fetches na WPA e leva vários segundos. Antes,
+// duas chamadas concorrentes (ex.: o snapshot do boot + o /api/teams de quem
+// abriu a página logo após o deploy) disparavam DUAS varreduras completas em
+// paralelo — dobrando a carga na WPA (que já devolve 500/502 sob pressão) e
+// deixando o Monitor "travado carregando". Agora, se já existe uma coleta EM VOO
+// pro mesmo setor, os chamadores seguintes aguardam a MESMA promise.
+// Não é cache: nenhum dado é reaproveitado depois que a coleta termina — a
+// frescura dos dados é exatamente a de antes.
+const _inflightSector = new Map();   // sectorId → Promise
+
+/**
+ * FUNÇÃO PURA (testável): compartilha a promise em voo por chave. Se já há uma
+ * execução pendente pra `key`, devolve a MESMA promise; senão executa `fn` e
+ * registra até resolver/rejeitar. Não guarda resultado (não é cache).
+ */
+function _singleFlight(map, key, fn) {
+  const emVoo = map.get(key);
+  if (emVoo) return emVoo;
+  const p = (async () => fn())().finally(() => { map.delete(key); });
+  map.set(key, p);
+  return p;
+}
+
+function getTeamsBySector(sectorId) {
+  return _singleFlight(_inflightSector, sectorId, () => _getTeamsBySectorUncached(sectorId));
+}
+
+async function _getTeamsBySectorUncached(sectorId) {
   // IMPORTANTE: usamos getSessionsByDate com data BRT explícita em vez de
   // getSessions ('today') porque a EDP usa "today" em UTC. Servidor em UTC
   // + EDP em UTC = após 21h BRT (00h UTC), /api/Sessions/today já retorna
@@ -1294,6 +1322,7 @@ module.exports = {
   getV2Cached,
   // Principal
   getTeamsBySector,
+  _singleFlight,   // exportado p/ teste (coalescência de coletas — incidente 30/07/2026)
   // Histórico
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)
