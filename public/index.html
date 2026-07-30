@@ -6109,38 +6109,79 @@ ${matrizHTML}
     // cards lotados mantêm o número no tamanho base (clamp do CSS); cards com
     // pouca info (muito vazio) crescem o número pra preencher. Reage a mudança
     // de conteúdo (dia/condições) e de largura. (Ajuste 30/07/2026.)
+    // Mede o conteúdo de um card: espaço disponível e altura ocupada.
+    function _kpiMetrics(card) {
+      const cs = getComputedStyle(card);
+      const avail = card.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      const kids = [...card.children].filter(ch => ch.getBoundingClientRect().height > 0);
+      if (!kids.length) return null;
+      const contentH = kids[kids.length - 1].getBoundingClientRect().bottom - kids[0].getBoundingClientRect().top;
+      return { avail, contentH, slack: avail - contentH };
+    }
+
+    let _fitKPIBusy = false;
     function _fitKPINumbers() {
+      if (_fitKPIBusy) return;
       const cards = [...document.querySelectorAll('.summary-grid .metric-card')];
       if (!cards.length) return;
-      // 1) reseta pro tamanho base (clamp do CSS) e força reflow.
-      cards.forEach(c => c.querySelectorAll('.metric-value').forEach(v => { v.style.fontSize = ''; }));
-      void document.body.offsetHeight;
-      // 2) MEDE todos ANTES de crescer — crescer um muda a altura da linha do
-      //    grid (compartilhada), então medir+crescer intercalado dá lixo.
-      const plan = cards.map(card => {
-        const vals = card.querySelectorAll('.metric-value');
-        if (!vals.length) return null;
-        const cs = getComputedStyle(card);
-        const avail = card.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-        const kids = [...card.children].filter(ch => ch.getBoundingClientRect().height > 0);
-        if (!kids.length) return null;
-        const contentH = kids[kids.length - 1].getBoundingClientRect().bottom - kids[0].getBoundingClientRect().top;
-        const base = parseFloat(getComputedStyle(vals[0]).fontSize) || 28;
-        return { vals, slack: avail - contentH, base };
-      });
-      // 3) APLICA (só writes, sem ler layout no meio). Cresce ~55% da folga,
-      //    teto 52px — fica abaixo da altura da linha, não empurra o grid.
-      plan.forEach(p => {
-        if (!p || p.slack <= 28) return;   // só cresce quem tem folga real (card cheio fica no base)
-        const grown = Math.min(p.base + p.slack * 0.45, 48);   // cresce ~45% da folga, teto 48px
-        p.vals.forEach(v => { v.style.fontSize = grown + 'px'; });
-      });
+      _fitKPIBusy = true;
+      try {
+        // 1) reseta pro tamanho base (clamp do CSS) e força reflow.
+        cards.forEach(c => c.querySelectorAll('.metric-value').forEach(v => { v.style.fontSize = ''; }));
+        void document.body.offsetHeight;
+        // 2) MEDE todos ANTES de crescer — crescer um muda a altura da linha do
+        //    grid (compartilhada), então medir+crescer intercalado dá lixo.
+        const plan = cards.map(card => {
+          const vals = card.querySelectorAll('.metric-value');
+          if (!vals.length) return null;
+          const m = _kpiMetrics(card);
+          if (!m) return null;
+          return { card, vals, slack: m.slack, base: parseFloat(getComputedStyle(vals[0]).fontSize) || 28 };
+        });
+        // 3) APLICA (só writes, sem ler layout no meio). Cresce ~45% da folga,
+        //    teto 48px. Card cheio (folga <= 28) fica no tamanho base.
+        plan.forEach(p => {
+          if (!p || p.slack <= 28) return;
+          p.grown = Math.min(p.base + p.slack * 0.45, 48);
+          p.vals.forEach(v => { v.style.fontSize = p.grown + 'px'; });
+        });
+        // 4) VERIFICA: se depois de crescer o conteúdo passou a não caber no
+        //    card (ex.: detalhe assíncrono chegou depois da medição — bug do KPI
+        //    de Carteira, 30/07/2026), volta pro tamanho base. Nunca deixa o
+        //    número estourar a box.
+        void document.body.offsetHeight;
+        plan.forEach(p => {
+          if (!p || !p.grown) return;
+          const m = _kpiMetrics(p.card);
+          if (m && m.contentH > m.avail - 2) {
+            p.vals.forEach(v => { v.style.fontSize = ''; });
+          }
+        });
+      } finally {
+        _fitKPIBusy = false;
+      }
     }
-    let _fitKPIResizeT = null;
-    window.addEventListener('resize', () => {
-      clearTimeout(_fitKPIResizeT);
-      _fitKPIResizeT = setTimeout(_fitKPINumbers, 150);
-    });
+
+    // Re-ajusta quando o conteúdo dos KPIs muda (renderMetrics é async: o
+    // detalhe da carteira/breakdown chega DEPOIS do primeiro render) e no resize.
+    let _fitKPIT = null;
+    function _scheduleFitKPI() {
+      clearTimeout(_fitKPIT);
+      _fitKPIT = setTimeout(_fitKPINumbers, 60);
+    }
+    window.addEventListener('resize', _scheduleFitKPI);
+    (function _observeKPIs() {
+      const grid = document.querySelector('.summary-grid');
+      if (!grid || typeof MutationObserver === 'undefined') return;
+      new MutationObserver(muts => {
+        if (_fitKPIBusy) return;
+        // Ignora as nossas próprias escritas de font-size (senão vira loop).
+        const relevante = muts.some(m => !(m.type === 'attributes'
+          && m.attributeName === 'style'
+          && m.target.classList && m.target.classList.contains('metric-value')));
+        if (relevante) _scheduleFitKPI();
+      }).observe(grid, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['style'] });
+    })();
 
     async function renderMetrics(teamsAll, teamsVisible) {
       // Compat: se chamado com 1 argumento, usa o mesmo array para ambos
