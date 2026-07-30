@@ -6119,11 +6119,32 @@ ${matrizHTML}
       return { avail, contentH, slack: avail - contentH };
     }
 
+    // Menor elemento que contém TODOS os números do card — é a "linha dos
+    // números" cuja largura precisa caber na box (nos cards com dois números,
+    // ex. "877 / 1093", é o grupo flex; nos simples, o próprio número).
+    function _kpiNumberRow(card, vals) {
+      const list = [...vals];
+      let row = list[0];
+      while (row && row !== card && !list.every(v => row.contains(v))) row = row.parentElement;
+      return (row && row !== card) ? row : list[0];
+    }
+
     let _fitKPIBusy = false;
+    let _fitKPIRetries = 0;
     function _fitKPINumbers() {
       if (_fitKPIBusy) return;
-      const cards = [...document.querySelectorAll('.summary-grid .metric-card')];
+      const grid = document.querySelector('.summary-grid');
+      const cards = grid ? [...grid.querySelectorAll('.metric-card')] : [];
       if (!cards.length) return;
+      // GUARDA: não medir com layout degenerado (aba oculta, meio de um resize,
+      // render incompleto). Sem isto o ajuste horizontal encolhia tudo até o
+      // piso e ficava preso pequeno. Re-tenta algumas vezes até o layout
+      // estabilizar; se não estabilizar, fica no tamanho base (seguro).
+      if (grid.clientWidth < 120 || cards[0].clientHeight < 40) {
+        if (_fitKPIRetries++ < 12) setTimeout(_fitKPINumbers, 250);
+        return;
+      }
+      _fitKPIRetries = 0;
       _fitKPIBusy = true;
       try {
         // 1) reseta pro tamanho base (clamp do CSS) e força reflow.
@@ -6155,6 +6176,26 @@ ${matrizHTML}
           const m = _kpiMetrics(p.card);
           if (m && m.contentH > m.avail - 2) {
             p.vals.forEach(v => { v.style.fontSize = ''; });
+          }
+        });
+        // 5) AJUSTE HORIZONTAL: número grande pode estourar a LARGURA do card
+        //    (bug 30/07/2026: "877 / 1093" no OS EM CARTEIRA saía da box e
+        //    cortava o label ATUAL). Encolhe a fonte até caber, piso 18px.
+        //    Mede a LINHA DOS NÚMEROS (não o card): o texto de detalhe é longo e
+        //    quebra linha — medir o card fazia o número encolher sem necessidade.
+        plan.forEach(p => {
+          if (!p) return;
+          const cs = getComputedStyle(p.card);
+          const availW = p.card.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+          if (!(availW > 60)) return;   // largura implausível → não encolhe (guarda)
+          const row = _kpiNumberRow(p.card, p.vals);
+          let guard = 0;
+          while (row.getBoundingClientRect().width > availW + 1 && guard++ < 16) {
+            const cur = parseFloat(getComputedStyle(p.vals[0]).fontSize) || 28;
+            const next = cur - 2;
+            if (next < 18) break;
+            p.vals.forEach(v => { v.style.fontSize = next + 'px'; });
+            void p.card.offsetWidth;   // reflow pra reavaliar
           }
         });
       } finally {
