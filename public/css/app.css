@@ -536,10 +536,23 @@
       transition: transform 0.15s, box-shadow 0.2s;
       /* Cards do grid esticam até a altura do mais alto (OS em Carteira); sem isto
          os números ficavam colados no topo com espaço vazio embaixo. Centraliza
-         verticalmente o conteúdo em cada box (P2-8+, ajuste 23/07/2026). */
+         o conteúdo (vertical + horizontal) em cada box (P2-8+; centralização
+         horizontal 30/07/2026). */
       display: flex;
       flex-direction: column;
       justify-content: center;
+      align-items: center;
+      text-align: center;
+    }
+    /* Listas de detalhe (breakdown de equipes / fluxo da carteira) ficam
+       full-width e alinhadas à esquerda — centralizá-las quebraria a leitura
+       chave·valor. O bloco em si já está centralizado pelo card. */
+    #m-tipos-breakdown,
+    #m-carteira-afazer,
+    #m-carteira-entradas,
+    #m-carteira-canceladas {
+      align-self: stretch;
+      text-align: left;
     }
 
     .metric-card:hover {
