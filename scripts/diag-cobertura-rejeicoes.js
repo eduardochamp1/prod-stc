@@ -7,23 +7,29 @@
  * o `diag-impacto-reconsolidacao` deu **+717 (+5,5%)** — sinal invertido em
  * relação a julho (−877) e muito errático (23/06 deu +181%).
  *
- * ⚠️ O PERIGO QUE ESTE SCRIPT EXPÕE — DIA SEM REJEIÇÃO REGISTRADA INFLA NA
- * RE-CONSOLIDAÇÃO. A WPA limpa `notasRejeitadas` do payload após algumas horas.
- * Quando o dia foi consolidado AO VIVO, a rejeição estava no payload e foi
- * descontada; hoje, a única fonte persistente é `note_rejections`. Se o coletor
- * falhou naquele dia, re-consolidar **devolve a nota rejeitada pra produção** —
- * ou seja, o "+" que aparece no dry-run é REGRESSÃO, não correção.
+ * ⚠️ ATENÇÃO — DUAS HIPÓTESES MINHAS SOBRE ESTE SCRIPT DERAM ERRADAS. Leia antes
+ * de tirar conclusão a partir dele:
  *
- * Medido em junho/2026: a cobertura vai de 25/04 a 31/07 (não há "início" no meio
- * do mês — essa foi uma leitura ERRADA minha, corrigida no mesmo dia; os dias de
- * volume baixo são fim de semana). O que existe são BURACOS pontuais:
- *   01/06 → 0 linhas    02/06 → 0 linhas    (segunda e terça)
- *   09/06 → 1 linha     10/06 → 1 linha     (terça e quarta)
- * E o 10/06 é justamente um dos maiores positivos do dry-run (+88) — coerente
- * com "não há rejeição pra descontar", não com "faltava produção".
+ *   1) "a coleta começa em 08/06" — ERRADO. A cobertura vai de 25/04 a 31/07;
+ *      os dias de volume baixo são FIM DE SEMANA (13/14, 20/21, 27/28).
+ *   2) "dia sem rejeição registrada infla na re-consolidação, então exclua do
+ *      apply" — ERRADO, e a recomendação que saiu disso era pior que inútil.
+ *      `_unionTeamsFromSnapshots` une `notasRejeitadas` de **TODOS os snapshots
+ *      do dia** (um a cada 15min), então a rejeição capturada em qualquer
+ *      snapshot sobrevive à re-consolidação. `note_rejections` é **suplemento**
+ *      (pega o que a WPA limpou antes de qualquer snapshot), não fonte única.
+ *      Verificado em 10/06/2026 (dia com 1 linha em note_rejections): depois de
+ *      re-consolidar, `GRAVADO = UNIÃO_D+1 = 1106` exato e **nenhuma equipe
+ *      zerada** — o "+88" que eu havia chamado de regressão era só a diferença
+ *      entre a régua de D e a de D+1 (o mesmo engano do P0-6).
+ *      E excluir dias do backfill não funciona de todo jeito: o passe do 1º dia
+ *      do intervalo wipa {1ºdia-1, 1ºdia}.
  *
- * Use ANTES de aplicar em qualquer mês antigo, e EXCLUA do apply os dias sem
- * cobertura. Ver P1-17 no BACKLOG.
+ * O QUE ESTE SCRIPT AINDA SERVE PRA FAZER: mostrar onde o COLETOR falhou, que é
+ * informação operacional real (dia útil com ~0 rejeição = coleta furada, ex.:
+ * 09 e 10/06 com 1 linha numa terça e numa quarta). Se um dia desses tiver
+ * REJEITADAS zeradas no painel, aí sim há perda — confira na matriz de Gráficos
+ * antes de concluir. Ver P1-17 no BACKLOG.
  *
  * USO (na VM):
  *   node scripts/diag-cobertura-rejeicoes.js                    # visão geral por mês
@@ -119,9 +125,11 @@ async function main() {
       console.log(`   ${suspeitos.join('  ')}`);
     }
     if (vazios || suspeitos.length) {
-      console.log(`\n   🚫 NÃO re-consolide esses dias: sem rejeição persistida, a nota`);
-      console.log(`      rejeitada VOLTA a contar como produção (a WPA já limpou o payload).`);
-      console.log(`      Rode o backfill em intervalos que os pulem. Ver P1-17 no BACKLOG.`);
+      console.log(`\n   ℹ️  Isso indica falha do COLETOR, não necessariamente perda de dado:`);
+      console.log(`      a re-consolidação também lê notasRejeitadas dos snapshots do dia.`);
+      console.log(`      NÃO é motivo pra excluir o dia do backfill (verificado em 10/06/2026).`);
+      console.log(`      Confira REJEITADAS desses dias na matriz de Gráficos: se estiver`);
+      console.log(`      zerado, aí houve perda real. Ver o topo deste arquivo e P1-17.`);
     } else {
       console.log(`\n✅ Todos os dias úteis do intervalo têm rejeição registrada.`);
     }

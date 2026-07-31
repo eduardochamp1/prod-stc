@@ -1665,18 +1665,27 @@ feita em PR separado depois dos testes.
      = −532) na tabela inteira.
   5. ⚠️ **`2026-07-01` ficou na régua de D** (era o último dia do trecho 2) — e
      julho é o mês reportado, já verificado. Precisa re-rodar julho pra selar.
-  6. ❓ **A premissa da proteção pode estar ERRADA — verificar.** Eu afirmei que
-     dia sem `note_rejections` infla na re-consolidação porque "a WPA já limpou o
-     payload". Mas `_unionTeamsFromSnapshots` une `notasRejeitadas` de **todos os
-     snapshots do dia** (a cada 15min), então a rejeição capturada em qualquer
-     snapshot sobrevive — `note_rejections` é **suplemento**, não fonte única.
-     Se for o caso, os 4 dias não precisavam de proteção e o `+88` do 10/06 é
-     recuperação estrutural, igual ao 23/06. **Checar com
-     `diag-drift-team.js 2026-06-10`**: se o gap vier de equipes com `gravado=0`,
-     é estrutural, não rejeição.
-  7. ⬜ `verify-consolidacao.js 2026-06-01 2026-06-30` e revisar o saldo com o José
-     — junho **sobe**, e produção que sobe depois de reportada também precisa de
-     explicação escrita pra auditoria.
+  6. ❌ **A PREMISSA DA PROTEÇÃO ERA ERRADA — CONFIRMADO.** `diag-drift-team.js
+     2026-06-10` (dia com 1 linha em `note_rejections`) depois de re-consolidado:
+     `GRAVADO = UNIÃO_D+1 = 1106` exato, `UNIÃO_D = 928`, **53 equipes com gap e
+     nenhuma zerada**, veredito do próprio script "HIPÓTESE CONFIRMADA". O `+88`
+     que eu havia chamado de regressão era só a diferença de régua D vs D+1 — o
+     mesmo engano do P0-6, pela **4ª vez**.
+     Razão: `_unionTeamsFromSnapshots` une `notasRejeitadas` de **todos** os
+     snapshots do dia (a cada 15min), então a rejeição sobrevive à
+     re-consolidação. `note_rejections` é **suplemento** (pega o que a WPA limpou
+     antes de qualquer snapshot), não fonte única.
+     ⇒ **Não há dia a excluir do backfill.** Rodar o intervalo inteiro.
+  7. ⚠️ `verify-consolidacao.js 2026-06-01 2026-06-30` — **3 dias com drift**, todos
+     consequência dos itens 4 e 5 (nenhum é dado novo):
+     - `06-01` tabela 685 × régua 710 (+25): dia "protegido", nunca consolidado.
+     - `06-08` tabela 877 × régua 900 (+23): último dia do trecho 1, régua de D.
+     - `06-13` tabela 259 × régua 252 (−7): resíduo pequeno, sábado.
+     Os outros 27 dias `ok`, com 20 deles em diff **0** — o corpo de junho ficou
+     consistente. Correção: re-rodar `06-02 → 07-01` (o passe de 06-02 wipa e
+     regrava 06-01) e depois `07-01 → 07-31` pra selar julho.
+  8. ⬜ Revisar o saldo final de junho com o José — junho **sobe**, e produção que
+     sobe depois de reportada também precisa de explicação escrita pra auditoria.
   8. ⬜ Medir maio (`diag-impacto-reconsolidacao.js 2026-05-01 2026-05-31`) e rodar
      a mesma checagem de cobertura antes de decidir.
 - **Confirmação do padrão nos outros dias do cluster** (`diag-drift-team`):
