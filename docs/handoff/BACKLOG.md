@@ -1620,33 +1620,46 @@ feita em PR separado depois dos testes.
     é a assinatura do P1-16, igual às sextas de julho. Coerente.
   - Os **positivos** não têm explicação por rejeição. Um dia com +181% significa
     tabela em 222 contra régua em 624 — isso é dia mal consolidado, não regra.
-- **⚠️ COBERTURA DE REJEIÇÃO COMEÇA NO MEIO DO MÊS.** Os eventos
-  `consolidate_rejeicao_por_nota` do dry-run: 01/06→4, 02/06→0, 03/06→5,
-  04/06→14, 05/06→27, 06/06→22, 07/06→24, **08/06→273**, 09/06→253, e daí
-  centenas. Salto de 70x = o coletor só passou a **persistir** em
-  `note_rejections` por volta de 08/06. Antes disso a regra "rejeitada não é
-  produção" **não tem dado pra ser aplicada retroativamente** → re-consolidar o
-  começo de junho corrige a parte estrutural mas NÃO desconta rejeição, e o mês
-  fica com critério diferente de julho. Ferramenta:
-  `scripts/diag-cobertura-rejeicoes.js` (criado pra isso).
-- **Hipóteses pros positivos (a testar, NÃO confirmadas):**
-  1. **Dano acumulado do P0-6.** O auto-reparo destrutivo rodava todo dia às 02:00
-     sobre D-1..D-7 desde antes de junho e só foi corrigido em 25/07 — cada dia de
-     junho passou ~7 noites sendo rebaixado pela régua estreita.
-  2. **P1-13** (`_acc` em memória não sobrevivia a restart): dia com deploy tinha
-     consolidação parcial. O cluster de 22→24/06 (+160/+402/+123) sugere um evento
-     pontual — deploy, restart ou incidente.
-  3. Consolidação interrompida entre wipe e reagregação (risco do P1-11, sem
-     transação) deixando o dia pela metade.
+- **❌ LEITURA ERRADA, CORRIGIDA NO MESMO DIA.** Registrei aqui que "a cobertura de
+  `note_rejections` só começa em 08/06" com base no salto das injeções
+  (24 → 273). Errado: `diag-cobertura-rejeicoes.js` mostra **13.991 linhas de
+  25/04 a 31/07**, e os dias de volume baixo são **fim de semana** (13/14, 20/21,
+  27/28). Não há "início da coleta" no meio do mês.
+- **✅ O QUE EXISTE SÃO BURACOS PONTUAIS — E ELES INVERTEM O SINAL DO DRY-RUN:**
+  - `01/06` → **0** linhas · `02/06` → **0** (segunda e terça)
+  - `09/06` → **1** linha · `10/06` → **1** (terça e quarta)
+  - **A WPA limpa `notasRejeitadas` do payload após horas.** Quando esses dias
+    foram consolidados AO VIVO, a rejeição estava no payload e foi descontada.
+    Hoje a única fonte persistente é `note_rejections` — então re-consolidar um dia
+    sem cobertura **devolve a nota rejeitada pra produção**. O `+88` do 10/06 no
+    dry-run é REGRESSÃO, não correção.
+  - 🚫 **Excluir do apply:** 01, 02, 09 e 10/06.
+- **✅ CAUSA DOS POSITIVOS GRANDES: dias com consolidação PARCIAL (equipes inteiras
+  zeradas).** `diag-drift-team.js 2026-06-23` (gravado 636, união_D 931,
+  união_D+1 933 — as duas réguas concordam, então não é assimetria de janela):
+  - **96 equipes com gap**, soma +170 / −465. Os −465 são equipes com
+    `gravado = 0` tendo produção real nos snapshots: ETGPR15 0×51, ETCIT16 0×35,
+    ETCIT18 0×35, ETALE15 0×28, ETCIT17 0×27, ETCIT15 0×18, ECCIT80 0×17…
+  - **As zeradas são de fora de SJC** (ETCIT/ETALE/ETGPR/ECALE/ECMRT/EPANC/EPCIT/
+    EBGPR/ECVGA…), enquanto as com `gravado > união` são **SJC** (ECCSJ83 21×7,
+    ECCSJ82 15×2, ECCSJ86 12×1) — estas últimas são o P1-16 puro.
+  - Leitura: **algum passe wipou 23/06 e reagregou só parte dos setores.** O wipe
+    do `consolidateDay` apaga o dia INTEIRO; se a reagregação não cobre todos os
+    setores, as equipes ausentes ficam sem linha nenhuma. É o risco do **P1-11**
+    (sem transação) e/ou do **P1-13**. Produção perdida é REAL — os snapshots
+    estão lá, as duas réguas veem.
 - **Ação:**
-  1. ⬜ `diag-cobertura-rejeicoes.js 2026-06-01 2026-06-30` — fixar a data a partir
-     da qual a regra é aplicável.
-  2. ⬜ `diag-drift-team.js 2026-06-23` — abrir o outlier de +181% por equipe. Se
-     as equipes faltantes forem poucas e identificáveis, é dia mal consolidado.
-  3. ⬜ Cruzar as datas dos positivos com histórico de deploy/restart (P1-13) e com
-     a janela dos sweeps (P0-6).
-  4. ⬜ Só então decidir: aplicar junho inteiro, aplicar a partir da data de
-     cobertura, ou não aplicar.
+  1. ✅ `diag-cobertura-rejeicoes.js 2026-06-01 2026-06-30` — buracos identificados.
+  2. ✅ `diag-drift-team.js 2026-06-23` — confirmado: consolidação parcial por setor.
+  3. ⬜ Repetir o `diag-drift-team` em **22/06 e 24/06** (o cluster) e em 28/06 e
+     20/06 — confirmar o mesmo padrão de equipes zeradas antes de generalizar.
+  4. ⬜ Aplicar em intervalos que PULEM 01, 02, 09 e 10/06, com 1 dia extra no fim
+     de cada trecho pra selar o último dia.
+  5. ⬜ Verificar com `verify-consolidacao.js` e revisar o saldo final com o José —
+     junho **sobe** ~5%, e produção que sobe depois de reportada também precisa de
+     explicação escrita pra auditoria.
+  6. ⬜ Medir maio (`diag-impacto-reconsolidacao.js 2026-05-01 2026-05-31`) e rodar
+     a mesma checagem de cobertura antes de decidir.
 - **Impacto da decisão:** re-consolidar junho **AUMENTA** a produção reportada em
   ~5,5%. Menos arriscado que reduzir, mas número que sobe depois de reportado
   também é questionável em auditoria — e pior, pode estar subindo por motivo

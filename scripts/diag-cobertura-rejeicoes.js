@@ -5,21 +5,25 @@
  *
  * POR QUE EXISTE (31/07/2026): ao medir o impacto da re-consolidação em JUNHO,
  * o `diag-impacto-reconsolidacao` deu **+717 (+5,5%)** — sinal invertido em
- * relação a julho (−877) e muito errático (23/06 deu +181%). Os eventos
- * `consolidate_rejeicao_por_nota` do próprio dry-run mostraram o porquê:
+ * relação a julho (−877) e muito errático (23/06 deu +181%).
  *
- *   01/06→4   02/06→0   03/06→5   04/06→14   05/06→27   06/06→22   07/06→24
- *   08/06→273  09/06→253  ... (patamar de centenas daí em diante)
+ * ⚠️ O PERIGO QUE ESTE SCRIPT EXPÕE — DIA SEM REJEIÇÃO REGISTRADA INFLA NA
+ * RE-CONSOLIDAÇÃO. A WPA limpa `notasRejeitadas` do payload após algumas horas.
+ * Quando o dia foi consolidado AO VIVO, a rejeição estava no payload e foi
+ * descontada; hoje, a única fonte persistente é `note_rejections`. Se o coletor
+ * falhou naquele dia, re-consolidar **devolve a nota rejeitada pra produção** —
+ * ou seja, o "+" que aparece no dry-run é REGRESSÃO, não correção.
  *
- * Um salto de 70x não é sazonalidade: é o coletor de rejeições que só passou a
- * PERSISTIR em `note_rejections` a partir dali. Antes disso a regra "rejeitada
- * não é produção" **não tem dado pra ser aplicada retroativamente** — re-consolidar
- * aqueles dias corrige a parte estrutural (união de equipes, vira-noite) mas NÃO
- * desconta as rejeições, gerando um número inconsistente com julho.
+ * Medido em junho/2026: a cobertura vai de 25/04 a 31/07 (não há "início" no meio
+ * do mês — essa foi uma leitura ERRADA minha, corrigida no mesmo dia; os dias de
+ * volume baixo são fim de semana). O que existe são BURACOS pontuais:
+ *   01/06 → 0 linhas    02/06 → 0 linhas    (segunda e terça)
+ *   09/06 → 1 linha     10/06 → 1 linha     (terça e quarta)
+ * E o 10/06 é justamente um dos maiores positivos do dry-run (+88) — coerente
+ * com "não há rejeição pra descontar", não com "faltava produção".
  *
- * Este script mostra a cobertura real por dia, pra decidir a partir de que data a
- * re-consolidação produz número comparável. Use ANTES de aplicar em qualquer mês
- * antigo.
+ * Use ANTES de aplicar em qualquer mês antigo, e EXCLUA do apply os dias sem
+ * cobertura. Ver P1-17 no BACKLOG.
  *
  * USO (na VM):
  *   node scripts/diag-cobertura-rejeicoes.js                    # visão geral por mês
@@ -66,9 +70,9 @@ async function main() {
         + String(r.dias).padStart(6) + String(r.com_rejected_at).padStart(14));
     }
     console.log('-'.repeat(46));
-    console.log(`\n   Procure o mês em que "linhas" sai de dezenas pra centenas/milhares:`);
-    console.log(`   antes dele a regra de rejeição NÃO pode ser aplicada retroativamente.`);
-    console.log(`   Rode com um intervalo pra ver dia a dia.\n`);
+    console.log(`\n   Rode com um intervalo pra ver dia a dia — o que importa não é o`);
+    console.log(`   volume do mês, e sim DIA ÚTIL com zero (ou quase) rejeição: nesses,`);
+    console.log(`   re-consolidar devolve nota rejeitada pra produção. Ver o topo.\n`);
   } else {
     const de = datas[0], ate = datas[1] || datas[0];
     const { rows } = await pool.query(`
@@ -98,13 +102,28 @@ async function main() {
       d.setUTCDate(d.getUTCDate() + 1);
     }
     console.log('-'.repeat(37));
+
+    // Dia ÚTIL com volume suspeito de falha de coleta. O corte de 5 é grosseiro
+    // de propósito: fim de semana tem dezenas, dia útil normal tem centenas —
+    // 1 linha numa terça (10/06/2026) é falha, não baixa demanda.
+    const suspeitos = rows
+      .filter(r => r.linhas <= 5 && ![0, 6].includes(new Date(ymd(r.dia) + 'T12:00:00Z').getUTCDay()))
+      .map(r => `${ymd(r.dia)} (${r.linhas})`);
+
     if (vazios) {
       console.log(`\n⚠️  ${vazios} dia(s) SEM nenhuma rejeição registrada:`);
       console.log(`   ${faltando.join(' ')}`);
-      console.log(`   Nesses dias a regra "rejeitada não é produção" não tem dado —`);
-      console.log(`   re-consolidar corrige só a parte estrutural. Ver P1-17 no BACKLOG.`);
+    }
+    if (suspeitos.length) {
+      console.log(`\n⚠️  dia(s) ÚTEIS com volume perto de zero (falha de coleta):`);
+      console.log(`   ${suspeitos.join('  ')}`);
+    }
+    if (vazios || suspeitos.length) {
+      console.log(`\n   🚫 NÃO re-consolide esses dias: sem rejeição persistida, a nota`);
+      console.log(`      rejeitada VOLTA a contar como produção (a WPA já limpou o payload).`);
+      console.log(`      Rode o backfill em intervalos que os pulem. Ver P1-17 no BACKLOG.`);
     } else {
-      console.log(`\n✅ Todos os dias do intervalo têm rejeição registrada.`);
+      console.log(`\n✅ Todos os dias úteis do intervalo têm rejeição registrada.`);
     }
     console.log('');
   }
