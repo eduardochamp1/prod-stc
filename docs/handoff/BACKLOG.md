@@ -1684,8 +1684,19 @@ feita em PR separado depois dos testes.
      Os outros 27 dias `ok`, com 20 deles em diff **0** — o corpo de junho ficou
      consistente. Correção: re-rodar `06-02 → 07-01` (o passe de 06-02 wipa e
      regrava 06-01) e depois `07-01 → 07-31` pra selar julho.
-  8. ⬜ Revisar o saldo final de junho com o José — junho **sobe**, e produção que
+  8. ✅ **Re-aplicado `06-02 → 07-01`** (+20 na tabela inteira, só os 3 dias
+     pendentes) e **`07-01 → 07-31`** (+152, fechando o resíduo do P2-13 em julho).
+  9. ✅ **VERIFICAÇÃO FINAL `06-01 → 07-31`: 58 dos 61 dias `ok`.** Os 3 restantes:
+     - `06-05` tabela 420 × régua 393 (−27) — **P2-13**, e foi a 2ª passada que
+       criou (antes estava 392 × 393). Ver a correção no P2-13.
+     - `06-13` tabela 259 × régua 252 (−7) — **P2-13**, resistiu às duas passadas.
+     - `07-31` (+6) — dia em curso, o cron das 00:15 sela.
+     Nenhum dos três é o P1-16/P1-15: são acúmulo de upsert fora da janela de wipe.
+  10. ⬜ Revisar o saldo final de junho com o José — junho **sobe**, e produção que
      sobe depois de reportada também precisa de explicação escrita pra auditoria.
+  11. ⬜ Registrar os totais reportáveis finais de junho e julho (rodar
+     `diag-impacto-reconsolidacao.js` nos dois meses; a coluna `antes` é o total
+     vigente). Os números de julho neste documento são de ANTES do último passe.
   8. ⬜ Medir maio (`diag-impacto-reconsolidacao.js 2026-05-01 2026-05-31`) e rodar
      a mesma checagem de cobertura antes de decidir.
 - **Confirmação do padrão nos outros dias do cluster** (`diag-drift-team`):
@@ -1727,9 +1738,22 @@ feita em PR separado depois dos testes.
   - Medido em julho após a re-consolidação: `diag-impacto-reconsolidacao.js` fica
     em **+114 OS (+0,8%)** — a tabela subconta ~4 OS/dia. Os últimos dias do
     intervalo dão 0 justamente porque tiveram menos passes posteriores.
-- **Impacto:** subnotificação sistemática de ~0,8% no número reportado. Direção
-  conservadora (não infla pra EDP) e dentro do limiar do `detectDrift`, por isso
-  não é P0/P1 — mas é erro conhecido, não ruído.
+- **Impacto:** ~0,8% do número reportado, e **as duas direções** — não só
+  subnotificação. Correção de duas afirmações minhas de 31/07:
+  1. ❌ *"direção conservadora, só subconta"* — **errado**. O upsert só substitui
+     chaves que ele calcula; linhas de equipe/tipo que o passe selador não produziu
+     **ficam** e se somam. Verificado em `06-05` após a 2ª re-consolidação de junho:
+     tabela **420** contra régua **393** (+27, limiar 8) — o dia recebeu upsert dos
+     passes de 06-07, 06-08, 06-09, 06-10 e 06-11 (todos listam `2026-06-05` em
+     `dates`) sem nunca ser wipado de novo. Mesma coisa em `06-13` (259 × 252).
+  2. ❌ *"rodar o backfill duas vezes fecha"* — **errado**. Em julho a 2ª passada
+     fechou +152 de resíduo, o que me levou a essa conclusão; mas em junho a 2ª
+     passada **criou** o desvio do 06-05. Não converge — embaralha. A correção
+     tem de ser uma das 3 ações abaixo.
+- **Consequência operacional (não é dano):** esses dias vão aparecer como
+  `drift_nao_reparado` no log do sweep das 02:00 todas as noites, porque o guard do
+  **P0-7** recusa reparo que subtrai. É ruído de log, e o guard está justamente
+  impedindo que o sweep "conserte" pra baixo. Não silenciar sem resolver o P2-13.
 - **Ação (candidatas, decidir antes de implementar):**
   1. Alargar o wipe pra cobrir TODAS as datas que o passe vai escrever (ex.:
      `D-3..D`) e reconstruí-las juntas — correto por construção, mais caro.
