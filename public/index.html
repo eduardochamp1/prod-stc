@@ -1602,17 +1602,32 @@
         // a cada carga, e o onChange do multi-select é o próprio loadGraficos(),
         // cada clique era desfeito no mesmo instante.
         const eraTodas = _isAllSelected(inst);
+        // Estado VAZIO é legítimo e intencional: é o resultado de desmarcar
+        // "Todas as …" pra depois escolher 2 ou 3 itens — com 39 equipes,
+        // desmarcar uma por uma não é opção. Sem esta distinção o vazio caía no
+        // mesmo ramo de "nada sobreviveu ao refiltro" e voltava pra todas, então
+        // desmarcar "Todas" também não funcionava (2º sintoma do mesmo bug,
+        // reportado em 31/07/2026 logo depois do 1º).
+        // No nível da CONSULTA vazio continua significando "todas" (getValues
+        // devolve []), o que é o certo: os gráficos seguem mostrando tudo
+        // enquanto o usuário escolhe. As caixas vazias dizem "escolha"; o rótulo
+        // diz o que está sendo exibido.
+        const eraVazio = inst.selected.size === 0;
 
         // Re-coleta options do select original (que foi populado dinamicamente)
         const newItems = Array.from(inst.sel.options).map(o => ({
           value: o.value, label: o.textContent.trim()
         }));
         inst.items = newItems;
-        // Preserva seleção válida; só volta pra "todas" se de fato estava tudo
-        // marcado antes (ou se nada da seleção antiga sobreviveu ao refiltro).
         const realNew = newItems.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
         const prevValid = new Set(Array.from(inst.selected).filter(v => realNew.some(o => o.value === v)));
-        if (eraTodas || prevValid.size === 0) {
+        if (eraTodas) {
+          // estava tudo marcado → marca tudo de novo (inclui equipe que acabou de entrar)
+          inst.selected = new Set(realNew.map(o => o.value));
+        } else if (eraVazio) {
+          inst.selected = new Set();          // limpou de propósito — respeita
+        } else if (prevValid.size === 0) {
+          // a seleção saiu do escopo (trocou de regional) → cai pra todas
           inst.selected = new Set(realNew.map(o => o.value));
         } else {
           inst.selected = prevValid;
