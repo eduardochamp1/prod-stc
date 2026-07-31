@@ -905,13 +905,25 @@ feita em PR separado depois dos testes.
   "para mais" nem "para menos" de forma sistemática — é **arbitrário**, e é
   número que vai pra EDP. Também explica parte da divergência com o levantamento
   manual (planilha: 1.824 executadas; painel: 1.732; concluídas cruas: 2.100).
-- **DECISÃO NECESSÁRIA (José):** uma nota **rejeitada e depois refeita/concluída**
-  conta como produção?
-  - **(A) SIM (conta)** → paramos de excluir as 368; a produção SOBE. Coerente com
-    "a equipe executou o serviço". Aproxima do levantamento manual.
-  - **(B) NÃO (não conta)** → excluímos todas as 787; a produção DESCE (−419).
-    Coerente com "nota com histórico de rejeição não é faturável".
-  - Em qualquer caso o estado atual (misto) está errado e exige **re-consolidação**.
+- **REGRA DEFINIDA PELO JOSÉ (30/07/2026) — substitui a de 20/07:**
+  > "Se uma nota é rejeitada, na maioria ela é REPROGRAMADA. A nota rejeitada
+  > conta para a REJEIÇÃO da equipe que rejeitou. Quando ela for atribuída à
+  > mesma equipe ou a OUTRA e essa equipe EXECUTAR, conta como nota EXECUTADA
+  > também."
+  - São **dois eventos independentes**, podendo ser de equipes diferentes:
+    rejeição → conta pra quem rejeitou; execução → conta pra quem executou.
+  - Portanto a exclusão cega "está em notasRejeitadas ⇒ não conta como
+    executada" (regra 20/07) está **ERRADA** e suprime produção legítima.
+  - O que ainda NÃO conta como executada: conclusão **seguida** de rejeição
+    (`RejectedAt` > `conclusionDate`) — nesse caso o serviço foi recusado, e era
+    esse o caso que a regra de 20/07 pretendia pegar. Ou seja: a regra passa a
+    depender da ORDEM DOS EVENTOS, não da simples presença nas duas listas.
+- **CONSEQUÊNCIA MEDIDA (amostra L0, 13 equipes, 01→25/07):** produção passa de
+  **1.732 → 2.100 (+368, +21%)**. Nas 787 notas com rejeição, `RejectedAt` é
+  anterior à conclusão em 100% — todas são reprogramadas-e-executadas, logo
+  contam. Direção coerente com o levantamento manual (1.824), que ficou entre os
+  dois. ⚠️ Extrapolar pro contrato inteiro (todos os tipos, todo o histórico)
+  pode significar MILHARES de OS a mais — medir antes de aplicar.
 - **Ação (depois da decisão):**
   1. Tornar a regra determinística e independente do timing da coleta (aplicar
      sobre o estado FINAL da nota, não sobre o que estava no banco naquele dia).
