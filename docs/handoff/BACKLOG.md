@@ -29,7 +29,7 @@
 | P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | **done** (a8dcbab, 08/07) |
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
 | P0-6 | Auto-reparo do drift APAGAVA produção legítima toda noite (07-22 perdeu 172 OS) | Dados | **done** (25/07 código; 31/07 histórico re-consolidado no apply de julho) |
-| P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo virou monotônico + rota manual corrigida |
+| P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo monotônico + rota manual corrigida; causa-raiz era o P1-16 |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -45,7 +45,7 @@
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | **Fases 1+2 código done** (30/07) — falta SÓ re-consolidar histórico (dry-run→revisar→aplicar) |
 | P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | fix no ar (0ce0a73) + julho re-consolidado 31/07 (−88 OS) · jun/mai pendentes |
-| P1-16 | Exclusão de rejeitada casava pelo dia da SESSÃO → nota rejeitada na sexta voltava a contar como produção | Dados | **código done** (31/07) — falta medir e re-consolidar |
+| P1-16 | Exclusão de rejeitada casava pelo dia da SESSÃO → nota rejeitada na sexta voltava a contar como produção | Dados | **done** (31/07) — julho re-consolidado e verificado; jun/mai pendentes |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -439,10 +439,15 @@
         `verify-consolidacao.js` mostrando os mesmos números do dia anterior.
 - **Esforço:** 1h (feito).
 - **Rollback:** reverter o commit. ⚠️ Devolve o reparo destrutivo.
-- **Em aberto (não bloqueia):** por que a diferença concentra em sexta merece
-  medição própria — se o valor acumulado é o "certo", a régua do `detectDrift`
-  deveria olhar D+1..D+3 em vez de só D+1, e aí o drift negativo viraria ~0.
-  Enquanto isso o guard impede qualquer perda.
+- **✅ CAUSA-RAIZ ENCONTRADA no mesmo dia: era o P1-16.** A hipótese de "acúmulo
+  legítimo" estava ERRADA — o que a tabela tinha a mais era **nota rejeitada
+  re-somada** pelos passes dos dias seguintes (a exclusão casava pelo dia da
+  SESSÃO, não da NOTA). Depois do fix do P1-16 + re-consolidação de julho, as
+  quatro sextas passaram de −56 / −96 / −117 / −84 para **+2 / +3 / +2 / +4**, e
+  os 31 dias ficaram `ok`. A régua de D+1 SEMPRE foi suficiente; o problema era o
+  dado. **Não há necessidade de alargar a régua pra D+1..D+3.**
+  - O guard continua valendo como rede de segurança — um reparo automático que
+    pode subtrair é perigoso independentemente desta causa específica.
 
 ---
 
@@ -997,6 +1002,9 @@ feita em PR separado depois dos testes.
   subconta ~5%, então o script previa uma queda que era, na verdade, o próprio
   viés da régua. Corrigido no mesmo dia (ambos os scripts passaram a usar D+1,
   igual `detectDrift`) + `scripts/verify-consolidacao.js` criado pra verificar.
+- **⚠️ ESTE BLOCO É O 1º APPLY DO DIA. O NÚMERO FINAL DE JULHO ESTÁ NO P1-16:**
+  depois do 2º apply (com o fix do P1-16), julho fechou em **15.005 → 14.128 =
+  −877 OS (−5,8%)** no reportável. Os −88 abaixo são só a 1ª metade da correção.
 - **✅ APLICADO (31/07/2026, julho 01→31) — medição direta, tabela antes × depois:**
   - **Reportável (whitelist): 15.005 → 14.917 = −88 OS (−0,6%)** no mês.
     01→25: 12.080 → 11.989. 26→31: praticamente inalterado.
@@ -1005,9 +1013,9 @@ feita em PR separado depois dos testes.
     auto-reparo do P0-6 havia derrubado (pra cima) — visível em 21/07 (+6),
     24/07 (+7), 25/07 (+6), justo a janela danificada pelos sweeps de 24–25/07.
   - Quedas concentradas no começo do mês: 02/07 −14, 09/07 −13, 16/07 −28.
-  - ⚠️ Vários dias (26, 27, 28, 30/07) ficaram **idênticos** ao valor anterior.
-    Não explicado ainda — investigar se o enriquecimento de rejeições é no-op
-    quando a rejeição já vinha no payload do snapshot.
+  - ✅ Os dias que ficaram **idênticos** neste 1º apply (26, 27, 28, 30/07) eram
+    o sintoma do **P1-16** — a exclusão não alcançava a nota carregada de um dia
+    anterior. No 2º apply eles caíram −11, −37, −82 e −84.
   - Resolve junto: P0-6 (dias 17–24/07 rebaixados pelos sweeps) e P1-14
     (vira-noite) no mesmo passe.
   - Backup `pg_dump -Fc` de 728M tirado 11:51, íntegro (`pg_restore --list`).
@@ -1111,15 +1119,25 @@ feita em PR separado depois dos testes.
      caminhos separados fariam a aba de tipos divergir da de subcategorias.
   4. ✅ `test/regraExecutadaRejeitada.test.js` (16 casos) — cada frase da regra
      virou teste, incluindo o vazamento sexta→segunda e "A rejeita, B finaliza".
-  5. ⬜ **Medir** com `scripts/diag-impacto-reconsolidacao.js` (régua D+1) antes de
-     re-consolidar. A produção reportada **vai cair** — decisão do José.
-  6. ⬜ Re-verificar o P0-7 depois: se esta era a causa, o drift negativo das
-     sextas deve encostar em zero e a régua de D+1 volta a ser suficiente.
+  5. ✅ **Medido** antes de aplicar: reportável de julho **14.956 → 14.226 =
+     −730 (−4,9%)**, com 100 a 490 notas re-somadas por passe (evento
+     `consolidate_rejeicao_por_nota`). Os dias que o apply da manhã não havia
+     movido — 28/07 e 30/07 — apareceram aqui com −82 e −84, confirmando o
+     mecanismo.
+  6. ✅ **Aplicado** em 31/07 (`backfill-consolidate 2026-07-01 2026-07-31
+     --apply`, backup de 728M às 12:44). Tabela inteira 26.315 → 23.877 (−2.438).
+  7. ✅ **Verificado** — e é o que fecha o P0-7: as quatro sextas passaram de
+     −56 / −96 / −117 / −84 para **+2 / +3 / +2 / +4**, todos os 31 dias `ok`.
+     O `diag-impacto` colapsou de −730 pra **+114 (+0,8%)**, sem nenhum dia
+     negativo — a tabela agora subconta de leve (direção conservadora, dentro do
+     limiar). Provável causa do resíduo: passes de D+2 fazem upsert de linhas
+     `(D, equipe, tipo)` com contagem parcial, sem wipar D. Não investigado a
+     fundo — é pequeno (~4 OS/dia) e para o lado seguro.
 - **Aceite:**
   - [x] `node --test` 343 → 357 verdes.
-  - [ ] Impacto medido por dia no recorte da whitelist, revisado com o José.
-  - [ ] `verify-consolidacao.js` sem drift negativo nas sextas após re-consolidar.
-- **Esforço:** fix 1h (feito). Medição ~5min. Re-consolidação ~10min.
+  - [x] Impacto medido por dia no recorte da whitelist, revisado com o José.
+  - [x] `verify-consolidacao.js` sem drift negativo nas sextas após re-consolidar.
+- **Esforço:** fix 1h + medição/apply/verificação ~30min (tudo feito).
 - **Rollback:** reverter o commit (volta a contar visita rejeitada como produção)
   e re-consolidar o período.
 - **Relacionado:** P1-15 (mesma linha de código, chave diferente), P0-7 (é o
