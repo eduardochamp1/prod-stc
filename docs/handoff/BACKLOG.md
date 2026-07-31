@@ -930,6 +930,25 @@ feita em PR separado depois dos testes.
     NÃO foi executado. Rejeição e conclusão são **o mesmo evento** — a visita
     terminou em rejeição. Pela regra do José, isso conta como REJEIÇÃO, não como
     produção.
+- **✅ MEDIÇÃO DEFINITIVA (31/07/2026) — use ESTA, as anteriores eram frágeis.**
+  Feita com `scripts/diag-impacto-reconsolidacao.js`, que roda o próprio
+  `consolidateDay` em dryRun e compara com `team_daily_totals` no MESMO recorte
+  do painel (whitelist). Apples-to-apples: mesma união, mesma atribuição de dia,
+  mesma regra — a diferença é só o fix.
+  - **Julho 01→25, equipes oficiais: 12.080 → 11.464 = −616 (−5,1%)**, caindo em
+    24 dos 25 dias (só 25/07 +3). Tabela inteira (todas as equipes, via
+    `backfill-consolidate` dry-run): 21.711 → 19.368 = −2.343 (−10,8%), 25/25 dias.
+  - Uniformidade da direção = assinatura de bug sistemático (≠ ruído).
+  - ⚠️ O dry-run carrega TAMBÉM o P1-14 (vira-noite), que desloca notas ENTRE
+    dias e quase se anula no mês. Pra isolar o P1-15 puro, rodar com
+    `RECONEXAO_MAX_GAP_MIN=0`.
+- **❌ MEDIÇÕES DESCARTADAS (não usar):** as estimativas por extração de snapshot
+  (“+368 / +21%”, depois “509 / +42%” em L0, depois “+1.257 jul / −693 jun /
+  +3.232 mai”) eram incomparáveis com o painel por dois motivos: atribuíam o dia
+  pela data de conclusão (o painel usa `_notaDate`, que joga vira-noite pro dia
+  de início do turno) e ignoravam que o painel inclui equipes-fantasma do `_acc`
+  (ausentes dos snapshots). O sinal invertendo entre meses foi o que expôs o
+  problema. Lição: medir SEMPRE pela própria consolidação em dryRun.
 - **CONSEQUÊNCIA MEDIDA (L0, 13 equipes SJC, notas com conclusão em 01→25/07):**
   - 1.957 notas concluídas no período; **734** têm rejeição no MESMO dia
     (visita que terminou em rejeição → não é produção).
