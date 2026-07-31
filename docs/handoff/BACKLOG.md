@@ -43,6 +43,7 @@
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | **Fases 1+2 código done** (30/07) — falta SÓ re-consolidar histórico (dry-run→revisar→aplicar) |
+| P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | pending — **decisão de negócio** + re-consolidação |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -878,6 +879,55 @@ feita em PR separado depois dos testes.
 - **Rollback:** reverter commits; re-consolidar os dias de volta (dry-run guarda o antes).
 - **Relacionado:** P1-13 (união), P0-6 (janela de consolidação), regra de relogin
   (`_resolveLogon`, dataService, `RELOGIN_MAX_GAP_HORAS`).
+
+## P1-15 — Regra rejeitada>concluída aplicada de forma INCONSISTENTE
+
+- **Categoria:** Dados (produção reportada à EDP)
+- **Status:** pending — precisa de **decisão de negócio** antes de qualquer código
+- **Fonte:** conferência da planilha manual de um colaborador (L0, 01→25/07/2026).
+  Ferramentas: `scripts/diag-listar-notas-subcat.js`, `diag-conferencia-subcat.js`.
+- **Evidência (13 equipes ECTSJ8x/9x, L0, 01→25/07):**
+  - 2.100 notas concluídas distintas (dedup por UUID).
+  - **787** delas têm registro em `note_rejections` (100% com `RejectedAt`).
+  - O painel (`team_daily_subcat_totals`) mostra **1.732** → excluiu **368**.
+  - Logo **419** notas com rejeição registrada **foram contadas como produção**,
+    e 368 do mesmo tipo **não** foram. Mesma característica, tratamento diferente.
+  - **Por quê:** `consolidateDay` aplica a regra com as rejeições CONHECIDAS
+    naquele momento (+ enriquecimento via `note_rejections`). O coletor de
+    rejeições roda de hora em hora e o sweep noturno só reprocessa D-1..D-7 —
+    então rejeição coletada depois disso nunca é reavaliada. O resultado passa a
+    depender do TIMING da coleta, não do fato.
+  - **Ordem no tempo:** nas 787, o `RejectedAt` é ANTERIOR ao `conclusionDate` em
+    100% dos casos → são notas rejeitadas e depois REFEITAS. (Hipótese provável
+    do porquê não aparece o contrário: nota rejeitada DEPOIS de concluída sai do
+    `Concluded[]` da WPA, então não entra nesta amostra. Não confirmado.)
+- **Impacto:** ~24% da amostra (419 de 1.732) está num limbo de critério. Não é
+  "para mais" nem "para menos" de forma sistemática — é **arbitrário**, e é
+  número que vai pra EDP. Também explica parte da divergência com o levantamento
+  manual (planilha: 1.824 executadas; painel: 1.732; concluídas cruas: 2.100).
+- **DECISÃO NECESSÁRIA (José):** uma nota **rejeitada e depois refeita/concluída**
+  conta como produção?
+  - **(A) SIM (conta)** → paramos de excluir as 368; a produção SOBE. Coerente com
+    "a equipe executou o serviço". Aproxima do levantamento manual.
+  - **(B) NÃO (não conta)** → excluímos todas as 787; a produção DESCE (−419).
+    Coerente com "nota com histórico de rejeição não é faturável".
+  - Em qualquer caso o estado atual (misto) está errado e exige **re-consolidação**.
+- **Ação (depois da decisão):**
+  1. Tornar a regra determinística e independente do timing da coleta (aplicar
+     sobre o estado FINAL da nota, não sobre o que estava no banco naquele dia).
+  2. Função pura + teste cobrindo: nunca rejeitada, rejeitada→refeita,
+     concluída→rejeitada, múltiplas rejeições.
+  3. Dry-run do `backfill-consolidate` medindo o impacto por dia/equipe, revisar
+     com o José, só então aplicar.
+- **Aceite:**
+  - [ ] Regra escrita e aprovada por escrito (vai pra EDP).
+  - [ ] Duas notas de exemplo conferidas no portal WPA (fonte autoritativa).
+  - [ ] Reconsolidação medida antes de aplicar; painel = regra em 100% da amostra.
+- **Esforço:** 1 dia (após a decisão).
+- **Rollback:** re-consolidar de volta (dry-run guarda o antes).
+- **Relacionado:** regra de 20/07 (`project-regra-rejeitada-vs-concluida`),
+  P0-6, P1-14. ⚠️ Nesta apuração 4 diagnósticos meus deram falso positivo antes
+  de chegar aqui — validar QUALQUER número novo com 2 caminhos independentes.
 
 ---
 
