@@ -48,8 +48,55 @@ function parseArgs(argv) {
   };
 }
 
+/**
+ * Modo --por-sub: abre as subcategorias de um TIPO por equipe (ex.: SF → L0, L1,
+ * OUTROS). Serve pra testar se a divergência da planilha é de CLASSIFICAÇÃO —
+ * uma nota que chamamos de L1 sendo contada como L0 no levantamento manual (e
+ * vice-versa) produz desvios nos dois sentidos mantendo o total do tipo igual.
+ */
+async function porSub(pool, de, ate, tipo, equipes) {
+  const filtroEq = equipes ? ' AND team_name = ANY($4::text[])' : '';
+  const params = equipes ? [de, ate, tipo, equipes] : [de, ate, tipo];
+  const { rows } = await pool.query(`
+    SELECT team_name, sub_code, SUM(count)::int AS n
+      FROM team_daily_subcat_totals
+     WHERE date BETWEEN $1::date AND $2::date AND tipo = $3 ${filtroEq}
+     GROUP BY team_name, sub_code`, params);
+
+  const subs = [...new Set(rows.map(r => r.sub_code))].sort();
+  const porEq = new Map();
+  for (const r of rows) {
+    if (!porEq.has(r.team_name)) porEq.set(r.team_name, {});
+    porEq.get(r.team_name)[r.sub_code] = r.n;
+  }
+  const equipesOrd = [...porEq.keys()].sort();
+
+  console.log(`\n📊 EXECUTADO por subcategoria · tipo ${tipo} · ${de} → ${ate}\n`);
+  console.log('EQUIPE'.padEnd(12) + subs.map(s => s.padStart(9)).join('') + 'TOTAL'.padStart(9));
+  console.log('-'.repeat(12 + 9 * (subs.length + 1)));
+  const tot = {};
+  for (const eq of equipesOrd) {
+    const linha = porEq.get(eq);
+    const soma = subs.reduce((s, c) => s + (linha[c] || 0), 0);
+    subs.forEach(c => { tot[c] = (tot[c] || 0) + (linha[c] || 0); });
+    console.log(eq.padEnd(12) + subs.map(c => String(linha[c] || 0).padStart(9)).join('') + String(soma).padStart(9));
+  }
+  console.log('-'.repeat(12 + 9 * (subs.length + 1)));
+  const somaGeral = subs.reduce((s, c) => s + (tot[c] || 0), 0);
+  console.log('TOTAL'.padEnd(12) + subs.map(c => String(tot[c] || 0).padStart(9)).join('') + String(somaGeral).padStart(9));
+  console.log(`\n→ Compare a coluna da planilha manual com CADA subcategoria e com o TOTAL.`);
+  console.log(`  Se o número dele bate melhor com o TOTAL (ou com L0+L1) do que com L0`);
+  console.log(`  isolado, a divergência é de CLASSIFICAÇÃO, não de contagem.\n`);
+}
+
 async function main() {
   const { de, ate, sub, equipes, porDia, error } = parseArgs(process.argv.slice(2));
+  // --por-sub: matriz de subcategorias do tipo (o 3º argumento passa a ser o TIPO)
+  if (process.argv.includes('--por-sub')) {
+    const pool = _getPool();
+    await porSub(pool, de, ate, sub, equipes);
+    return;
+  }
   if (error) {
     console.error(`✖ ${error}`);
     console.error('Uso: node scripts/diag-conferencia-subcat.js 2026-07-01 2026-07-25 L0 [--equipes=A,B] [--por-dia]');

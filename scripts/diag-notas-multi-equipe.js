@@ -94,10 +94,17 @@ async function main() {
     console.log('-'.repeat(60));
     exemplos.forEach(r => console.log(String(r.numero || r.uuid).padEnd(14) + String(r.n_eq).padStart(3) + '  ' + r.equipes));
     console.log('-'.repeat(60));
-    console.log(`\n→ CONFIRMADO: a mesma nota está creditada a mais de uma equipe.`);
-    console.log(`  Pela regra do negócio (conta pra quem EXECUTOU), isso é dupla contagem`);
-    console.log(`  e explica desvios por equipe nos DOIS sentidos na conferência manual.`);
-    console.log(`  Próximo passo: decidir o critério de desempate (quem fica com a nota).`);
+    // Dimensiona antes de concluir: 1 caso em 12 mil é ruído; % alto é sistêmico.
+    if (pct >= 1) {
+      console.log(`\n→ DUPLA CONTAGEM SIGNIFICATIVA (${pct.toFixed(2)}% do total).`);
+      console.log(`  Viola a regra "a nota conta pra quem EXECUTOU" e pode explicar desvios`);
+      console.log(`  por equipe nos dois sentidos. Definir critério de desempate + re-consolidar.`);
+    } else {
+      console.log(`\n→ Casos ISOLADOS (${notas_em_2_ou_mais} em ${notas_distintas} = ${pct.toFixed(2)}%).`);
+      console.log(`  A atribuição é praticamente exclusiva: NÃO explica desvios grandes por`);
+      console.log(`  equipe. Vale investigar as notas acima uma a uma, mas a causa de uma`);
+      console.log(`  divergência de dezenas de OS está em outro lugar.`);
+    }
   } else {
     console.log(`✅ Nenhuma nota concluída aparece em 2+ equipes no período.`);
     console.log(`   A atribuição é exclusiva — a divergência da planilha vem de outro lugar.`);
