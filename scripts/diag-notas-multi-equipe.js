@@ -40,10 +40,16 @@ async function main() {
   const pool = _getPool();
   const siglas = getSiglas();            // whitelist (mesmo recorte do painel)
 
-  // (equipe, uuid) distintos das CONCLUÍDAS no período — só equipes oficiais.
+  // Notas CONCLUÍDAS no período (só equipes oficiais).
+  // ⚠️ n_eq usa COUNT(DISTINCT team_name). A 1ª versão deste script fazia
+  // SELECT DISTINCT (team_name, uuid, numero) e contava linhas — quando o mesmo
+  // (equipe, uuid) vinha com `codigo` diferente entre snapshots (um vazio, outro
+  // preenchido) saíam 2 linhas e a MESMA equipe aparecia como "2 equipes",
+  // gerando falso positivo de dupla contagem (visto em 30/07/2026:
+  // "EPMRT31, EPMRT31"). Contar equipes DISTINTAS é o certo.
   const base = `
     WITH conc AS (
-      SELECT DISTINCT s.team_name, (n->>'id') AS uuid, (n->>'codigo') AS numero
+      SELECT s.team_name, (n->>'id') AS uuid, (n->>'codigo') AS numero
         FROM snapshots s
         CROSS JOIN LATERAL jsonb_array_elements(
                CASE WHEN jsonb_typeof(s.data->'notasConcluidas') = 'array'
@@ -53,8 +59,10 @@ async function main() {
          AND (n->>'id') IS NOT NULL
     ),
     porNota AS (
-      SELECT uuid, MIN(numero) AS numero, COUNT(*)::int AS n_eq,
-             string_agg(team_name, ', ' ORDER BY team_name) AS equipes
+      SELECT uuid,
+             MAX(numero) AS numero,
+             COUNT(DISTINCT team_name)::int AS n_eq,
+             string_agg(DISTINCT team_name, ', ' ORDER BY team_name) AS equipes
         FROM conc GROUP BY uuid
     )`;
 
