@@ -58,21 +58,37 @@ async function main() {
     )
     SELECT u.numero, u.uuid, u.team_name,
            CASE WHEN u.cd ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substring(u.cd,1,10) ELSE NULL END AS dia_conclusao,
-           to_char(u.snap_date,'YYYY-MM-DD') AS dia_snapshot
+           to_char(u.snap_date,'YYYY-MM-DD') AS dia_snapshot,
+           (r.note_id IS NOT NULL) AS rejeitada
       FROM uni u
       JOIN note_subcategorias sc ON sc.note_id = u.uuid::uuid
+      LEFT JOIN note_rejections r ON r.note_id = u.uuid::uuid
      WHERE sc.sub_code = $4
      ORDER BY u.team_name, dia_conclusao NULLS LAST, u.numero`, [de, ate, siglas, sub]);
 
-  // CSV com ; (Excel pt-BR abre direto)
-  console.log('equipe;numero;dia_conclusao;dia_snapshot;uuid');
+  // CSV com ; (Excel pt-BR abre direto).
+  // conta_como reproduz a regra do painel (20/07/2026): nota concluída que a EDP
+  // REJEITOU não é produção — conta só em Rejeitadas. Por isso a soma de
+  // "EXECUTADA" aqui bate com o EXECUTADO do painel, e o total de linhas (todas
+  // as concluídas cruas) é MAIOR. É exatamente aqui que um levantamento manual
+  // divergir se contar a mesma nota nas duas colunas.
+  console.log('equipe;numero;dia_conclusao;dia_snapshot;conta_como;uuid');
   for (const r of rows) {
-    console.log([r.team_name, r.numero || '', r.dia_conclusao || '', r.dia_snapshot, r.uuid].join(';'));
+    console.log([r.team_name, r.numero || '', r.dia_conclusao || '', r.dia_snapshot,
+      r.rejeitada ? 'REJEITADA' : 'EXECUTADA', r.uuid].join(';'));
   }
   // Resumo no stderr pra não sujar o CSV quando redirecionar pra arquivo
-  const porEq = rows.reduce((a, r) => (a[r.team_name] = (a[r.team_name] || 0) + 1, a), {});
-  console.error(`\n📄 ${rows.length} nota(s) ${sub} · ${de} → ${ate}`);
-  Object.entries(porEq).sort().forEach(([eq, n]) => console.error(`   ${eq.padEnd(12)} ${n}`));
+  const agg = {};
+  for (const r of rows) {
+    const a = agg[r.team_name] || (agg[r.team_name] = { exec: 0, rej: 0 });
+    r.rejeitada ? a.rej++ : a.exec++;
+  }
+  console.error(`\n📄 ${rows.length} nota(s) ${sub} concluídas (cruas) · ${de} → ${ate}`);
+  console.error('   EQUIPE'.padEnd(15) + 'EXECUTADA'.padStart(10) + 'REJEITADA'.padStart(11) + 'CRUAS'.padStart(8));
+  Object.entries(agg).sort().forEach(([eq, a]) =>
+    console.error('   ' + eq.padEnd(12) + String(a.exec).padStart(10) + String(a.rej).padStart(11) + String(a.exec + a.rej).padStart(8)));
+  console.error(`\n   EXECUTADA = o que o painel mostra como executado (exclui rejeitadas).`);
+  console.error(`   CRUAS = todas as concluídas, incluindo as que foram rejeitadas depois.`);
   console.error(`\n→ Redirecione pra CSV e abra no Excel ao lado da folha do colaborador:`);
   console.error(`   node scripts/diag-listar-notas-subcat.js ${de} ${ate} ${sub} --equipes=EQ > /tmp/eq.csv`);
   console.error(`   Compare pelo NÚMERO da OS: o que ele tem e não está aqui (e vice-versa)`);
