@@ -918,12 +918,32 @@ feita em PR separado depois dos testes.
     (`RejectedAt` > `conclusionDate`) — nesse caso o serviço foi recusado, e era
     esse o caso que a regra de 20/07 pretendia pegar. Ou seja: a regra passa a
     depender da ORDEM DOS EVENTOS, não da simples presença nas duas listas.
-- **CONSEQUÊNCIA MEDIDA (amostra L0, 13 equipes, 01→25/07):** produção passa de
-  **1.732 → 2.100 (+368, +21%)**. Nas 787 notas com rejeição, `RejectedAt` é
-  anterior à conclusão em 100% — todas são reprogramadas-e-executadas, logo
-  contam. Direção coerente com o levantamento manual (1.824), que ficou entre os
-  dois. ⚠️ Extrapolar pro contrato inteiro (todos os tipos, todo o histórico)
-  pode significar MILHARES de OS a mais — medir antes de aplicar.
+- **⚠️ MEDIÇÃO CORRIGIDA (31/07/2026) — a anterior estava ERRADA.** A primeira
+  leitura dizia "+368 OS (+21%), painel subnotifica". Era artefato de dois
+  defeitos do diagnóstico: (a) comparar MINUTOS (rejeição 1 min antes da
+  conclusão virava "nota refeita") e (b) filtrar pelo dia do SNAPSHOT, o que
+  incluía notas concluídas em junho. **Conclusão retirada.**
+- **VALIDAÇÃO NO PORTAL DA EDP (2 notas, fonte autoritativa):**
+  - `030009946354` — Rejeição 30/06 **12:27** · Fim do Trabalho 30/06 **12:27:59**
+  - `030009957459` — Rejeição 01/07 **12:20** · Fim do Trabalho 01/07 **12:20:24**
+  - Ambas com motivo **“1172 - Pix no WPA”**: o cliente pagou na hora, o corte
+    NÃO foi executado. Rejeição e conclusão são **o mesmo evento** — a visita
+    terminou em rejeição. Pela regra do José, isso conta como REJEIÇÃO, não como
+    produção.
+- **CONSEQUÊNCIA MEDIDA (L0, 13 equipes SJC, notas com conclusão em 01→25/07):**
+  - 1.957 notas concluídas no período; **734** têm rejeição no MESMO dia
+    (visita que terminou em rejeição → não é produção).
+  - Produção correta pela regra = **1.223**. O painel mostra **1.732**.
+  - Ou seja o painel excluiu só 225 das 734 e **contou 509 como produção**
+    → **superestima em 509 (+42% sobre o correto)** nesta amostra.
+  - Mesma situação, dois tratamentos → o problema é a INCONSISTÊNCIA.
+- **MECANISMO PROVÁVEL (a confirmar no código):** a WPA limpa `notasRejeitadas`
+  do payload após algumas horas, então o último snapshot do dia pode já não ter
+  a rejeição; o enriquecimento via `note_rejections` no `consolidateDay` casa por
+  `session_date IN (D-1, D)` + equipe; e o sweep noturno só re-consolida quando
+  `detectDrift` acusa desvio ACIMA do limiar (`max(5, 2%)`) — poucas rejeições
+  tardias por dia ficam sob o limiar e nunca são reaplicadas, acumulando ao longo
+  do mês.
 - **Ação (depois da decisão):**
   1. Tornar a regra determinística e independente do timing da coleta (aplicar
      sobre o estado FINAL da nota, não sobre o que estava no banco naquele dia).
