@@ -14,15 +14,22 @@
  *                naquela subcategoria), contada por note_id ÚNICO
  *
  * ⚠️ LER ANTES DE CONCLUIR DIVERGÊNCIA:
- *   1) Semântica: no nosso sistema uma nota rejeitada pela EDP NÃO conta como
- *      executada (regra 20/07/2026). Se a planilha manual conta a mesma nota
- *      nas DUAS colunas, o EXECUTADO dela fica maior por construção.
- *   2) P0-6 (30/07): o auto-reparo do drift derrubou produção real em dias da
- *      janela ~07-17..07-24 e a RE-CONSOLIDAÇÃO AINDA NÃO FOI FEITA. Nesses
- *      dias o sistema está SUBNOTIFICANDO. Ver BACKLOG P0-6.
- *   3) P1-14 (30/07): turno que vira a noite com reconexão tinha a produção
- *      partida entre 2 dias. Código corrigido, histórico NÃO re-consolidado.
- *   4) note_rejections só tem rejeição a partir de quando o coletor começou a
+ *   1) Semântica — é a explicação PRINCIPAL da divergência com a planilha, e
+ *      não é bug de nenhum dos dois lados. A regra (José, 30/07/2026) trata
+ *      rejeição e execução como DOIS EVENTOS: a nota rejeitada conta pra
+ *      rejeição de quem rejeitou; se for reprogramada e executada depois, conta
+ *      como executada pra quem executou. Mas conclusão E rejeição no MESMO dia
+ *      = a visita terminou em rejeição, NÃO é produção — validado no portal da
+ *      EDP (notas 030009946354 e 030009957459, motivo "1172 - Pix no WPA": o
+ *      cliente pagou na hora e o corte não foi executado). Quem anota à mão
+ *      costuma contar a VISITA FEITA; o sistema conta o SERVIÇO ACEITO. Por
+ *      construção o EXECUTADO da planilha fica maior.
+ *   2) P0-6 / P1-14 / P1-15: os três estão com código no ar E com o histórico de
+ *      **julho/2026 re-consolidado em 31/07** (`backfill-consolidate 2026-07-01
+ *      2026-07-31 --apply`). Junho e maio NÃO foram re-consolidados — pra esses
+ *      meses o P1-15 ainda infla o EXECUTADO (nota rejeitada contando como
+ *      produção). Ver BACKLOG P0-6, P0-7, P1-14, P1-15.
+ *   3) note_rejections só tem rejeição a partir de quando o coletor começou a
  *      persistir; e a subcategoria depende de note_subcategorias estar
  *      classificada (notas sem classificação caem em OUTROS, não em L0).
  *
