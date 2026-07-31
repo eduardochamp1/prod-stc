@@ -1004,9 +1004,10 @@ feita em PR separado depois dos testes.
   subconta ~5%, então o script previa uma queda que era, na verdade, o próprio
   viés da régua. Corrigido no mesmo dia (ambos os scripts passaram a usar D+1,
   igual `detectDrift`) + `scripts/verify-consolidacao.js` criado pra verificar.
-- **⚠️ ESTE BLOCO É O 1º APPLY DO DIA. O NÚMERO FINAL DE JULHO ESTÁ NO P1-16:**
-  depois do 2º apply (com o fix do P1-16), julho fechou em **15.005 → 14.128 =
-  −877 OS (−5,8%)** no reportável. Os −88 abaixo são só a 1ª metade da correção.
+- **⚠️ ESTE BLOCO É O 1º APPLY DO DIA. O NÚMERO FINAL ESTÁ NO P1-17 (item 10):**
+  julho fechou em **14.998 → 14.064 = −934 (−6,2%)** (01→30, reportável) e junho
+  em **13.082 → 13.764 = +682 (+5,2%)** — juntos, **−252 (−0,9%)**. Os −88 abaixo
+  são só a 1ª de três passadas do dia.
 - **✅ APLICADO (31/07/2026, julho 01→31) — medição direta, tabela antes × depois:**
   - **Reportável (whitelist): 15.005 → 14.917 = −88 OS (−0,6%)** no mês.
     01→25: 12.080 → 11.989. 26→31: praticamente inalterado.
@@ -1692,11 +1693,22 @@ feita em PR separado depois dos testes.
      - `06-13` tabela 259 × régua 252 (−7) — **P2-13**, resistiu às duas passadas.
      - `07-31` (+6) — dia em curso, o cron das 00:15 sela.
      Nenhum dos três é o P1-16/P1-15: são acúmulo de upsert fora da janela de wipe.
-  10. ⬜ Revisar o saldo final de junho com o José — junho **sobe**, e produção que
-     sobe depois de reportada também precisa de explicação escrita pra auditoria.
-  11. ⬜ Registrar os totais reportáveis finais de junho e julho (rodar
-     `diag-impacto-reconsolidacao.js` nos dois meses; a coluna `antes` é o total
-     vigente). Os números de julho neste documento são de ANTES do último passe.
+  10. ✅ **TOTAIS FINAIS (31/07/2026, recorte da whitelist):**
+
+      | mês | antes de hoje | depois | saldo |
+      |---|---|---|---|
+      | **junho** (01→30) | 13.082 | **13.764** | **+682 (+5,2%)** |
+      | **julho** (01→30) | 14.998 | **14.064** | **−934 (−6,2%)** |
+      | **os dois** | 28.080 | 27.828 | **−252 (−0,9%)** |
+
+      Julho comparado só até o dia **30** de propósito — o dia 31 estava em curso
+      nas duas medições (7 OS às 11:33, 151 às 14:31) e contaminaria o saldo.
+      **Os dois meses quase se anulam**: julho cai ~6% (rejeitada que era contada
+      como produção) e junho sobe ~5% (produção real perdida em consolidação
+      parcial). Isso é o argumento pra auditoria — a correção não é uma
+      "redução de produção", é a remoção de dois erros de sinais opostos.
+      Resíduo restante: junho +0,3% (35 OS), julho +0,8% (113 OS) — é o **P2-13**.
+  11. ⬜ Revisar esses números com o José antes de qualquer comunicação à EDP.
   8. ⬜ Medir maio (`diag-impacto-reconsolidacao.js 2026-05-01 2026-05-31`) e rodar
      a mesma checagem de cobertura antes de decidir.
 - **Confirmação do padrão nos outros dias do cluster** (`diag-drift-team`):
