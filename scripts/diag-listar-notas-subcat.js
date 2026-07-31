@@ -78,7 +78,12 @@ async function main() {
        -- snapshot: o payload da WPA carrega concluídas de dias anteriores, então
        -- sem isto entravam notas de JUNHO (ex.: 030009946354, concluída 30/06) e
        -- o total ficava incomparável com o painel, que atribui pelo notaDate.
-       AND (u.cd IS NULL OR substring(u.cd,1,10) BETWEEN $1 AND $2)
+       -- cast explícito: $1/$2 já são DATE (usados como $1::date acima), então
+       -- comparar com substring() texto dá "operator does not exist: text >= date".
+       -- Notas sem conclusionDate (ou com formato inesperado) ficam na lista.
+       AND ( u.cd IS NULL
+             OR u.cd !~ '^\\d{4}-\\d{2}-\\d{2}'
+             OR substring(u.cd,1,10)::date BETWEEN $1::date AND $2::date )
      ORDER BY u.team_name, dia_conclusao NULLS LAST, u.numero`, [de, ate, siglas, sub]);
   // ⚠️ EXISTS (não LEFT JOIN): note_rejections pode ter mais de uma linha por
   // note_id (re-rejeição), e o JOIN multiplicava a nota na lista — inflando
