@@ -202,26 +202,32 @@ async function main() {
   // dois eventos — são as mais fáceis de enxergar no portal. Objetivo: validar
   // a regra do José (rejeição e execução são 2 eventos) contra a EDP antes de
   // mexer em produção. Ver P1-15 no BACKLOG.
-  const refeitas = rows
-    .filter(r => classificar(r) === 'REJ_ANTES' && r.rej_at && r.conc_at)
-    .map(r => ({ ...r, gapH: (new Date(r.conc_at) - new Date(r.rej_at)) / 3600000 }))
-    .sort((a, b) => b.gapH - a.gapH)
-    .slice(0, 8);
-  if (refeitas.length) {
-    console.error(`\n🔍 AMOSTRA PRA CONFERIR NO PORTAL DA EDP (${refeitas.length} notas "refeitas")`);
-    console.error('   NOTA'.padEnd(17) + 'EQUIPE'.padEnd(11) + 'REJEITADA EM'.padEnd(18)
-      + 'EXECUTADA EM'.padEnd(13) + 'INTERVALO');
-    console.error('   ' + '-'.repeat(72));
-    for (const r of refeitas) {
-      const dias = Math.round(r.gapH / 24);
+  // Amostra de VISITA_REJEITADA espalhada por equipes/dias — é a classe que
+  // decide o Δ contra o painel (509 na rodada de 30/07). A pergunta pro portal:
+  // a EDP considera esta nota EXECUTADA ou REJEITADA?
+  const amostra = [];
+  const vistos = new Set();
+  for (const r of rows) {
+    if (classificar(r) !== 'VISITA_REJEITADA' || !r.dia_conclusao) continue;
+    if (vistos.has(r.team_name)) continue;          // 1 por equipe = espalha a amostra
+    vistos.add(r.team_name);
+    amostra.push(r);
+    if (amostra.length >= 8) break;
+  }
+  if (amostra.length) {
+    console.error(`\n🔍 AMOSTRA PRA CONFERIR NO PORTAL (${amostra.length} notas VIS_REJ, 1 por equipe)`);
+    console.error('   NOTA'.padEnd(17) + 'EQUIPE'.padEnd(11) + 'CONCLUÍDA EM'.padEnd(14) + 'REJEITADA EM');
+    console.error('   ' + '-'.repeat(62));
+    for (const r of amostra) {
       console.error('   ' + String(r.numero || r.uuid).padEnd(14) + r.team_name.padEnd(11)
-        + fmtTs(r.rej_at).padEnd(18) + String(r.dia_conclusao || '').padEnd(13)
-        + (dias >= 1 ? `${dias} dia(s)` : `${Math.round(r.gapH)}h`));
+        + String(r.dia_conclusao).padEnd(14) + fmtTs(r.rej_at));
     }
-    console.error('   ' + '-'.repeat(72));
-    console.error(`   No portal, confirmar em cada uma: (a) houve rejeição na 1ª data,`);
-    console.error(`   (b) foi reprogramada, (c) a EDP reconhece como EXECUTADA depois.`);
-    console.error(`   Se sim, a regra atual (excluir da produção) está errada — ver P1-15.`);
+    console.error('   ' + '-'.repeat(62));
+    console.error(`   PERGUNTA PRO PORTAL: a EDP considera esta nota EXECUTADA ou REJEITADA?`);
+    console.error(`   • Se REJEITADA (como a 030009946354 → motivo "Pix no WPA"), então as`);
+    console.error(`     ${'509'} contadas pelo painel NÃO são produção → painel superestima.`);
+    console.error(`   • Se EXECUTADA, minha classificação está errada e o painel está certo.`);
+    console.error(`   NÃO alterar nada antes desta resposta. Ver P1-15 no BACKLOG.`);
   }
 
   console.error(`\n→ Redirecione pra CSV e abra no Excel ao lado da folha do colaborador:`);
