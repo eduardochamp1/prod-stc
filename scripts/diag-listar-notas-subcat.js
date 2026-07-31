@@ -59,13 +59,18 @@ async function main() {
     SELECT u.numero, u.uuid, u.team_name,
            CASE WHEN u.cd ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substring(u.cd,1,10) ELSE NULL END AS dia_conclusao,
            to_char(u.snap_date,'YYYY-MM-DD') AS dia_snapshot,
-           rj.n_rej, rj.rej_at,
+           rj.n_rej, rj.rej_at, to_char(rj.rej_day,'YYYY-MM-DD') AS rej_day,
            CASE WHEN u.cd ~ '^\\d{4}-\\d{2}-\\d{2}' THEN u.cd::timestamptz ELSE NULL END AS conc_at
       FROM uni u
       JOIN note_subcategorias sc ON sc.note_id = u.uuid::uuid
       LEFT JOIN LATERAL (   -- agregado: 1 linha por nota, sem multiplicar
+        -- ⚠️ rej_at = SÓ rejection_date real. NÃO cair pra session_date: ele é
+        -- DATE (meia-noite) e faria toda rejeição sem hora parecer ANTERIOR a
+        -- uma conclusão às 22:40 — foi o erro da versão anterior (REJ_APOS=0 em
+        -- tudo). Sem hora, o dia (rej_day) decide; empate no dia = indeterminado.
         SELECT COUNT(*)::int AS n_rej,
-               MAX(COALESCE(r.rejection_date, r.session_date::timestamptz)) AS rej_at
+               MAX(r.rejection_date) AS rej_at,
+               MAX(r.session_date)   AS rej_day
           FROM note_rejections r WHERE r.note_id = u.uuid::uuid
       ) rj ON TRUE
      WHERE sc.sub_code = $4
@@ -102,8 +107,17 @@ async function main() {
   //   REJ_S_DATA = tem rejeição mas falta data pra decidir → investigar à mão
   const classificar = (r) => {
     if (!r.n_rej) return 'EXECUTADA';
-    if (!r.rej_at || !r.conc_at) return 'REJ_S_DATA';
-    return (new Date(r.rej_at) > new Date(r.conc_at)) ? 'REJ_APOS' : 'REJ_ANTES';
+    // 1) Melhor evidência: horário real da rejeição × horário da conclusão.
+    if (r.rej_at && r.conc_at) {
+      return (new Date(r.rej_at) > new Date(r.conc_at)) ? 'REJ_APOS' : 'REJ_ANTES';
+    }
+    // 2) Sem horário da rejeição: compara só os DIAS. Mesmo dia → indeterminado.
+    if (r.rej_day && r.dia_conclusao) {
+      if (r.rej_day > r.dia_conclusao) return 'REJ_APOS';
+      if (r.rej_day < r.dia_conclusao) return 'REJ_ANTES';
+      return 'REJ_S_DATA';               // mesmo dia, sem hora → não dá pra saber
+    }
+    return 'REJ_S_DATA';
   };
 
   console.log('equipe;numero;dia_conclusao;dia_snapshot;classificacao;n_rejeicoes;uuid');
@@ -121,6 +135,13 @@ async function main() {
     else if (c === 'REJ_APOS') a.apos++;
     else a.semData++;
   }
+  // Quão resolvível é a ordem? (rejeição com horário real × só com dia)
+  const comRej = rows.filter(r => r.n_rej > 0);
+  const comHora = comRej.filter(r => r.rej_at).length;
+  console.error(`\n🕐 Rejeições: ${comRej.length} nota(s) com registro · ${comHora} com HORÁRIO`
+    + ` (${comRej.length ? Math.round(100 * comHora / comRej.length) : 0}%)`
+    + ` · ${comRej.length - comHora} só com o dia`);
+
   console.error(`\n📄 ${rows.length} nota(s) ${sub} concluídas · ${de} → ${ate}`);
   console.error('   EQUIPE'.padEnd(15) + 'S/REJ'.padStart(7) + 'REFEITA'.padStart(8)
     + 'REJ_APOS'.padStart(9) + 'S/DATA'.padStart(7) + ' | ' + 'ESPERADO'.padStart(9)
