@@ -43,7 +43,7 @@
 | P1-12 | Vazamento regional em 7 rotas que ignoravam `req.scope.regionals` | Segurança | **done** (14/07) |
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | **Fases 1+2 código done** (30/07) — falta SÓ re-consolidar histórico (dry-run→revisar→aplicar) |
-| P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | pending — **decisão de negócio** + re-consolidação |
+| P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | fix no ar (0ce0a73) + julho re-consolidado 31/07 (−88 OS) · jun/mai pendentes |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -930,18 +930,40 @@ feita em PR separado depois dos testes.
     NÃO foi executado. Rejeição e conclusão são **o mesmo evento** — a visita
     terminou em rejeição. Pela regra do José, isso conta como REJEIÇÃO, não como
     produção.
-- **✅ MEDIÇÃO DEFINITIVA (31/07/2026) — use ESTA, as anteriores eram frágeis.**
-  Feita com `scripts/diag-impacto-reconsolidacao.js`, que roda o próprio
-  `consolidateDay` em dryRun e compara com `team_daily_totals` no MESMO recorte
-  do painel (whitelist). Apples-to-apples: mesma união, mesma atribuição de dia,
-  mesma regra — a diferença é só o fix.
-  - **Julho 01→25, equipes oficiais: 12.080 → 11.464 = −616 (−5,1%)**, caindo em
-    24 dos 25 dias (só 25/07 +3). Tabela inteira (todas as equipes, via
-    `backfill-consolidate` dry-run): 21.711 → 19.368 = −2.343 (−10,8%), 25/25 dias.
-  - Uniformidade da direção = assinatura de bug sistemático (≠ ruído).
+- **⚠️ PREVISÃO (31/07/2026) — ERRADA POR RÉGUA, mantida como registro.** Feita
+  com `scripts/diag-impacto-reconsolidacao.js` na sua 1ª versão: previa
+  **12.080 → 11.464 = −616 (−5,1%)** em julho 01→25 (tabela inteira: 21.711 →
+  19.368 = −2.343). O apply NÃO confirmou. Causa: o script media o "depois" com
+  `consolidateDay(D)` filtrado em `r.date === D` — **a mesma régua errada do
+  P0-6**. Quem grava o valor final de D é o passe de **D+1**; a régua de D
+  subconta ~5%, então o script previa uma queda que era, na verdade, o próprio
+  viés da régua. Corrigido no mesmo dia (ambos os scripts passaram a usar D+1,
+  igual `detectDrift`) + `scripts/verify-consolidacao.js` criado pra verificar.
+- **✅ APLICADO (31/07/2026, julho 01→31) — medição direta, tabela antes × depois:**
+  - **Reportável (whitelist): 15.005 → 14.917 = −88 OS (−0,6%)** no mês.
+    01→25: 12.080 → 11.989. 26→31: praticamente inalterado.
+  - Saldo pequeno porque são **duas forças opostas**: o P1-15 tira nota rejeitada
+    (pra baixo) e a re-consolidação com a régua de D+1 **devolve** produção que o
+    auto-reparo do P0-6 havia derrubado (pra cima) — visível em 21/07 (+6),
+    24/07 (+7), 25/07 (+6), justo a janela danificada pelos sweeps de 24–25/07.
+  - Quedas concentradas no começo do mês: 02/07 −14, 09/07 −13, 16/07 −28.
+  - ⚠️ Vários dias (26, 27, 28, 30/07) ficaram **idênticos** ao valor anterior.
+    Não explicado ainda — investigar se o enriquecimento de rejeições é no-op
+    quando a rejeição já vinha no payload do snapshot.
+  - Resolve junto: P0-6 (dias 17–24/07 rebaixados pelos sweeps) e P1-14
+    (vira-noite) no mesmo passe.
+  - Backup `pg_dump -Fc` de 728M tirado 11:51, íntegro (`pg_restore --list`).
   - ⚠️ O dry-run carrega TAMBÉM o P1-14 (vira-noite), que desloca notas ENTRE
     dias e quase se anula no mês. Pra isolar o P1-15 puro, rodar com
     `RECONEXAO_MAX_GAP_MIN=0`.
+  - **Junho e maio NÃO foram re-consolidados** — precisam de medição própria com
+    a régua corrigida antes de qualquer decisão.
+- **🪤 ARMADILHA DESCOBERTA NO APPLY: o último dia do intervalo não fica selado.**
+  `consolidateDay(D)` apaga {D-1, D}; logo, num backfill crescente, cada dia é
+  reescrito pelo passe do dia seguinte — **menos o último**, que fica com a régua
+  de D (subcontado). Se o fim do intervalo é hoje, o cron das 00:15 sela sozinho;
+  se é passado, rodar com 1 dia extra no fim. O `backfill-consolidate` agora
+  avisa isso ao terminar.
 - **❌ MEDIÇÕES DESCARTADAS (não usar):** as estimativas por extração de snapshot
   (“+368 / +21%”, depois “509 / +42%” em L0, depois “+1.257 jul / −693 jun /
   +3.232 mai”) eram incomparáveis com o painel por dois motivos: atribuíam o dia

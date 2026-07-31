@@ -39,7 +39,7 @@
  */
 
 require('dotenv').config();
-const { consolidateDay } = require('../services/dataWriter');
+const { consolidateDay, _addDays } = require('../services/dataWriter');
 const { getClient } = require('../services/dbClient');
 const { _getPool } = require('../services/pgShim');
 
@@ -159,7 +159,14 @@ async function main() {
         // dry-run calcula o "depois" sem gravar. consolidateDay gera linhas de
         // vários notaDate (D-2..D); pra comparar com o `antes` (só date), filtra
         // as linhas por r.date === date. Somar dry.newCount inflaria (P1-13).
-        const dry = await consolidateDay(date, { dryRun: true });
+        //
+        // RÉGUA = passe de D+1, não de D (31/07/2026). consolidateDay(D) apaga
+        // {D-1,D} e é o passe de D+1 que reescreve D — vendo as sessões que só
+        // aparecem nos snapshots de D+1. A régua de D subconta ~5% e foi o que
+        // gerou o P0-6 (auto-reparo apagando produção legítima) e, aqui, uma
+        // previsão de queda que o apply não confirmou (previu −847 em julho,
+        // real −88). Igual a detectDrift.
+        const dry = await consolidateDay(_addDays(date, 1), { dryRun: true });
         const depois = dry ? (dry.rows || []).filter(r => r.date === date).reduce((s, r) => s + r.count, 0) : 0;
         const equipes = dry ? dry.teams : 0;
         const diff = depois - antes;
@@ -188,6 +195,18 @@ async function main() {
       String(totDepois - totAntes).padStart(8));
     console.log(`\n${apply ? '✅ Aplicado' : 'ℹ️  Dry-run — rode com --apply pra gravar'}` +
       `${erros ? ` · ${erros} dia(s) com erro` : ''}.\n`);
+
+    if (apply) {
+      // O ÚLTIMO dia do intervalo fica com o valor do passe de ELE MESMO (régua
+      // de D), que subconta — porque nenhum passe de D+1 rodou depois pra
+      // reescrevê-lo. Todos os outros dias do intervalo foram selados pelo passe
+      // do dia seguinte. Descoberto em 31/07/2026 no apply de julho.
+      console.log(`⚠️  ${ate} é o último dia do intervalo e ficou com a régua de D (subconta).`);
+      console.log(`   Quem sela um dia é o passe do dia SEGUINTE. Opções:`);
+      console.log(`     • se ${ate} é hoje: o cron das 00:15 sela sozinho, nada a fazer;`);
+      console.log(`     • se ${ate} é passado: rode o intervalo com 1 dia extra no fim.`);
+      console.log(`   Confira o resultado com: node scripts/verify-consolidacao.js ${de} ${ate}\n`);
+    }
   } finally {
     await releaseLock(lockClient);
     try { const p = _getPool && _getPool(); if (p && p.end) await p.end(); } catch (_) { /* ignore */ }

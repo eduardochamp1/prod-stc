@@ -14,12 +14,22 @@
  * mesma regra de rejeição — a diferença é só o fix do P1-15 (o índice de
  * rejeições persistidas, que estava morto por Date × string).
  *
+ * ⚠️ CORREÇÃO DA RÉGUA (31/07/2026 — depois do apply de julho).
+ * A 1ª versão deste script media o "depois" com `consolidateDay(D)` filtrado em
+ * `r.date === D`. Essa é a MESMA régua errada que causou o P0-6: quem grava o
+ * valor final do dia D é o passe de **D+1** (consolidateDay(D) apaga {D-1,D} e
+ * o passe seguinte reescreve D vendo mais sessões). A régua de D subconta ~5%,
+ * então o script acusava uma queda permanente de −5,1% que NUNCA colapsava —
+ * mesmo depois do apply, comparando tabela-correta contra régua-subcontada.
+ * Medição direta do apply de julho/2026: 15.005 → 14.917 = −88 (−0,6%), e não
+ * os −847 (−5,6%) que a régua de D previa. Agora usamos D+1, igual detectDrift.
+ *
  * USO (na VM):
  *   node scripts/diag-impacto-reconsolidacao.js 2026-07-01 2026-07-25
  */
 
 require('dotenv').config();
-const { consolidateDay } = require('../services/dataWriter');
+const { consolidateDay, _addDays } = require('../services/dataWriter');
 const { getClient } = require('../services/dbClient');
 const { _getPool } = require('../services/pgShim');
 const { getSiglas } = require('../services/equipesOficiais');
@@ -58,8 +68,10 @@ async function main() {
         .filter(r => oficiais.has(String(r.team_name).toUpperCase()))
         .reduce((s, r) => s + (Number(r.count) || 0), 0);
 
-      // DEPOIS: o que a consolidação gravaria HOJE (com o fix), mesmo recorte
-      const dry = await consolidateDay(dia, { dryRun: true });
+      // DEPOIS: o que a consolidação gravaria HOJE (com o fix), mesmo recorte.
+      // Régua = passe de D+1, que é QUEM grava o valor final de D (ver P0-6 e
+      // detectDrift). Usar consolidateDay(dia) aqui subconta e inventa queda.
+      const dry = await consolidateDay(_addDays(dia, 1), { dryRun: true });
       const depois = (dry?.rows || [])
         .filter(r => r.date === dia && oficiais.has(String(r.team_name).toUpperCase()))
         .reduce((s, r) => s + r.count, 0);
@@ -82,6 +94,9 @@ async function main() {
   if (erros) console.log(`\n⚠️  ${erros} dia(s) com erro.`);
   console.log(`\n   Este É o número pra decisão contratual: quanto a produção REPORTADA muda`);
   console.log(`   se o histórico for re-consolidado. Negativo = cai.`);
+  console.log(`   Régua = passe de D+1 (a que de fato grava o dia D). Se você vê aqui uma`);
+  console.log(`   queda constante de ~5% que não colapsa depois de aplicar, a régua voltou`);
+  console.log(`   a estar errada — ver o comentário do topo (P0-6).`);
   console.log(`   Inclui, além do fix do P1-15 (rejeições), o P1-14 (turno vira-noite herda o`);
   console.log(`   dia do início) — este último desloca notas ENTRE dias, quase se anulando`);
   console.log(`   dentro do mês; o saldo do período é dominado pelo P1-15.\n`);
