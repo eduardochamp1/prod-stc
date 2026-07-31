@@ -760,6 +760,42 @@ async function detectDrift(date) {
 }
 
 /**
+ * O auto-reparo pode rodar pra este relatório? Decisão PURA (testável).
+ *
+ * ⚠️ REGRA ASSIMÉTRICA — o reparo só pode ADICIONAR, nunca SUBTRAIR.
+ * Descoberto em 31/07/2026, verificando o backfill de julho: 5 dias apareceram
+ * com drift NEGATIVO (tabela MAIOR que a régua) — 03/07 −56, 08/07 −22,
+ * 10/07 −96, 17/07 −117, 24/07 −84. **Quatro dos cinco são sexta-feira.**
+ *
+ * Não é dado corrompido, é acúmulo legítimo: `consolidateDay(X)` apaga só
+ * {X-1, X}, mas faz upsert de linhas para VÁRIOS notaDate anteriores (uma nota
+ * concluída na sexta continua no payload das sessões de sábado e segunda). Nos
+ * logs do backfill: o passe de 05/07 gravou `dates ["2026-07-03","2026-07-04",
+ * "2026-07-05"]` sem wipar 03/07. Ou seja o valor gravado de um dia antigo é
+ * mais COMPLETO que o de qualquer passe isolado — nenhuma régua de janela fixa
+ * consegue reproduzi-lo, e a diferença é maior justamente nas sextas, cuja
+ * produção continua aparecendo no fim de semana e na segunda.
+ *
+ * Se o sweep das 02:00 "reparasse" esses dias, rodaria consolidateDay(D+1), que
+ * wipa {D, D+1} e regrava com a régua estreita → **destruiria as 84–117 OS**.
+ * É exatamente o P0-6 outra vez, um nível mais fundo: lá a régua era D, aqui é
+ * D+1 e ainda subconta. Em vez de alargar a régua indefinidamente, o reparo
+ * passa a ser monotônico: repara quando FALTA produção, alerta quando SOBRA.
+ *
+ * @param   {object} report  saída de detectDrift
+ * @returns {{repair: boolean, reason: string}}
+ */
+function shouldAutoRepair(report) {
+  if (!report || !report.has_drift) return { repair: false, reason: 'sem_drift' };
+  // diff = régua − tabela. Positivo ⇒ a tabela subconta ⇒ falta produção ⇒
+  // re-consolidar ACRESCENTA o que falta. Seguro.
+  if (report.diff > 0) return { repair: true, reason: 'tabela_subconta' };
+  // Negativo ⇒ a tabela tem MAIS que a régua consegue enxergar. Reparar aqui
+  // APAGA produção. Nunca automático — só investigação humana.
+  return { repair: false, reason: 'tabela_acima_da_regua' };
+}
+
+/**
  * Remove snapshots com mais de 30 dias da tabela `snapshots`.
  * Chamado uma vez por dia (após a consolidação). Evita crescimento indefinido
  * da tabela que não tem uso operacional para dados tão antigos.
@@ -917,7 +953,7 @@ module.exports = {
   saveSnapshot, pushTeams,
   upsertDailyTotals, upsertTeamDailyTotals, upsertSubcatTotals,
   upsertTeamDailyCarteira,
-  consolidateDay, detectDrift,
+  consolidateDay, detectDrift, shouldAutoRepair,
   cleanOldSnapshots, cleanOldNoteDetails,
   // Exportadas pra teste (P0-3) — funções puras da regra de agregação.
   _addDays,

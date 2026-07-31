@@ -1768,11 +1768,31 @@ router.post('/admin/drift/repair', async (req, res) => {
     return res.status(400).json({ error: 'date inválido. Use YYYY-MM-DD' });
   }
   try {
-    const { detectDrift, consolidateDay } = require('../services/dataWriter');
+    const { detectDrift, consolidateDay, shouldAutoRepair } = require('../services/dataWriter');
     const before = await detectDrift(date);
-    await consolidateDay(date);
+
+    // Esta rota ficou 6 dias com DOIS defeitos que o fix do P0-6 (25/07/2026) já
+    // havia corrigido no cron — corrigidos aqui em 31/07:
+    //   1) rodava consolidateDay(date), a régua de D, que subconta e APAGA
+    //      produção; quem grava o dia é o passe de D+1 (before.repair_date);
+    //   2) reparava mesmo com drift NEGATIVO (tabela maior que a régua), o que
+    //      destrói o acúmulo legítimo de passes posteriores.
+    // Ver shouldAutoRepair em services/dataWriter.js.
+    const decisao = shouldAutoRepair(before);
+    const forcar = req.query.force === '1';
+    if (!decisao.repair && !forcar) {
+      return res.json({
+        ok: false, date, before, skipped: true, motivo: decisao.reason,
+        aviso: decisao.reason === 'tabela_acima_da_regua'
+          ? 'A tabela tem MAIS que a régua enxerga — re-consolidar APAGARIA produção. '
+            + 'Investigue com scripts/diag-drift-team.js antes. Use ?force=1 se tiver certeza.'
+          : 'Sem drift acima do limiar — nada a reparar. Use ?force=1 pra forçar.',
+      });
+    }
+
+    await consolidateDay(before.repair_date);
     const after = await detectDrift(date);
-    res.json({ ok: true, date, before, after });
+    res.json({ ok: true, date, repair_date: before.repair_date, forcado: forcar, before, after });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

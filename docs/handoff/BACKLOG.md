@@ -28,7 +28,8 @@
 | P0-3 | Matemática de agregação sem teste (A/B/C) | Dados/Qualidade | **done** (f8b839b, 08/07) — transação virou P1-11 |
 | P0-4 | `enforceTeamRegional` desligado silenciosamente (v=2) | Segurança/Backend | **done** (a8dcbab, 08/07) |
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
-| P0-6 | Auto-reparo do drift APAGAVA produção legítima toda noite (07-22 perdeu 172 OS) | Dados | **código done** (25/07) — falta re-consolidar 07-17..07-24 |
+| P0-6 | Auto-reparo do drift APAGAVA produção legítima toda noite (07-22 perdeu 172 OS) | Dados | **done** (25/07 código; 31/07 histórico re-consolidado no apply de julho) |
+| P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo virou monotônico + rota manual corrigida |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -385,6 +386,62 @@
   destrutivo — se precisar reverter, desligue o sweep das 02:00 junto.
 - **Depende de:** nada. **Relacionado:** P1-13 (a união que criou a assimetria),
   P1-11 (transação — um crash no meio do reparo ainda zera o dia).
+- **31/07/2026:** item 5 resolvido junto com o apply de julho (P1-15) — os dias
+  17→24/07 voltaram pra cima (21/07 +6, 24/07 +7, 25/07 +6). E a investigação
+  revelou que o fix estava **incompleto**: ver **P0-7**.
+
+---
+
+## P0-7 — Auto-reparo do drift ainda podia SUBTRAIR produção
+
+- **Categoria:** Dados
+- **Status:** **done** (31/07/2026)
+- **Fonte:** `scripts/verify-consolidacao.js` rodado logo após o apply de julho.
+- **Evidência:** 5 dias com drift acima do limiar, **todos negativos** (tabela
+  MAIOR que a régua de D+1), e **4 dos 5 são sexta-feira**:
+
+  | dia | tabela | régua D+1 | diff | limiar |
+  |---|---|---|---|---|
+  | 03/07 (sex) | 888 | 832 | −56 | 17 |
+  | 08/07 (qua) | 980 | 958 | −22 | 19 |
+  | 10/07 (sex) | 885 | 789 | −96 | 16 |
+  | 17/07 (sex) | 1076 | 959 | −117 | 19 |
+  | 24/07 (sex) | 959 | 875 | −84 | 18 |
+
+  - **Não é corrupção — é acúmulo legítimo.** `consolidateDay(X)` apaga só
+    `{X-1, X}`, mas faz upsert de linhas pra **vários notaDate anteriores** (nota
+    concluída na sexta segue no payload das sessões de sábado e segunda). Nos logs
+    do apply de 31/07 o passe de 05/07 gravou
+    `dates ["2026-07-03","2026-07-04","2026-07-05"]` **sem wipar 03/07**. Logo o
+    valor gravado de um dia antigo é mais COMPLETO que o de qualquer passe
+    isolado, e a diferença é maior nas sextas — cuja produção continua a aparecer
+    no fim de semana e na segunda.
+- **Impacto:** o sweep das 02:00 de 31/07 iria "reparar" o 24/07 (dentro da
+  janela D-7) e **destruir 84 OS**. Nos 5 dias, **375 OS**. É o P0-6 outra vez,
+  um nível mais fundo: lá a régua era D, aqui é D+1 e ainda subconta. Alargar a
+  régua indefinidamente não resolve — sempre existe um passe posterior.
+- **Ação:**
+  1. ✅ `shouldAutoRepair(report)` em `dataWriter.js` — decisão pura: repara só
+     quando `diff > 0` (falta produção). Drift negativo → `drift_nao_reparado` +
+     `drift_last_skip` em `app_settings`, sem tocar em dado. **Reparo monotônico:
+     só ADICIONA, nunca subtrai.**
+  2. ✅ `runDriftCheck` consulta a decisão antes de consolidar.
+  3. ✅ `POST /api/admin/drift/repair` corrigido — ficou 6 dias com os DOIS
+     defeitos que o P0-6 já havia corrigido no cron: rodava `consolidateDay(date)`
+     (régua de D) e reparava com drift negativo. Agora usa `repair_date`, respeita
+     o guard e exige `?force=1` pra sobrescrever.
+  4. ✅ `test/driftRepairGuard.test.js` (8 casos), incluindo os 5 dias reais e a
+     soma de 375 OS que o sweep destruiria.
+- **Aceite:**
+  - [x] `node --test` 336 → 343 verdes.
+  - [ ] Log do sweep de 01/08 às 02:00: `drift_nao_reparado` nesses dias, e
+        `verify-consolidacao.js` mostrando os mesmos números do dia anterior.
+- **Esforço:** 1h (feito).
+- **Rollback:** reverter o commit. ⚠️ Devolve o reparo destrutivo.
+- **Em aberto (não bloqueia):** por que a diferença concentra em sexta merece
+  medição própria — se o valor acumulado é o "certo", a régua do `detectDrift`
+  deveria olhar D+1..D+3 em vez de só D+1, e aí o drift negativo viraria ~0.
+  Enquanto isso o guard impede qualquer perda.
 
 ---
 

@@ -948,9 +948,10 @@ async function runConsolidate(date) {
 
 async function runDriftCheck(date) {
   try {
-    const { detectDrift, consolidateDay } = require('./dataWriter');
+    const { detectDrift, consolidateDay, shouldAutoRepair } = require('./dataWriter');
     date = date || dateBRT();
     const report = await detectDrift(date);
+    const decisao = shouldAutoRepair(report);
 
     if (report.has_drift) {
       log.warn('drift_detected', {
@@ -959,7 +960,41 @@ async function runDriftCheck(date) {
         table:    report.table_count,
         diff:     report.diff,
         threshold: report.threshold,
+        acao:     decisao.reason,
       });
+    }
+
+    // ⚠️ SÓ REPARA QUANDO FALTA PRODUÇÃO (31/07/2026). Drift negativo — tabela
+    // MAIOR que a régua — é acúmulo legítimo de passes posteriores (uma nota de
+    // sexta continua no payload de sábado e segunda, e o upsert não wipa o dia
+    // antigo). Reparar isso APAGARIA produção real: em 31/07 seriam 84 OS no
+    // 24/07, 117 no 17/07, 96 no 10/07. Ver shouldAutoRepair em dataWriter.js.
+    if (!decisao.repair) {
+      if (report.has_drift) {
+        log.warn('drift_nao_reparado', {
+          date: report.date,
+          diff: report.diff,
+          motivo: decisao.reason,
+          nota: 'reparo automatico so ADICIONA; drift negativo exige investigacao humana',
+        });
+        try {
+          const sq = require('../db/queries');
+          await sq.setSetting('drift_last_skip', {
+            date, report, motivo: decisao.reason, at: new Date().toISOString(),
+          });
+        } catch (_) {}
+      } else {
+        log.info('drift_ok', {
+          date: report.date,
+          snapshot: report.snapshot_count,
+          table:    report.table_count,
+          diff:     report.diff,
+        });
+      }
+      return report;
+    }
+
+    {
       // ⚠️ REPARA VIA D+1, não via D (corrigido 25/07/2026).
       // consolidateDay(X) monta equipes com sessão em {X-1, X} mas wipa {X-1, X}
       // — logo quem grava o valor COMPLETO de um dia D é o passe de D+1 (a janela
@@ -990,13 +1025,6 @@ async function runDriftCheck(date) {
           repaired_at: new Date().toISOString(),
         });
       } catch (_) {}
-    } else {
-      log.info('drift_ok', {
-        date: report.date,
-        snapshot: report.snapshot_count,
-        table:    report.table_count,
-        diff:     report.diff,
-      });
     }
     return report;
   } catch (err) {
