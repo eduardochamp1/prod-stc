@@ -1586,17 +1586,33 @@
       function refresh(selectId) {
         const inst = _instances[selectId];
         if (!inst) return;
+
+        // "todas estavam marcadas?" TEM de ser medido contra a lista ANTIGA e
+        // ANTES de trocar inst.items.
+        //
+        // bug reportado em 31/07/2026: "o filtro de EQUIPE não está funcionando,
+        // quando tento marcar ou desmarcar uma equipe não conseguimos" (aba
+        // Gráficos). A versão anterior calculava
+        //     wasAll = prevValid.size === 0 || prevValid.size === inst.selected.size
+        // mas `prevValid` é derivado de `inst.selected` — filtrando só o que ainda
+        // existe nas options novas. Quando a lista de options NÃO muda (o caso
+        // normal: o refiltro por regional/tipo devolve as mesmas equipes), os dois
+        // tamanhos são sempre iguais ⇒ wasAll sempre true ⇒ a seleção voltava pra
+        // "todas". Como loadGraficos() chama _popularDropdownEquipes() → refresh()
+        // a cada carga, e o onChange do multi-select é o próprio loadGraficos(),
+        // cada clique era desfeito no mesmo instante.
+        const eraTodas = _isAllSelected(inst);
+
         // Re-coleta options do select original (que foi populado dinamicamente)
         const newItems = Array.from(inst.sel.options).map(o => ({
           value: o.value, label: o.textContent.trim()
         }));
         inst.items = newItems;
-        // Preserva seleção válida + adiciona novos como "selecionados" se estavam todos antes
+        // Preserva seleção válida; só volta pra "todas" se de fato estava tudo
+        // marcado antes (ou se nada da seleção antiga sobreviveu ao refiltro).
         const realNew = newItems.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
         const prevValid = new Set(Array.from(inst.selected).filter(v => realNew.some(o => o.value === v)));
-        // Se previamente "todas estavam selecionadas" e agora novos vieram, mantém "todas"
-        const wasAll = prevValid.size === 0 || prevValid.size === inst.selected.size;
-        if (wasAll) {
+        if (eraTodas || prevValid.size === 0) {
           inst.selected = new Set(realNew.map(o => o.value));
         } else {
           inst.selected = prevValid;
