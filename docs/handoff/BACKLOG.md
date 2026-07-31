@@ -46,6 +46,7 @@
 | P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | **Fases 1+2 código done** (30/07) — falta SÓ re-consolidar histórico (dry-run→revisar→aplicar) |
 | P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | fix no ar (0ce0a73) + julho re-consolidado 31/07 (−88 OS) · jun/mai pendentes |
 | P1-16 | Exclusão de rejeitada casava pelo dia da SESSÃO → nota rejeitada na sexta voltava a contar como produção | Dados | **done** (31/07) — julho re-consolidado e verificado; jun/mai pendentes |
+| P1-17 | Junho mede +717 (+5,5%) na re-consolidação — sinal INVERTIDO e errático; NÃO aplicar sem investigar | Dados | pending — investigação |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
@@ -1600,6 +1601,58 @@ feita em PR separado depois dos testes.
     intactos, null; `reconcileOnBoot` com load/save injetados). Suíte: 236/236.
   - **Deploy:** código (`routes/index.js`, `server.js`, `index.html`, novo
     service), sem migração — usa a `app_settings` existente. `git pull` + PM2.
+
+---
+
+## P1-17 — Junho mede +717 na re-consolidação (sinal invertido) — NÃO aplicar ainda
+
+- **Categoria:** Dados (produção reportada à EDP)
+- **Status:** pending — **investigação antes de qualquer apply**
+- **Fonte:** `diag-impacto-reconsolidacao.js 2026-06-01 2026-06-30`, 31/07/2026,
+  já com todos os fixes do dia no ar (P1-14, P1-15, P1-16).
+- **Evidência:** **13.082 → 13.799 = +717 (+5,5%)** no recorte da whitelist —
+  ou seja a tabela de junho **subconta**, o oposto de julho (−877). E o padrão
+  por dia não é de um mecanismo único:
+  - Positivos extremos: **23/06 +402 (+181,1%)**, 22/06 +160 (+37,6%),
+    24/06 +123 (+27,4%), 28/06 +47 (+33,8%), 20/06 +50 (+25,8%), 10/06 +88.
+  - Negativos: 08/06 −79, 15/06 −73, 16/06 −64, 25/06 −62, 12/06 −26.
+  - Os **negativos** têm injeção alta de rejeição (273, 215, 243, 247, 150) →
+    é a assinatura do P1-16, igual às sextas de julho. Coerente.
+  - Os **positivos** não têm explicação por rejeição. Um dia com +181% significa
+    tabela em 222 contra régua em 624 — isso é dia mal consolidado, não regra.
+- **⚠️ COBERTURA DE REJEIÇÃO COMEÇA NO MEIO DO MÊS.** Os eventos
+  `consolidate_rejeicao_por_nota` do dry-run: 01/06→4, 02/06→0, 03/06→5,
+  04/06→14, 05/06→27, 06/06→22, 07/06→24, **08/06→273**, 09/06→253, e daí
+  centenas. Salto de 70x = o coletor só passou a **persistir** em
+  `note_rejections` por volta de 08/06. Antes disso a regra "rejeitada não é
+  produção" **não tem dado pra ser aplicada retroativamente** → re-consolidar o
+  começo de junho corrige a parte estrutural mas NÃO desconta rejeição, e o mês
+  fica com critério diferente de julho. Ferramenta:
+  `scripts/diag-cobertura-rejeicoes.js` (criado pra isso).
+- **Hipóteses pros positivos (a testar, NÃO confirmadas):**
+  1. **Dano acumulado do P0-6.** O auto-reparo destrutivo rodava todo dia às 02:00
+     sobre D-1..D-7 desde antes de junho e só foi corrigido em 25/07 — cada dia de
+     junho passou ~7 noites sendo rebaixado pela régua estreita.
+  2. **P1-13** (`_acc` em memória não sobrevivia a restart): dia com deploy tinha
+     consolidação parcial. O cluster de 22→24/06 (+160/+402/+123) sugere um evento
+     pontual — deploy, restart ou incidente.
+  3. Consolidação interrompida entre wipe e reagregação (risco do P1-11, sem
+     transação) deixando o dia pela metade.
+- **Ação:**
+  1. ⬜ `diag-cobertura-rejeicoes.js 2026-06-01 2026-06-30` — fixar a data a partir
+     da qual a regra é aplicável.
+  2. ⬜ `diag-drift-team.js 2026-06-23` — abrir o outlier de +181% por equipe. Se
+     as equipes faltantes forem poucas e identificáveis, é dia mal consolidado.
+  3. ⬜ Cruzar as datas dos positivos com histórico de deploy/restart (P1-13) e com
+     a janela dos sweeps (P0-6).
+  4. ⬜ Só então decidir: aplicar junho inteiro, aplicar a partir da data de
+     cobertura, ou não aplicar.
+- **Impacto da decisão:** re-consolidar junho **AUMENTA** a produção reportada em
+  ~5,5%. Menos arriscado que reduzir, mas número que sobe depois de reportado
+  também é questionável em auditoria — e pior, pode estar subindo por motivo
+  errado. **Não aplicar às cegas.**
+- **Esforço:** investigação 2–3h.
+- **Relacionado:** P0-6, P1-11, P1-13, P1-16, P2-13. Maio ainda não medido.
 
 ---
 
