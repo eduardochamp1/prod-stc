@@ -158,9 +158,13 @@ async function main() {
   const totPct = (tE + tR) > 0 ? Math.round(100 * tR / (tE + tR)) : 0;
   console.log('TOTAL'.padEnd(porDia ? 24 : 12) + String(tE).padStart(10) + String(tR).padStart(11) + (totPct + '%').padStart(8));
   console.log(`\n⚠️  Antes de concluir divergência, ler o cabeçalho deste arquivo:`);
-  console.log(`   • rejeitada NÃO conta como executada aqui (regra 20/07) — planilha manual pode contar nas duas;`);
-  console.log(`   • dias ~07-17..07-24 estão SUBNOTIFICADOS (P0-6, re-consolidação pendente);`);
-  console.log(`   • turno vira-noite com reconexão pode estar partido entre 2 dias (P1-14, histórico não re-consolidado).\n`);
+  console.log(`   • EXECUTADO aqui = serviço ACEITO pela EDP. Conclusão e rejeição no MESMO dia`);
+  console.log(`     significa que a visita terminou em rejeição (validado no portal, motivo`);
+  console.log(`     "1172 - Pix no WPA") → não é produção. Contagem manual costuma medir a`);
+  console.log(`     VISITA FEITA, então fica MAIOR por construção — são métricas diferentes;`);
+  console.log(`   • nota rejeitada e depois REFEITA conta nas duas colunas (2 eventos, regra 30/07);`);
+  console.log(`   • julho/2026 já está re-consolidado (31/07: P0-6 + P1-14 + P1-15 aplicados).`);
+  console.log(`     JUNHO e MAIO não — nesses meses o EXECUTADO ainda vem inflado pelo P1-15.\n`);
 }
 
 main()
