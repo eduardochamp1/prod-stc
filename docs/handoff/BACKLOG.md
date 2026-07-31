@@ -46,6 +46,7 @@
 | P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | **Fases 1+2 código done** (30/07) — falta SÓ re-consolidar histórico (dry-run→revisar→aplicar) |
 | P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | fix no ar (0ce0a73) + julho re-consolidado 31/07 (−88 OS) · jun/mai pendentes |
 | P1-16 | Exclusão de rejeitada casava pelo dia da SESSÃO → nota rejeitada na sexta voltava a contar como produção | Dados | **done** (31/07) — julho re-consolidado e verificado; jun/mai pendentes |
+| P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -1599,6 +1600,41 @@ feita em PR separado depois dos testes.
     intactos, null; `reconcileOnBoot` com load/save injetados). Suíte: 236/236.
   - **Deploy:** código (`routes/index.js`, `server.js`, `index.html`, novo
     service), sem migração — usa a `app_settings` existente. `git pull` + PM2.
+
+---
+
+## P2-13 — Upsert de dia antigo SOBRESCREVE em vez de somar (subconta ~0,8%)
+
+- **Categoria:** Dados
+- **Status:** pending — pequeno e na direção conservadora, mas é sistemático
+- **Fonte:** resíduo que sobrou depois de fechar o P1-16 em 31/07/2026.
+- **Evidência:**
+  - `consolidateDay(D)` **wipa** só `{D-1, D}`, mas faz **upsert** de linhas pra
+    vários `notaDate` anteriores (`_notaDate` devolve a nota pro dia da conclusão).
+    Nos logs: o passe de 27/07 gravou `dates ["2026-07-20","2026-07-24","2026-07-25",
+    "2026-07-26","2026-07-27"]`.
+  - O upsert é por `(date, team_name, tipo_code)` com **replace**. O passe de D+3
+    vê só as equipes que ainda carregam aquela nota, calcula um count PARCIAL pra
+    `(D, equipe, tipo)` e **sobrescreve** o valor completo que o passe de D+1
+    havia gravado. Último escritor ganha, mesmo com visão parcial.
+  - Medido em julho após a re-consolidação: `diag-impacto-reconsolidacao.js` fica
+    em **+114 OS (+0,8%)** — a tabela subconta ~4 OS/dia. Os últimos dias do
+    intervalo dão 0 justamente porque tiveram menos passes posteriores.
+- **Impacto:** subnotificação sistemática de ~0,8% no número reportado. Direção
+  conservadora (não infla pra EDP) e dentro do limiar do `detectDrift`, por isso
+  não é P0/P1 — mas é erro conhecido, não ruído.
+- **Ação (candidatas, decidir antes de implementar):**
+  1. Alargar o wipe pra cobrir TODAS as datas que o passe vai escrever (ex.:
+     `D-3..D`) e reconstruí-las juntas — correto por construção, mais caro.
+  2. Trocar o replace por união de note-ids nas datas fora da janela de wipe —
+     exige retomar os ids já gravados, que hoje não são persistidos.
+  3. Não escrever datas fora da janela de wipe e deixar o `verify-consolidacao`
+     acusar — ⚠️ **perde** a nota que só aparece depois (era o ganho do P1-13).
+- **Aceite:** `diag-impacto-reconsolidacao.js` de um mês inteiro em ~0 (hoje +0,8%),
+  sem reintroduzir os sintomas do P1-13/P0-6 (verificar com `verify-consolidacao`).
+- **Esforço:** 3–4h + medição. **Rollback:** reverter e re-consolidar.
+- **Relacionado:** P1-13 (a razão de escrever datas antigas), P0-6/P0-7 (a mesma
+  assimetria de janela vista por outro ângulo), P1-16.
 
 ---
 
