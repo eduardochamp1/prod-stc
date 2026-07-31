@@ -97,9 +97,11 @@ async function main() {
   console.log(`   Régua = passe de D+1 (a que de fato grava o dia D). Se você vê aqui uma`);
   console.log(`   queda constante de ~5% que não colapsa depois de aplicar, a régua voltou`);
   console.log(`   a estar errada — ver o comentário do topo (P0-6).`);
-  console.log(`   Inclui, além do fix do P1-15 (rejeições), o P1-14 (turno vira-noite herda o`);
-  console.log(`   dia do início) — este último desloca notas ENTRE dias, quase se anulando`);
-  console.log(`   dentro do mês; o saldo do período é dominado pelo P1-15.\n`);
+  console.log(`   O saldo é dominado pelo P1-16 (exclusão da rejeitada casada pela NOTA e não`);
+  console.log(`   pela sessão) — veja os eventos "consolidate_rejeicao_por_nota" acima: cada um`);
+  console.log(`   é a contagem de notas que voltavam a contar como produção naquele passe.`);
+  console.log(`   Carrega também o P1-15 (chave Date × string) e o P1-14 (vira-noite), este`);
+  console.log(`   último só deslocando notas ENTRE dias, quase se anulando dentro do mês.\n`);
 }
 
 main()
