@@ -59,9 +59,15 @@ async function main() {
     SELECT u.numero, u.uuid, u.team_name,
            CASE WHEN u.cd ~ '^\\d{4}-\\d{2}-\\d{2}' THEN substring(u.cd,1,10) ELSE NULL END AS dia_conclusao,
            to_char(u.snap_date,'YYYY-MM-DD') AS dia_snapshot,
-           EXISTS (SELECT 1 FROM note_rejections r WHERE r.note_id = u.uuid::uuid) AS rejeitada
+           rj.n_rej, rj.rej_at,
+           CASE WHEN u.cd ~ '^\\d{4}-\\d{2}-\\d{2}' THEN u.cd::timestamptz ELSE NULL END AS conc_at
       FROM uni u
       JOIN note_subcategorias sc ON sc.note_id = u.uuid::uuid
+      LEFT JOIN LATERAL (   -- agregado: 1 linha por nota, sem multiplicar
+        SELECT COUNT(*)::int AS n_rej,
+               MAX(COALESCE(r.rejection_date, r.session_date::timestamptz)) AS rej_at
+          FROM note_rejections r WHERE r.note_id = u.uuid::uuid
+      ) rj ON TRUE
      WHERE sc.sub_code = $4
      ORDER BY u.team_name, dia_conclusao NULLS LAST, u.numero`, [de, ate, siglas, sub]);
   // ⚠️ EXISTS (não LEFT JOIN): note_rejections pode ter mais de uma linha por
@@ -86,40 +92,74 @@ async function main() {
   // "EXECUTADA" aqui bate com o EXECUTADO do painel, e o total de linhas (todas
   // as concluídas cruas) é MAIOR. É exatamente aqui que um levantamento manual
   // divergir se contar a mesma nota nas duas colunas.
-  console.log('equipe;numero;dia_conclusao;dia_snapshot;conta_como;uuid');
+  // Classifica pela ORDEM NO TEMPO (o ponto central):
+  //   EXECUTADA  = nunca teve rejeição → produção
+  //   REJ_ANTES  = rejeição ANTERIOR à conclusão → nota devolvida e REFEITA,
+  //                terminou executada → CONTA como produção (painel está certo)
+  //   REJ_APOS   = rejeição POSTERIOR à conclusão → concluiu e a EDP rejeitou
+  //                depois → NÃO é produção. Se o consolidado já contou, o painel
+  //                está SUPERESTIMANDO (rejeição tardia nunca descontada).
+  //   REJ_S_DATA = tem rejeição mas falta data pra decidir → investigar à mão
+  const classificar = (r) => {
+    if (!r.n_rej) return 'EXECUTADA';
+    if (!r.rej_at || !r.conc_at) return 'REJ_S_DATA';
+    return (new Date(r.rej_at) > new Date(r.conc_at)) ? 'REJ_APOS' : 'REJ_ANTES';
+  };
+
+  console.log('equipe;numero;dia_conclusao;dia_snapshot;classificacao;n_rejeicoes;uuid');
   for (const r of rows) {
     console.log([r.team_name, r.numero || '', r.dia_conclusao || '', r.dia_snapshot,
-      r.rejeitada ? 'REJEITADA' : 'EXECUTADA', r.uuid].join(';'));
+      classificar(r), r.n_rej || 0, r.uuid].join(';'));
   }
   // Resumo no stderr pra não sujar o CSV quando redirecionar pra arquivo
   const agg = {};
   for (const r of rows) {
-    const a = agg[r.team_name] || (agg[r.team_name] = { exec: 0, rej: 0 });
-    r.rejeitada ? a.rej++ : a.exec++;
+    const a = agg[r.team_name] || (agg[r.team_name] = { exec: 0, antes: 0, apos: 0, semData: 0 });
+    const c = classificar(r);
+    if (c === 'EXECUTADA') a.exec++;
+    else if (c === 'REJ_ANTES') a.antes++;
+    else if (c === 'REJ_APOS') a.apos++;
+    else a.semData++;
   }
-  console.error(`\n📄 ${rows.length} nota(s) ${sub} concluídas (cruas) · ${de} → ${ate}`);
-  console.error('   EQUIPE'.padEnd(15) + 'EXEC_HOJE'.padStart(10) + 'REJEITADA'.padStart(11)
-    + 'CRUAS'.padStart(8) + 'PAINEL'.padStart(8) + '  Δ(painel−exec_hoje)');
-  let divergentes = 0;
+  console.error(`\n📄 ${rows.length} nota(s) ${sub} concluídas · ${de} → ${ate}`);
+  console.error('   EQUIPE'.padEnd(15) + 'S/REJ'.padStart(7) + 'REFEITA'.padStart(8)
+    + 'REJ_APOS'.padStart(9) + 'S/DATA'.padStart(7) + ' | ' + 'ESPERADO'.padStart(9)
+    + 'PAINEL'.padStart(7) + '   Δ');
+  let tot = { exec: 0, antes: 0, apos: 0, semData: 0, esp: 0, pnl: 0 };
   Object.entries(agg).sort().forEach(([eq, a]) => {
+    const esperado = a.exec + a.antes;      // produção: nunca rejeitada + refeita
     const p = painel[eq] || 0;
-    const d = p - a.exec;
-    if (d !== 0) divergentes++;
-    console.error('   ' + eq.padEnd(12) + String(a.exec).padStart(10) + String(a.rej).padStart(11)
-      + String(a.exec + a.rej).padStart(8) + String(p).padStart(8)
-      + '  ' + (d > 0 ? '+' : '') + d);
+    tot.exec += a.exec; tot.antes += a.antes; tot.apos += a.apos; tot.semData += a.semData;
+    tot.esp += esperado; tot.pnl += p;
+    console.error('   ' + eq.padEnd(12) + String(a.exec).padStart(7) + String(a.antes).padStart(8)
+      + String(a.apos).padStart(9) + String(a.semData).padStart(7) + ' | ' + String(esperado).padStart(9)
+      + String(p).padStart(7) + '   ' + (p - esperado > 0 ? '+' : '') + (p - esperado));
   });
-  console.error(`\n   EXEC_HOJE = concluídas que NÃO constam em note_rejections HOJE.`);
-  console.error(`   REJEITADA = concluídas que constam em note_rejections (a qualquer tempo).`);
-  console.error(`   CRUAS     = todas as concluídas (EXEC_HOJE + REJEITADA).`);
-  console.error(`   PAINEL    = team_daily_subcat_totals (o que o painel/EDP mostra hoje).`);
-  if (divergentes) {
-    console.error(`\n⚠️  ${divergentes} equipe(s) com PAINEL > EXEC_HOJE. Causa mais provável:`);
-    console.error(`   REJEIÇÃO TARDIA — a EDP rejeitou a nota DEPOIS da consolidação do dia.`);
-    console.error(`   O consolidado guarda o estado do dia e o sweep noturno só reprocessa`);
-    console.error(`   D-1..D-7, então rejeição que chega mais tarde nunca é descontada da`);
-    console.error(`   produção. Ou seja: o painel pode estar SUPERESTIMANDO o executado.`);
-    console.error(`   Verificar e, se confirmado, re-consolidar o período (muda número EDP).`);
+  console.error('   ' + '-'.repeat(70));
+  console.error('   ' + 'TOTAL'.padEnd(12) + String(tot.exec).padStart(7) + String(tot.antes).padStart(8)
+    + String(tot.apos).padStart(9) + String(tot.semData).padStart(7) + ' | ' + String(tot.esp).padStart(9)
+    + String(tot.pnl).padStart(7) + '   ' + (tot.pnl - tot.esp > 0 ? '+' : '') + (tot.pnl - tot.esp));
+
+  console.error(`\n   S/REJ    = concluída, nunca rejeitada → produção`);
+  console.error(`   REFEITA  = rejeitada ANTES de concluir (devolvida e refeita) → produção`);
+  console.error(`   REJ_APOS = concluída e rejeitada DEPOIS → NÃO é produção`);
+  console.error(`   S/DATA   = tem rejeição mas falta data pra decidir → conferir à mão`);
+  console.error(`   ESPERADO = S/REJ + REFEITA · PAINEL = team_daily_subcat_totals`);
+  if (tot.apos > 0) {
+    console.error(`\n⚠️  ${tot.apos} nota(s) concluídas foram REJEITADAS DEPOIS.`);
+    if (tot.pnl - tot.esp > 0) {
+      console.error(`   E o painel está ${tot.pnl - tot.esp} acima do esperado → parte dessas`);
+      console.error(`   rejeições tardias NÃO foi descontada da produção consolidada. O sweep`);
+      console.error(`   noturno só reprocessa D-1..D-7, então rejeição que chega depois fica`);
+      console.error(`   fora. Isso SUPERESTIMA o executado reportado. Confirmar e re-consolidar.`);
+    } else {
+      console.error(`   Mas o painel NÃO está acima do esperado — as rejeições tardias já`);
+      console.error(`   foram descontadas na consolidação. Nada a corrigir aqui.`);
+    }
+  }
+  if (tot.semData > 0) {
+    console.error(`\n   ⚠️ ${tot.semData} nota(s) sem data pra decidir a ordem — não entram em`);
+    console.error(`      nenhuma conclusão acima. Ver classificacao=REJ_S_DATA no CSV.`);
   }
   console.error(`\n→ Redirecione pra CSV e abra no Excel ao lado da folha do colaborador:`);
   console.error(`   node scripts/diag-listar-notas-subcat.js ${de} ${ate} ${sub} --equipes=EQ > /tmp/eq.csv`);
