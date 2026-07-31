@@ -234,6 +234,66 @@ function _ymdDate(v) {
  * contar como produção. Medido em L0/SJC (01→25/07): 509 de 734 escaparam, painel
  * 1.732 contra 1.223 corretas. Mesma família do P2-12 (Date × string).
  */
+/**
+ * Índice de rejeições por NOTA+EQUIPE → dias em que aquela equipe rejeitou.
+ *
+ * ⚠️ POR QUE POR NOTA E NÃO POR SESSÃO (31/07/2026 — regra do José):
+ *   "Uma visita não conta como executada por si só. Se a equipe vai à nota e ela
+ *    é rejeitada, conta SOMENTE como rejeitada pra essa equipe. Se a nota for
+ *    reprogramada e a equipe (a mesma ou outra) retornar e finalizar 100%, aí
+ *    conta como executada SÓ pra quem finalizou 100%."
+ *
+ * O índice por session_date (`_rejIndexByTeamDate`) não cumpre isso: a WPA
+ * carrega as concluídas ACUMULADAS em cada sessão, então uma nota concluída e
+ * rejeitada na sexta reaparece nas sessões de sábado e segunda. O passe daqueles
+ * dias procurava a rejeição com a chave do dia da SESSÃO (`2026-07-06|ECTSJ80`)
+ * enquanto a rejeição está gravada no dia da NOTA (`2026-07-03|ECTSJ80`) → não
+ * casava, a nota voltava a contar como produção e era lançada em 03/07. Pior:
+ * `consolidateDay` grava linhas de dias anteriores SEM wipá-los, então o valor
+ * inflado sobrescrevia o correto. É a origem do P0-7 (tabela acima da régua,
+ * concentrada nas sextas, cuja produção passa de novo no fim de semana).
+ *
+ * Usa `rejection_date` (o RejectedAt da WPA, autoritativo) e cai pra
+ * `session_date` quando ausente — session_date é o dia em que o coletor VIU a
+ * rejeição, que pode ser posterior ao fato.
+ *
+ * @param   {Array} rejRows  linhas de note_rejections
+ * @returns {Map<string, string[]>}  'note_id|team_name' → ['YYYY-MM-DD', …]
+ */
+function _rejIndexByNote(rejRows) {
+  const m = new Map();
+  for (const r of (rejRows || [])) {
+    if (!r || !r.note_id || !r.team_name) continue;
+    const dia = _ymdDate(r.rejection_date || r.session_date);
+    if (!dia) continue;
+    const k = `${r.note_id}|${r.team_name}`;
+    const atual = m.get(k);
+    if (!atual) m.set(k, [dia]);
+    else if (!atual.includes(dia)) atual.push(dia);
+  }
+  return m;
+}
+
+/**
+ * A nota conta como EXECUTADA pra esta equipe neste dia? Decisão PURA.
+ *
+ * Regra (José, 31/07/2026) — a execução pertence a quem FINALIZOU 100%:
+ *   rejeição no MESMO dia da conclusão  → a visita terminou em rejeição → NÃO
+ *   rejeição DEPOIS da conclusão        → a EDP recusou o serviço       → NÃO
+ *   rejeição ANTES da conclusão         → nota reprogramada e refeita   → SIM
+ * Comparação por DIA (não por minuto): rejeição 1 min antes da conclusão é o
+ * mesmo evento, não uma nota refeita — foi o que a validação no portal mostrou
+ * (notas 030009946354 e 030009957459, motivo "1172 - Pix no WPA").
+ *
+ * @param   {string[]|undefined} diasRejeicao  dias em que a equipe rejeitou a nota
+ * @param   {string} notaDate                  dia atribuído à conclusão
+ * @returns {boolean}
+ */
+function _contaComoExecutada(diasRejeicao, notaDate) {
+  if (!diasRejeicao || !diasRejeicao.length || !notaDate) return true;
+  return !diasRejeicao.some(d => d >= notaDate);
+}
+
 function _rejIndexByTeamDate(rejRows) {
   const m = new Map();
   for (const r of (rejRows || [])) {
@@ -640,6 +700,58 @@ async function consolidateDay(date, opts = {}) {
     log.warn('consolidate_rejections_enrich_failed', { date, msg: errRej.message });
   }
 
+  // 2ª passada: rejeição casada pela NOTA, não pela sessão (31/07/2026).
+  //
+  // A busca por session_date acima só pega a rejeição quando a sessão da equipe
+  // é do MESMO dia da rejeição. Mas a WPA carrega as concluídas ACUMULADAS em
+  // cada sessão: a nota concluída e rejeitada na sexta reaparece nas sessões de
+  // sábado e segunda, e nesses passes a chave (`2026-07-06|ECTSJ80`) não casava
+  // com a da rejeição (`2026-07-03|ECTSJ80`) → a nota voltava a contar como
+  // produção, lançada em 03/07. E como o wipe cobre só {D-1, D}, esse valor
+  // inflado sobrescrevia o dia 03/07 já correto. Origem medida do P0-7 (tabela
+  // acima da régua, concentrada nas sextas).
+  //
+  // Regra do José (31/07): a execução pertence a quem FINALIZOU 100%. Rejeição
+  // no mesmo dia da conclusão ou depois ⇒ não é produção; antes ⇒ nota
+  // reprogramada e refeita ⇒ é produção de quem finalizou. Ver
+  // _rejIndexByNote/_contaComoExecutada.
+  //
+  // Injeta em notasRejeitadas (em vez de mudar a agregação) pra que
+  // _aggregateTeamDailyTotals E upsertSubcatTotals apliquem a MESMA regra — se
+  // fossem caminhos diferentes, a aba de tipos e a de subcategorias divergiriam.
+  try {
+    const idsConcluidas = new Set();
+    for (const tm of teams) {
+      for (const n of (tm.notasConcluidas || [])) if (n && n.id) idsConcluidas.add(n.id);
+    }
+    if (idsConcluidas.size) {
+      const { data: rejPorNota } = await sb
+        .from('note_rejections')
+        .select('note_id, team_name, session_date, rejection_date')
+        .in('note_id', [...idsConcluidas]);
+      const byNote = _rejIndexByNote(rejPorNota);
+      let injetadas = 0;
+      for (const tm of teams) {
+        if (!Array.isArray(tm.notasRejeitadas)) tm.notasRejeitadas = [];
+        const have = new Set(tm.notasRejeitadas.map(n => n && n.id).filter(Boolean));
+        // MESMO sessDate que a agregação usa (inclui o _effDate do P1-14).
+        const sd = tm._effDate || _sessionDate(tm);
+        for (const n of (tm.notasConcluidas || [])) {
+          if (!n || !n.id || have.has(n.id)) continue;
+          const dias = byNote.get(`${n.id}|${tm.teamName}`);
+          if (!dias) continue;
+          if (_contaComoExecutada(dias, _notaDate(n, sd, tm.sessionBegin))) continue;
+          tm.notasRejeitadas.push({ id: n.id });
+          have.add(n.id);
+          injetadas++;
+        }
+      }
+      if (injetadas) log.info('consolidate_rejeicao_por_nota', { date, injetadas });
+    }
+  } catch (errRejNota) {
+    log.warn('consolidate_rejections_por_nota_failed', { date, msg: errRejNota.message });
+  }
+
   // Modo dry-run: calcula o que a produtividade SERIA (sem wipe, sem gravar) e
   // retorna. Usado por scripts/reconsolidar-produtividade.js pra medir o impacto
   // da regra rejeitada > concluída antes de aplicar no histórico.
@@ -961,4 +1073,5 @@ module.exports = {
   _unionTeamsFromSnapshots,   // P1-13 — união dos snapshots do dia
   _effectiveSessionDates,     // P1-14 — reconexão vira-noite herda o dia do turno
   _rejIndexByTeamDate, _ymdDate,   // P1-15 — chave do enriquecimento de rejeições
+  _rejIndexByNote, _contaComoExecutada,   // P1-16 — execução pertence a quem finalizou 100%
 };

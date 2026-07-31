@@ -45,6 +45,7 @@
 | P1-13 | `_acc` em memória não sobrevive a restart → produção subnotifica em dia de deploy | Dados | **código done** — falta re-consolidar histórico (dry-run mede) |
 | P1-14 | Reconexão vira-noite parte a produção do turno em 2 dias (relogin cruza meia-noite) | Dados | **Fases 1+2 código done** (30/07) — falta SÓ re-consolidar histórico (dry-run→revisar→aplicar) |
 | P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | fix no ar (0ce0a73) + julho re-consolidado 31/07 (−88 OS) · jun/mai pendentes |
+| P1-16 | Exclusão de rejeitada casava pelo dia da SESSÃO → nota rejeitada na sexta voltava a contar como produção | Dados | **código done** (31/07) — falta medir e re-consolidar |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -1058,6 +1059,71 @@ feita em PR separado depois dos testes.
 - **Relacionado:** regra de 20/07 (`project-regra-rejeitada-vs-concluida`),
   P0-6, P1-14. ⚠️ Nesta apuração 4 diagnósticos meus deram falso positivo antes
   de chegar aqui — validar QUALQUER número novo com 2 caminhos independentes.
+- **31/07 (tarde):** a regra foi reformulada pelo José de forma mais estrita e
+  revelou que a exclusão estava com a CHAVE ERRADA → ver **P1-16**.
+
+---
+
+## P1-16 — Exclusão de rejeitada casava pelo dia da SESSÃO, não pelo da NOTA
+
+- **Categoria:** Dados (produção reportada à EDP)
+- **Status:** **código done** (31/07/2026) — falta medir o impacto e re-consolidar
+- **REGRA (José, 31/07/2026) — é ESTA que manda, supera a de 20/07 e detalha a de 30/07:**
+  > "Uma visita de uma equipe a uma nota não pode contar como executada por si
+  > só; a nota deve ser contada como executada quando for finalizada pela equipe.
+  > Se uma equipe vai a uma nota e essa nota é rejeitada, ela deve contar somente
+  > como rejeitada para essa equipe. Nos casos em que uma nota é rejeitada por uma
+  > equipe (e conta como rejeitada para ela) e essa nota for reprogramada, quando
+  > a equipe (seja ela a mesma ou outra) retornar para executar a nota e ela
+  > finalizar a nota 100%, ela vai contar como executada somente para a equipe que
+  > finalizou ela 100%."
+  - Operacionalizada como: rejeição no MESMO dia da conclusão → não é produção;
+    DEPOIS → não é produção; ANTES → é produção de quem concluiu. Comparação por
+    DIA, não por minuto (a validação no portal mostrou rejeição no mesmo minuto do
+    "Fim do Trabalho", motivo "1172 - Pix no WPA").
+- **Evidência (reproduzida direto nas funções puras, 31/07):**
+  ```
+  nota X: concluída sexta 03/07, REJEITADA pela ECTSJ80 na sexta
+  sessão de segunda 06/07 da ECTSJ80 ainda carrega X nas concluídas
+  chave procurada pelo enrich: 2026-07-06|ECTSJ80   (dia da SESSÃO)
+  chave gravada na rejeição:   2026-07-03|ECTSJ80   (dia da NOTA)
+  → não casa → X conta como EXECUTADA, lançada em 03/07
+  ```
+  - A WPA carrega as concluídas **acumuladas** em cada sessão, então toda nota
+    reaparece nos passes dos dias seguintes.
+  - Agravante: `consolidateDay` grava linhas de dias anteriores **sem wipá-los**
+    → o valor inflado **sobrescreve** o dia já correto.
+  - Além disso o enrich só buscava `session_date IN (D-1, D)`: mesmo com a chave
+    certa, rejeição mais antiga não era carregada.
+- **Impacto:** é a **origem medida do P0-7** — tabela acima da régua em 5 dias,
+  **4 deles sexta-feira** (03, 10, 17, 24/07), justamente os dias cuja produção
+  passa de novo nas sessões de sábado e segunda. Explica também por que o apply
+  de julho mexeu tão pouco (−88 OS): o P1-15 corrigia a chave `Date × string`,
+  mas a chave em si era do conceito errado.
+- **Ação:**
+  1. ✅ `_rejIndexByNote(rejRows)` — índice `note_id|team_name` → dias de rejeição,
+     usando `rejection_date` (o RejectedAt da WPA) com fallback pra `session_date`.
+  2. ✅ `_contaComoExecutada(diasRejeicao, notaDate)` — a regra como função pura.
+  3. ✅ 2ª passada no `consolidateDay`: busca rejeições **pelos note_id das
+     concluídas** (sem janela de data) e injeta em `notasRejeitadas` quando a
+     regra reprova. Injeta em vez de mudar a agregação **de propósito**, pra que
+     `_aggregateTeamDailyTotals` e `upsertSubcatTotals` apliquem a MESMA regra —
+     caminhos separados fariam a aba de tipos divergir da de subcategorias.
+  4. ✅ `test/regraExecutadaRejeitada.test.js` (16 casos) — cada frase da regra
+     virou teste, incluindo o vazamento sexta→segunda e "A rejeita, B finaliza".
+  5. ⬜ **Medir** com `scripts/diag-impacto-reconsolidacao.js` (régua D+1) antes de
+     re-consolidar. A produção reportada **vai cair** — decisão do José.
+  6. ⬜ Re-verificar o P0-7 depois: se esta era a causa, o drift negativo das
+     sextas deve encostar em zero e a régua de D+1 volta a ser suficiente.
+- **Aceite:**
+  - [x] `node --test` 343 → 357 verdes.
+  - [ ] Impacto medido por dia no recorte da whitelist, revisado com o José.
+  - [ ] `verify-consolidacao.js` sem drift negativo nas sextas após re-consolidar.
+- **Esforço:** fix 1h (feito). Medição ~5min. Re-consolidação ~10min.
+- **Rollback:** reverter o commit (volta a contar visita rejeitada como produção)
+  e re-consolidar o período.
+- **Relacionado:** P1-15 (mesma linha de código, chave diferente), P0-7 (é o
+  sintoma), P1-14 (`_effDate` é usado no cálculo do `notaDate` aqui).
 
 ---
 
