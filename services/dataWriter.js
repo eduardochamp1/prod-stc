@@ -208,6 +208,44 @@ const RECONEXAO_MAX_GAP_MIN = (() => {
 })();
 
 /**
+ * Normaliza um valor DATE do Postgres para 'YYYY-MM-DD'. O driver `pg` devolve
+ * DATE como objeto `Date` (o pgShim não registra parser pro OID 1082). Usa os
+ * getters LOCAIS porque o pg parseia DATE como meia-noite local — toISOString()
+ * poderia escorregar um dia em servidor a oeste de UTC.
+ */
+function _ymdDate(v) {
+  if (v instanceof Date) {
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
+  return String(v || '').slice(0, 10);
+}
+
+/**
+ * FUNÇÃO PURA (testável): índice `${session_date}|${team_name}` → Set(note_id)
+ * das rejeições persistidas, usado pra reaplicar a regra rejeitada > concluída
+ * na consolidação.
+ *
+ * bug encontrado em 31/07/2026: a versão anterior montava a chave com
+ * `${r.session_date}` direto — e session_date vem do pg como OBJETO Date, então
+ * a chave saía "Wed Jul 01 2026 00:00:00 GMT+0000|ECTSJ80" enquanto a busca
+ * usava "2026-07-01|ECTSJ80" (_sessionDate devolve string). As chaves NUNCA
+ * casavam: o enriquecimento era código morto e nenhuma rejeição persistida era
+ * reaplicada. Efeito: nota rejeitada cujo payload a WPA já tinha limpo voltava a
+ * contar como produção. Medido em L0/SJC (01→25/07): 509 de 734 escaparam, painel
+ * 1.732 contra 1.223 corretas. Mesma família do P2-12 (Date × string).
+ */
+function _rejIndexByTeamDate(rejRows) {
+  const m = new Map();
+  for (const r of (rejRows || [])) {
+    if (!r || !r.note_id) continue;
+    const k = `${_ymdDate(r.session_date)}|${r.team_name}`;
+    if (!m.has(k)) m.set(k, new Set());
+    m.get(k).add(r.note_id);
+  }
+  return m;
+}
+
+/**
  * FUNÇÃO PURA (testável): data operacional EFETIVA de cada sessão, linkando
  * reconexões vira-noite ao dia do INÍCIO DO TURNO (P1-14, decisão José 30/07/2026).
  *
@@ -586,12 +624,10 @@ async function consolidateDay(date, opts = {}) {
       .select('note_id, team_name, session_date')
       .in('session_date', [dayMinus1, date]);
     if (Array.isArray(rejRows) && rejRows.length) {
-      const byTeamDate = new Map();
-      for (const r of rejRows) {
-        const k = `${r.session_date}|${r.team_name}`;
-        if (!byTeamDate.has(k)) byTeamDate.set(k, new Set());
-        byTeamDate.get(k).add(r.note_id);
-      }
+      // _rejIndexByTeamDate normaliza session_date (Date → 'YYYY-MM-DD'). Sem
+      // isso as chaves não casavam com _sessionDate e nada era reaplicado —
+      // bug de 31/07/2026, ver a nota na própria função.
+      const byTeamDate = _rejIndexByTeamDate(rejRows);
       for (const tm of teams) {
         const sd = _sessionDate(tm);
         const extra = byTeamDate.get(`${sd}|${tm.teamName}`);
@@ -888,4 +924,5 @@ module.exports = {
   _sessionDate, _notaDate, _aggregateTeamDailyTotals,
   _unionTeamsFromSnapshots,   // P1-13 — união dos snapshots do dia
   _effectiveSessionDates,     // P1-14 — reconexão vira-noite herda o dia do turno
+  _rejIndexByTeamDate, _ymdDate,   // P1-15 — chave do enriquecimento de rejeições
 };
