@@ -120,10 +120,11 @@ async function main() {
     return 'REJ_S_DATA';
   };
 
-  console.log('equipe;numero;dia_conclusao;dia_snapshot;classificacao;n_rejeicoes;uuid');
+  const fmtTs = (t) => t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '';
+  console.log('equipe;numero;dia_conclusao;data_rejeicao;classificacao;n_rejeicoes;dia_snapshot;uuid');
   for (const r of rows) {
-    console.log([r.team_name, r.numero || '', r.dia_conclusao || '', r.dia_snapshot,
-      classificar(r), r.n_rej || 0, r.uuid].join(';'));
+    console.log([r.team_name, r.numero || '', r.dia_conclusao || '', fmtTs(r.rej_at),
+      classificar(r), r.n_rej || 0, r.dia_snapshot, r.uuid].join(';'));
   }
   // Resumo no stderr pra não sujar o CSV quando redirecionar pra arquivo
   const agg = {};
@@ -182,6 +183,33 @@ async function main() {
     console.error(`\n   ⚠️ ${tot.semData} nota(s) sem data pra decidir a ordem — não entram em`);
     console.error(`      nenhuma conclusão acima. Ver classificacao=REJ_S_DATA no CSV.`);
   }
+  // AMOSTRA PRA CONFERIR NO PORTAL DA EDP (fonte autoritativa). Pega notas
+  // REFEITA (rejeitada ANTES, concluída DEPOIS) com o maior intervalo entre os
+  // dois eventos — são as mais fáceis de enxergar no portal. Objetivo: validar
+  // a regra do José (rejeição e execução são 2 eventos) contra a EDP antes de
+  // mexer em produção. Ver P1-15 no BACKLOG.
+  const refeitas = rows
+    .filter(r => classificar(r) === 'REJ_ANTES' && r.rej_at && r.conc_at)
+    .map(r => ({ ...r, gapH: (new Date(r.conc_at) - new Date(r.rej_at)) / 3600000 }))
+    .sort((a, b) => b.gapH - a.gapH)
+    .slice(0, 8);
+  if (refeitas.length) {
+    console.error(`\n🔍 AMOSTRA PRA CONFERIR NO PORTAL DA EDP (${refeitas.length} notas "refeitas")`);
+    console.error('   NOTA'.padEnd(17) + 'EQUIPE'.padEnd(11) + 'REJEITADA EM'.padEnd(18)
+      + 'EXECUTADA EM'.padEnd(13) + 'INTERVALO');
+    console.error('   ' + '-'.repeat(72));
+    for (const r of refeitas) {
+      const dias = Math.round(r.gapH / 24);
+      console.error('   ' + String(r.numero || r.uuid).padEnd(14) + r.team_name.padEnd(11)
+        + fmtTs(r.rej_at).padEnd(18) + String(r.dia_conclusao || '').padEnd(13)
+        + (dias >= 1 ? `${dias} dia(s)` : `${Math.round(r.gapH)}h`));
+    }
+    console.error('   ' + '-'.repeat(72));
+    console.error(`   No portal, confirmar em cada uma: (a) houve rejeição na 1ª data,`);
+    console.error(`   (b) foi reprogramada, (c) a EDP reconhece como EXECUTADA depois.`);
+    console.error(`   Se sim, a regra atual (excluir da produção) está errada — ver P1-15.`);
+  }
+
   console.error(`\n→ Redirecione pra CSV e abra no Excel ao lado da folha do colaborador:`);
   console.error(`   node scripts/diag-listar-notas-subcat.js ${de} ${ate} ${sub} --equipes=EQ > /tmp/eq.csv`);
   console.error(`   Compare pelo NÚMERO da OS: o que ele tem e não está aqui (e vice-versa)`);
