@@ -205,6 +205,17 @@ async function main() {
       console.log(`   Quem sela um dia é o passe do dia SEGUINTE. Opções:`);
       console.log(`     • se ${ate} é hoje: o cron das 00:15 sela sozinho, nada a fazer;`);
       console.log(`     • se ${ate} é passado: rode o intervalo com 1 dia extra no fim.`);
+      console.log('');
+      // Descoberto em 31/07/2026 aplicando junho em trechos pra PULAR dias sem
+      // cobertura de rejeição: não funcionou. O passe do 1º dia do intervalo wipa
+      // {1ºdia-1, 1ºdia}, então o dia ANTERIOR ao intervalo é apagado e reescrito
+      // mesmo estando fora dele. Pular um dia exige que o intervalo comece 2 dias
+      // depois dele, não 1.
+      console.log(`⚠️  ${_addDays(de, -1)} está FORA do intervalo mas foi APAGADO e reescrito:`);
+      console.log(`   o passe de ${de} wipa {${_addDays(de, -1)}, ${de}}. Se você escolheu este`);
+      console.log(`   início pra PULAR ${_addDays(de, -1)}, não funcionou — comece 2 dias depois`);
+      console.log(`   do dia que quer preservar. ${_addDays(de, -2)} só recebeu upsert parcial.`);
+      console.log('');
       console.log(`   Confira o resultado com: node scripts/verify-consolidacao.js ${de} ${ate}\n`);
     }
   } finally {

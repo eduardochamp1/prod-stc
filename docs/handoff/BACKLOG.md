@@ -1653,13 +1653,45 @@ feita em PR separado depois dos testes.
   2. ✅ `diag-drift-team.js 2026-06-23` — confirmado: consolidação parcial por setor.
   3. ⬜ Repetir o `diag-drift-team` em **22/06 e 24/06** (o cluster) e em 28/06 e
      20/06 — confirmar o mesmo padrão de equipes zeradas antes de generalizar.
-  4. ⬜ Aplicar em intervalos que PULEM 01, 02, 09 e 10/06, com 1 dia extra no fim
-     de cada trecho pra selar o último dia.
-  5. ⬜ Verificar com `verify-consolidacao.js` e revisar o saldo final com o José —
-     junho **sobe** ~5%, e produção que sobe depois de reportada também precisa de
+  4. ⚠️ **APLICADO em 31/07 — e o plano de PULAR dias tinha um FURO.** Rodado em
+     dois trechos (`06-03→06-08` e `06-11→07-01`) pra pular 01, 02, 09 e 10/06.
+     **Não funcionou:** o passe do 1º dia do intervalo wipa `{1ºdia-1, 1ºdia}`, então
+     - `06-02` foi APAGADO e reescrito pelo passe de `06-03`;
+     - `06-10` foi APAGADO e reescrito pelo passe de `06-11`;
+     - `06-01` e `06-09` receberam upsert parcial (não foram wipados).
+     Pra preservar um dia, o intervalo tem de começar **2 dias depois** dele. O
+     `backfill-consolidate` agora avisa isso ao terminar.
+     Saldos aplicados: trecho 1 (2.897 → 2.764 = −133), trecho 2 (15.058 → 14.526
+     = −532) na tabela inteira.
+  5. ⚠️ **`2026-07-01` ficou na régua de D** (era o último dia do trecho 2) — e
+     julho é o mês reportado, já verificado. Precisa re-rodar julho pra selar.
+  6. ❓ **A premissa da proteção pode estar ERRADA — verificar.** Eu afirmei que
+     dia sem `note_rejections` infla na re-consolidação porque "a WPA já limpou o
+     payload". Mas `_unionTeamsFromSnapshots` une `notasRejeitadas` de **todos os
+     snapshots do dia** (a cada 15min), então a rejeição capturada em qualquer
+     snapshot sobrevive — `note_rejections` é **suplemento**, não fonte única.
+     Se for o caso, os 4 dias não precisavam de proteção e o `+88` do 10/06 é
+     recuperação estrutural, igual ao 23/06. **Checar com
+     `diag-drift-team.js 2026-06-10`**: se o gap vier de equipes com `gravado=0`,
+     é estrutural, não rejeição.
+  7. ⬜ `verify-consolidacao.js 2026-06-01 2026-06-30` e revisar o saldo com o José
+     — junho **sobe**, e produção que sobe depois de reportada também precisa de
      explicação escrita pra auditoria.
-  6. ⬜ Medir maio (`diag-impacto-reconsolidacao.js 2026-05-01 2026-05-31`) e rodar
+  8. ⬜ Medir maio (`diag-impacto-reconsolidacao.js 2026-05-01 2026-05-31`) e rodar
      a mesma checagem de cobertura antes de decidir.
+- **Confirmação do padrão nos outros dias do cluster** (`diag-drift-team`):
+  - `22/06`: gravado 913 · união 922/925 · líquido −9, mas +216/−225 por equipe —
+    ETGPR15 0×46, ETPIU15 0×32 zeradas, e SJC inflada (ECTSJ88 29×13, ECTSJ80 15×2).
+    Os dois efeitos quase se cancelam no total; por equipe, não.
+  - `24/06`: gravado 597 · união 802/804 · líquido −205, com ETALE15 1×35,
+    ETPIU15 0×33, ECPIU90 0×27, ETGPR16 0×21, ETMRT16 0×20 zeradas.
+  - Padrão confirmado: **equipes inteiras sem linha, concentradas fora de SJC**.
+    Consolidação parcial por setor, não questão de régua.
+- **🐛 CURIOSIDADE A INVESTIGAR:** os passes de 26 e 27/06 gravaram linha para
+  `"2026-01-16"` (`team_daily_totals_upserted dates ["2026-01-16", …]`) — data
+  anterior ao início do projeto (abr/2026). Alguma nota tem `conclusionDate` de
+  janeiro e o `_notaDate` a joga pra lá. Inofensivo hoje (ninguém consulta jan),
+  mas indica que `_notaDate` aceita data arbitrária do payload sem sanity check.
 - **Impacto da decisão:** re-consolidar junho **AUMENTA** a produção reportada em
   ~5,5%. Menos arriscado que reduzir, mas número que sobe depois de reportado
   também é questionável em auditoria — e pior, pode estar subindo por motivo
