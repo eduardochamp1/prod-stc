@@ -5039,12 +5039,28 @@ ${matrizHTML}
           allLabel: 'Todas as Regionais',
         });
         _histMultiInited = true;
-        if (currentRegional && currentRegional !== 'ALL' && !String(currentRegional).includes(',')) {
-          try {
-            MultiSelect.setValues('hist-regional-select', [currentRegional]);
+        // Trava a regional SÓ quando o USUÁRIO tem acesso a uma regional (escopo
+        // de permissão), nunca com base em currentRegional.
+        //
+        // bug reportado em 13/08/2026: o admin (3 regionais) abria a Histórico
+        // com "Guarapari" selecionado em outra aba → currentRegional='GUA' → a
+        // aba TRAVAVA em Guarapari e não voltava mais, mesmo trocando pra "Todas"
+        // nas outras abas (a init roda 1x e o setDisabled(true) nunca era desfeito).
+        // currentRegional é o FILTRO corrente (mutável); userRegionals é o ESCOPO
+        // (imutável, do JWT). Só o escopo pode governar uma trava de permissão.
+        // A Gráficos nunca travou porque testava sess.regional, que não existe no
+        // token v2 — as duas abas ficaram inconsistentes.
+        try {
+          if (userRegionals.length === 1) {
+            MultiSelect.setValues('hist-regional-select', [userRegionals[0]]);
             MultiSelect.setDisabled('hist-regional-select', true);
-          } catch (_) { /* ok */ }
-        }
+          } else if (Array.isArray(selectedRegionals)
+                     && selectedRegionals.length
+                     && selectedRegionals.length < userRegionals.length) {
+            // reflete a seleção corrente das outras abas, mas mantém DESTRAVADO
+            MultiSelect.setValues('hist-regional-select', [...selectedRegionals]);
+          }
+        } catch (_) { /* ok */ }
       }
 
       // BRT (UTC-3) — UTC puro daria "amanhã" após 21h, quebrando o range padrão
