@@ -49,7 +49,7 @@
 | P1-17 | Junho mede +717 (+5,5%) na re-consolidação — sinal INVERTIDO e errático; NÃO aplicar sem investigar | Dados | pending — investigação |
 | P1-18 | `/settings/:key` lia/gravava QUALQUER chave de app_settings só com auth (escalonamento + IDOR) | Segurança | **done** (13/08) — rota restrita à `monitor-filters:<próprio-user>`; 9 testes |
 | P1-19 | Aba Histórico travava a regional pra admin (usava `currentRegional`, não `userRegionals`) | Frontend | **done** (13/08, 5e2c17a) — restringia, não vazava |
-| P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | pending — implementar breaker + backlog |
+| P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | **código done** (13/08) — breaker por conta + 13 testes; senha do `.env` é ação humana |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
@@ -516,7 +516,7 @@
 ## P1-20 — Login WPA sem circuit breaker trava a conta na EDP
 
 - **Categoria:** Ops / Backend (continuidade da ingestão)
-- **Status:** pending
+- **Status:** **código done** (13/08/2026) — falta só o deploy e a ação humana da senha
 - **Incidente (13/08/2026):** entre 17:45 e 18:00 a senha da conta WPA `sp` parou
   de ser aceita ("Usuário ou senha inválidos" — a EDP rotacionou a senha). O
   sistema seguiu pedindo token a cada trigger (snapshot 15/15min + notas + teams);
@@ -527,17 +527,23 @@
   tentativas numa chamada. As 5 vêm de **chamadores independentes** que não
   compartilham o conhecimento "o último login falhou por senha". Cada um reaprende
   do zero e gasta uma tentativa do orçamento da EDP.
-- **Ação (a implementar):** circuit breaker por conta em `getToken`:
-  - marcar o erro como `isInvalidCredential` quando a mensagem da WPA indica
-    usuário/senha inválidos, e `isAccountLocked` quando indica bloqueio (parsear o
-    "aguarde até HH:MM" pra saber até quando).
-  - guardar em `_tokens`/estado por conta um `blockedUntil`; enquanto vigente,
-    `getToken` **rejeita sem chamar `/signin`** (devolve o último erro), poupando o
-    orçamento de tentativas.
-  - resetar em: login bem-sucedido, reinício do processo, ou fim de `blockedUntil`.
-  - função pura testável (`_classifyLoginError(msg)` + `_breakerState`) — cobrir
-    invalid-cred, locked-com-horário, transiente (não abre o breaker), sucesso
-    (fecha o breaker).
+- **✅ IMPLEMENTADO (13/08/2026) — breaker por conta em `login()`** (`services/
+  wpaService.js`; `login()` é o choke point de `getToken`, `forceRefresh` e o cron
+  de token, então cobre tudo):
+  - `_classifyLoginError(msg)` — `invalid_credential` / `account_locked` / `other`.
+  - `_computeUnlockUntil(msg, nowMs)` — parseia "aguarde até HH:MM" e devolve a
+    PRÓXIMA ocorrência em BRT (+2min de margem). Puro, `nowMs` injetável.
+  - `_breaker` (Map por conta) com `until`; `login()` no topo rejeita sem tocar no
+    `/signin` enquanto vigente (`err.isBreakerOpen`).
+  - cooldown: `account_locked` → até o horário do desbloqueio; `invalid_credential`
+    → longo (12h, `WPA_INVALID_CRED_COOLDOWN_MIN`) porque não se cura sozinho — só
+    troca de `.env` + restart, e o restart zera o breaker (é em memória).
+  - reseta em: login OK (`_clearBreaker`), restart, ou fim do `until`.
+  - erro transiente (rede/Azure cold-start) **não** abre o breaker — o retry curto
+    do cold-start segue funcionando.
+  - `test/loginBreaker.test.js` (13 casos): classificação, parse do horário
+    (18:30→03:32 e "já passou→amanhã"), abrir/expirar, isolamento por conta, e
+    `login()` rejeitando sem rede. Suíte 366 → 379.
 - **Efeito:** senha errada continua parando a coleta (inevitável), mas a conta
   **não trava** → corrigir `.env` + `pm2 restart` recupera na hora, sem esperar a
   janela de bloqueio da EDP.

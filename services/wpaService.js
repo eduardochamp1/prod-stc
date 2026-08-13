@@ -93,6 +93,77 @@ function _sectorFromPath(path) {
 const _tokens = new Map();   // accountKey → { token, expireAt }
 const _loginPromises = new Map();   // accountKey → Promise pendente (serializa concorrência)
 
+// ── CIRCUIT BREAKER de login (P1-20, incidente 13/08/2026) ───────────────────
+// Quando a EDP rejeita a credencial ("Usuário ou senha inválidos") ou bloqueia a
+// conta ("aguarde até HH:MM"), tentar de novo NÃO ajuda — só queima o orçamento
+// de 5 tentativas da EDP e trava a conta. Como cada trigger (snapshot, notas,
+// teams, cron de token das 45min) pede token de forma independente, sem breaker
+// eles reaprendem o erro um a um e, em 5 tentativas espalhadas, a conta trava:
+// foi o que aconteceu em 13/08 — 17:45 OK → 18:00 "senha inválida" → 18:30
+// "bloqueado até 03:30", coleta parada a noite toda.
+//
+// O breaker guarda, POR CONTA, um `until`: enquanto vigente, login() rejeita SEM
+// tocar no /signin (1 tentativa e para). Reseta em: login bem-sucedido, reinício
+// do processo (estado é em memória de propósito — .env corrigido + restart
+// recupera na hora), ou fim do `until`. Erro transiente (rede / Azure cold-start)
+// NÃO abre o breaker.
+const _breaker = new Map();   // accountKey → { until: ms, kind, message }
+
+// Credencial inválida NÃO se cura sozinha (só troca de .env + restart). Por isso
+// o cooldown é longo: garante ~1 tentativa por janela → nunca chega a 5 → nunca
+// trava a conta. O restart limpa o estado, então isto não atrasa a recuperação.
+const INVALID_CRED_COOLDOWN_MS =
+  (Number(process.env.WPA_INVALID_CRED_COOLDOWN_MIN) || 720) * 60_000;   // default 12h
+const LOCKED_FALLBACK_COOLDOWN_MS = 4 * 3_600_000;   // se não der pra ler o "HH:MM"
+
+/** Classifica a mensagem de erro de login da WPA. Pura. */
+function _classifyLoginError(message) {
+  const m = String(message || '');
+  if (/bloquead|aguarde\s+at[ée]/i.test(m)) return { kind: 'account_locked' };
+  if (/usu[áa]rio\s+ou\s+senha\s+inv[áa]lid|senha\s+inv[áa]lid|invalid\s+(user|password|credential)/i.test(m)) {
+    return { kind: 'invalid_credential' };
+  }
+  return { kind: 'other' };
+}
+
+/**
+ * Extrai "aguarde até HH:MM" e devolve o timestamp (ms) da PRÓXIMA ocorrência
+ * desse horário em BRT a partir de `nowMs`, com 2 min de margem. null se não achar.
+ * Puro (nowMs injetável pra teste). BRT = UTC-3, calculado só a partir do epoch.
+ */
+function _computeUnlockUntil(message, nowMs = Date.now()) {
+  const m = String(message || '').match(/aguarde\s+at[ée]\s*(\d{1,2}):(\d{2})/i);
+  if (!m) return null;
+  const targetMin = (+m[1]) * 60 + (+m[2]);
+  const brt = new Date(nowMs - 3 * 3_600_000);
+  const nowMin = brt.getUTCHours() * 60 + brt.getUTCMinutes();
+  let delta = targetMin - nowMin;
+  if (delta <= 0) delta += 1440;                       // vira o dia
+  return nowMs + delta * 60_000 + 2 * 60_000;          // +2 min de margem
+}
+
+/** ms restantes do breaker pra conta (0 = fechado). Limpa a entrada expirada. */
+function _breakerRemaining(accountKey, nowMs = Date.now()) {
+  const b = _breaker.get(accountKey);
+  if (!b) return 0;
+  const left = b.until - nowMs;
+  if (left <= 0) { _breaker.delete(accountKey); return 0; }
+  return left;
+}
+
+/** Abre o breaker pra conta conforme a classificação. Erro 'other' não abre. */
+function _openBreaker(accountKey, message, nowMs = Date.now()) {
+  const cls = _classifyLoginError(message);
+  if (cls.kind === 'other') return null;
+  const until = cls.kind === 'account_locked'
+    ? (_computeUnlockUntil(message, nowMs) || (nowMs + LOCKED_FALLBACK_COOLDOWN_MS))
+    : (nowMs + INVALID_CRED_COOLDOWN_MS);
+  _breaker.set(accountKey, { until, kind: cls.kind, message: String(message).slice(0, 200) });
+  return { kind: cls.kind, until };
+}
+
+function _clearBreaker(accountKey) { _breaker.delete(accountKey); }
+
 // Cache compartilhado em Supabase — opcional (lazy require pra evitar circular
 // dep e permitir rodar sem Supabase em dev/test). Carregado na primeira
 // chamada de loadCachedToken/saveCachedToken.
@@ -201,6 +272,26 @@ async function loginAttempt(accountKey = DEFAULT_ACCOUNT) {
  */
 async function login(opts = {}) {
   const accountKey = opts.account || DEFAULT_ACCOUNT;
+
+  // Circuit breaker (P1-20): se a conta está em cooldown por credencial inválida
+  // ou bloqueio, NÃO toca no /signin — devolve o erro conhecido, poupando o
+  // orçamento de tentativas da EDP. `opts.force` é escape-hatch manual (ignora o
+  // breaker) — hoje sem chamador; a recuperação normal é corrigir o .env e
+  // reiniciar (o restart zera o breaker, que é em memória).
+  if (!opts.force) {
+    const remaining = _breakerRemaining(accountKey);
+    if (remaining > 0) {
+      const b = _breaker.get(accountKey);
+      const err = new Error(
+        `WPA login (account=${accountKey}) em cooldown [${b.kind}] por ~${Math.ceil(remaining / 60000)}min — ` +
+        `não tentando /signin pra não travar a conta na EDP. Corrija a credencial (.env) e reinicie. ` +
+        `Original: ${b.message}`);
+      err.isBreakerOpen = true;
+      err.breakerKind = b.kind;
+      throw err;
+    }
+  }
+
   // Backoff calibrado p/ Azure cold-start do edp-wpa-po. Em produção foi
   // observado cold-start de até 25-30s — backoff agressivo cobre isso.
   // Cliente pode pedir backoff mais longo via opts.aggressive (rota /admin/warm).
@@ -212,11 +303,23 @@ async function login(opts = {}) {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const result = await loginAttempt(accountKey);
+      _clearBreaker(accountKey);   // sucesso → fecha o breaker
       if (attempt > 1) console.log(`[WPA] Login OK (account=${accountKey}) na tentativa ${attempt}/${MAX_ATTEMPTS}`);
       return result;
     } catch (err) {
       const transient = err.isAzureColdStart || err.isNetworkError;
-      if (!transient || attempt === MAX_ATTEMPTS) throw err;
+      if (!transient || attempt === MAX_ATTEMPTS) {
+        // Antes de propagar: se for credencial inválida/bloqueio, abre o breaker
+        // pra que os próximos triggers não gastem tentativa (P1-20).
+        const opened = _openBreaker(accountKey, err.message);
+        if (opened) {
+          console.warn(
+            `[WPA] Breaker ABERTO (account=${accountKey}, ${opened.kind}) até ` +
+            `${new Date(opened.until).toISOString()} — logins suspensos pra não travar ` +
+            `a conta. Corrija a credencial no .env e reinicie o processo.`);
+        }
+        throw err;
+      }
       const delay = BACKOFF_MS[attempt - 1];
       const reason = err.isAzureColdStart ? 'Azure cold-start' : 'erro de rede';
       console.warn(`[WPA] Login tentativa ${attempt}/${MAX_ATTEMPTS} (account=${accountKey}) falhou (${reason}: ${err.message.slice(0, 80)}) — retry em ${delay}ms`);
@@ -1329,4 +1432,6 @@ module.exports = {
   REGIONAL_MAP,
   // Exportados pra teste (P3-11) — acumulador diário.
   _accRecord, _accApply, _acc,
+  // Exportados pra teste (P1-20) — circuit breaker de login.
+  _classifyLoginError, _computeUnlockUntil, _breakerRemaining, _openBreaker, _clearBreaker, _breaker,
 };
