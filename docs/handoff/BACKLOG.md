@@ -49,6 +49,7 @@
 | P1-17 | Junho mede +717 (+5,5%) na re-consolidação — sinal INVERTIDO e errático; NÃO aplicar sem investigar | Dados | pending — investigação |
 | P1-18 | `/settings/:key` lia/gravava QUALQUER chave de app_settings só com auth (escalonamento + IDOR) | Segurança | **done** (13/08) — rota restrita à `monitor-filters:<próprio-user>`; 9 testes |
 | P1-19 | Aba Histórico travava a regional pra admin (usava `currentRegional`, não `userRegionals`) | Frontend | **done** (13/08, 5e2c17a) — restringia, não vazava |
+| P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | pending — implementar breaker + backlog |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
@@ -509,6 +510,43 @@
 - **Segurança:** nenhuma — o backend enforce escopo por conta, e o bug
   restringia (mostrava MENOS), o oposto de vazar.
 - **Esforço:** 30min (feito). **Relacionado:** P1-18 (achado na mesma trilha).
+
+---
+
+## P1-20 — Login WPA sem circuit breaker trava a conta na EDP
+
+- **Categoria:** Ops / Backend (continuidade da ingestão)
+- **Status:** pending
+- **Incidente (13/08/2026):** entre 17:45 e 18:00 a senha da conta WPA `sp` parou
+  de ser aceita ("Usuário ou senha inválidos" — a EDP rotacionou a senha). O
+  sistema seguiu pedindo token a cada trigger (snapshot 15/15min + notas + teams);
+  **cada um faz 1 login real** e, em 5 tentativas, a EDP **bloqueou a conta até
+  03:30**. Coleta parada das 18h até intervenção.
+- **Diagnóstico:** o `login()` (`services/wpaService.js:202`) já NÃO faz retry em
+  credencial inválida (só em erro transiente de rede/Azure) — então não são 5
+  tentativas numa chamada. As 5 vêm de **chamadores independentes** que não
+  compartilham o conhecimento "o último login falhou por senha". Cada um reaprende
+  do zero e gasta uma tentativa do orçamento da EDP.
+- **Ação (a implementar):** circuit breaker por conta em `getToken`:
+  - marcar o erro como `isInvalidCredential` quando a mensagem da WPA indica
+    usuário/senha inválidos, e `isAccountLocked` quando indica bloqueio (parsear o
+    "aguarde até HH:MM" pra saber até quando).
+  - guardar em `_tokens`/estado por conta um `blockedUntil`; enquanto vigente,
+    `getToken` **rejeita sem chamar `/signin`** (devolve o último erro), poupando o
+    orçamento de tentativas.
+  - resetar em: login bem-sucedido, reinício do processo, ou fim de `blockedUntil`.
+  - função pura testável (`_classifyLoginError(msg)` + `_breakerState`) — cobrir
+    invalid-cred, locked-com-horário, transiente (não abre o breaker), sucesso
+    (fecha o breaker).
+- **Efeito:** senha errada continua parando a coleta (inevitável), mas a conta
+  **não trava** → corrigir `.env` + `pm2 restart` recupera na hora, sem esperar a
+  janela de bloqueio da EDP.
+- **Ação humana (fora do código):** quando a EDP rotacionar a senha, atualizar o
+  `.env` (`SP_PASS`/equivalente) ANTES do próximo ciclo e reiniciar. ⚠️ Se o `.env`
+  seguir errado após o desbloqueio, re-trava na 1ª rodada.
+- **Relacionado:** P1-1 (watchdog — deveria ter alertado o bloqueio em tempo real),
+  P1-3 (`snapshot_last_ok`/`snapshot_error` já registram, mas ninguém é avisado).
+- **Esforço:** ~2-3h com testes.
 
 ---
 
