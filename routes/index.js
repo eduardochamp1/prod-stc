@@ -596,10 +596,39 @@ router.get('/teams/deslogadas', async (req, res) => {
   }
 });
 
-// ── APP SETTINGS (preferências compartilhadas) ────────────────────────────────
+// ── APP SETTINGS (preferências do PRÓPRIO usuário) ────────────────────────────
+//
+// ⚠️ SEGURANÇA (13/08/2026): esta rota gravava/lia QUALQUER chave de app_settings
+// só com autenticação — sem checar dono nem role. app_settings é uma tabela
+// COMPARTILHADA que guarda estado operacional protegido por rotas dedicadas:
+//   metas_diarias        (PUT /metas/diarias valida regional por conta)
+//   contador-transgressao (PUT /contador-transgressao é requireAdmin)
+//   desloc-threshold      (PUT /deslocamentos/threshold é requireAdmin)
+//   snapshot_last_ok / snapshot_error / subcat_error / drift_last_* (só o cron)
+// Pela rota genérica, uma conta comum reabria todas essas SEM guarda —
+// escalonamento de privilégio (sobrescrever metas de todas as regionais, forjar
+// saúde do cron) + IDOR (ler/escrever o monitor-filters de outro usuário).
+//
+// Correção: a rota só serve a preferência do PRÓPRIO usuário — a chave
+// `monitor-filters:<username-do-token>`. O front nunca usou outra. Qualquer chave
+// fora desse padrão → 403. Estado operacional continua só nas rotas dedicadas.
+// Ver test/settingsScope.test.js.
+function _ownSettingsKey(req) {
+  const username = req.user && req.user.username;
+  return username ? `monitor-filters:${username}` : null;
+}
+function _assertOwnSettingsKey(req, res) {
+  const own = _ownSettingsKey(req);
+  if (!own || req.params.key !== own) {
+    res.status(403).json({ error: 'forbidden_settings_key', code: 'SETTINGS_SCOPE' });
+    return false;
+  }
+  return true;
+}
 
-// GET /api/settings/:key  → retorna { data, updated_at } ou {} se não existe
+// GET /api/settings/:key  → só a chave do próprio usuário. { data, updated_at } ou {}
 router.get('/settings/:key', async (req, res) => {
+  if (!_assertOwnSettingsKey(req, res)) return;
   try {
     const sq = sbq();
     if (!sq) return res.json({});
@@ -611,8 +640,9 @@ router.get('/settings/:key', async (req, res) => {
   }
 });
 
-// PUT /api/settings/:key  body: { ... } qualquer JSON
+// PUT /api/settings/:key  body: { ... } — só a chave do próprio usuário
 router.put('/settings/:key', async (req, res) => {
+  if (!_assertOwnSettingsKey(req, res)) return;
   try {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'supabase indisponível' });

@@ -47,6 +47,8 @@
 | P1-15 | Regra rejeitada>concluída aplicada de forma INCONSISTENTE (depende de quando a rejeição foi coletada) | Dados | fix no ar (0ce0a73) + julho re-consolidado 31/07 (−88 OS) · jun/mai pendentes |
 | P1-16 | Exclusão de rejeitada casava pelo dia da SESSÃO → nota rejeitada na sexta voltava a contar como produção | Dados | **done** (31/07) — julho re-consolidado e verificado; jun/mai pendentes |
 | P1-17 | Junho mede +717 (+5,5%) na re-consolidação — sinal INVERTIDO e errático; NÃO aplicar sem investigar | Dados | pending — investigação |
+| P1-18 | `/settings/:key` lia/gravava QUALQUER chave de app_settings só com auth (escalonamento + IDOR) | Segurança | **done** (13/08) — rota restrita à `monitor-filters:<próprio-user>`; 9 testes |
+| P1-19 | Aba Histórico travava a regional pra admin (usava `currentRegional`, não `userRegionals`) | Frontend | **done** (13/08, 5e2c17a) — restringia, não vazava |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
@@ -454,6 +456,61 @@
 ---
 
 # P1 — Alta prioridade (4 semanas)
+
+## P1-18 — `/settings/:key` sem guarda de dono/role (escalonamento + IDOR)
+
+- **Categoria:** Segurança (controle de acesso)
+- **Status:** **done** (13/08/2026)
+- **Fonte:** investigação da persistência de filtros, disparada por um susto do
+  admin não ver outras regionais na Histórico (que era o **P1-19**, não este).
+- **Evidência:** `GET`/`PUT /api/settings/:key` (`routes/index.js`) só passavam por
+  `authMiddleware` — sem checar dono nem role. `app_settings` é COMPARTILHADA e
+  guarda estado operacional que tem rotas dedicadas protegidas:
+  - `metas_diarias` — a rota dedicada valida regional por conta (não-admin só
+    escreve a própria); a genérica deixava **qualquer conta sobrescrever as metas
+    de todas as regionais**.
+  - `contador-transgressao` e `desloc-threshold` — `requireAdmin` nas dedicadas,
+    reabertos sem guarda.
+  - `snapshot_last_ok` / `snapshot_error` / `subcat_error` / `drift_last_*` —
+    escritos só pelo cron; qualquer conta podia forjar "cron saudável" e cegar o
+    watchdog.
+  - `monitor-filters:<outro-user>` — IDOR: ler ou sobrescrever o filtro alheio.
+  - **Não** era vazamento de dado operacional (o `applyScope` das rotas de dados
+    seguia firme) — era escrita indevida em estado de configuração + IDOR.
+- **Fix:** a rota passa a servir SÓ a preferência do próprio usuário —
+  `monitor-filters:<username-do-token>`. Qualquer outra chave → `403`
+  (`code: SETTINGS_SCOPE`). Helpers `_ownSettingsKey` / `_assertOwnSettingsKey`.
+  O front nunca usou outra chave (confirmado: só `_filtersKey()`), então não
+  quebra nada. Estado operacional continua só nas rotas dedicadas.
+- **Teste:** `test/settingsScope.test.js` (9 casos) — própria chave passa, chave
+  de outro user 403, metas/cron/contador 403 até pra admin, sem-token 401.
+  Suíte 357 → 366.
+- **Aceite:** [x] testes verdes · [ ] após deploy, tentar `PUT
+  /api/settings/metas_diarias` com token não-admin e ver 403.
+- **Esforço:** 1h (feito). **Rollback:** reverter o commit (reabre o buraco).
+- **Relacionado:** P0-4, P1-12 (mesma família de controle de acesso), P1-19.
+
+## P1-19 — Aba Histórico travava a regional pra admin
+
+- **Categoria:** Frontend (correção; NÃO é vazamento)
+- **Status:** **done** (13/08/2026, commit 5e2c17a)
+- **Sintoma:** admin (3 regionais) só via Guarapari na Histórico; nas outras abas
+  via todas. Gerou dúvida sobre acesso das outras contas — daí a investigação que
+  achou o **P1-18**.
+- **Causa:** a trava da regional na init lazy da Histórico testava
+  `currentRegional` (o FILTRO corrente, mutável) em vez de `userRegionals` (o
+  ESCOPO do JWT, imutável). Sequência: admin com Guarapari selecionado noutra aba
+  → `currentRegional='GUA'` → 1ª abertura da Histórico dispara a trava e
+  DESABILITA o dropdown; a init roda 1x e o `setDisabled(true)` nunca era desfeito.
+  A Gráficos nunca sofreu porque testava `sess.regional`, ausente no token v2.
+- **Fix:** travar só quando `userRegionals.length === 1` (conta de 1 regional).
+  Multi-regional com subconjunto selecionado: reflete a seleção, mas DESTRAVADO.
+  Verificado nos 6 perfis (admin todas/1/2, user GUA, user ES todas/subset).
+- **Segurança:** nenhuma — o backend enforce escopo por conta, e o bug
+  restringia (mostrava MENOS), o oposto de vazar.
+- **Esforço:** 30min (feito). **Relacionado:** P1-18 (achado na mesma trilha).
+
+---
 
 ## P1-1 — Alerta ativo (watchdog + Teams webhook)
 
