@@ -41,20 +41,29 @@ const WPA_API  = process.env.WPA_API_URL  || 'https://edp-wpa-web-api.azurewebsi
 // Adicionado em 08/06/2026 pra incluir regional SJC (EDP SP) com conta
 // separada da Clarissa (ES).
 //
-//   account='es'  → WPA_USERNAME       / WPA_PASSWORD       (Clarissa, GUA/CAC)
-//   account='sp'  → WPA_USERNAME_SP    / WPA_PASSWORD_SP    (SJC)
+//   account='es'   → WPA_USERNAME        / WPA_PASSWORD        (Clarissa, GUA/CAC)
+//   account='sp'   → WPA_USERNAME_SP     / WPA_PASSWORD_SP     (SJC — conta do Ismael)
+//   account='sp2'  → WPA_USERNAME_SP2    / WPA_PASSWORD_SP2    (SJC — BACKUP)
 //
-// SECTOR_TO_ACCOUNT mapeia sectorId → account pra roteamento automático.
+// SECTOR_ACCOUNT_CHAIN mapeia sectorId → CADEIA de contas (failover). A 1ª
+// USÁVEL (não desativada e sem breaker aberto) é escolhida por requisição.
 const ACCOUNTS = {
-  es: { userEnv: 'WPA_USERNAME',    passEnv: 'WPA_PASSWORD'    },
-  sp: { userEnv: 'WPA_USERNAME_SP', passEnv: 'WPA_PASSWORD_SP' },
+  es:  { userEnv: 'WPA_USERNAME',     passEnv: 'WPA_PASSWORD'     },
+  sp:  { userEnv: 'WPA_USERNAME_SP',  passEnv: 'WPA_PASSWORD_SP'  },
+  sp2: { userEnv: 'WPA_USERNAME_SP2', passEnv: 'WPA_PASSWORD_SP2' },
 };
 const DEFAULT_ACCOUNT = 'es';
 
-// Mapeamento sectorId → account. Setores não mapeados caem no default.
-const SECTOR_TO_ACCOUNT = {
-  DESG: 'es', DESC: 'es', DEPT: 'es',  // ES: conta Clarissa
-  DSSJ: 'sp',                           // SJC: conta SP
+// Cadeia de contas por setor (failover 13/08/2026). SJC tem primária (Ismael) +
+// BACKUP: a backup SÓ é usada quando a primária "para de funcionar" — desativada
+// (WPA_ACCOUNTS_DISABLED) ou com breaker aberto (credencial inválida / conta
+// bloqueada). Setor não mapeado → [DEFAULT_ACCOUNT].
+//   ⚠️ "não travar a backup por nossa causa" é garantido pelo circuit breaker
+//   (P1-20): no máximo 1 tentativa de login por janela de cooldown (12h em
+//   credencial inválida) — nunca chega às 5 tentativas que a EDP usa pra travar.
+const SECTOR_ACCOUNT_CHAIN = {
+  DESG: ['es'], DESC: ['es'], DEPT: ['es'],
+  DSSJ: ['sp', 'sp2'],
 };
 
 /** Resolve account a partir de sectorId (ou default se não mapeado). */
@@ -78,9 +87,31 @@ async function _mapConcurrent(items, concurrency, mapper) {
   return results;
 }
 
+/** Cadeia de contas de um setor (ordem de failover). Sempre array não-vazio. */
+function _accountsForSector(sectorId) {
+  if (!sectorId) return [DEFAULT_ACCOUNT];
+  return SECTOR_ACCOUNT_CHAIN[String(sectorId).toUpperCase()] || [DEFAULT_ACCOUNT];
+}
+
+/** Conta PRIMÁRIA do setor (1ª da cadeia). Pra mensagens/status; não roteia. */
 function _accountForSector(sectorId) {
-  if (!sectorId) return DEFAULT_ACCOUNT;
-  return SECTOR_TO_ACCOUNT[String(sectorId).toUpperCase()] || DEFAULT_ACCOUNT;
+  return _accountsForSector(sectorId)[0];
+}
+
+/**
+ * Conta USÁVEL do setor agora, percorrendo a cadeia de failover: pula contas
+ * DESATIVADAS (kill-switch) e com BREAKER ABERTO (pararam de funcionar). A
+ * backup só entra quando a primária cai — exatamente a regra pedida. Se nenhuma
+ * está usável, devolve a ÚLTIMA (o erro propaga limpo, sem tentar /signin à toa).
+ */
+function _resolveUsableAccount(sectorId) {
+  const chain = _accountsForSector(sectorId);
+  for (const acc of chain) {
+    if (isAccountDisabled(acc)) continue;
+    if (_breakerRemaining(acc) > 0) continue;
+    return acc;
+  }
+  return chain[chain.length - 1];
 }
 
 /** Extrai sectorId de um path (?sectorId=X) pra rotear pra conta correta. */
@@ -184,9 +215,11 @@ const _disabledAccounts = new Set(
 function isAccountDisabled(accountKey) {
   return _disabledAccounts.has(String(accountKey || '').toLowerCase());
 }
-/** Setor está desativado? (via a conta que o atende). Usado pela coleta resiliente. */
+/** Setor desativado? SÓ se TODA a cadeia de contas está desativada (com failover,
+ *  desativar a primária não desativa o setor enquanto a backup estiver ativa). */
 function isSectorDisabled(sectorId) {
-  return isAccountDisabled(_accountForSector(sectorId));
+  const chain = _accountsForSector(sectorId);
+  return chain.length > 0 && chain.every(acc => isAccountDisabled(acc));
 }
 const _disabledLogged = new Set();   // evita spam: loga o skip 1x por setor/boot
 
@@ -460,10 +493,11 @@ async function _isAzureColdStartResponse(res) {
 async function wpaFetch(path, options = {}) {
   // Resolve qual conta usar pra essa requisição:
   //   1. options.account explícito (chamadas internas sabem qual conta)
-  //   2. Inferir do sectorId no path (?sectorId=DSSJ → 'sp')
+  //   2. Inferir do sectorId no path (?sectorId=DSSJ → cadeia [sp, sp2], pega a
+  //      1ª usável → failover automático pra backup quando a primária cai)
   //   3. Default: 'es' (Clarissa)
   const accountKey = options.account
-    || _accountForSector(_sectorFromPath(path))
+    || _resolveUsableAccount(_sectorFromPath(path))
     || DEFAULT_ACCOUNT;
 
   // Backoff mais curto que o do login: a Web API costuma estar quente quando
@@ -1157,11 +1191,10 @@ function getTeamsBySector(sectorId) {
   // único por onde toda coleta de equipes passa, então isto cobre snapshot,
   // /teams e afins de uma vez. Devolve [] → a regional dessa conta fica vazia no
   // período (esperado: "travar a extração da conta"). Loga 1x por setor/boot.
-  const acc = _accountForSector(sectorId);
-  if (isAccountDisabled(acc)) {
+  if (isSectorDisabled(sectorId)) {   // TODA a cadeia do setor desativada
     if (!_disabledLogged.has(sectorId)) {
       _disabledLogged.add(sectorId);
-      console.warn(`[WPA] setor ${sectorId} PULADO — conta '${acc}' desativada (WPA_ACCOUNTS_DISABLED).`);
+      console.warn(`[WPA] setor ${sectorId} PULADO — todas as contas [${_accountsForSector(sectorId).join(', ')}] desativadas (WPA_ACCOUNTS_DISABLED).`);
     }
     return Promise.resolve([]);
   }
@@ -1484,4 +1517,6 @@ module.exports = {
   _classifyLoginError, _computeUnlockUntil, _breakerRemaining, _openBreaker, _clearBreaker, _breaker,
   // Kill-switch de conta (WPA_ACCOUNTS_DISABLED).
   isAccountDisabled, isSectorDisabled, _disabledAccounts,
+  // Failover de conta por setor (backup SJC).
+  _accountsForSector, _resolveUsableAccount,
 };

@@ -25,10 +25,12 @@ test('isAccountDisabled reflete o set (case-insensitive)', () => {
   assert.equal(wpa.isAccountDisabled('es'), false, 'só a conta listada');
 });
 
-test('getTeamsBySector de setor da conta desativada devolve [] SEM rede', async () => {
+test('getTeamsBySector de setor com TODA a cadeia desativada devolve [] SEM rede', async () => {
+  // DSSJ → cadeia [sp, sp2] (failover). Desativar SÓ sp faz o setor cair na
+  // backup sp2; pra pular o setor por completo é preciso desativar as duas.
+  // Devolver [] limpo prova que nem tentou rede.
   wpa._disabledAccounts.add('sp');
-  // DSSJ → conta sp (SECTOR_TO_ACCOUNT). Se tentasse rede, falharia por credencial
-  // ausente no ambiente de teste; devolver [] limpo prova que nem tentou.
+  wpa._disabledAccounts.add('sp2');
   const teams = await wpa.getTeamsBySector('DSSJ');
   assert.deepEqual(teams, []);
 });

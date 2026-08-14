@@ -36,10 +36,12 @@ test('0 equipes e nada falhou → empty (dia vazio / só contas desativadas — 
 
 // ── setor desativado (via conta) ──────────────────────────────────────────────
 
-test('isSectorDisabled reflete a conta do setor', () => {
-  assert.equal(wpa.isSectorDisabled('DSSJ'), false, 'DSSJ = conta sp, ainda ativa');
+test('isSectorDisabled reflete a CADEIA do setor (failover)', () => {
+  assert.equal(wpa.isSectorDisabled('DSSJ'), false, 'DSSJ = cadeia [sp, sp2], ativa');
   wpa._disabledAccounts.add('sp');
-  assert.equal(wpa.isSectorDisabled('DSSJ'), true, 'DSSJ desativado quando sp desativa');
+  assert.equal(wpa.isSectorDisabled('DSSJ'), false, 'só a primária fora — backup sp2 cobre');
+  wpa._disabledAccounts.add('sp2');
+  assert.equal(wpa.isSectorDisabled('DSSJ'), true, 'toda a cadeia desativada');
   assert.equal(wpa.isSectorDisabled('DESG'), false, 'DESG = conta es, não afetado');
   assert.equal(wpa.isSectorDisabled('DESC'), false);
 });
