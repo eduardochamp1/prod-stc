@@ -164,6 +164,28 @@ function _openBreaker(accountKey, message, nowMs = Date.now()) {
 
 function _clearBreaker(accountKey) { _breaker.delete(accountKey); }
 
+// ── CONTA DESATIVADA (kill-switch operacional) ───────────────────────────────
+// Desliga POR COMPLETO a extração de uma conta WPA — nem tenta login. Uso: a
+// credencial foi revogada/errada e não queremos NENHUMA tentativa (nem a 1 por
+// 12h do breaker) até resolver com a EDP/dono da conta. Diferente do breaker
+// (que é automático e temporário), este é uma decisão MANUAL, via .env:
+//
+//     WPA_ACCOUNTS_DISABLED=sp           (CSV de accountKeys; ex.: sp  ou  sp,es)
+//
+// Enquanto desativada: getTeamsBySector devolve [] (sem rede) e login() recusa.
+// Reativar = tirar do .env e reiniciar. ⚠️ Os dados dessa conta NÃO são coletados
+// no período — a API WPA só serve o ESTADO ATUAL, então NÃO dá pra backfill
+// depois. (Se a conta já está travada/senha errada, o dado já está sendo perdido
+// agora de qualquer jeito — desativar só evita re-travar e o spam de erro.)
+const _disabledAccounts = new Set(
+  String(process.env.WPA_ACCOUNTS_DISABLED || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+);
+function isAccountDisabled(accountKey) {
+  return _disabledAccounts.has(String(accountKey || '').toLowerCase());
+}
+const _disabledLogged = new Set();   // evita spam: loga o skip 1x por setor/boot
+
 // Cache compartilhado em Supabase — opcional (lazy require pra evitar circular
 // dep e permitir rodar sem Supabase em dev/test). Carregado na primeira
 // chamada de loadCachedToken/saveCachedToken.
@@ -272,6 +294,15 @@ async function loginAttempt(accountKey = DEFAULT_ACCOUNT) {
  */
 async function login(opts = {}) {
   const accountKey = opts.account || DEFAULT_ACCOUNT;
+
+  // Kill-switch manual: conta desativada no .env não tenta login de jeito nenhum.
+  if (isAccountDisabled(accountKey) && !opts.force) {
+    const err = new Error(
+      `WPA login (account=${accountKey}) DESATIVADO (WPA_ACCOUNTS_DISABLED) — ` +
+      `extração pausada por decisão operacional; não tentando /signin.`);
+    err.isAccountDisabled = true;
+    throw err;
+  }
 
   // Circuit breaker (P1-20): se a conta está em cooldown por credencial inválida
   // ou bloqueio, NÃO toca no /signin — devolve o erro conhecido, poupando o
@@ -1118,6 +1149,18 @@ function _singleFlight(map, key, fn) {
 }
 
 function getTeamsBySector(sectorId) {
+  // Conta desativada (kill-switch): pula a extração sem tocar na rede. É o ponto
+  // único por onde toda coleta de equipes passa, então isto cobre snapshot,
+  // /teams e afins de uma vez. Devolve [] → a regional dessa conta fica vazia no
+  // período (esperado: "travar a extração da conta"). Loga 1x por setor/boot.
+  const acc = _accountForSector(sectorId);
+  if (isAccountDisabled(acc)) {
+    if (!_disabledLogged.has(sectorId)) {
+      _disabledLogged.add(sectorId);
+      console.warn(`[WPA] setor ${sectorId} PULADO — conta '${acc}' desativada (WPA_ACCOUNTS_DISABLED).`);
+    }
+    return Promise.resolve([]);
+  }
   return _singleFlight(_inflightSector, sectorId, () => _getTeamsBySectorUncached(sectorId));
 }
 
@@ -1434,4 +1477,6 @@ module.exports = {
   _accRecord, _accApply, _acc,
   // Exportados pra teste (P1-20) — circuit breaker de login.
   _classifyLoginError, _computeUnlockUntil, _breakerRemaining, _openBreaker, _clearBreaker, _breaker,
+  // Kill-switch de conta (WPA_ACCOUNTS_DISABLED).
+  isAccountDisabled, _disabledAccounts,
 };
