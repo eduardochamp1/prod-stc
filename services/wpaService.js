@@ -1231,6 +1231,7 @@ async function _getTeamsBySectorUncached(sectorId) {
     if (!v2 && !sessaoEncerrada) {
       for (const altSector of ALL_SECTORS) {
         if (altSector === sectorId) continue; // já tentamos este
+        if (isSectorDisabled(altSector)) continue; // conta desativada — não cutuca (P1-21)
         try {
           const altList = await getV2Cached(altSector);
           const { byId: altById, byName: altByName } = buildV2Index(altList);

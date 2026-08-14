@@ -9,7 +9,7 @@
  *                       limpa snapshots > 30 dias.
  */
 
-const { getNotasDevolvidas, getTeamsSimple } = require('./wpaService');
+const { getNotasDevolvidas, getTeamsSimple, isSectorDisabled } = require('./wpaService');
 const equipesOficiais                          = require('./equipesOficiais');
 const { _getPool }                             = require('./pgShim');
 const log                                      = require('./logger').forModule('notas');
@@ -229,11 +229,14 @@ const SECTOR_TO_REGIONAL = { DESG: 'GUA', DEPT: 'GUA', DESC: 'CAC', DSSJ: 'SJC' 
 
 async function collectSnapshot() {
   const t0 = Date.now();
+  // Pula setores de conta desativada (P1-21) — não cutuca o WPA à toa. Usa a
+  // lista ATIVA em todo o resto pra manter o alinhamento setor↔índice.
+  const activeSectors = SECTORS.filter(s => !isSectorDisabled(s));
   // Busca paralelo: teams (1x por setor) + notas (1x por setor).
-  const teamsBySector = await Promise.all(SECTORS.map(s =>
+  const teamsBySector = await Promise.all(activeSectors.map(s =>
     getTeamsSimple(s).catch(e => { log.warn('teams_simple_fail', { sector: s, msg: e.message }); return []; })
   ));
-  const notasBySector = await Promise.all(SECTORS.map(s =>
+  const notasBySector = await Promise.all(activeSectors.map(s =>
     getNotasDevolvidas(s).catch(e => { log.warn('notas_fail', { sector: s, msg: e.message }); return []; })
   ));
   // Junta dropdown de equipes (Name → CompanyId) — uma equipe pode aparecer
@@ -246,7 +249,7 @@ async function collectSnapshot() {
   // Tagueia cada nota com a regional do setor onde apareceu pela primeira vez.
   const seen = new Map();
   notasBySector.forEach((arr, idx) => {
-    const regional = SECTOR_TO_REGIONAL[SECTORS[idx]] || null;
+    const regional = SECTOR_TO_REGIONAL[activeSectors[idx]] || null;
     for (const n of arr) {
       if (n?.Number && !seen.has(n.Number)) {
         n._regional = regional;

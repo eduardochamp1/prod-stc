@@ -11,7 +11,7 @@
 const cron                    = require('node-cron');
 const { getTeams, getLastSectorReport } = require('./dataService');
 const { collectSnapshot: collectNotas } = require('./notasMonitor');
-const { forceRefresh }        = require('./wpaService');
+const { forceRefresh, isSectorDisabled } = require('./wpaService');
 const { dateBRT, hourBRT }    = require('./timeUtil');
 const log                     = require('./logger').forModule('cron');
 
@@ -1227,6 +1227,7 @@ async function runSyncLogoffs(targetDate) {
 
   let totalUpdated = 0;
   for (const sectorId of SETORES) {
+    if (isSectorDisabled(sectorId)) continue;   // conta desativada — pula (P1-21)
     try {
       const sessions = await getSessionsByDate(sectorId, date);
       // Filtra só Engelmig + com EndTime preenchido (= sessões realmente fechadas)
