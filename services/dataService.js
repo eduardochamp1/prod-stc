@@ -4,7 +4,7 @@
  */
 
 const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/mockData');
-const { getTeamsBySector, REGIONAL_MAP } = require('./wpaService');
+const { getTeamsBySector, isSectorDisabled, REGIONAL_MAP } = require('./wpaService');
 const { isOficial, getMeta } = require('./equipesOficiais');
 const { classifyBuckets } = require('./bucketMath');   // fonte única da aritmética de buckets (P2-2)
 // Nota: regional agora é SEMPRE string[] de siglas reais (GUA/CAC/SJC).
@@ -530,6 +530,13 @@ const SETORES = {
   ALL: ['DESG', 'DEPT', 'DESC', 'DSSJ'],
 };
 
+// Resultado por setor da ÚLTIMA chamada de getTeams (P1-3+): { ok:[], failed:[],
+// skipped:[] }. O runSnapshot lê pra marcar snapshot_last_ok/snapshot_error com
+// ciência de qual conta está fora — sem isso, uma conta desativada/quebrada
+// travava o marcador de saúde do ciclo inteiro.
+let _lastSectorReport = { ok: [], failed: [], skipped: [] };
+function getLastSectorReport() { return _lastSectorReport; }
+
 // ── GET TEAMS ─────────────────────────────────────────────────────────────────
 async function getTeams(filters = {}) {
   if (MODE === 'mock') return getMockTeams(filters);
@@ -556,10 +563,27 @@ async function getTeams(filters = {}) {
   // Sintoma: notas vinham vazias intermitentemente em modo ALL (_safeNotes
   // engolia timeouts com catch silencioso). Serial: ~3-5s mais lento, mas
   // resultados consistentes. Vide investigação 08/06/2026.
+  //
+  // ⚠️ RESILIÊNCIA POR SETOR (13/08/2026): um setor que falha (breaker/rede/WPA,
+  // ou conta desativada) NÃO derruba os outros. Antes, o loop lançava no 1º erro
+  // e um snapshot ATÉ de GUA/CAC era perdido quando só a conta SP estava fora —
+  // o snapshot ficava tudo-ou-nada entre contas. Agora coleta o que der e expõe
+  // o resultado por setor em getLastSectorReport(), que o runSnapshot usa pra
+  // decidir sucesso × erro do ciclo (e não travar o snapshot_last_ok à toa).
+  const report = { ok: [], failed: [], skipped: [] };
   const resultados = [];
   for (const s of setores) {
-    resultados.push(await getTeamsBySector(s));
+    if (isSectorDisabled(s)) { report.skipped.push(s); continue; }
+    try {
+      resultados.push(await getTeamsBySector(s));
+      report.ok.push(s);
+    } catch (err) {
+      const msg = String((err && err.message) || err).slice(0, 140);
+      report.failed.push({ sector: s, msg });
+      console.warn(`[dataService] setor ${s} falhou (${msg.slice(0, 90)}) — seguindo com os demais.`);
+    }
   }
+  _lastSectorReport = report;
   const teams = _filterOficiais(resultados.flat());
 
   // Enriquecer com escala (de equipes_oficiais) e sessionBeginReal (primeiro snapshot do dia)
@@ -621,4 +645,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite };
+module.exports = { getTeams, getLastSectorReport, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite };

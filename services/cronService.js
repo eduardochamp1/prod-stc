@@ -9,7 +9,7 @@
  */
 
 const cron                    = require('node-cron');
-const { getTeams }            = require('./dataService');
+const { getTeams, getLastSectorReport } = require('./dataService');
 const { collectSnapshot: collectNotas } = require('./notasMonitor');
 const { forceRefresh }        = require('./wpaService');
 const { dateBRT, hourBRT }    = require('./timeUtil');
@@ -69,6 +69,27 @@ async function _recordSnapshotError(err) {
   } catch (_) {}
 }
 
+// Limpa o snapshot_error quando o ciclo dá certo (mesmo parcialmente) — senão uma
+// mensagem antiga fica pra sempre no /admin/health e no health-check. Falha DE
+// SETOR (ex: conta desativada) não é erro de ciclo: fica em snapshot_last_ok.sectors_failed.
+async function _clearSnapshotError() {
+  try {
+    const sq = require('../db/queries');
+    await sq.setSetting('snapshot_error', { message: null, ts: new Date().toISOString() });
+  } catch (_) {}
+}
+
+// Decisão PURA do desfecho do ciclo de snapshot (testável sem DB/rede):
+//   teamsCount > 0                     → 'ok'    (salvou algo; sucesso, ainda que parcial)
+//   0 equipes e algum setor FALHOU     → 'error' (queda real, não "dia vazio")
+//   0 equipes e nada falhou            → 'empty' (legítimo: madrugada, ninguém logado,
+//                                                  ou só contas desativadas)
+function _classifySnapshotOutcome(teamsCount, report) {
+  if (teamsCount > 0) return 'ok';
+  if (report && Array.isArray(report.failed) && report.failed.length > 0) return 'error';
+  return 'empty';
+}
+
 // ── RENOVAÇÃO DE TOKEN ────────────────────────────────────────────────────────
 
 async function runTokenRefresh() {
@@ -110,6 +131,7 @@ async function runSnapshot() {
   isRunningAt = Date.now();
   try {
     const allTeams = await getTeams();
+    const sectorReport = getLastSectorReport();   // { ok, failed, skipped } por setor
 
     // Separa equipes reais (vindas do WPA) das equipes-fantasma (_ghostFromAcc).
     // Ghosts existem para manter KPIs no frontend e nos totais quando uma equipe
@@ -122,7 +144,15 @@ async function runSnapshot() {
     }
 
     if (teams.length === 0) {
-      log.info('snapshot_skipped_empty', {});
+      // Distingue "dia vazio" de QUEDA REAL: se todos os setores ativos falharam,
+      // é queda da WPA — tem de virar snapshot_error (senão o watchdog não vê).
+      if (_classifySnapshotOutcome(0, sectorReport) === 'error') {
+        log.error('snapshot_all_sectors_failed', { failed: sectorReport.failed });
+        await _recordSnapshotError(new Error(
+          `todos os setores ativos falharam: ${sectorReport.failed.map(f => f.sector).join(', ')}`));
+      } else {
+        log.info('snapshot_skipped_empty', { skipped: sectorReport.skipped });
+      }
       return; // finally abaixo libera isRunning corretamente
     }
 
@@ -142,8 +172,22 @@ async function runSnapshot() {
 
     log.info('snapshot_saved', { teams: teams.length, ghosts: ghostCount, at: ts });
     // Marca sucesso do ciclo pra observabilidade (P1-3) — /admin/health e
-    // watchdog leem snapshot_last_ok pra detectar queda da WPA.
-    _recordSnapshotOk({ teams: teams.length, ghosts: ghostCount });
+    // watchdog leem snapshot_last_ok pra detectar queda da WPA. Inclui o estado
+    // POR SETOR: sucesso do ciclo não é mais tudo-ou-nada entre contas — enquanto
+    // UMA conta ativa coletar, o marcador fica fresco, e as contas fora ficam
+    // visíveis em sectors_failed/sectors_skipped (o watchdog distingue "SP
+    // desativado de propósito" de "queda real").
+    _recordSnapshotOk({
+      teams: teams.length, ghosts: ghostCount,
+      sectors_ok:      sectorReport.ok,
+      sectors_skipped: sectorReport.skipped,
+      sectors_failed:  sectorReport.failed.map(f => f.sector),
+    });
+    _clearSnapshotError();   // ciclo deu certo → limpa erro de ciclo antigo
+    if (sectorReport.failed.length > 0) {
+      log.warn('snapshot_partial', {
+        ok: sectorReport.ok, failed: sectorReport.failed, skipped: sectorReport.skipped });
+    }
 
     // Aproveitamento de carteira por equipe (team_daily_carteira) — histórico
     // permanente do que estava disponível vs executado. Lê dos snapshots recém
@@ -1245,4 +1289,6 @@ module.exports = {
   runSyncLogoffs,
   runClassifyRejections, runBackfillRejeicoes,
   runSyncEscalas,
+  // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
+  _classifySnapshotOutcome,
 };

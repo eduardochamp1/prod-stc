@@ -184,6 +184,10 @@ const _disabledAccounts = new Set(
 function isAccountDisabled(accountKey) {
   return _disabledAccounts.has(String(accountKey || '').toLowerCase());
 }
+/** Setor está desativado? (via a conta que o atende). Usado pela coleta resiliente. */
+function isSectorDisabled(sectorId) {
+  return isAccountDisabled(_accountForSector(sectorId));
+}
 const _disabledLogged = new Set();   // evita spam: loga o skip 1x por setor/boot
 
 // Cache compartilhado em Supabase — opcional (lazy require pra evitar circular
@@ -1478,5 +1482,5 @@ module.exports = {
   // Exportados pra teste (P1-20) — circuit breaker de login.
   _classifyLoginError, _computeUnlockUntil, _breakerRemaining, _openBreaker, _clearBreaker, _breaker,
   // Kill-switch de conta (WPA_ACCOUNTS_DISABLED).
-  isAccountDisabled, _disabledAccounts,
+  isAccountDisabled, isSectorDisabled, _disabledAccounts,
 };

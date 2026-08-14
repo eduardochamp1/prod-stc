@@ -50,6 +50,7 @@
 | P1-18 | `/settings/:key` lia/gravava QUALQUER chave de app_settings só com auth (escalonamento + IDOR) | Segurança | **done** (13/08) — rota restrita à `monitor-filters:<próprio-user>`; 9 testes |
 | P1-19 | Aba Histórico travava a regional pra admin (usava `currentRegional`, não `userRegionals`) | Frontend | **done** (13/08, 5e2c17a) — restringia, não vazava |
 | P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | **código done** (13/08) — breaker por conta + 13 testes; senha do `.env` é ação humana |
+| P1-21 | Snapshot era tudo-ou-nada entre contas: uma conta fora derrubava GUA/CAC e travava `snapshot_last_ok` | Ops/Backend | **código done** (14/08) — coleta resiliente por setor + saúde por conta ativa; 5 testes |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
