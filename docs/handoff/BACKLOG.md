@@ -51,7 +51,7 @@
 | P1-19 | Aba Histórico travava a regional pra admin (usava `currentRegional`, não `userRegionals`) | Frontend | **done** (13/08, 5e2c17a) — restringia, não vazava |
 | P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | **código done** (13/08) — breaker por conta + 13 testes; senha do `.env` é ação humana |
 | P1-21 | Snapshot era tudo-ou-nada entre contas: uma conta fora derrubava GUA/CAC e travava `snapshot_last_ok` | Ops/Backend | **código done** (14/08) — coleta resiliente por setor + saúde por conta ativa; 5 testes |
-| P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **código done** (14/08) — cadeia [sp, sp2] + resolução por breaker/kill-switch; 11 testes; falta credencial no `.env` |
+| P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **done** (14/08) — cadeia [sp, sp2]; credencial `sp2` (Luan) no ar, SJC coletando pela backup (teams 64→122); RUNBOOK atualizado |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |

@@ -57,9 +57,71 @@ pm2 logs wpa-monitor --lines 50
 **NÃO use** `pm2 reload --update-env` — não funciona confiavelmente em
 cluster mode. Sempre `delete + start`.
 
+### Trocar credencial WPA / conta de backup SJC
+
+A EDP rotaciona senha das contas WPA sem avisar. Contas (`.env`):
+
+| conta | env | quem/o quê | setores |
+|---|---|---|---|
+| `es`  | `WPA_USERNAME` / `WPA_PASSWORD`         | Clarissa (ES) | GUA, CAC |
+| `sp`  | `WPA_USERNAME_SP` / `WPA_PASSWORD_SP`   | Ismael (SJC — primária) | SJC |
+| `sp2` | `WPA_USERNAME_SP2` / `WPA_PASSWORD_SP2` | Luan (SJC — **BACKUP**) | SJC (só se `sp` cair) |
+
+SJC tem **failover automático** (`sp` → `sp2`, ver P1-22 no BACKLOG): a backup só
+é usada quando a primária "para de funcionar" (desativada ou com breaker aberto).
+
+**Procedimento pra trocar uma senha (ex.: EDP rotacionou a do Ismael):**
+
+```bash
+cd ~/prod-stc
+nano .env            # editar a senha da conta
+```
+
+⚠️ **SENHA COM CARACTERE ESPECIAL PRECISA DE ASPAS DUPLAS.** Se a senha tem `#`,
+espaço, `$` ou aspas, o dotenv CORTA o valor sem aspas — `#` vira comentário e a
+senha é truncada silenciosamente. Sempre:
+
+```
+WPA_PASSWORD_SP2="Ab3#xy9k2"
+```
+
+Confirme o que o Node carregou ANTES de reiniciar (não imprime a senha):
+
+```bash
+node -e "require('dotenv').config(); const p=process.env.WPA_PASSWORD_SP||''; console.log('len_pass='+p.length+' espaco='+/\s/.test(p));"
+```
+
+`len_pass` tem de bater com o tamanho REAL. Se vier menor (ex.: 3 numa senha de
+9), a senha está truncada — faltam aspas. (Isso custou ~40min em 14/08/2026.)
+
+Teste o login da conta direto, sem esperar o cron (1 tentativa, o breaker
+protege — não trava a conta):
+
+```bash
+node -e "require('dotenv').config(); const w=require('./services/wpaService'); w.login({account:'sp'}).then(r=>console.log('>>> LOGIN OK (userId='+r.userId+')')).catch(e=>console.log('>>> FALHOU: '+e.message)).finally(()=>setTimeout(()=>process.exit(0),500));"
+```
+
+Só depois de `>>> LOGIN OK`, reinicie (o restart também limpa o breaker em memória):
+
+```bash
+pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
+```
+
+**Pausar uma conta de propósito** (kill-switch, ex.: senha revogada e sem prazo):
+`WPA_ACCOUNTS_DISABLED=sp` no `.env` + restart. Com a backup ativa, SJC segue via
+`sp2`. Reativar = tirar do `.env` + restart.
+
+**Se a conta travou na EDP** ("bloqueado após 5 tentativas, aguarde até HH:MM"): o
+circuit breaker (P1-20) já impede isso daqui pra frente — no máx. 1 tentativa por
+janela. Se acontecer mesmo assim, é só esperar o horário do desbloqueio ou usar a
+backup. NUNCA fique reiniciando pra tentar logar com senha errada — é o que trava.
+
 ### Verificar saúde geral
 
 ```bash
+# Health-check consolidado (rodando? dados confiáveis? degradou?) — leva ~30-60s
+node scripts/health-check.js
+
 # Idade do último snapshot (deve ser < 20min em horário útil 06-20h BRT)
 psql -d wpa_monitor -c "SELECT max(captured_at) AT TIME ZONE 'America/Sao_Paulo' FROM snapshots;"
 
