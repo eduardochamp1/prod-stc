@@ -2572,13 +2572,33 @@
       if (!_rejTotaisCache) { loadRejeicoes(); return; }   // cache vazio -> recarrega
       renderRejeicoes(_rejTotaisCache, _rejFullList);
     }
-    function rejFiltrarPorTipo(tipo) {
-      document.getElementById('rej-tipo-select').value = tipo;
+    // Aplica um valor num filtro que virou MultiSelect, com TOGGLE.
+    //
+    // bug reportado em 14/08/2026: "ao clicar numa equipe pra filtrar, a pagina
+    // recarrega e nao acontece nada". Estas funcoes escreviam em .value do <select>
+    // ORIGINAL - que o MultiSelect esconde (display:none) e IGNORA: getValues() le
+    // o Set interno (inst.selected) e so cai no .value quando NAO existe instancia.
+    // Como rej-equipe-select e rej-tipo-select sao MultiSelect (ver init acima), o
+    // .value era escrito no vazio, loadRejeicoes() relia "todas" e a tela recarregava
+    // identica. Agora vai pelo componente. Clicar de novo no mesmo item limpa.
+    function _rejAplicarFiltroMS(selectId, valor) {
+      const atual = (typeof MultiSelect !== 'undefined' && MultiSelect.getValues)
+        ? (MultiSelect.getValues(selectId) || []) : [];
+      const jaSozinho = atual.length === 1 && _rejCode(atual[0]) === _rejCode(valor);
+      const alvo = jaSozinho ? [] : [valor];   // [] = todas (limpa o filtro)
+      if (typeof MultiSelect !== 'undefined' && MultiSelect.setValues) {
+        MultiSelect.setValues(selectId, alvo);
+      } else {
+        const el = document.getElementById(selectId);
+        if (el) el.value = alvo.length ? valor : 'ALL';
+      }
       loadRejeicoes();
     }
+    function rejFiltrarPorTipo(tipo) {
+      _rejAplicarFiltroMS('rej-tipo-select', tipo);
+    }
     function rejFiltrarPorEquipe(team) {
-      document.getElementById('rej-equipe-select').value = team;
-      loadRejeicoes();
+      _rejAplicarFiltroMS('rej-equipe-select', team);
     }
     function rejToggleSomenteComMotivo(checked) {
       _rejShowOnlyComMotivo = !!checked;
