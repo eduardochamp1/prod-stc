@@ -2106,6 +2106,19 @@
     let _rejShowOnlyComMotivo = false;
     let _rejMotivoFilter = null;       // code|null
 
+    // Comparacao de codigo de motivo NORMALIZADA (sempre String).
+    //
+    // bug reportado em 14/08/2026: "clico na tabela de motivos de rejeicao e nao
+    // filtra a pagina, e o segundo clique tambem nao reverte". O codigo do motivo
+    // chega por DOIS caminhos independentes: porMotivo[].code (agregado de
+    // /rejeicoes/totais) e motivo_codes[] de cada linha (TEXT[] do Postgres via
+    // /rejeicoes/lista). Se um lado vier como NUMERO no JSON e o outro como string,
+    // === e Array.includes() falham em SILENCIO: o filtro nao corta nada e o clique
+    // parece morto. Normalizar os dois lados elimina a classe inteira de bug.
+    const _rejCode    = (v) => (v === null || v === undefined) ? '' : String(v);
+    const _rejHasCode = (codes, code) =>
+      Array.isArray(codes) && codes.some(c => _rejCode(c) === _rejCode(code));
+
     async function initRejeicoes() {
       // Default range: dia 01 do mês atual → hoje (BRT).
       const hoje = todayISO();
@@ -2289,7 +2302,7 @@
         const pct = (100 * m.count / maxMot).toFixed(1);
         const isSem = m.code === '__SEM_MOTIVO__';
         const color = isSem ? '#aaa' : '#e74c3c';
-        const isActive = _rejMotivoFilter === m.code;
+        const isActive = _rejCode(_rejMotivoFilter) === _rejCode(m.code);
         return `
           <div class="rej-bar-row ${isActive ? 'active' : ''}" onclick="rejFiltrarPorMotivo(${JSON.stringify(m.code).replace(/"/g, '&quot;')})" title="Clique pra filtrar a tabela">
             <div class="rej-bar-label">${escapeHtml(m.label)} ${isSem ? '<span style="font-size:10px;opacity:.6">(sem registro)</span>' : `<span style="font-size:10px;opacity:.5">${m.code}</span>`}</div>
@@ -2304,9 +2317,9 @@
       // NESSE motivo específico. Sem filtro, usa o ranking agregado do backend.
       let porEquipeRanking = tot.porEquipe || [];
       if (_rejMotivoFilter && lst && Array.isArray(lst.rows)) {
-        const rowsFiltradas = (_rejMotivoFilter === '__SEM_MOTIVO__')
+        const rowsFiltradas = (_rejCode(_rejMotivoFilter) === '__SEM_MOTIVO__')
           ? lst.rows.filter(r => (r.motivo_codes || []).length === 0)
-          : lst.rows.filter(r => (r.motivo_codes || []).includes(_rejMotivoFilter));
+          : lst.rows.filter(r => _rejHasCode(r.motivo_codes, _rejMotivoFilter));
         const porEq = {};
         rowsFiltradas.forEach(r => {
           const t = r.team_name || r.team;
@@ -2485,14 +2498,24 @@
     function renderRejTabela() {
       const tbody = document.getElementById('rej-tbody');
       const countEl = document.getElementById('rej-tabela-count');
-      if (!tbody || !_rejFullList) return;
-      let rows = (_rejFullList.rows || []).slice();
+      if (!tbody) return;
+      // Antes: if (!tbody || !_rejFullList) return; -- retorno MUDO. Se o cache nao
+      // estivesse pronto (clique durante um load, ou /lista devolvendo objeto de erro
+      // em vez de {rows}), a tabela nao repintava e o clique parecia nao fazer nada.
+      // Agora o estado e VISIVEL. (14/08/2026)
+      if (!_rejFullList || !Array.isArray(_rejFullList.rows)) {
+        if (countEl) countEl.textContent = '(0)';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;opacity:.6;padding:20px">'
+          + 'Lista ainda nao carregada - clique em Atualizar.</td></tr>';
+        return;
+      }
+      let rows = _rejFullList.rows.slice();
       if (_rejShowOnlyComMotivo) rows = rows.filter(r => (r.motivo_codes || []).length > 0);
       if (_rejMotivoFilter) {
-        if (_rejMotivoFilter === '__SEM_MOTIVO__') {
+        if (_rejCode(_rejMotivoFilter) === '__SEM_MOTIVO__') {
           rows = rows.filter(r => (r.motivo_codes || []).length === 0);
         } else {
-          rows = rows.filter(r => (r.motivo_codes || []).includes(_rejMotivoFilter));
+          rows = rows.filter(r => _rejHasCode(r.motivo_codes, _rejMotivoFilter));
         }
       }
       countEl.textContent = `(${rows.length})`;
@@ -2541,7 +2564,12 @@
     }
 
     function rejFiltrarPorMotivo(code) {
-      _rejMotivoFilter = (_rejMotivoFilter === code) ? null : code;
+      // Toggle normalizado: 2o clique no mesmo motivo limpa o filtro. Sem normalizar,
+      // o toggle nunca casava quando os tipos divergiam - o filtro ficava "preso" e o
+      // 2o clique nao revertia (sintoma reportado). Ver _rejCode acima.
+      const alvo = _rejCode(code);
+      _rejMotivoFilter = (_rejCode(_rejMotivoFilter) === alvo) ? null : code;
+      if (!_rejTotaisCache) { loadRejeicoes(); return; }   // cache vazio -> recarrega
       renderRejeicoes(_rejTotaisCache, _rejFullList);
     }
     function rejFiltrarPorTipo(tipo) {
