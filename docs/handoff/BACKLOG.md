@@ -3074,8 +3074,30 @@ de falha que não aparece em relatório.
      `scripts/backfill-rejeicoes-sem-data.js` (novo) faz UPDATE só das que estão
      sem data. Rodar `--dry-run`, depois `--tipo VL --limite 20`, conferir, e só
      então inteiro.
-  6. ⬜ se o backfill preencher datas, MEDIR o delta da re-consolidação em dry-run
-     antes de aplicar — algumas notas podem mudar de lado na regra.
+  6. ✅ backfill COMPLETO rodado 21/08: 1266/1282 ganharam `rejection_date` E
+     `motivo_codes` em 40s, zero erro. Descobertos no caminho: `RL → /api/notes/sfrl`,
+     `LE → /api/notes/lnrl`, `DL → /api/notes/sfdl`. `SM` (16 linhas) esgotou os
+     candidatos e entrou no cache negativo — único tipo realmente sem endpoint.
+  7. ⚠️ **NÃO APLICAR a re-consolidação ainda.** O dry-run 01/06→20/08 deu TOTAL
+     −308, mas com DUAS populações opostas:
+       • 01/06→29/07: positivos pequenos (+1 a +26), soma ~+340 — é o efeito
+         esperado do backfill (rejeição volta pro dia real, produção retorna);
+       • 14/08 e 17→20/08: negativos grandes (−102 a −202), soma ~−645. Os
+         "antes" desses dias (1185, 1288) estão acima de toda a série e o "depois"
+         (983, 1164) cai pra faixa normal. Não tem a forma do backfill.
+     **Erro de método admitido:** o dry-run foi rodado DEPOIS do backfill, sem
+     linha de base, então os dois efeitos estão somados e não são atribuíveis.
+  8. ⬜ separar os efeitos: `scripts/diag-rejeicoes-data-mudou.js` (novo). O
+     backfill gravou `fetched_at = now()`, então as 1266 linhas são
+     identificáveis, e o efeito na regra depende SÓ de o dia ter mudado
+     (`date(rejection_date)` vs `session_date`). Isso dá o TETO exato do efeito do
+     backfill por mês. Se agosto tiver ~0 linhas com dia alterado, os −645 são de
+     outra causa — hipótese: P1-15, dias consolidados antes de as rejeições serem
+     coletadas (os `injetadas` desses dias são 394/442/319).
+  9. ⬜ só depois decidir o que aplicar, e provavelmente em duas janelas separadas
+     (jun–jul por um motivo, ago por outro). Lembrar do P0-6: subtrair produção
+     em massa já apagou dado legítimo antes — foi por isso que o reparo do drift
+     virou monotônico.
 - **Critério de aceite:** toda linha de `note_rejections` dos tipos DL/LE/RL tem
   `rejection_date` preenchido, ou existe medição mostrando que a ausência não
   altera nenhum total.
