@@ -2526,6 +2526,24 @@ feita em PR separado depois dos testes.
 
 ## P2-13 — Upsert de dia antigo SOBRESCREVE em vez de somar (subconta ~0,8%)
 
+> **MEDIÇÃO DE 21/08/2026 — agosto está com ~−645 de resíduo inflacionário.**
+> O dry-run `backfill-consolidate.js 2026-06-01 2026-08-20` deu TOTAL −308, mas
+> composto de duas coisas opostas:
+>   • **01/06 → 29/07: +340 em ~60 dias (~5,7/dia)** — a subcontagem clássica deste
+>     item, batendo com o `+114 OS (+0,8%)` já medido em julho;
+>   • **14/08 e 17→20/08: −645** — a direção INFLACIONÁRIA, com `gravado` acima da
+>     régua (17/08: 1185 gravado × 983 régua). Junho e julho não mostram isso porque
+>     foram re-consolidados em 31/07 e o wipe de `{D-1, D}` limpou as linhas órfãs.
+>     Agosto acumula resíduo desde então.
+> Três hipóteses alternativas foram testadas e refutadas antes de chegar aqui
+> (rejeição coletada atrasada, volume do SJC em 14/08, rejeição posterior à
+> conclusão) — os scripts e resultados estão no P2-32, itens 8e a 8g. Nenhuma delas
+> era a causa; a assinatura é deste item.
+> **Consequência prática nova:** o reparo do drift é monotônico desde o P0-7 (só
+> ADICIONA), então a direção inflacionária **não se autocorrige** — só sai com
+> re-consolidação manual. Ou seja: existe uma dívida que cresce em silêncio entre
+> re-consolidações, e ninguém é avisado. Isso pede alarme próprio (ver P1-1).
+
 - **Categoria:** Dados
 - **Status:** pending — pequeno e na direção conservadora, mas é sistemático
 - **Fonte:** resíduo que sobrou depois de fechar o P1-16 em 31/07/2026.
@@ -3152,6 +3170,35 @@ de falha que não aparece em relatório.
      as notas rejeitadas depois daquele dia e coletadas após o selo. Se a ordem de
      grandeza bater com os diffs (−108, −202, −124, −109, −102), a causa está
      identificada e o valor GRAVADO é o inflado.
+  8g. ❌ **TERCEIRA hipótese refutada, e o desfecho: não era mecanismo novo, era o P2-13.**
+     `diag-rejeicao-posterior.js`: **0 rejeições posteriores à conclusão**, em
+     20/20 dias, contra 3.781 no MESMO dia. O zero é limpo demais pra ser ruído —
+     é fato de negócio: a EDP recusa na análise daquela visita, então a rejeição é
+     do mesmo dia. A cláusula *"rejeição DEPOIS da conclusão"* da regra de 31/07 é
+     defensiva pra um caso que **não ocorre** (registrar isso: economiza a próxima
+     investigação).
+
+     Três hipóteses minhas caíram em sequência (rejeição atrasada → volume do SJC →
+     rejeição posterior). O que eu não fiz, e devia ter feito primeiro, foi comparar
+     a **direção** observada com o que o backlog já dizia. Os dias de agosto têm
+     `gravado` **ACIMA** da régua (1185 vs 983 em 17/08), e o P2-13 documenta
+     exatamente esse sinal, corrigindo por escrito uma afirmação minha de 31/07:
+     *"o upsert só substitui chaves que ele calcula; linhas de equipe/tipo que o
+     passe selador não produziu ficam e se somam"* — com o exemplo de `06-05`,
+     tabela 420 contra régua 393 (+27).
+
+     Fecha o quadro: **junho e julho foram re-consolidados em 31/07**, e como
+     `consolidateDay` wipa `{D-1, D}` dia a dia, aquilo limpou as linhas órfãs —
+     sobrou neles só a subcontagem de ~5/dia. **Agosto acumula resíduo desde
+     31/07.** Não é o backfill, não é o SJC, não é rejeição atrasada: é o P2-13 na
+     direção inflacionária, esperando re-consolidação.
+  8h. ⬜ confirmar por decomposição (não por hipótese): `node scripts/diag-drift-team.js
+     2026-08-17` mostra, equipe a equipe, `gravado` × `uniao_D` × `uniao_D+1`. Se o
+     +202 estiver concentrado em pares (equipe, tipo) que o passe selador não
+     produz, são linhas órfãs e o P2-13 está confirmado como a causa.
+  8i. ⬜ **a decisão sobre agosto migra pro P2-13**, que é o item dono do problema.
+     Este item (P2-32) fica com o que era dele: VL/SM mapeados, cache negativo,
+     backfill feito, 1266 rejeições com motivo. Efeito em produção: 3 notas.
   9. ⬜ só depois decidir o que aplicar, e provavelmente em duas janelas separadas
      (jun–jul por um motivo, ago por outro). Lembrar do P0-6: subtrair produção
      em massa já apagou dado legítimo antes — foi por isso que o reparo do drift
