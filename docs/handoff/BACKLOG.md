@@ -84,7 +84,7 @@
 | P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
 | P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
 | P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | **done** (22/07) |
-| P0-8 | `note_rejections` PK = `note_id`: a regra "rejeitada > concluída" não é representável (nota rejeitada por 2 equipes guarda 1 linha) | Dados | **medindo** — `scripts/diag-rejeicoes-multiplas.js` pronto (21/08), rodar na VM antes de migrar |
+| P0-8 | `note_rejections` PK = `note_id` colapsa rejeições. **Medido 21/08: a hipótese que justificava o P0 (2 equipes) tem ZERO casos** — rebaixado, mecanismo residual em medição | Dados | **rebaixado a P1** (21/08) — 0/19.573 com 2 equipes; 395 com 2 dias, 2ª medição pendente |
 | P1-27 | Histórico multi-dia: Set único nos 3 buckets + dedup por código (não UUID) → nota concluída+rejeitada cai num bucket só | Dados | **código done** (21/08) — Set por bucket + dedup por UUID; 7 testes |
 | P1-28 | Checkpoints usam `RegisteredAt2` contra a própria regra documentada 15 linhas acima | Dados/Frontend | **done** (21/08) — TimeStamp UTC primeiro + reparo do cache antigo; 5 testes |
 | P1-29 | Breaker é em memória: restart do PM2 zera e crash-loop queima os 5 logins (furo no P1-20) | Ops/Backend | **código done** (21/08) — breaker em app_settings + boot usa getToken; RUNBOOK atualizado |
@@ -495,7 +495,64 @@
 ## P0-8 — `note_rejections` tem PK = `note_id`: a regra que reportamos à EDP não é representável no schema
 
 - **Categoria:** Dados
-- **Status:** medindo — script de medição pronto (21/08/2026), rodar na VM antes de migrar
+- **Status:** **REBAIXADO A P1 em 21/08/2026** — a premissa que sustentava o P0 foi
+  REFUTADA pela medição. Mecanismo residual (dia que sobrevive) em 2ª medição.
+
+### MEDIÇÃO 21/08/2026 — eu errei a severidade, e o dado mostra onde
+
+`scripts/diag-rejeicoes-multiplas.js`, janela 01/06 → 21/08/2026:
+
+```
+pares (nota, equipe, dia) em notasRejeitadas: 19.968
+notas distintas com rejeição:                 19.573
+notas rejeitadas por 2+ EQUIPES distintas:         0   ← a hipótese do P0
+notas rejeitadas em 2+ DIAS distintos:           395
+  dessas, também concluídas:                     315
+  com rejeição de equipe ≠ da que concluiu:        0
+presentes em note_rejections:                395/395, todas com 1 linha
+```
+
+**O caso que eu usei para justificar o P0 não acontece.** Eu escrevi que a regra
+de 31/07/2026 fala literalmente de "equipe A rejeita → reprogramada → equipe B
+conclui" e que o schema não representa isso. As duas afirmações são verdadeiras,
+mas eu tratei "não é representável" como "está acontecendo": em 19.573 notas
+rejeitadas ao longo de quase 3 meses, **zero** foram rejeitadas por duas equipes.
+A rejeição, na prática, nunca troca de equipe. Então a PK não estava apagando
+produção de ninguém — não havia nada para apagar.
+
+**O que a medição achou no lugar, e que continua valendo:** 395 notas rejeitadas
+em DOIS dias, sempre pela MESMA equipe, e concentradas em pares de dias colados
+(08→09/07 e 23→24/06 aparecem repetidamente, em equipes de GUA, CAC e SJC ao
+mesmo tempo). Concentração por par-de-datas e não por equipe sugere **arrasto da
+mesma rejeição entre dois snapshots** (a nota permanece no payload), não uma
+segunda recusa. A 2ª medição confirma ou refuta isso.
+
+**O mecanismo residual — real, verificado, ainda não quantificado:**
+`_contaComoExecutada(dias, notaDate)` só devolve "não é produção" se ALGUM dia de
+rejeição for >= o dia da nota. Com a PK colapsando, sobra um dia só. Se o que
+sobrou é o mais ANTIGO e a conclusão caiu depois dele, a regra passa a ver
+"rejeição antes da conclusão" e conta como produção:
+
+```
+rejeições reais 08/07 e 09/07, conclusão 09/07:
+  com os dois dias        → produção? false   (correto)
+  só 08/07 sobrevivendo   → produção? true    (errado)
+  só 09/07 sobrevivendo   → produção? false   (correto)
+```
+
+Ou seja: o impacto depende de QUAL dia a última gravação deixou na tabela.
+`scripts/diag-rejeicoes-datas.js` (21/08) simula os dois cenários com as funções
+reais do `dataWriter` e conta em quantas notas o resultado difere. Se der 0, a
+migração é preventiva e entra sem re-consolidar; se der >0, é corretiva.
+
+**Ação revisada:**
+  1. ⬜ rodar `scripts/diag-rejeicoes-datas.js` na VM (read-only);
+  2. ⬜ só depois decidir entre PK composta `(note_id, team_name, rejection_date)`
+     ou apenas garantir que a linha que sobrevive seja a do dia MAIS RECENTE
+     (correção de 1 linha no upsert, sem migração) — se o mecanismo residual for
+     o único impacto, a segunda opção resolve com muito menos risco;
+  3. ⬜ re-consolidação só se a 2ª medição apontar diferença.
+
 - **Origem:** revisão paralela por agentes, 20/08/2026 (5 análises dos scripts
   Python do outro projeto). Conferido linha a linha antes de registrar.
 - **Evidência:**
