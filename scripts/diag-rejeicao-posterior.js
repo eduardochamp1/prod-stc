@@ -65,8 +65,19 @@ async function main() {
               (n->>'id')::uuid AS note_id,
               s.team_name,
               COALESCE(
-                (NULLIF(n->>'conclusionDate','') AT TIME ZONE 'UTC'
-                   AT TIME ZONE 'America/Sao_Paulo')::date,
+                CASE
+                  -- Só tenta converter se for ISO de verdade e não a sentinela
+                  -- 0001-01-01 que a EDP usa como nulo.
+                  WHEN n->>'conclusionDate' ~ '^\\d{4}-\\d{2}-\\d{2}T'
+                   AND left(n->>'conclusionDate', 4) <> '0001'
+                  THEN (
+                    -- Mesma lógica do _normTz: sem marcador de fuso, é UTC.
+                    CASE WHEN n->>'conclusionDate' ~ '(Z|[+-]\\d{2}:?\\d{2})$'
+                         THEN (n->>'conclusionDate')::timestamptz
+                         ELSE ((n->>'conclusionDate') || 'Z')::timestamptz
+                    END AT TIME ZONE 'America/Sao_Paulo'
+                  )::date
+                END,
                 s.date
               ) AS dia_conc
          FROM snapshots s,
@@ -80,8 +91,9 @@ async function main() {
             count(*) FILTER (WHERE ${DIA_REJ} > c.dia_conc)::int AS rej_posterior,
             count(*) FILTER (WHERE ${DIA_REJ} = c.dia_conc)::int AS rej_mesmo_dia,
             count(*) FILTER (WHERE ${DIA_REJ} > c.dia_conc
-                               AND r.fetched_at > (c.dia_conc + INTERVAL '1 day'
-                                   + INTERVAL '23 hours 50 minutes' + INTERVAL '3 hours')
+                               AND r.fetched_at > ((c.dia_conc + INTERVAL '1 day'
+                                     + INTERVAL '23 hours 50 minutes')
+                                   AT TIME ZONE 'America/Sao_Paulo')
                             )::int AS posterior_e_pos_selo
        FROM conc c
        LEFT JOIN note_rejections r
