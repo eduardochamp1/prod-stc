@@ -53,7 +53,7 @@
 | P1-21 | Snapshot era tudo-ou-nada entre contas: uma conta fora derrubava GUA/CAC e travava `snapshot_last_ok` | Ops/Backend | **código done** (14/08) — coleta resiliente por setor + saúde por conta ativa; 5 testes |
 | P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **done** (14/08) — cadeia [sp, sp2]; credencial `sp2` (Luan) no ar, SJC coletando pela backup (teams 64→122); RUNBOOK atualizado |
 | P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | pending — investigar (pode simplificar P1-16 e P2-13) |
-| P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos; o rejectionService faz fallback de 4 endpoints | Dados | pending — pode cobrir DL/LE/RL sem requisição extra |
+| P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos | Dados | pending — **premissa revista 21/08**: DL/LE/RL JÁ têm motivo e data (auto-descoberta funciona); o valor do item é outro |
 | P1-25 | Outro sistema usa a MESMA conta EDP (`clarissa.alves` = nossa `es`) — e faz **relogin por item sem limite**: pode BLOQUEAR o ES sozinho | Ops | pending — **avisar o autor com prioridade** (agravado 20/08) |
 | P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | pending — falso positivo diário |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
@@ -107,7 +107,7 @@
 | P2-29 | `*/45` = minutos 0 e 45 (48 logins/dia); RUNBOOK e log de boot dizem 20:30, cron é 23:50 | Ops/Docs | pending |
 | P2-30 | Sem orçamento global de concorrência contra a WPA: caudas fire-and-forget fora do lock | Ops | pending |
 | P2-31 | Varredura de campos: `Checkpoints[].Try`, `SessionBreakReason.Responsible`, `LastLocationComunication`, `LastUpdateWallet`, `Address` na lista, `Team.Description`, `Assigned[]`, probe do `Team.SectorId`, KB errada sobre placa | Dados | pending |
-| P2-32 | Resíduo do P0-8: quando `rejection_date` é NULL, o fallback `session_date` herda o dia do ARRASTO e pode suprimir produção legítima | Dados | pending — depende do P1-33 (RejectedAt via `completeInterruptions`) |
+| P2-32 | Resíduo do P0-8: **VL (1278 rejeições, 100% sem RejectedAt) nunca era tentado** — tipo fora de CANDIDATE_PATHS não faz UMA chamada. Sem RejectedAt o dia vem do arrasto e suprime produção | Dados | **código done** (21/08) — VL/SM mapeados + cache negativo; falta backfill das 1302 linhas |
 | P3-12 | `_hojeBRT` com `-3h` fixo sobrevive em 5 lugares apesar do `timeUtil` | Backend | pending (latente) |
 | P3-13 | Snapshot persiste os campos `_*`, incluindo cópia da carteira inicial do dia (~16MB/dia) | Dados/Ops | pending |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
@@ -1459,6 +1459,19 @@ feita em PR separado depois dos testes.
      fallback.
 - **⚠️** Alimenta a aba Rejeições → medir antes de trocar a fonte.
 - **Relacionado:** P1-15, P1-16, P2-13.
+
+> **PREMISSA REVISTA EM 21/08/2026.** Este item (e parte da justificativa do
+> P1-33) partia de "DL/LE/RL ficam sem motivo". A medição de cobertura mostrou o
+> contrário: DL 1258/1259, LE 1138/1140, RL 563/564 têm `RejectedAt` — a
+> auto-descoberta por `FALLBACK_PATHS` resolve esses tipos, e o comentário de
+> cabeçalho do `rejectionService.js` que dizia "endpoint desconhecido" estava
+> velho. O tipo realmente descoberto era **VL** (1278, 100% sem dado), e a causa
+> era estar fora de `CANDIDATE_PATHS` — corrigido no P2-32, sem precisar deste
+> item. O que continua valendo aqui é o argumento de CUSTO: `Interruptions[]` já
+> vem no `details/optimized` que cacheamos, então usar isso pouparia 1 request
+> por nota rejeitada. Deixou de ser "cobrir uma lacuna" e passou a ser
+> "economizar rede na conta compartilhada" — o que rebaixa a urgência, mas casa
+> com o P2-30.
 
 ---
 
@@ -2981,7 +2994,7 @@ feita em PR separado depois dos testes.
 ## P2-32 — Rejeição sem `RejectedAt` herda o dia do ARRASTO e pode suprimir produção legítima
 
 - **Categoria:** Dados
-- **Status:** pending — depende do P1-33
+- **Status:** **código done** (21/08/2026) — VL/SM mapeados, cache negativo, 3 testes. Falta o backfill das 1302 linhas existentes. NÃO dependia do P1-33.
 - **Origem:** resíduo do P0-8, isolado pelas duas medições de 21/08/2026. É o
   único risco que sobrou depois de o P0-8 ser fechado como não-problema.
 - **Evidência:**
@@ -3002,14 +3015,62 @@ feita em PR separado depois dos testes.
   `services/rejectionService.js:22-24` documenta `DL`, `LE` e `RL` como
   *"endpoint desconhecido"*, gravando `motivo_codes: []`. Se não há formulário de
   rejeição lido, provavelmente não há `RejectedAt` — a mesma lacuna, dois sintomas.
-- **Ação:**
-  1. ⬜ medir a exposição: seção 6 do `scripts/diag-rejeicoes-datas.js` (cobertura
-     de `RejectedAt` por tipo). Se `sem_rejectedat` for 0, este item fecha também.
-  2. ⬜ se houver exposição, obter a data autoritativa via P1-33
-     (`/Notes/{id}/completeInterruptions` devolve `Date` por interrupção).
-  3. ⬜ enquanto não houver `RejectedAt`, considerar usar o dia MAIS ANTIGO em que
-     a rejeição foi vista (a primeira aparição está mais perto do fato que a
-     última) — mas só com o número da etapa 1 na mão.
+### MEDIÇÃO 21/08/2026 — e a causa não era a que eu previ
+
+Cobertura de `RejectedAt` por tipo (jun–ago/2026):
+
+```
+tipo   rejeições   sem RejectedAt
+DL         1259           1  (0%)
+LE         1140           2  (0%)
+RL          564           1  (0%)
+SF         7135           3  (0%)
+LN         1583           1  (0%)
+MD         2423           0  (0%)
+VL         1278        1278  (100%)   ← aqui
+SM           16          16  (100%)
+----
+TOTAL     15398        1302  (8%)
+das 395 notas de 2 dias, sem RejectedAt: 66
+```
+
+**Eu previ DL/LE/RL e errei.** A auto-descoberta por `FALLBACK_PATHS` resolveu
+esses três há tempos — o comentário de cabeçalho do `rejectionService.js` que
+dizia *"endpoint desconhecido → 404"* estava **desatualizado** e ninguém notou
+(corrigido no mesmo commit, com a tabela acima registrada no arquivo).
+
+**A causa real é mais simples e pior:** `VL` e `SM` **não estavam em
+`CANDIDATE_PATHS`**. Tipo que não está nem em `KNOWN_PATHS` nem em
+`CANDIDATE_PATHS` cai no ramo `uniquePaths.length === 0`
+(`services/rejectionService.js`), que devolve `endpoint_missing` **sem fazer uma
+única chamada**. Não era "o endpoint não existe": era o tipo nunca ter sido
+tentado. 1278 rejeições VL gravadas com `motivo_codes: []` e `rejection_date:
+null` por uma entrada faltando numa tabela.
+
+E isso não é cosmético: sem `RejectedAt`, `_rejIndexByNote` cai no
+`session_date` — o dia em que o coletor VIU —, que com o arrasto entre snapshots
+pode estar 1 dia à frente do fato. Rejeição empurrada pra frente cobre a
+conclusão e **suprime produção legítima**. Subnotificação, não inflação: o modo
+de falha que não aparece em relatório.
+
+**Ação:**
+  1. ✅ medir a exposição — feito 21/08, tabela acima.
+  2. ✅ mapear `VL`/`SM` em `CANDIDATE_PATHS` com `FALLBACK_PATHS` (o que fez
+     DL/LE/RL funcionarem) — feito 21/08. **Não** precisou do P1-33.
+  3. ✅ cache NEGATIVO (`_noPathForTipo`): sem ele, um tipo cujos candidatos todos
+     falham paga a lista inteira em CADA nota — 1278 × 8 ≈ 10 mil requests
+     inúteis na conta compartilhada (P1-25). Agora é 1 tentativa por processo.
+     Só marca em 404 puro; um 500 significa que o endpoint existe.
+  4. ✅ teste de guarda-corpo: todo tipo visto em produção tem de ter entrada em
+     `KNOWN_PATHS` ou `CANDIDATE_PATHS` — tipo novo sem mapeamento falha a suíte
+     em vez de gravar rejeição vazia em silêncio.
+  5. ⬜ backfill das 1302 linhas existentes: o retry normal filtra por PRESENÇA na
+     tabela (`cronService.js` ~660), então nunca volta nelas.
+     `scripts/backfill-rejeicoes-sem-data.js` (novo) faz UPDATE só das que estão
+     sem data. Rodar `--dry-run`, depois `--tipo VL --limite 20`, conferir, e só
+     então inteiro.
+  6. ⬜ se o backfill preencher datas, MEDIR o delta da re-consolidação em dry-run
+     antes de aplicar — algumas notas podem mudar de lado na regra.
 - **Critério de aceite:** toda linha de `note_rejections` dos tipos DL/LE/RL tem
   `rejection_date` preenchido, ou existe medição mostrando que a ausência não
   altera nenhum total.

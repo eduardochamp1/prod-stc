@@ -7,6 +7,7 @@
  *   P1-28  checkpoint usa TimeStamp (UTC) e não RegisteredAt2 (BR)
  *   P1-32  breaker deixa de ser fail-open em mensagem desconhecida
  *   P1-30  getTeams devolve o report DAQUELA chamada via `out`
+ *   P2-32  todo tipo de nota tem endpoint candidato (VL/SM não tinham)
  */
 
 const test = require('node:test');
@@ -278,4 +279,34 @@ test('P1-30: getTeams escreve o report DAQUELA chamada em `out`', async () => {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P2-32 — tipos de nota sem candidato de endpoint nunca eram tentados
+// ─────────────────────────────────────────────────────────────────────────────
+const rejSvc = require('../services/rejectionService');
+
+test('P2-32: VL e SM agora têm candidatos de endpoint', () => {
+  // A medição de 21/08 achou VL com 1278 rejeições e 100% sem RejectedAt: o tipo
+  // não estava em CANDIDATE_PATHS, então caía no ramo que devolve
+  // endpoint_missing SEM fazer nenhuma chamada.
+  assert.ok(Array.isArray(rejSvc.CANDIDATE_PATHS.VL), 'VL precisa de candidatos');
+  assert.ok(Array.isArray(rejSvc.CANDIDATE_PATHS.SM), 'SM precisa de candidatos');
+  // E os FALLBACK_PATHS (que resolveram DL/LE/RL) têm de estar na frente.
+  assert.ok(rejSvc.CANDIDATE_PATHS.VL.includes('sfrl'));
+  assert.ok(rejSvc.CANDIDATE_PATHS.VL.includes('md'));
+});
+
+test('P2-32: todo tipo visto em produção tem KNOWN_PATHS ou CANDIDATE_PATHS', () => {
+  // Guarda-corpo: tipo novo aparecendo em produção sem entrada aqui volta a
+  // gravar rejeição sem data nem motivo, silenciosamente.
+  const vistos = ['MD', 'LN', 'SF', 'DL', 'LE', 'RL', 'VL', 'SM'];
+  const semCobertura = vistos.filter(
+    t => !rejSvc.KNOWN_PATHS[t] && !rejSvc.CANDIDATE_PATHS[t]);
+  assert.deepEqual(semCobertura, [], `tipos sem endpoint mapeado: ${semCobertura}`);
+});
+
+test('P2-32: cache negativo começa vazio e é resetável', () => {
+  rejSvc._resetNoPathCache();
+  assert.deepEqual(rejSvc.getNoPathTipos(), []);
 });

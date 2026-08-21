@@ -19,10 +19,30 @@
  *   LN → /api/notes/lnrl       (confirmado — Data.Rejection)
  *   SF → /api/notes/sfdl       (confirmado — primary)
  *      → /api/notes/sfrl       (fallback)
- *   DL → endpoint desconhecido (tentamos: dl, dlrl, dldl, desligamento, corte → 404)
- *   LE → endpoint desconhecido (tentamos: le, lerl, ledl, leitura → 404)
- *   RL → endpoint desconhecido (tentamos: rl, rlrl, rldl, religacao → 404)
+ *   DL → resolvido por AUTO-DESCOBERTA via FALLBACK_PATHS (ver medição abaixo)
+ *   LE → idem
+ *   RL → idem
  *   II/PO/UG/RD/SO/DD → sem amostras nos snapshots ainda (raros)
+ *
+ * ⚠️ CORREÇÃO DE 21/08/2026 — o parágrafo acima dizia "DL/LE/RL: endpoint
+ * desconhecido", e isso ficou desatualizado sem ninguém notar. A medição de
+ * cobertura de `RejectedAt` (jun–ago/2026, `scripts/diag-rejeicoes-datas.js`)
+ * mostra que a auto-descoberta pelos FALLBACK_PATHS resolve esses três:
+ *
+ *     tipo   rejeições   sem RejectedAt
+ *     DL         1259          1  (0%)
+ *     LE         1140          2  (0%)
+ *     RL          564          1  (0%)
+ *     SF         7135          3  (0%)
+ *     LN         1583          1  (0%)
+ *     MD         2423          0  (0%)
+ *     VL         1278       1278  (100%)   ← o problema real
+ *     SM           16         16  (100%)
+ *
+ * VL e SM simplesmente NÃO ESTAVAM em CANDIDATE_PATHS, e tipo sem candidato cai
+ * no ramo `uniquePaths.length === 0`, que devolve `endpoint_missing` sem fazer
+ * UMA chamada. Não era "endpoint que não existe": era tipo que nunca foi tentado.
+ * Corrigido incluindo VL/SM na tabela (+ cache negativo, ver _noPathForTipo).
  *
  * Estratégia pra tipos com endpoint desconhecido:
  *   - Auto-descoberta: tenta uma lista de candidatos e cacheia o primeiro que
@@ -80,6 +100,19 @@ const KNOWN_PATHS = {
 const FALLBACK_PATHS = ['sfrl', 'sfdl', 'lnrl', 'md'];
 
 const CANDIDATE_PATHS = {
+  // 21/08/2026 — VL e SM não estavam AQUI, e o efeito não era "sem motivo": era
+  // ZERO tentativa. Tipo fora de KNOWN_PATHS e de CANDIDATE_PATHS cai no ramo
+  // `uniquePaths.length === 0` mais abaixo, que devolve endpoint_missing SEM
+  // nenhuma chamada — logo sem `motivo_codes` E sem `rejection_date`. A medição
+  // do P0-8 achou VL com 1278 rejeições e 100% sem RejectedAt, contra ~0% em
+  // todos os outros tipos. Faltar o RejectedAt não é cosmético: o
+  // `_rejIndexByNote` cai pro `session_date` (o dia em que o coletor VIU), que
+  // com o arrasto entre snapshots pode estar 1 dia à frente do fato e SUPRIMIR
+  // produção legítima (backlog P2-32).
+  // Como o endpoint é por FORMULÁRIO e não por tipo (descoberta de 25/05/2026),
+  // FALLBACK_PATHS é exatamente o que fez DL/LE/RL funcionarem.
+  VL: [...FALLBACK_PATHS, 'vl', 'vlrl', 'vldl', 'vistoria'],
+  SM: [...FALLBACK_PATHS, 'sm', 'smrl', 'smdl'],
   DL: [...FALLBACK_PATHS, 'dl', 'dlrl', 'dldl', 'desligamento', 'corte'],
   LE: [...FALLBACK_PATHS, 'le', 'lerl', 'ledl', 'leitura'],
   RL: [...FALLBACK_PATHS, 'rl', 'rlrl', 'rldl', 'religacao', 'religa'],
@@ -94,6 +127,19 @@ const CANDIDATE_PATHS = {
 // Cache de auto-descoberta — quando um tipo desconhecido revela o path certo,
 // guardamos aqui pro resto da vida do processo.
 const _discoveredPath = {};   // { 'DL': 'dlrl', ... }
+
+// Cache NEGATIVO (21/08/2026). Sem ele, um tipo cujos candidatos todos falham
+// paga a lista inteira em CADA nota — 1278 rejeições VL × 8 candidatos seriam
+// ~10 mil requests inúteis na conta compartilhada da EDP (que é a mesma do outro
+// projeto, ver P1-25). Agora o tipo é tentado uma vez por processo: se todos os
+// candidatos derem 404, marca aqui e as notas seguintes nem tentam.
+// Só entra aqui em 404 puro. Se algum candidato devolveu 500, o endpoint EXISTE
+// e a falha é da nota (arquivada/limpa) — não envenena o cache.
+const _noPathForTipo = new Set();
+
+/** Estado do cache negativo (debug/teste). */
+function getNoPathTipos() { return [..._noPathForTipo]; }
+function _resetNoPathCache() { _noPathForTipo.clear(); }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -199,6 +245,17 @@ async function fetchRejectionDetails(noteId, tipo) {
     };
   }
 
+  // Cache negativo: este tipo já esgotou todos os candidatos com 404 neste
+  // processo. Não gasta requisição de novo nota a nota.
+  if (_noPathForTipo.has(TIPO)) {
+    return {
+      motivo_codes: [], motivo_textos: [], observacao: null,
+      rejection_date: null, formulario: null,
+      raw: { no_path_cached: TIPO },
+      endpoint: null, endpoint_missing: true,
+    };
+  }
+
   let last500 = null;
   for (const path of uniquePaths) {
     const r = await tryEndpoint(path, noteId);
@@ -224,6 +281,13 @@ async function fetchRejectionDetails(noteId, tipo) {
   // existe mas a nota está com problema (provavelmente foi arquivada/limpa).
   // Retorna estrutura vazia mas sinaliza que a tentativa foi feita.
   console.warn(`[rejectionService] tipo=${TIPO} noteId=${noteId.slice(0, 8)} sem 200 (last500=${last500 || 'nenhum'})`);
+  // 404 em TODOS os candidatos → o path não existe pra este tipo. Marca pro
+  // resto do processo (ver _noPathForTipo). Com um 500 no meio, não marca: o
+  // endpoint existe e o problema é da nota.
+  if (!last500) {
+    _noPathForTipo.add(TIPO);
+    console.warn(`[rejectionService] tipo=${TIPO} marcado como SEM path — não tento de novo neste processo`);
+  }
   return {
     motivo_codes: [], motivo_textos: [], observacao: null,
     rejection_date: null, formulario: null,
@@ -241,4 +305,6 @@ function getDiscoveredPaths() {
 module.exports = {
   fetchRejectionDetails,
   getDiscoveredPaths,
+  getNoPathTipos, _resetNoPathCache,   // cache negativo (21/08/2026) — exportado p/ teste
+  CANDIDATE_PATHS, KNOWN_PATHS,        // exportados p/ teste de cobertura de tipos
 };
