@@ -3094,6 +3094,39 @@ de falha que não aparece em relatório.
      backfill por mês. Se agosto tiver ~0 linhas com dia alterado, os −645 são de
      outra causa — hipótese: P1-15, dias consolidados antes de as rejeições serem
      coletadas (os `injetadas` desses dias são 394/442/319).
+  8b. ✅ **RESULTADO (21/08): o backfill mexeu em 3 notas.** 1283/1286 linhas com
+     o dia INALTERADO (`date(rejection_date)` == `session_date`) → efeito ZERO na
+     regra. Junho 2 pra trás e 1 pra frente; julho e agosto ZERO. Ou seja: os
+     −308 do dry-run **não têm nada a ver** com o backfill, nem os +340 de
+     jun/jul que eu havia atribuído a ele. Duas atribuições minhas caíram.
+
+     O que o dry-run mede, então, é **drift acumulado** — a diferença entre o que
+     está gravado e o que a consolidação produziria hoje. E aí os dois blocos têm
+     causas distintas:
+       • **jun/jul, +340 em ~60 dias (~5,7/dia): é o P2-13**, que mede exatamente
+         isso (*"+114 OS (+0,8%)… a tabela subconta ~4 OS/dia"*). Assinatura igual.
+       • **14/08 e 17→20/08, −645: NÃO é o P2-13**, que prevê ~0 nos dias recentes
+         (*"tiveram menos passes posteriores"*). A série vira exatamente em 14/08:
+         11→13/08 dão +9/+12/+17 e 14/08 dá −108. **14/08 é o dia em que a conta de
+         backup do SJC entrou (P1-22) e as equipes saltaram de 64 pra 122.**
+
+     Hipótese a testar (mecanismo do P1-15): com o volume do SJC de volta, a coleta
+     de rejeições passou a chegar DEPOIS da consolidação que sela o dia
+     (`consolidateDay(D+1)` às 23:50 reescreve `{D, D+1}`; depois disso só o drift
+     sweep toca, e ele é **monotônico** desde o P0-7 — só ADICIONA). Rejeição que
+     chega atrasada nunca é aplicada, porque aplicá-la SUBTRAIRIA produção → o dia
+     fica gravado INFLADO e não se autocorrige.
+     ⚠️ Se isso se confirmar, é um achado próprio e maior que este item: o sistema
+     sabe curar subcontagem e **não sabe curar sobrecontagem**, por decisão de
+     projeto tomada por um bom motivo (o P0-6 apagou produção legítima).
+  8c. ⬜ testar com `scripts/diag-lag-rejeicoes.js`: quantas rejeições de cada dia
+     foram coletadas APÓS o selo (D+1 23:50 BRT). Se os dias com muitas
+     "após o selo" forem 14/08 e 17→20/08, a causa está identificada.
+  8d. ⚠️ Efeito colateral do backfill a registrar: ele gravou `fetched_at = now()`
+     em 1266 linhas, apagando o `fetched_at` original delas. Não afeta número
+     nenhum, mas destruiu informação forense — o `diag-lag-rejeicoes.js` precisa
+     excluir essas linhas via `--excluir-dia`. Próximo backfill: preservar o
+     `fetched_at` original ou gravar em coluna separada.
   9. ⬜ só depois decidir o que aplicar, e provavelmente em duas janelas separadas
      (jun–jul por um motivo, ago por outro). Lembrar do P0-6: subtrair produção
      em massa já apagou dado legítimo antes — foi por isso que o reparo do drift
