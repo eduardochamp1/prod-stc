@@ -12,6 +12,9 @@ const { classifyBuckets } = require('./bucketMath');   // fonte única da aritm�
 
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 
+// Limiar pra logar o timing por fase do getTeams. Mesmo default do slow_request.
+const GETTEAMS_LOG_MS = Number(process.env.SLOW_REQUEST_MS) || 1500;
+
 // Filtra um array de teams mantendo apenas equipes oficiais (whitelist).
 // Em modo "mock" não aplica filtro (mantém comportamento de teste).
 function _filterOficiais(teams) {
@@ -547,6 +550,7 @@ function getLastSectorReport() { return _lastSectorReport; }
 // @param {object} [out] recebe `out.report = {ok, failed, skipped}` desta chamada.
 async function getTeams(filters = {}, out = null) {
   if (MODE === 'mock') return getMockTeams(filters);
+  const t0 = Date.now();
 
   // Determina quais setores buscar. `filters.regionals` é string[] de siglas
   // reais (GUA/CAC/SJC), expandido pelo middleware applyScope a partir do
@@ -600,13 +604,36 @@ async function getTeams(filters = {}, out = null) {
   if (out && typeof out === 'object') out.report = report;
   _lastSectorReport = report;
   const teams = _filterOficiais(resultados.flat());
+  const tColeta = Date.now();
 
   // Enriquecer com escala (de equipes_oficiais) e sessionBeginReal (primeiro snapshot do dia)
   const enriched = await _enrichComEscalaELogonReal(teams);
+  const tEsc = Date.now();
   // Restaurar notasConcluidas de equipes encerradas (EDP não expõe pós-deslog)
   const comConcluidas = await _enrichConcluidasDeEncerradas(enriched);
+  const tConc = Date.now();
   // Carteira Inicial REAL do primeiro snapshot do dia (cada equipe individualmente)
-  return await _enrichCarteiraInicial(comConcluidas);
+  const final = await _enrichCarteiraInicial(comConcluidas);
+  const tCart = Date.now();
+
+  // TIMING POR FASE (21/08/2026). O slow_request mostrou /api/teams em 17s na
+  // primeira chamada e ~2s nas seguintes, mas o total não diz ONDE o tempo vai:
+  // a coleta serial na EDP e os três enriquecimentos (que varrem snapshots
+  // paginados) são candidatos bem diferentes, e cada um pede conserto diferente.
+  // Só loga acima do limiar pra não poluir. Mesmo limiar do slow_request.
+  const total = tCart - t0;
+  if (total >= GETTEAMS_LOG_MS) {
+    console.log('[getTeams] ' + JSON.stringify({
+      total_ms:    total,
+      coleta_ms:   tColeta - t0,     // fetches na EDP, serial por setor
+      escala_ms:   tEsc - tColeta,   // _enrichComEscalaELogonReal (snapshots hoje+ontem)
+      encerradas_ms: tConc - tEsc,   // _enrichConcluidasDeEncerradas
+      carteira_ms: tCart - tConc,    // _enrichCarteiraInicial
+      setores:     report.ok.length,
+      equipes:     final.length,
+    }));
+  }
+  return final;
 }
 
 // ── GET TEAM DETAIL ───────────────────────────────────────────────────────────
