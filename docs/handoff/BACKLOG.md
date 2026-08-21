@@ -53,8 +53,14 @@
 | P1-21 | Snapshot era tudo-ou-nada entre contas: uma conta fora derrubava GUA/CAC e travava `snapshot_last_ok` | Ops/Backend | **código done** (14/08) — coleta resiliente por setor + saúde por conta ativa; 5 testes |
 | P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **done** (14/08) — cadeia [sp, sp2]; credencial `sp2` (Luan) no ar, SJC coletando pela backup (teams 64→122); RUNBOOK atualizado |
 | P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | pending — investigar (pode simplificar P1-16 e P2-13) |
+| P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos; o rejectionService faz fallback de 4 endpoints | Dados | pending — pode cobrir DL/LE/RL sem requisição extra |
+| P1-25 | Outro sistema usa a MESMA conta EDP (`clarissa.alves` = nossa `es`) com volume alto — risco de saturar/travar GUA/CAC | Ops | pending — alinhar com o outro time |
+| P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | pending — falso positivo diário |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-14 | `/Sessions/{id}/collaborators` — fecha a lacuna dos Collaborators vazios | Dados | pending |
+| P2-15 | `/sessions/{id}/break` (intervalos) + horários previstos — base de "previsto × realizado" e da linha do tempo | Dados | pending — habilita prevenção |
+| P2-16 | `filterByExhibitionSector=true` no V2 pode ser a CAUSA do nosso fallback cross-setor (eles não usam e não precisam) | Backend | pending — testar sem o parâmetro |
+| P2-17 | Achados menores: placa no histórico, `SessionEndBy`, sinal, `VehicleCategory`, parser de DATE no pgShim, sentinela `0001-01-01` | Dados | pending |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -1253,6 +1259,93 @@ feita em PR separado depois dos testes.
 
 ---
 
+## P1-24 — `Interruptions[]` vem de graça no `details/optimized` (e ignoramos)
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Fonte:** 3ª revisão dos scripts Python (14/08/2026).
+- **O que descobrimos:** os dois scripts leem `Interruptions[]` (com `Date`, `Try`,
+  `Notes`) da resposta do `GET /Notes/{id}/details/optimized` — **o mesmo endpoint
+  que nós já chamamos e cujo payload já gravamos em `note_details`.**
+  - `services/notaProcessor.js` tem **ZERO** referências a `Interruptions`.
+  - O header do `getNoteDetail` documenta `Checkpoints`, `Equipments`, `Seals`,
+    `Materials`, `Activities`, `*Note`, `CustomerName`… e **não menciona
+    `Interruptions`** — provavelmente nunca notamos o campo.
+- **O custo que isso nos gera hoje:** `services/rejectionService.js` busca o motivo
+  de rejeição em **endpoints separados por tipo de nota**, com fallback e
+  auto-descoberta — e o cabeçalho dele afirma que o dado *"não vem no
+  `/Notes/{id}/details/optimized`"*. Consequências registradas lá:
+  - `DL`, `LE`, `RL` → **endpoint desconhecido** (todos os candidatos deram 404);
+  - tipos raros (`II/PO/UG/RD/SO/DD`) sem amostra;
+  - nesses casos a rejeição é gravada com `motivo_codes=[]` + `endpoint_missing`.
+- **Hipótese a testar:** se `Interruptions[].Notes` traz o motivo textual (e `Try`
+  a tentativa), temos o dado **sem requisição adicional** e **uniforme para todos
+  os tipos** — incluindo DL/LE/RL, que hoje ficam sem motivo.
+- **Ação:**
+  1. ⬜ Pegar 3 notas rejeitadas conhecidas (tipos diferentes, incluindo DL ou LE)
+     e inspecionar `Interruptions[]` no `note_details` **já cacheado** — consulta
+     local, custo zero, sem tocar na EDP.
+  2. ⬜ Comparar com o motivo que o `rejectionService` obteve (quando obteve).
+  3. ⬜ Se casar, usar como fonte primária e manter os endpoints por tipo como
+     fallback.
+- **⚠️** Alimenta a aba Rejeições → medir antes de trocar a fonte.
+- **Relacionado:** P1-15, P1-16, P2-13.
+
+---
+
+## P1-25 — Outro sistema usa a MESMA conta EDP, com volume alto
+
+- **Categoria:** Operação (continuidade da ingestão)
+- **Status:** pending — **alinhamento humano, não código**
+- **Fonte:** revisão de `monitor_stc_es.py` (14/08/2026).
+- **O problema:** o script usa `clarissa.alves@engelmig.com.br` — a **mesma conta
+  que o WPA Monitor usa como `es` para GUA/CAC**. E o volume é alto: janela padrão
+  de **15 dias**, sequencial, **1 requisição por nota** em até 4 etapas
+  (`details/optimized`, `historic`, `completeInterruptions`, `collaborators`) —
+  ordem de dezenas de milhares de requisições por execução.
+- **Dois riscos concretos:**
+  1. **Lockout compartilhado.** A conta bloqueia após 5 logins falhos. O breaker
+     (P1-20) é **por processo** — não enxerga o outro sistema. Se a EDP rotacionar
+     a senha da `es`, os dois tentam e se travam mutuamente. Foi o incidente de
+     13/08, mas na `sp`.
+  2. **Rate limit / saturação.** O sintoma de saturar a EDP está no nosso próprio
+     código: *"notas vinham vazias intermitentemente"*. Se GUA/CAC apresentar falha
+     intermitente sem causa aparente, esta é hipótese a checar **antes** de
+     procurar bug nosso.
+- **Ação:**
+  1. ⬜ Alinhar: **conta EDP dedicada por sistema** (foi o que fizemos pro SJC).
+  2. ⬜ Até lá, ao investigar falha intermitente em ES, verificar se o outro script
+     rodou na janela.
+- **Relacionado:** P1-20, P1-22.
+
+---
+
+## P1-26 — "Equipe não logou" não cruza com a escala do dia (falso positivo diário)
+
+- **Categoria:** Dados / Operação
+- **Status:** pending
+- **Evidência:** `routes/index.js` (~1510-1521) monta `teams_missing_today`
+  iterando a **whitelist inteira** e marcando como faltante quem não está em
+  `teams_current`:
+  ```js
+  for (const e of oficGua) {
+    if (!loggedSiglas.has(e.sigla.toUpperCase())) missing.push({...});
+  }
+  ```
+  Não há cruzamento com escala. **Equipe de folga/férias/afastamento aparece como
+  "não logou"** — falso positivo todo dia.
+- **A solução que os scripts mostram:** `GET /collaboratorshifts/{setor}/{mes}/{ano}`
+  dá a escala por dia, e a lista de códigos que **não são dia trabalhado**:
+  `FOL, DR, DES, FER, DIS, AFO, NA, SAV, SIN, TRE` (constante `ESCALA_EXCLUIR`).
+  Com isso, "não logou" passa a significar **estava escalada e não logou**.
+- **Por que importa além do health:** é a regra de desvio nº 1 de qualquer sistema
+  de alerta ("equipe não iniciou o turno"). Sem cruzar com escala, o alerta é ruído.
+- **Ação:** ⬜ coletar `collaboratorshifts`, aplicar `ESCALA_EXCLUIR`, usar a escala
+  do dia como denominador do "não logou" (health + futuro alerta).
+- **Relacionado:** P1-1, P2-15.
+
+---
+
 ## P1-23 — `/Notes/{id}/historic`: posse da nota por equipe (hoje é inferência)
 
 - **Categoria:** Dados (produção reportada à EDP)
@@ -1874,6 +1967,95 @@ feita em PR separado depois dos testes.
   errado. **Não aplicar às cegas.**
 - **Esforço:** investigação 2–3h.
 - **Relacionado:** P0-6, P1-11, P1-13, P1-16, P2-13. Maio ainda não medido.
+
+---
+
+## P2-15 — Intervalos (`/sessions/{id}/break`) + previsto × realizado + linha do tempo
+
+- **Categoria:** Dados (capacidade nova)
+- **Status:** pending
+- **Fonte:** `monitor_stc_es.py` (tabelas `intervalos` e `rota_dia`).
+- **O que não temos hoje:**
+  1. **Intervalos.** `GET /api/sessions/{sessionId}/break` →
+     `SessionBreakReason.{Text, Responsible}`, `StartTime`, `EndTime`. É o dado que
+     explica **por que** a equipe está parada (almoço, deslocamento, aguardando).
+     Sem ele, o painel não distingue **parada legítima** de **desvio**.
+  2. **Horários previstos de intervalo.** Temos `escala_inicio`/`escala_fim` em
+     `equipes_oficiais`, mas **não** o início/fim previstos do intervalo. O cadastro
+     deles (`public.escalas`) tem `inicio_escala`, `fim_sessao`, `inicio_intervalo`,
+     `fim_intervalo` por código de escala.
+  3. **Linha do tempo unificada (`rota_dia`).** Empilha checkpoints das notas +
+     início/fim de cada intervalo, ordenados por equipe e hora, com a equipe
+     **corrigida por quem detinha a nota no instante** (via P1-23).
+- **O que destrava (não conseguimos responder hoje):**
+  - tempo entre **chegada** e **conclusão** de cada nota;
+  - tempo de **deslocamento** entre notas;
+  - **ociosidade** não explicada por intervalo;
+  - **intervalo além do previsto** / fora da janela;
+  - sessão encerrada **antes** do fim da escala.
+- **Por que é estratégico:** é a base de **prevenção** (projetar "no ritmo atual não
+  fecha a carteira até o fim da escala"). Sem trajetória cronológica só se detecta
+  o desvio depois de acontecer.
+- **⚠️ Aprender do erro deles:** a PK da `rota_dia` **não inclui o horário**, então
+  eventos do mesmo tipo/tentativa no dia colapsam num registro só — anula o
+  propósito da tabela. Incluir `registro` na chave.
+- **Relacionado:** P1-23, P1-26, P1-1.
+
+---
+
+## P2-16 — `filterByExhibitionSector=true` pode ser a causa do nosso fallback cross-setor
+
+- **Categoria:** Backend (desempenho + ruído)
+- **Status:** pending — testar
+- **A diferença:** nós chamamos
+  `GET /teamsstatus/V2?sectorId=X&filterByExhibitionSector=true`.
+  **Os dois scripts chamam sem o parâmetro** — e não precisam de fallback nenhum.
+- **O que o parâmetro nos custa:** o comentário no nosso `_getTeamsBySectorUncached`
+  diz que a equipe some do V2 quando o "setor de exibição" difere do setor de login
+  *"fazendo a equipe sumir do V2 com filterByExhibitionSector=true"* — e por isso
+  mantemos um **fallback cross-setor**: para cada equipe visitante sem V2, varremos
+  os outros setores (`ALL_SECTORS`). Isso gera N requisições extras por ciclo e foi
+  a origem do ruído `falha ao buscar V2 em DSSJ` investigado em 14/08.
+- **Hipótese:** sem o parâmetro, o V2 devolve todas as equipes do setor e o fallback
+  inteiro se torna desnecessário — menos requisições, menos ruído, menos código.
+- **Ação:**
+  1. ⬜ Comparar, no mesmo setor e instante, a lista **com** e **sem** o parâmetro
+     (quantas equipes, quais faltam).
+  2. ⬜ Se sem o parâmetro vier tudo, remover o parâmetro e o fallback cross-setor.
+  3. ⬜ Se vier diferente, documentar a diferença REAL — o comentário atual pode
+     estar descrevendo uma suposição, não um teste.
+- **⚠️** Muda a fonte dos contadores de nota → medir produção antes/depois.
+
+---
+
+## P2-17 — Achados menores dos scripts Python
+
+- **Status:** pending · **Fonte:** revisão 14/08/2026
+
+1. **Placa no histórico.** Nosso comentário afirma *"Placa: só existe em
+   sessions/current"* (endpoint ao vivo). Mas os scripts leem `Vehicle.Label` do
+   `Sessions/all/date` — o endpoint **histórico**. Provavelmente conseguimos placa
+   no histórico e não aproveitamos. ⬜ Verificar `Vehicle.Code` × `Vehicle.Label`.
+2. **`SessionEndBy`** — quem encerrou a sessão (equipe × backoffice). Não lemos.
+   Útil pro P1-14/deslogadas.
+3. **`LastStatusUpdateWithoutSignal`** — distingue equipe **sem sinal** de equipe
+   **parada**. Não lemos.
+4. **`Session.VehicleCategory.Name`** — categoria do veículo. Lemos só a placa.
+5. **Parser de DATE no `pgShim` (OID 1082).** Confirmado: **não registramos** nenhum
+   `setTypeParser`. Toda coluna DATE volta como objeto `Date` onde o código espera
+   string — classe que já causou **dois** bugs de número reportável (**P2-12** coluna
+   DIAS e **P1-15** enriquecimento de rejeição virando código morto). Registrar o
+   parser mata a classe inteira. ⚠️ Mudança **global**: exige varredura de todo lugar
+   que hoje recebe `Date` e chama `.getFullYear()` etc.
+6. **Sentinela `0001-01-01T00:00:00`.** A EDP usa esse valor como "vazio". Nós
+   tratamos em `cronService.js` e `notasMonitor.js`, mas o `wpaService.js` decide
+   sessão encerrada com `const sessaoEncerrada = !!s.EndTime` (~1263) e
+   `sessionEnd: s.EndTime || null` — a sentinela é **truthy**, então uma sessão
+   ABERTA seria tratada como **encerrada** (equipe sai do monitor indevidamente).
+   Eles centralizam isso (`converter_data_robusta`). ⬜ Criar helper único.
+7. **Janela de reprocessamento.** Nosso drift sweep cobre **D-1..D-7**; eles
+   reprocessam **15 dias**. Nota que muda de status após 7 dias nunca é recapturada
+   por nós. ⬜ Avaliar se 7 basta.
 
 ---
 

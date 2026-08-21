@@ -205,6 +205,70 @@ que mudou. É a diferença entre um ciclo de 30 min e um de segundos.
 
 ---
 
+## 6-B. ONDE **NÓS** ESTÁVAMOS ERRADOS (3ª passada)
+
+Esta seção é o retorno mais valioso da revisão: coisas que os scripts expõem como
+**erro ou lacuna nossa**, não deles. Registradas no nosso backlog.
+
+### 6-B.1 Ignoramos `Interruptions[]` que já pagamos para baixar — P1-24
+
+Os scripts leem `Interruptions[]` (`Date`, `Try`, `Notes`) da resposta do
+`details/optimized`. Nós chamamos esse mesmo endpoint e **gravamos o payload
+inteiro** em `note_details` — mas:
+
+- `services/notaProcessor.js` tem **zero** referências a `Interruptions`;
+- o header do nosso `getNoteDetail` não menciona o campo.
+
+Enquanto isso, o `rejectionService` busca motivo de rejeição em **endpoints
+separados por tipo** com auto-descoberta, e o próprio cabeçalho dele afirma que o
+dado *"não vem no `details/optimized`"*. Resultado registrado lá: `DL`, `LE` e `RL`
+ficam com **endpoint desconhecido** e a rejeição é gravada com `motivo_codes=[]`.
+
+Se `Interruptions[].Notes` traz o motivo, temos o dado **de graça e uniforme para
+todos os tipos** — incluindo os três que hoje ficam sem motivo. Vale testar no
+`note_details` já cacheado (custo zero, sem tocar na EDP).
+
+### 6-B.2 `filterByExhibitionSector=true` — talvez o fallback cross-setor seja auto-infligido — P2-16
+
+Nós passamos esse parâmetro no V2; **os dois scripts não passam**. Nosso comentário
+diz que a equipe "some do V2" quando o setor de exibição difere — e por isso
+mantemos um **fallback cross-setor** que varre os outros setores para cada equipe
+visitante. Isso gera N requisições extras por ciclo e foi a origem do ruído
+`falha ao buscar V2 em DSSJ` que investigamos hoje.
+
+Se sem o parâmetro o V2 devolve tudo, o fallback inteiro é desnecessário. Precisa
+de um teste A/B no mesmo instante — o comentário atual pode estar descrevendo uma
+suposição, não uma medição.
+
+### 6-B.3 "Equipe não logou" acusa quem está de folga — P1-26
+
+Nosso `/admin/health` monta `teams_missing_today` varrendo a **whitelist inteira**,
+sem cruzar com escala. Equipe em FOL/FER/DR entra como faltante — falso positivo
+diário. A `ESCALA_EXCLUIR` deles + `collaboratorshifts` resolvem. E isso é a regra
+de desvio nº 1 de qualquer alerta: sem escala, o alerta é ruído.
+
+### 6-B.4 A sentinela `0001-01-01` falta no lugar mais crítico — P2-17.6
+
+Tratamos em `cronService.js` e `notasMonitor.js`, mas o `wpaService.js` decide
+sessão encerrada com `!!s.EndTime`. A sentinela da EDP é **truthy** → sessão
+**aberta** seria tratada como **encerrada**, e a equipe sairia do monitor
+indevidamente. Vocês centralizam isso; nós espalhamos e deixamos passar no ponto
+que mais importa.
+
+### 6-B.5 Lacunas de dado que nem sabíamos ter — P1-23, P2-14, P2-15, P2-17
+
+`historic` (posse da nota), `collaborators` (nosso dado vem vazio), `break`
+(intervalos), placa no histórico via `Sessions/all/date`, `SessionEndBy`,
+`LastStatusUpdateWithoutSignal`, `VehicleCategory`. E o conceito de **linha do
+tempo** (`rota_dia`) — que é a base do sistema de prevenção que queremos construir.
+
+### 6-B.6 Janela de reprocessamento menor que a de vocês — P2-17.7
+
+Nosso drift sweep cobre **D-1..D-7**; vocês reprocessam **15 dias**. Nota que muda
+de status depois de 7 dias nunca é recapturada por nós.
+
+---
+
 ## 7. O que fizeram melhor que nós
 
 Registrando porque vamos copiar:
