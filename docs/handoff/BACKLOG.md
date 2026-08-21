@@ -3127,6 +3127,31 @@ de falha que não aparece em relatório.
      nenhum, mas destruiu informação forense — o `diag-lag-rejeicoes.js` precisa
      excluir essas linhas via `--excluir-dia`. Próximo backfill: preservar o
      `fetched_at` original ou gravar em coluna separada.
+  8e. ❌ **HIPÓTESE REFUTADA (21/08) — e o meu join estava errado.**
+     `diag-lag-rejeicoes.js`: **0 rejeições após o selo**, em todos os 20 dias de
+     agosto, lag uniforme de ~13h. E o contexto de equipes derruba junto a minha
+     correlação com o SJC: já eram 120+ equipes desde **03/08**, então nada vira
+     em 14/08 no volume — a coincidência de data com o P1-22 era só isso.
+
+     O erro de medição: comparei o `fetched_at` da rejeição com o selo do dia da
+     PRÓPRIA rejeição. O que decide a produção do dia D é a rejeição comparada com
+     o selo de **D** — e uma rejeição do dia D+2, coletada pontualmente, chega
+     depois do selo de D sem nunca estar "atrasada". Terceira régua errada nesta
+     investigação; o padrão do projeto se repete.
+  8f. ⬜ **Mecanismo reformulado, e agora ele explica os DOIS blocos.**
+     A regra de 31/07 diz: *rejeição DEPOIS da conclusão → a EDP recusou → não é
+     produção*. E o `consolidateDay` consulta `note_rejections` por `note_id`
+     **sem janela de data** (P1-16). Então: nota concluída em 17/08 e rejeitada em
+     19/08 CONTOU como produção no valor gravado (selado em 18/08 23:50, antes de
+     a rejeição existir) e deixa de contar ao re-consolidar. O reparo monotônico
+     (P0-7) não remove, porque remover é subtrair.
+     E o que faltava pro quadro fechar: **junho e julho FORAM re-consolidados em
+     31/07**, absorvendo as rejeições posteriores conhecidas até ali — por isso
+     sobrou neles só a assinatura do P2-13 (+~5/dia). **Agosto nunca foi.**
+     Testar com `scripts/diag-rejeicao-posterior.js`: conta, por dia de conclusão,
+     as notas rejeitadas depois daquele dia e coletadas após o selo. Se a ordem de
+     grandeza bater com os diffs (−108, −202, −124, −109, −102), a causa está
+     identificada e o valor GRAVADO é o inflado.
   9. ⬜ só depois decidir o que aplicar, e provavelmente em duas janelas separadas
      (jun–jul por um motivo, ago por outro). Lembrar do P0-6: subtrair produção
      em massa já apagou dado legítimo antes — foi por isso que o reparo do drift
