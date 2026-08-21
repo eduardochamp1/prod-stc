@@ -84,7 +84,7 @@
 | P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
 | P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
 | P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | **done** (22/07) |
-| P0-8 | `note_rejections` PK = `note_id` colapsa rejeições. **Medido 21/08: a hipótese que justificava o P0 (2 equipes) tem ZERO casos** — rebaixado, mecanismo residual em medição | Dados | **rebaixado a P1** (21/08) — 0/19.573 com 2 equipes; 395 com 2 dias, 2ª medição pendente |
+| P0-8 | `note_rejections` PK = `note_id`: eu classifiquei como P0 por hipótese. **Duas medições refutaram: impacto ZERO, e a PK composta seria PIOR** | Dados | **fechado como não-problema** (21/08) — resíduo virou P2-32 |
 | P1-27 | Histórico multi-dia: Set único nos 3 buckets + dedup por código (não UUID) → nota concluída+rejeitada cai num bucket só | Dados | **código done** (21/08) — Set por bucket + dedup por UUID; 7 testes |
 | P1-28 | Checkpoints usam `RegisteredAt2` contra a própria regra documentada 15 linhas acima | Dados/Frontend | **done** (21/08) — TimeStamp UTC primeiro + reparo do cache antigo; 5 testes |
 | P1-29 | Breaker é em memória: restart do PM2 zera e crash-loop queima os 5 logins (furo no P1-20) | Ops/Backend | **código done** (21/08) — breaker em app_settings + boot usa getToken; RUNBOOK atualizado |
@@ -107,6 +107,7 @@
 | P2-29 | `*/45` = minutos 0 e 45 (48 logins/dia); RUNBOOK e log de boot dizem 20:30, cron é 23:50 | Ops/Docs | pending |
 | P2-30 | Sem orçamento global de concorrência contra a WPA: caudas fire-and-forget fora do lock | Ops | pending |
 | P2-31 | Varredura de campos: `Checkpoints[].Try`, `SessionBreakReason.Responsible`, `LastLocationComunication`, `LastUpdateWallet`, `Address` na lista, `Team.Description`, `Assigned[]`, probe do `Team.SectorId`, KB errada sobre placa | Dados | pending |
+| P2-32 | Resíduo do P0-8: quando `rejection_date` é NULL, o fallback `session_date` herda o dia do ARRASTO e pode suprimir produção legítima | Dados | pending — depende do P1-33 (RejectedAt via `completeInterruptions`) |
 | P3-12 | `_hojeBRT` com `-3h` fixo sobrevive em 5 lugares apesar do `timeUtil` | Backend | pending (latente) |
 | P3-13 | Snapshot persiste os campos `_*`, incluindo cópia da carteira inicial do dia (~16MB/dia) | Dados/Ops | pending |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
@@ -545,13 +546,52 @@ Ou seja: o impacto depende de QUAL dia a última gravação deixou na tabela.
 reais do `dataWriter` e conta em quantas notas o resultado difere. Se der 0, a
 migração é preventiva e entra sem re-consolidar; se der >0, é corretiva.
 
+### 2ª MEDIÇÃO 21/08/2026 — FECHADO como não-problema, e a correção que eu propus seria PIOR
+
+`scripts/diag-rejeicoes-datas.js`, mesma janela:
+
+```
+notas rejeitadas em 2+ dias:      395
+  pares de dias CONSECUTIVOS:     395/395   ← 100%
+  sem linha em note_rejections:     0
+  sem conclusão na janela:         80
+  regra dá o MESMO resultado:     313
+  regra dá resultado DIFERENTE:     2
+```
+
+**2 notas em 19.573.** E as duas são artefato da minha simulação, não bug:
+`_rejIndexByNote` usa `rejection_date` — o **RejectedAt da WPA** —, e o comentário
+que está no código desde o P1-16 já explicava por quê:
+*"session_date é o dia em que o coletor VIU a rejeição, que pode ser posterior ao
+fato"* (`services/dataWriter.js:256-259`). Minha simulação alimentou a regra com
+dias de `snapshots.date`, que é exatamente essa grandeza que o código descarta de
+propósito. Com 395/395 em dias colados, o 2º dia é **arrasto da mesma rejeição**
+(a nota permanece no payload do dia seguinte), não uma segunda recusa.
+
+**Consequência importante:** a PK composta `(note_id, team_name, rejection_date)`
+que eu propus **degradaria** o sistema — passaria a gravar uma linha por
+*dia-em-que-vimos*, reinjetando na regra os dias fantasma que o design atual
+filtra. Ou seja: o "conserto" reintroduziria o problema que o P1-16 resolveu.
+A PK de uma linha por nota, com a data autoritativa, é a escolha certa.
+
+**O que sobra, e é o único risco real** (virou P2-32): linhas em que
+`rejection_date` é NULL caem no `session_date` e aí herdam o dia do arrasto. Nessas
+o erro é o INVERSO do que eu supus — rejeição empurrada para frente **suprime**
+produção legítima. É medível pela seção 6 do script (cobertura de RejectedAt por
+tipo) e casa com o P1-24/P1-33: os tipos sem endpoint de rejeição (DL/LE/RL) são
+justamente os que não têm data autoritativa. O conserto é obter o RejectedAt,
+não mexer em chave.
+
+**Lição pro próximo que ler isto:** eu abri este item como P0 com evidência de
+schema correta e premissa de comportamento não verificada. As duas medições que o
+próprio item pedia como ação nº 1 derrubaram a classificação e a solução. Medir
+antes de migrar não foi burocracia — foi o que evitou uma regressão.
 **Ação revisada:**
-  1. ⬜ rodar `scripts/diag-rejeicoes-datas.js` na VM (read-only);
-  2. ⬜ só depois decidir entre PK composta `(note_id, team_name, rejection_date)`
-     ou apenas garantir que a linha que sobrevive seja a do dia MAIS RECENTE
-     (correção de 1 linha no upsert, sem migração) — se o mecanismo residual for
-     o único impacto, a segunda opção resolve com muito menos risco;
-  3. ⬜ re-consolidação só se a 2ª medição apontar diferença.
+  1. ✅ rodar `scripts/diag-rejeicoes-datas.js` na VM — feito 21/08, resultado acima;
+  2. ✅ decidido: **nenhuma das duas.** PK composta seria regressão; e "dia mais
+     recente" também está errado quando o dia vem do arrasto. O que fica é o
+     P2-32 (cobrir o `rejection_date` NULL), dependente do P1-33.
+  3. ✅ re-consolidação NÃO necessária — 2 notas em 19.573, ambas artefato.
 
 - **Origem:** revisão paralela por agentes, 20/08/2026 (5 análises dos scripts
   Python do outro projeto). Conferido linha a linha antes de registrar.
@@ -2677,7 +2717,7 @@ feita em PR separado depois dos testes.
   `Retry-After`; ⬜ `_safeNotes` devolver `{notes, failed:true}` e propagar a flag
   até o report, para bucket-vazio-por-falha nunca virar bucket-vazio-real.
 - **Esforço:** 3h + testes.
-- **Relacionado:** P1-31, P1-13, P2-32.
+- **Relacionado:** P1-31, P1-13, P2-30.
 
 ---
 
@@ -2935,6 +2975,47 @@ feita em PR separado depois dos testes.
   normalizadores; ⬜ decidir o 7.
 - **Esforço:** probes 1h · captura 3h · uso no painel depois.
 - **Relacionado:** P2-17, P2-21, P2-15, P1-26.
+
+---
+
+## P2-32 — Rejeição sem `RejectedAt` herda o dia do ARRASTO e pode suprimir produção legítima
+
+- **Categoria:** Dados
+- **Status:** pending — depende do P1-33
+- **Origem:** resíduo do P0-8, isolado pelas duas medições de 21/08/2026. É o
+  único risco que sobrou depois de o P0-8 ser fechado como não-problema.
+- **Evidência:**
+  - `services/dataWriter.js:267` — `_ymdDate(r.rejection_date || r.session_date)`.
+    O `rejection_date` é o `RejectedAt` da WPA (`services/rejectionService.js:151`),
+    autoritativo. O `session_date` é, nas palavras do próprio comentário
+    (`dataWriter.js:256-259`), *"o dia em que o coletor VIU a rejeição, que pode ser
+    posterior ao fato"*.
+  - A medição mostrou que a mesma rejeição aparece no payload de **dois dias
+    consecutivos** (395/395 dos casos). Então, quando o `RejectedAt` falta, o dia
+    gravado pode ser o do arrasto — um dia à frente do fato.
+- **Impacto:** `_contaComoExecutada` suprime a produção quando algum dia de
+  rejeição é `>=` o dia da nota. Rejeição empurrada um dia pra frente passa a
+  cobrir a conclusão e **derruba produção que era legítima**. É o INVERSO do que o
+  P0-8 supunha, e por isso não aparece como inflação em nenhum relatório: aparece
+  como subnotificação, que é o modo de falha mais difícil de perceber.
+- **Quem está exposto:** os tipos sem endpoint de rejeição conhecido —
+  `services/rejectionService.js:22-24` documenta `DL`, `LE` e `RL` como
+  *"endpoint desconhecido"*, gravando `motivo_codes: []`. Se não há formulário de
+  rejeição lido, provavelmente não há `RejectedAt` — a mesma lacuna, dois sintomas.
+- **Ação:**
+  1. ⬜ medir a exposição: seção 6 do `scripts/diag-rejeicoes-datas.js` (cobertura
+     de `RejectedAt` por tipo). Se `sem_rejectedat` for 0, este item fecha também.
+  2. ⬜ se houver exposição, obter a data autoritativa via P1-33
+     (`/Notes/{id}/completeInterruptions` devolve `Date` por interrupção).
+  3. ⬜ enquanto não houver `RejectedAt`, considerar usar o dia MAIS ANTIGO em que
+     a rejeição foi vista (a primeira aparição está mais perto do fato que a
+     última) — mas só com o número da etapa 1 na mão.
+- **Critério de aceite:** toda linha de `note_rejections` dos tipos DL/LE/RL tem
+  `rejection_date` preenchido, ou existe medição mostrando que a ausência não
+  altera nenhum total.
+- **Esforço:** medição 15min · correção junto do P1-33.
+- **Rollback:** n/a (só passa a gravar um campo que hoje fica nulo).
+- **Relacionado:** P0-8 (fechado), P1-16, P1-24, P1-33.
 
 ---
 

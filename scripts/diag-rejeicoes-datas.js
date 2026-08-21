@@ -19,9 +19,19 @@
  *   "rejeição antes da conclusão" → conta como PRODUÇÃO. Com os dois dias
  *   presentes, o dia mais recente poderia suprimir a mesma nota.
  *
- * Este script simula as duas situações com as funções REAIS do dataWriter e
- * conta em quantas notas o resultado difere. Esse é o número que decide se a
- * migração do P0-8 é corretiva (exige re-consolidação) ou preventiva.
+ * Este script simula as duas situações com as funções REAIS do dataWriter.
+ *
+ * ⚠️ CONCLUSÃO DA 1ª RODADA (21/08/2026) — leia antes de interpretar a seção 4:
+ * deu 2 divergências em 395, e as 2 são ARTEFATO DESTA SIMULAÇÃO, não bug de
+ * produção. Motivo: os dias que a seção 4 junta vêm de `snapshots.date` = "dia em
+ * que o coletor VIU a rejeição", e o `_rejIndexByNote` evita justamente isso ao
+ * preferir `rejection_date` (o RejectedAt da WPA, autoritativo — ver
+ * services/dataWriter.js:256-259). Com 395/395 pares em dias CONSECUTIVOS, o 2º dia
+ * é arrasto da mesma rejeição. A linha que a PK deixou sobreviver é a certa.
+ *
+ * O risco REAL está na seção 6: linhas SEM `rejection_date`, que caem no
+ * `session_date` e portanto herdam o dia do arrasto. Nessas o erro é o INVERSO —
+ * suprimir produção legítima. E o conserto não é a PK: é obter o RejectedAt (P1-33).
  *
  * Uso (na VM):
  *   node -r dotenv/config scripts/diag-rejeicoes-datas.js
@@ -133,22 +143,30 @@ async function main() {
   console.log(`regra dá resultado DIFERENTE:        ${divergem.length}  ← este é o número que decide`);
 
   if (divergem.length > 0) {
-    const infla = divergem.filter(d => d.soSobrev === true && d.comTodos === false).length;
-    const deflaciona = divergem.length - infla;
-    console.log(`\n  conta como produção e NÃO deveria:  ${infla}   (PK inflando)`);
-    console.log(`  não conta e DEVERIA contar:         ${deflaciona} (PK subcontando)`);
-    console.log(`\n── AMOSTRA (até 10) ──`);
+    // ⚠️ LEITURA CORRIGIDA (21/08/2026, depois da 1ª rodada): NÃO trate `comTodos`
+    // como verdade. Os dias que este script junta vêm de `snapshots.date`, isto é,
+    // "dia em que o coletor VIU a rejeição" — exatamente o que o _rejIndexByNote
+    // evita de propósito ao preferir `rejection_date` (o RejectedAt da WPA,
+    // autoritativo; ver services/dataWriter.js:256-259). Com 395/395 pares em dias
+    // CONSECUTIVOS, o 2º dia é arrasto da mesma rejeição, não recusa nova. Logo a
+    // linha que sobreviveu à PK é a CERTA, e a divergência abaixo é artefato da
+    // simulação, não bug de produção.
+    console.log(`
+  ⚠️  Não conclua daqui que a PK está errada. Ver o bloco abaixo:`);
+    console.log(`  a régua deste script é o dia do SNAPSHOT; a de produção é o`);
+    console.log(`  RejectedAt da WPA. Onde as duas discordam, a de produção vence.`);
+    console.log(`
+── AMOSTRA (até 10) ──`);
     divergem.slice(0, 10).forEach(d => {
       console.log(`  ${d.codigo}  ${d.equipe}`);
-      console.log(`    rejeições reais: ${d.diasRejeicao.join(', ')}`);
-      console.log(`    sobreviveu:      ${d.diaSobrevivente}`);
-      console.log(`    conclusão:       ${d.diaConclusao}`);
-      console.log(`    produção? com todos=${d.comTodos}  só sobrevivente=${d.soSobrev}`);
+      console.log(`    dias em que o coletor viu: ${d.diasRejeicao.join(', ')}`);
+      console.log(`    linha autoritativa:        ${d.diaSobrevivente}`);
+      console.log(`    conclusão:                 ${d.diaConclusao}`);
+      console.log(`    produção? régua-snapshot=${d.comTodos}  autoritativa=${d.soSobrev}`);
     });
-    console.log(`\n→ Migração do P0-8 é CORRETIVA. Medir o delta em dry-run antes de aplicar.`);
   } else {
-    console.log(`\n→ A PK colapsa linhas, mas o dia que sobrevive NUNCA muda o resultado da`);
-    console.log(`  regra nesta janela. Migração do P0-8 é PREVENTIVA: entra sem re-consolidar.`);
+    console.log(`
+→ O dia que sobrevive nunca muda o resultado da regra nesta janela.`);
   }
 
   // ── 5. Bônus: os "2 dias" são rejeição de verdade ou a mesma rejeição aparecendo
@@ -163,6 +181,48 @@ async function main() {
   if (colados / multiDia.length > 0.8) {
     console.log(`→ predominam dias colados: provável ARRASTO da mesma rejeição entre dois`);
     console.log(`  snapshots (a nota permanece no payload), não uma segunda recusa.`);
+  }
+
+  // ── 6. O RISCO DE VERDADE: quantas linhas NÃO têm o RejectedAt da WPA e por
+  //    isso caem no session_date (= dia em que o coletor viu). Nessas, o arrasto
+  //    PODE empurrar o dia pra frente e suprimir produção legítima — o inverso
+  //    do que a seção 4 sugere. É aqui que mora o impacto, se houver.
+  const { rows: cob } = await pool.query(
+    `SELECT tipo,
+            count(*)::int                                    AS total,
+            count(rejection_date)::int                        AS com_rejectedat,
+            (count(*) - count(rejection_date))::int           AS sem_rejectedat
+       FROM note_rejections
+      WHERE session_date BETWEEN $1::date AND $2::date
+      GROUP BY tipo ORDER BY sem_rejectedat DESC`,
+    [DE, ate]);
+
+  console.log(`
+── COBERTURA DO RejectedAt (autoritativo) POR TIPO ──`);
+  let tot = 0, semTot = 0;
+  for (const r of cob) {
+    tot += r.total; semTot += r.sem_rejectedat;
+    const pct = r.total ? Math.round(100 * r.sem_rejectedat / r.total) : 0;
+    console.log(`  ${String(r.tipo).padEnd(6)} total=${String(r.total).padStart(6)}  ` +
+                `sem RejectedAt=${String(r.sem_rejectedat).padStart(6)} (${pct}%)`);
+  }
+  console.log(`  ----`);
+  console.log(`  TOTAL  total=${String(tot).padStart(6)}  sem RejectedAt=${String(semTot).padStart(6)}` +
+              ` (${tot ? Math.round(100*semTot/tot) : 0}%)`);
+
+  // Quantas das notas de 2 dias caem justamente nesse grupo sem data autoritativa.
+  const { rows: semData } = await pool.query(
+    `SELECT count(*)::int AS n FROM note_rejections
+      WHERE note_id = ANY($1::uuid[]) AND rejection_date IS NULL`, [ids]);
+  console.log(`
+  das ${multiDia.length} notas de 2 dias, sem RejectedAt: ${semData[0].n}`);
+  if (semData[0].n === 0) {
+    console.log(`  → todas têm data autoritativa: o arrasto não afeta a regra. P0-8 sem impacto.`);
+  } else {
+    console.log(`  → essas dependem do session_date (dia em que o coletor viu). Se o`);
+    console.log(`    arrasto empurrou o dia pra frente, produção legítima foi suprimida.`);
+    console.log(`    O conserto NÃO é a PK: é obter o RejectedAt — ver backlog P1-33`);
+    console.log(`    (/Notes/{id}/completeInterruptions devolve Date por interrupção).`);
   }
 
   await pool.end();
