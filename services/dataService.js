@@ -477,7 +477,11 @@ async function _enrichConcluidasDeEncerradas(teams) {
 
     // DISTINCT ON (team_name) com ORDER BY team_name, captured_at DESC
     // → pra cada equipe, o LINHA do snapshot MAIS RECENTE que tinha concluídas.
-    // Uma query só, índice em (date, team_name, captured_at) torna isso barato.
+    // Uma query só. ⚠️ 21/08/2026: este comentário afirmava que o índice em
+    // (date, team_name, captured_at) "torna isso barato" — mas esse índice NÃO
+    // EXISTIA. Os reais eram só (captured_at DESC) e (date, team_name), então
+    // cada chamada ordenava dentro do grupo, numa tabela retida pra sempre.
+    // Criar com scripts/criar-indice-snapshots.js (CONCURRENTLY, sem lock).
     const { rows } = await pool.query(
       `SELECT DISTINCT ON (team_name)
               team_name,

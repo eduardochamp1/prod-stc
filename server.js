@@ -98,6 +98,12 @@ app.post('/webhook/deploy', express.raw({ type: 'application/json' }), (req, res
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Timing de requisição: loga só o que passar de SLOW_REQUEST_MS (default 1500).
+// Adicionado em 21/08/2026 porque "algumas páginas estão lentas" não tinha como
+// ser investigado — não havia medida de latência por rota. Ver o middleware.
+const { requestTiming } = require('./middleware/requestTiming');
+app.use(requestTiming);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

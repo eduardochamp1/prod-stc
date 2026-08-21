@@ -38,7 +38,24 @@ const { dateBRT } = require('./timeUtil');
 // `pm2 restart`. Achado da revisão paralela de 20/08/2026 (backlog P1-31).
 // node-fetch@2 suporta a opção `timeout` (o padrão do repo já era esse em
 // osrmService.js:106).
-const WPA_HTTP_TIMEOUT_MS = Number(process.env.WPA_HTTP_TIMEOUT_MS) || 20000;
+//
+// ⚠️ CORRIGIDO EM 21/08/2026, no mesmo dia: o default entrou como 20000 e isso
+// foi ERRADO. O comentário do backoff de login, ~350 linhas abaixo, registra
+// "cold-start de até 25-30s" — ou seja, 20s corta resposta LEGÍTIMA. E o
+// `_safeNotes` engole a exceção devolvendo [] ("esvaziando bucket"), então o
+// efeito visível não é erro: é equipe aparecendo sem rejeitadas e sem
+// executadas. Com o retry de 3 tentativas, o pior caso ficou ~69s E vazio —
+// pior que o problema que o timeout foi resolver. Reportado pelo usuário como
+// "páginas lentas e não carregando tudo".
+// Agora: 45s (folga sobre os 30s observados) e SEM retry em timeout — ver
+// _isTimeoutError no wpaFetch. Timeout existe pra cortar socket pendurado, não
+// pra cortar resposta devagar.
+const WPA_HTTP_TIMEOUT_MS = Number(process.env.WPA_HTTP_TIMEOUT_MS) || 45000;
+
+/** node-fetch@2 marca timeout com type='request-timeout'. */
+function _isTimeoutError(err) {
+  return Boolean(err && (err.type === 'request-timeout' || /timeout/i.test(err.message || '')));
+}
 
 const WPA_AUTH = process.env.WPA_URL      || 'https://edp-wpa-po.azurewebsites.net';
 const WPA_API  = process.env.WPA_API_URL  || 'https://edp-wpa-web-api.azurewebsites.net';
@@ -631,6 +648,14 @@ async function wpaFetch(path, options = {}) {
         },
       });
     } catch (err) {
+      // Timeout NÃO é retentado: o socket ficou pendurado ou a API está fora do
+      // aceitável, e 3 tentativas de 45s multiplicariam a espera do usuário por
+      // três sem melhorar a chance. Cold-start de verdade chega como RESPOSTA
+      // HTTP (403/503 com HTML) e é tratado logo abaixo, não como timeout.
+      if (_isTimeoutError(err)) {
+        console.warn(`[WPA] wpaFetch ${path} TIMEOUT em ${WPA_HTTP_TIMEOUT_MS}ms (tentativa ${attempt}) — sem retry`);
+        throw err;
+      }
       if (attempt === MAX_ATTEMPTS) throw err;
       const delay = BACKOFF_MS[attempt - 1];
       console.warn(`[WPA] wpaFetch ${path} erro de rede (tentativa ${attempt}/${MAX_ATTEMPTS}): ${err.message} — retry em ${delay}ms`);
