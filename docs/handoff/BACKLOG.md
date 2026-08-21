@@ -52,7 +52,9 @@
 | P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | **código done** (13/08) — breaker por conta + 13 testes; senha do `.env` é ação humana |
 | P1-21 | Snapshot era tudo-ou-nada entre contas: uma conta fora derrubava GUA/CAC e travava `snapshot_last_ok` | Ops/Backend | **código done** (14/08) — coleta resiliente por setor + saúde por conta ativa; 5 testes |
 | P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **done** (14/08) — cadeia [sp, sp2]; credencial `sp2` (Luan) no ar, SJC coletando pela backup (teams 64→122); RUNBOOK atualizado |
+| P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | pending — investigar (pode simplificar P1-16 e P2-13) |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
+| P2-14 | `/Sessions/{id}/collaborators` — fecha a lacuna dos Collaborators vazios | Dados | pending |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
 | P2-2 | Extrair matemática de buckets em módulo único | Dados | **done** (22/07) |
 | P2-3 | `public/` dedicado (parar de servir raiz do repo) | Segurança/Frontend | **done** (22/07) |
@@ -1251,6 +1253,45 @@ feita em PR separado depois dos testes.
 
 ---
 
+## P1-23 — `/Notes/{id}/historic`: posse da nota por equipe (hoje é inferência)
+
+- **Categoria:** Dados (produção reportada à EDP)
+- **Status:** pending — investigar antes de mexer em número
+- **Fonte:** revisão de dois scripts Python de outro projeto sobre a mesma API WPA
+  (`import_wpa_es.py` e `monitor_stc_es.py`, 14/08/2026). O segundo usa um
+  endpoint que **não conhecíamos**.
+- **O endpoint:** `GET /api/Notes/{noteId}/historic` → lista de janelas com
+  `Team.Name`, `CreatedAt`, `RemovedAt`. Ou seja: **qual equipe detinha a nota
+  em cada intervalo de tempo**. O script usa pra reatribuir a equipe de cada
+  evento conforme quem tinha a nota no instante do evento.
+- **Por que importa:** a regra do José (31/07) — "conta como executada só pra quem
+  finalizou 100%" — hoje é implementada por **inferência**: casamos nota × equipe
+  × dia usando `session_date`/`_effDate`/`_notaDate`, com todas as armadilhas que
+  isso trouxe (P1-15 chave Date × string, P1-16 dia da SESSÃO × dia da NOTA,
+  P1-14 vira-noite). Com `historic`, posse deixa de ser dedução e passa a ser
+  **consulta**: a conclusão caiu na janela da equipe X ⇒ é produção de X.
+- **O que pode simplificar/resolver:**
+  - **P1-16** — o casamento por dia da sessão vs. dia da nota deixa de ser
+    necessário (a janela de posse é explícita).
+  - **P2-13** — atribuição determinística por janela em vez de upsert por
+    (date, team, tipo) com visão parcial.
+  - O caso mais delicado: nota **rejeitada por uma equipe e executada por outra**.
+- **⚠️ Custo:** 1 requisição **por nota**. Inviável pra todas. Caminho proposto:
+  buscar `historic` só das notas **em disputa** (que aparecem em >1 equipe, ou
+  rejeitadas-e-refeitas) — hoje já sabemos identificá-las
+  (`scripts/diag-notas-multi-equipe.js`).
+- **Ação:**
+  1. ⬜ Chamar `historic` nas 2 notas já validadas no portal (`030009946354`,
+     `030009957459`) e conferir se a janela de posse casa com o que o portal mostra.
+  2. ⬜ Rodar nas notas multi-equipe de julho e comparar a atribuição atual × a
+     que o `historic` indica. **Medir a diferença ANTES de mudar qualquer coisa.**
+  3. ⬜ Só com número medido e revisado, decidir se vira fonte de verdade.
+- **⚠️ Regra da casa:** mexe em número reportável à EDP → medir, validar no
+  portal, revisar com o José, e só então aplicar. Ver P1-15/P1-16.
+- **Relacionado:** P1-14, P1-15, P1-16, P2-13.
+
+---
+
 # P2 — Média prioridade (2 meses)
 
 ## P2-1 — Testes de contrato de rota (login, scope, health)
@@ -1833,6 +1874,27 @@ feita em PR separado depois dos testes.
   errado. **Não aplicar às cegas.**
 - **Esforço:** investigação 2–3h.
 - **Relacionado:** P0-6, P1-11, P1-13, P1-16, P2-13. Maio ainda não medido.
+
+---
+
+## P2-14 — `/Sessions/{id}/collaborators`: Collaborators vazios
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Fonte:** `monitor_stc_es.py` (revisão 14/08/2026).
+- **Problema conhecido nosso:** o comentário em `services/wpaService.js` já
+  registra que `sessions/all/date` retorna `Collaborators` **vazio**, e que só
+  `sessions/current` traz nome/matrícula — o que deixa o histórico sem colaborador.
+- **O endpoint:** `GET /api/Sessions/{sessionId}/collaborators` → `Team.Name`,
+  `BeginTime` e `Collaborators[].Collaborator.{Name, Code}` + `SessionId`.
+  É provavelmente a fonte que faltava pra preencher colaborador no histórico.
+- **⚠️ O script usa ERRADO** (avisar o autor): passa o **Id do serviço** (nota) num
+  endpoint de **sessão** — `Sessions/{id_da_nota}/collaborators` — e itera por
+  serviço em vez de por sessão (centenas de chamadas redundantes). O correto é
+  `id_sessao`, 1 chamada por sessão.
+- **Ação:** ⬜ testar o endpoint com um `sessionId` real; se vier populado, usar
+  no enriquecimento do histórico (1 chamada por sessão, não por nota).
+- **Relacionado:** o card de detalhe da equipe no Monitor mostra colaboradores.
 
 ---
 
