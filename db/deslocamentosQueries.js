@@ -124,6 +124,22 @@ function setThresholdCache(fator) {
   }
 }
 
+// 21/08/2026 — aba Deslocamento "sempre demora muito" (reportado pelo usuario).
+// O front dispara /lista, /ranking e /tendencia em PARALELO com os mesmos filtros
+// (public/index.html ~2726), e rankingEquipes/tendenciaDiaria chamavam a versao
+// CRUA de listDeslocamentos. Resultado: o pipeline caro rodava TRES vezes
+// concorrentes — 3 varreduras completas de note_details com detoast de jsonb,
+// 3 explosoes de snapshots, e ate 3 x 20.000 consultas OSRM.
+//
+// O cache do fim do arquivo NAO cobria isso, apesar de o comentario dele dizer
+// que cobria: as chaves sao por funcao (list/rank/tend), entao as tres chamadas
+// nunca colidiam e o single-flight nunca era acionado.
+//
+// Conserto: as duas derivadas passam a chamar a versao CACHEADA da lista, via
+// esta referencia tardia (a cacheada so existe no fim do arquivo). Assim as tres
+// requisicoes compartilham UM calculo pelo single-flight do memoCache.
+let _listCached = null;
+
 async function listDeslocamentos(de, ate, opts = {}) {
   const pool = _getPool();
   const t0 = Date.now();
@@ -345,7 +361,7 @@ async function rankingEquipes(de, ate, opts = {}) {
   // limit alto: precisamos de TODOS os deslocamentos do periodo pra ranking
   // honesto. Com OSRM paralelizado + Worker cacheado (commit e97691f), 20k
   // pairs sao ~10s na 1a vez e <2s nas subsequentes.
-  const lista = await listDeslocamentos(de, ate, { ...opts, limit: 20000 });
+  const lista = await (_listCached || listDeslocamentos)(de, ate, { ...opts, limit: 20000 });
   const byTeam = new Map();
   for (const d of lista.rows) {
     if (d.status === 'sem_osrm' || d.tempo_osrm_sec === 0) continue;
@@ -377,7 +393,7 @@ async function tendenciaDiaria(de, ate, opts = {}) {
   // limit alto: tendencia precisa amostrar todos os dias do periodo, nao so os
   // mais recentes. Antes era 5000 e dias antigos sumiam quando rawNotas DESC
   // truncava neles. Com OSRM paralelizado, 20k pairs = ~10s 1a vez.
-  const lista = await listDeslocamentos(de, ate, { ...opts, limit: 20000 });
+  const lista = await (_listCached || listDeslocamentos)(de, ate, { ...opts, limit: 20000 });
   const byDay = new Map();
   for (const d of lista.rows) {
     if (d.status === 'sem_osrm') continue;
@@ -424,9 +440,15 @@ async function tendenciaDiaria(de, ate, opts = {}) {
 }
 
 // ── Cache de resultado: TTL 5min + single-flight ─────────────────────────────
-// Snapshots atualizam a cada 15min (cronService). TTL de 5min mantém os dados
-// "frescos o suficiente" e reduz drasticamente o re-trabalho quando o front
-// dispara lista/ranking/tendência em paralelo com mesmos filtros.
+// Snapshots atualizam a cada 15min (cronService). TTL de 5min mantem os dados
+// "frescos o suficiente".
+//
+// CORRECAO 21/08/2026: este comentario afirmava que o cache "reduz drasticamente
+// o re-trabalho quando o front dispara lista/ranking/tendencia em paralelo com
+// mesmos filtros". Nao reduzia — as chaves sao por funcao, entao as tres chamadas
+// geravam tres chaves distintas e o single-flight nunca colidia. O
+// compartilhamento agora vem de as derivadas chamarem a lista CACHEADA (ver
+// _listCached no topo) + o limit normalizado no _key.
 const _memo = require('../services/memoCache').create({
   ttlMs: 5 * 60 * 1000,
   name:  'deslocamentos',
@@ -441,7 +463,7 @@ function _key(prefix, de, ate, opts) {
     teams:     Array.isArray(o.teams)     ? [...o.teams].sort()     : o.team_name || null,
     regionais: Array.isArray(o.regionais) ? [...o.regionais].sort() : null,
     tipo:      o.tipo  || null,
-    limit:     o.limit || null,
+    limit:     o.limit != null && o.limit !== '' ? Number(o.limit) : null,   // string da querystring x numero interno (21/08)
     somenteLentos: !!o.somenteLentos,
     acimaPct:      o.acimaPct != null ? Number(o.acimaPct) : null,
   });
@@ -449,6 +471,7 @@ function _key(prefix, de, ate, opts) {
 
 const listDeslocamentosCached = _memo.wrap(listDeslocamentos,
   (de, ate, opts) => _key('list', de, ate, opts));
+_listCached = listDeslocamentosCached;   // ver nota no topo: as derivadas reusam esta
 const rankingEquipesCached    = _memo.wrap(rankingEquipes,
   (de, ate, opts) => _key('rank', de, ate, opts));
 const tendenciaDiariaCached   = _memo.wrap(tendenciaDiaria,
@@ -465,6 +488,7 @@ module.exports = {
   _tendenciaDiariaRaw:   tendenciaDiaria,
   // Resto
   extrairDeslocamentos,
+  _key,   // exportado p/ teste: a chave decide se as 3 rotas compartilham o calculo
   getThreshold,
   setThresholdCache,
   _memo,   // exposto pra debug/invalidate manual via rota admin se quiser

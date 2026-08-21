@@ -310,3 +310,40 @@ test('P2-32: cache negativo começa vazio e é resetável', () => {
   rejSvc._resetNoPathCache();
   assert.deepEqual(rejSvc.getNoPathTipos(), []);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deslocamento — as 3 rotas têm de compartilhar UM cálculo (21/08/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+const desloc = require('../db/deslocamentosQueries');
+
+test('desloc: limit string da querystring e número interno geram a MESMA chave', () => {
+  // O front manda limit=20000 (string) em /lista; rankingEquipes e tendenciaDiaria
+  // chamam com limit: 20000 (número). Antes o _key fazia `o.limit || null`, então
+  // JSON.stringify gerava chaves diferentes e o single-flight nunca colidia — o
+  // pipeline caro (varredura de note_details + até 20k consultas OSRM) rodava 3x.
+  const daRota    = desloc._key('list', '2026-08-01', '2026-08-20', { limit: '20000', regionais: ['GUA'] });
+  const interno   = desloc._key('list', '2026-08-01', '2026-08-20', { limit: 20000,   regionais: ['GUA'] });
+  assert.equal(daRota, interno);
+});
+
+test('desloc: chave ignora ordem das regionais e das equipes', () => {
+  const a = desloc._key('list', '2026-08-01', '2026-08-20', { regionais: ['SJC', 'GUA'], teams: ['B', 'A'] });
+  const b = desloc._key('list', '2026-08-01', '2026-08-20', { regionais: ['GUA', 'SJC'], teams: ['A', 'B'] });
+  assert.equal(a, b);
+});
+
+test('desloc: filtros diferentes NÃO compartilham chave', () => {
+  const base = { limit: 20000, regionais: ['GUA'] };
+  const k = o => desloc._key('list', '2026-08-01', '2026-08-20', { ...base, ...o });
+  assert.notEqual(k({}), k({ acimaPct: 50 }));
+  assert.notEqual(k({}), k({ somenteLentos: true }));
+  assert.notEqual(k({}), k({ tipo: 'MD' }));
+  assert.notEqual(k({}), k({ regionais: ['SJC'] }));
+});
+
+test('desloc: limit vazio ou ausente vira null (não NaN)', () => {
+  const a = desloc._key('list', '2026-08-01', '2026-08-20', {});
+  const b = desloc._key('list', '2026-08-01', '2026-08-20', { limit: '' });
+  assert.equal(a, b);
+  assert.ok(!a.includes('null,"limit":NaN') && !a.includes('NaN'));
+});
