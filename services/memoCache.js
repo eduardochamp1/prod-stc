@@ -13,6 +13,13 @@
  * (pm2 cluster=1) reduz drasticamente latência percebida em mudanças de filtro.
  */
 
+// Diagnóstico opcional. Ligado com MEMO_DEBUG=1 no .env, imprime uma linha por
+// chamada dizendo HIT / INFLIGHT / MISS e a chave. Adicionado em 21/08/2026
+// porque a aba Deslocamento continuou rodando o pipeline 3x mesmo depois de eu
+// apontar as funções derivadas pra versão cacheada — ou seja, as chaves NÃO
+// estão colidindo e eu preciso ver as três, não adivinhar qual campo difere.
+const MEMO_DEBUG = process.env.MEMO_DEBUG === '1';
+
 function create({ ttlMs = 5 * 60 * 1000, name = 'cache', maxEntries = 200 } = {}) {
   const store = new Map();   // key → { value, expiresAt }
   const inflight = new Map(); // key → Promise
@@ -41,13 +48,16 @@ function create({ ttlMs = 5 * 60 * 1000, name = 'cache', maxEntries = 200 } = {}
       // 1. Hit válido?
       const hit = store.get(key);
       if (hit && hit.expiresAt > _now()) {
+        if (MEMO_DEBUG) console.log(`[memo:${name}] HIT      ${key}`);
         return hit.value;
       }
       // 2. Já tem alguém computando essa chave? Aguarda.
       if (inflight.has(key)) {
+        if (MEMO_DEBUG) console.log(`[memo:${name}] INFLIGHT ${key}`);
         return inflight.get(key);
       }
       // 3. Computa, registra in-flight pra coalescer concorrentes.
+      if (MEMO_DEBUG) console.log(`[memo:${name}] MISS     ${key}`);
       const promise = (async () => {
         try {
           const value = await fn(...args);
