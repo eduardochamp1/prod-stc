@@ -31,6 +31,15 @@
 const fetch = require('node-fetch');
 const { dateBRT } = require('./timeUtil');
 
+// Timeout de TODA chamada HTTP à EDP. Antes não havia nenhum: um socket
+// derrubado pelo Fortinet sem FIN deixava a promise pendurada pra sempre, e
+// como o _singleFlight só limpa no .finally(), TODO getTeams/snapshot daquele
+// setor passava a esperar a mesma promise morta — painel travado até
+// `pm2 restart`. Achado da revisão paralela de 20/08/2026 (backlog P1-31).
+// node-fetch@2 suporta a opção `timeout` (o padrão do repo já era esse em
+// osrmService.js:106).
+const WPA_HTTP_TIMEOUT_MS = Number(process.env.WPA_HTTP_TIMEOUT_MS) || 20000;
+
 const WPA_AUTH = process.env.WPA_URL      || 'https://edp-wpa-po.azurewebsites.net';
 const WPA_API  = process.env.WPA_API_URL  || 'https://edp-wpa-web-api.azurewebsites.net';
 
@@ -147,6 +156,20 @@ const INVALID_CRED_COOLDOWN_MS =
   (Number(process.env.WPA_INVALID_CRED_COOLDOWN_MIN) || 720) * 60_000;   // default 12h
 const LOCKED_FALLBACK_COOLDOWN_MS = 4 * 3_600_000;   // se não der pra ler o "HH:MM"
 
+// ── P1-32 (20/08/2026): o breaker era FAIL-OPEN ──────────────────────────────
+// `_classifyLoginError` são dois regexes em PORTUGUÊS; qualquer outra mensagem
+// caía em 'other' e o breaker NÃO abria. Ou seja: a proteção inteira dependia de
+// uma string que a EDP controla. Se ela trocar o texto ("Senha incorreta", "Too
+// many attempts") ou passar a responder 429/HTML no /signin, cada trigger
+// independente (snapshot */15, cron de token, notas xx:05, /api/teams de cada
+// browser, classifier) volta a gastar uma tentativa — o incidente de 13/08 de
+// novo. Agora 'other' também abre, num cooldown CURTO e só a partir da 2ª falha
+// não-transiente consecutiva (a 1ª pode ser um soluço real da API).
+const UNKNOWN_ERROR_COOLDOWN_MS =
+  (Number(process.env.WPA_UNKNOWN_ERROR_COOLDOWN_MIN) || 20) * 60_000;
+const UNKNOWN_FAILS_TO_OPEN = 2;
+const _unknownFails = new Map();   // accountKey → falhas 'other' consecutivas
+
 /** Classifica a mensagem de erro de login da WPA. Pura. */
 function _classifyLoginError(message) {
   const m = String(message || '');
@@ -182,18 +205,101 @@ function _breakerRemaining(accountKey, nowMs = Date.now()) {
   return left;
 }
 
-/** Abre o breaker pra conta conforme a classificação. Erro 'other' não abre. */
+/**
+ * Abre o breaker pra conta conforme a classificação.
+ * 'other' (mensagem desconhecida) abre cooldown CURTO a partir da 2ª falha
+ * consecutiva — ver P1-32. Erro transiente nem chega aqui.
+ */
 function _openBreaker(accountKey, message, nowMs = Date.now()) {
   const cls = _classifyLoginError(message);
-  if (cls.kind === 'other') return null;
+
+  if (cls.kind === 'other') {
+    const n = (_unknownFails.get(accountKey) || 0) + 1;
+    _unknownFails.set(accountKey, n);
+    if (n < UNKNOWN_FAILS_TO_OPEN) return null;
+    const until = nowMs + UNKNOWN_ERROR_COOLDOWN_MS;
+    _breaker.set(accountKey, {
+      until, kind: 'unknown_error', message: String(message).slice(0, 200),
+    });
+    _persistBreaker();
+    return { kind: 'unknown_error', until };
+  }
+
+  _unknownFails.delete(accountKey);
   const until = cls.kind === 'account_locked'
     ? (_computeUnlockUntil(message, nowMs) || (nowMs + LOCKED_FALLBACK_COOLDOWN_MS))
     : (nowMs + INVALID_CRED_COOLDOWN_MS);
   _breaker.set(accountKey, { until, kind: cls.kind, message: String(message).slice(0, 200) });
+  _persistBreaker();
   return { kind: cls.kind, until };
 }
 
-function _clearBreaker(accountKey) { _breaker.delete(accountKey); }
+function _clearBreaker(accountKey) {
+  const tinhaEstado = _breaker.has(accountKey) || _unknownFails.has(accountKey);
+  _breaker.delete(accountKey);
+  _unknownFails.delete(accountKey);
+  // Só escreve no banco se havia algo a limpar — senão todo login bem-sucedido
+  // faria um UPDATE inútil em app_settings.
+  if (tinhaEstado) _persistBreaker();
+}
+
+// ── P1-29 (20/08/2026): breaker PERSISTIDO ───────────────────────────────────
+// O breaker era só em memória, "de propósito: .env corrigido + restart recupera
+// na hora". O custo dessa escolha só apareceu na revisão paralela: `autorestart`
+// + `max_memory_restart` (e o crash-loop de 161 restarts num dia registrado no
+// ecosystem.config.js) zeram o breaker a cada boot — e o boot AINDA disparava um
+// /signin obrigatório. Com credencial errada, 5 restarts em menos de um minuto =
+// conta travada na EDP. Era exatamente o incidente da conta do Ismael, com a
+// proteção do P1-20 no ar e sem efeito.
+//
+// Agora o estado vive em app_settings.wpa_breaker e é lido UMA vez antes do
+// primeiro /signin. Falha de banco nunca derruba o login: sem hidratação, o
+// comportamento degrada para o de antes (memória só).
+// Recuperação manual segue simples: corrigir o .env e apagar a chave
+//   DELETE FROM app_settings WHERE key = 'wpa_breaker';
+// (ou esperar o `until`). Está no RUNBOOK.
+const BREAKER_SETTING_KEY = 'wpa_breaker';
+let _breakerHydrated = false;
+let _breakerHydrating = null;
+
+/** Grava o mapa inteiro do breaker. Fire-and-forget: erro de banco é ignorado. */
+function _persistBreaker() {
+  (async () => {
+    try {
+      const sq = require('../db/queries');
+      const accounts = {};
+      for (const [k, v] of _breaker.entries()) accounts[k] = v;
+      await sq.setSetting(BREAKER_SETTING_KEY, { accounts, ts: new Date().toISOString() });
+    } catch (_) { /* breaker persistido é best-effort */ }
+  })();
+}
+
+/** Lê o breaker do banco uma única vez por processo. Entradas expiradas são ignoradas. */
+async function _hydrateBreaker() {
+  if (_breakerHydrated) return;
+  if (!_breakerHydrating) {
+    _breakerHydrating = (async () => {
+      try {
+        const sq = require('../db/queries');
+        const row = await sq.getSetting(BREAKER_SETTING_KEY);
+        const accounts = (row && row.data && row.data.accounts) || {};
+        const now = Date.now();
+        for (const [k, v] of Object.entries(accounts)) {
+          const until = Number(v && v.until);
+          if (!until || until <= now) continue;
+          // Não sobrescreve o que já foi aprendido nesta execução.
+          if (_breaker.has(k)) continue;
+          _breaker.set(k, { until, kind: v.kind, message: v.message });
+          console.warn(
+            `[WPA] Breaker RESTAURADO do banco (account=${k}, ${v.kind}) até ` +
+            `${new Date(until).toISOString()} — não vou tentar /signin até lá.`);
+        }
+      } catch (_) { /* sem banco → degrada pro comportamento antigo (memória só) */ }
+      _breakerHydrated = true;
+    })();
+  }
+  return _breakerHydrating;
+}
 
 // ── CONTA DESATIVADA (kill-switch operacional) ───────────────────────────────
 // Desliga POR COMPLETO a extração de uma conta WPA — nem tenta login. Uso: a
@@ -268,6 +374,7 @@ async function loginAttempt(accountKey = DEFAULT_ACCOUNT) {
         'X-Requested-With': 'XMLHttpRequest',
       },
       body: body.toString(),
+      timeout: WPA_HTTP_TIMEOUT_MS,   // P1-31 — sem isso o login podia pendurar pra sempre
     });
   } catch (err) {
     err.isNetworkError = true;
@@ -344,15 +451,20 @@ async function login(opts = {}) {
   // Circuit breaker (P1-20): se a conta está em cooldown por credencial inválida
   // ou bloqueio, NÃO toca no /signin — devolve o erro conhecido, poupando o
   // orçamento de tentativas da EDP. `opts.force` é escape-hatch manual (ignora o
-  // breaker) — hoje sem chamador; a recuperação normal é corrigir o .env e
-  // reiniciar (o restart zera o breaker, que é em memória).
+  // breaker) — hoje sem chamador.
+  //
+  // P1-29: o estado sobrevive a restart (app_settings.wpa_breaker), então a
+  // recuperação NÃO é mais "reiniciar" — é corrigir o .env e apagar a chave
+  // (ou esperar o `until`). Hidrata antes da primeira decisão.
   if (!opts.force) {
+    await _hydrateBreaker();
     const remaining = _breakerRemaining(accountKey);
     if (remaining > 0) {
       const b = _breaker.get(accountKey);
       const err = new Error(
         `WPA login (account=${accountKey}) em cooldown [${b.kind}] por ~${Math.ceil(remaining / 60000)}min — ` +
-        `não tentando /signin pra não travar a conta na EDP. Corrija a credencial (.env) e reinicie. ` +
+        `não tentando /signin pra não travar a conta na EDP. Corrija a credencial (.env) e ` +
+        `apague a chave: DELETE FROM app_settings WHERE key='wpa_breaker'; (restart NÃO limpa mais — P1-29). ` +
         `Original: ${b.message}`);
       err.isBreakerOpen = true;
       err.breakerKind = b.kind;
@@ -510,6 +622,7 @@ async function wpaFetch(path, options = {}) {
     let res;
     try {
       res = await fetch(`${WPA_API}${path}`, {
+        timeout: WPA_HTTP_TIMEOUT_MS,   // P1-31 — options pode sobrescrever se precisar
         ...options,
         headers: {
           Authorization: `Bearer ${token}`,

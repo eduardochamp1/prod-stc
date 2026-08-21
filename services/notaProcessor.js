@@ -25,6 +25,20 @@ function _normTz(s) {
 }
 
 /**
+ * "DD/MM/YYYY HH:MM(:SS)" (formato dos campos `*2` da EDP) → ISO com offset BRT.
+ * Qualquer outra coisa passa intacta. Não desloca o instante: o valor BR já é
+ * hora local de São Paulo (conferido contra o TimeStamp UTC na KB).
+ * Adicionado em 20/08/2026 junto do P1-28.
+ */
+function _brToIso(s) {
+  if (!s || typeof s !== 'string') return s;
+  const m = s.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return s;
+  const [, dd, mm, yyyy, hh, mi, ss] = m;
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss || '00'}-03:00`;
+}
+
+/**
  * @param {object} nota   Payload bruto vindo de getNoteDetail()
  * @param {object} opts   { incluirFotos?: boolean, subcat?: object }
  * @returns {object}      Resposta normalizada para o front
@@ -33,9 +47,18 @@ function processarNota(nota, opts = {}) {
   const incluirFotos = !!opts.incluirFotos;
   const subcat       = opts.subcat || { subCategoria: null, subcatCode: null, quantidade: null };
 
-  // Checkpoints ordenados cronologicamente; fotos só vão se solicitado
+  // Checkpoints ordenados cronologicamente; fotos só vão se solicitado.
+  //
+  // 20/08/2026 (backlog P1-28): a ordenação e o `timestamp` abaixo preferiam
+  // `RegisteredAt2`, contra a regra escrita neste mesmo arquivo (ver bloco
+  // `datas:`) — cp.TimeStamp é campo do APP MÓVEL, cuja versão 2 está corrompida.
+  // E `*Date2` vem em DD/MM/YYYY (BR), como o comentário do _normTz já dizia:
+  // `new Date("15/08/2026 14:23")` é Invalid Date, então de dia 13 a 31 esta
+  // ordenação era um no-op e `dispMin`/`execMin` do card viravam NaN
+  // (`NaN !== null` passa o guard de render → "🚗 NaNmin").
+  const _cpTs = cp => _normTz(cp.TimeStamp) || _brToIso(cp.RegisteredAt2);
   const checkpoints = (nota.Checkpoints || [])
-    .sort((a, b) => new Date(a.RegisteredAt2 || a.TimeStamp) - new Date(b.RegisteredAt2 || b.TimeStamp))
+    .sort((a, b) => new Date(_cpTs(a)) - new Date(_cpTs(b)))
     .map(cp => {
       const fotos = (cp.FileWrappers || []).map((fw, idx) => ({
         index:    idx,
@@ -45,7 +68,7 @@ function processarNota(nota, opts = {}) {
       return {
         id:          cp.Id,
         event:       cp.Event,
-        timestamp:   cp.RegisteredAt2 || _normTz(cp.TimeStamp),
+        timestamp:   _cpTs(cp),                 // P1-28 — UTC primeiro, BR só como fallback
         mileage:     cp.Mileage,
         latitude:    cp.Latitude,
         longitude:   cp.Longitude,
@@ -277,7 +300,13 @@ function fixCachedPayloadTz(payload) {
   }
   if (Array.isArray(payload.checkpoints)) {
     payload.checkpoints.forEach(cp => {
-      if (cp) cp.timestamp = _normTz(cp.timestamp);
+      // Caches gravados antes de 20/08/2026 (P1-28) têm o `RegisteredAt2` em
+      // DD/MM/YYYY, formato que `_normTz` ignora de propósito e que o
+      // `new Date()` do front lê como M/D — data errada até o dia 12 e
+      // Invalid Date do 13 em diante. O VALOR estava certo (é hora local BRT,
+      // conferido contra TimeStamp na KB), só o formato não era parseável;
+      // então aqui convertemos pra ISO com offset, sem deslocar o instante.
+      if (cp) cp.timestamp = _normTz(_brToIso(cp.timestamp));
     });
   }
   return payload;

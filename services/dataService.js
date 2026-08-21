@@ -534,11 +534,14 @@ const SETORES = {
 // skipped:[] }. O runSnapshot lê pra marcar snapshot_last_ok/snapshot_error com
 // ciência de qual conta está fora — sem isso, uma conta desativada/quebrada
 // travava o marcador de saúde do ciclo inteiro.
+// ⚠️ Estado de MÓDULO: só sirva de retrocompat. Para saber o resultado da SUA
+// chamada, passe `out` em getTeams(filters, out) e leia `out.report` (P1-30).
 let _lastSectorReport = { ok: [], failed: [], skipped: [] };
 function getLastSectorReport() { return _lastSectorReport; }
 
 // ── GET TEAMS ─────────────────────────────────────────────────────────────────
-async function getTeams(filters = {}) {
+// @param {object} [out] recebe `out.report = {ok, failed, skipped}` desta chamada.
+async function getTeams(filters = {}, out = null) {
   if (MODE === 'mock') return getMockTeams(filters);
 
   // Determina quais setores buscar. `filters.regionals` é string[] de siglas
@@ -583,6 +586,14 @@ async function getTeams(filters = {}) {
       console.warn(`[dataService] setor ${s} falhou (${msg.slice(0, 90)}) — seguindo com os demais.`);
     }
   }
+  // 20/08/2026 (backlog P1-30): o report SÓ vivia no global `_lastSectorReport`,
+  // e entre esta atribuição e a leitura pelo runSnapshot há TRÊS await com I/O
+  // de banco (os enriches abaixo). Um `/api/teams` de browser chegando nessa
+  // janela sobrescrevia o global com o report DELE — escopo GUA, failed: [] —
+  // e o snapshot gravava `sectors_failed: []` com SJC ausente da coleta:
+  // saúde verde e produção faltando, anulando o P1-21. Agora quem chama recebe
+  // o report DAQUELA chamada via `out`; o global fica só como retrocompat.
+  if (out && typeof out === 'object') out.report = report;
   _lastSectorReport = report;
   const teams = _filterOficiais(resultados.flat());
 

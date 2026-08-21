@@ -268,6 +268,59 @@ async function getTeamsCurrent(filters = {}) {
  * com notas concluídas acumuladas de todos os dias do intervalo.
  * de, ate: 'YYYY-MM-DD'
  */
+/**
+ * Acumula as notas de TODOS os snapshots do range por equipe, deduplicando.
+ * FUNÇÃO PURA (testável) — extraída do getTeamsByDateFromSnapshots em 20/08/2026.
+ *
+ * Corrige dois bugs do código anterior (backlog P1-27):
+ *
+ *  1. Os três buckets compartilhavam UM ÚNICO Set de códigos vistos. Uma nota
+ *     que está em `notasConcluidas` E em `notasRejeitadas` entrava em apenas um
+ *     deles — qual, era sorteado pela ordem `captured_at DESC`. Se caísse em
+ *     `conc`, contava como produção e desaparecia do card "OS Rejeitadas"; se
+ *     caísse em `rej`, a produção subcontava. Era o bug de 20/07/2026
+ *     reaparecendo no caminho de leitura de RANGE — o caminho single-day sempre
+ *     esteve correto. Agora cada bucket tem o seu Set, e o front aplica a regra
+ *     "rejeitada > concluída" sobre as duas listas completas, como já faz no dia.
+ *
+ *  2. O dedup era por `codigo`. O portal WPA exibe linhas duplicadas (conferido
+ *     em julho/2026) e a regra da casa é contar por UUID — `codigo` fica só como
+ *     fallback pra nota sem `id`.
+ *
+ * @param {Array} rows linhas de `snapshots` (qualquer ordem; dedup é por chave)
+ * @returns {object} team_name → { conc:[], exec:[], rej:[] }
+ */
+function _acumularNotasRange(rows) {
+  const porEquipe = {};
+
+  const acumular = (arr, bucket, vistos) => {
+    (arr || []).forEach(n => {
+      const chave = (n && n.id) || (n && (n.codigo || n.code));
+      if (!chave || vistos.has(chave)) return;
+      vistos.add(chave);
+      bucket.push(n);
+    });
+  };
+
+  (rows || []).forEach(r => {
+    const name = r.team_name;
+    if (!porEquipe[name]) {
+      porEquipe[name] = {
+        conc: [], exec: [], rej: [],
+        _vConc: new Set(), _vExec: new Set(), _vRej: new Set(),
+      };
+    }
+    const acc = porEquipe[name];
+    acumular(r.data?.notasConcluidas, acc.conc, acc._vConc);
+    acumular(r.data?.notasExecutadas, acc.exec, acc._vExec);
+    // Rejeitadas: o histórico antes não acumulava — o card "OS Rejeitadas" vinha
+    // só do snapshot base (último dia), perdendo os dias anteriores do range.
+    acumular(r.data?.notasRejeitadas, acc.rej, acc._vRej);
+  });
+
+  return porEquipe;
+}
+
 async function getTeamsByDateFromSnapshots(de, ate, regionals) {
   _assertRegionals(regionals, 'getTeamsByDateFromSnapshots');
   const sb = getClient();
@@ -355,44 +408,12 @@ async function getTeamsByDateFromSnapshots(de, ate, regionals) {
   const rows = rows0Filt.filter(r => r.date >= de && r.date <= ate);
 
   // Intervalo: snapshot base = o mais recente de cada equipe (para dados de sessão)
-  // Notas concluídas/executadas/rejeitadas = acumuladas de todos os dias do período
-  // (sem duplicar por código).
-  const baseByTeam   = {};   // snapshot mais recente por equipe
-  const notasByTeam  = {};   // Set de códigos já vistos por equipe + buckets
-
-  // Percorre do mais recente para o mais antigo (já ordenado por captured_at desc)
+  // Notas concluídas/executadas/rejeitadas = acumuladas de todos os dias do período.
+  const baseByTeam = {};   // snapshot mais recente por equipe
   rows.forEach(r => {
-    const name = r.team_name;
-    if (!baseByTeam[name]) baseByTeam[name] = r;  // snapshot mais recente = base
-    if (!notasByTeam[name]) notasByTeam[name] = { conc: [], exec: [], rej: [], codigos: new Set() };
-
-    // Acumula notas de cada snapshot dedupicando por código (1 nota só conta 1x
-    // mesmo aparecendo em vários snapshots do range).
-    (r.data?.notasConcluidas || []).forEach(n => {
-      const cod = n.codigo || n.code;
-      if (cod && !notasByTeam[name].codigos.has(cod)) {
-        notasByTeam[name].codigos.add(cod);
-        notasByTeam[name].conc.push(n);
-      }
-    });
-    (r.data?.notasExecutadas || []).forEach(n => {
-      const cod = n.codigo || n.code;
-      if (cod && !notasByTeam[name].codigos.has(cod)) {
-        notasByTeam[name].codigos.add(cod);
-        notasByTeam[name].exec.push(n);
-      }
-    });
-    // Rejeitadas: histórico antes não acumulava — card "OS Rejeitadas" no
-    // monitor histórico vinha sempre só do snapshot base (último dia), perdendo
-    // todas as rejeições dos dias anteriores do range.
-    (r.data?.notasRejeitadas || []).forEach(n => {
-      const cod = n.codigo || n.code;
-      if (cod && !notasByTeam[name].codigos.has(cod)) {
-        notasByTeam[name].codigos.add(cod);
-        notasByTeam[name].rej.push(n);
-      }
-    });
+    if (!baseByTeam[r.team_name]) baseByTeam[r.team_name] = r;   // rows vem captured_at DESC
   });
+  const notasByTeam = _acumularNotasRange(rows);
 
   return Object.values(baseByTeam)
     .sort((a, b) => a.team_name.localeCompare(b.team_name))
@@ -1312,7 +1333,14 @@ function _reconstruirDeslogada(unido, ultimoData, meta, ultimaSessaoDate) {
   const u = ultimoData || {};
   const andando  = u.notasExecutadas || [];
   const baixadas = u.notasBaixadas   || [];
-  const executadas = conc.length, rejeitadas = rej.length, andamento = andando.length;
+  // 20/08/2026 (backlog P1-34): `executadas` era `conc.length` cru, sem a regra
+  // "rejeitada > concluída" (decisão 20/07/2026, aplicada em toda a agregação e
+  // no card da equipe LOGADA). O card da deslogada mostrava a mesma nota nas
+  // duas contagens — 12 executadas + 3 rejeitadas onde a logada mostraria 9 —
+  // e os chips por subcategoria (que já filtram) não fechavam com o contador.
+  const _rejIds = new Set(rej.map(n => n && (n.id || n.noteId)).filter(Boolean));
+  const concReais = conc.filter(n => !(n && n.id && _rejIds.has(n.id)));
+  const executadas = concReais.length, rejeitadas = rej.length, andamento = andando.length;
   const inicial = baixadas.length;
   const atual = Math.max(0, inicial - executadas - rejeitadas - andamento);
   const m = meta || {};
@@ -1869,6 +1897,7 @@ module.exports = {
   getSetting, setSetting,
   getMetas, setMetas, getMetasCalculadas,
   getTeamsCurrent, getTeamsByDateFromSnapshots,
+  _acumularNotasRange,   // exportado p/ teste (P1-27)
   getMonthTotals, getDailyHistory,
   getSubcatMonthTotals, getSubcatDailyHistory, getSubcatTeamRanking,
   getTeamRanking, getTeamDailyHistory,

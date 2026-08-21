@@ -54,7 +54,7 @@
 | P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **done** (14/08) — cadeia [sp, sp2]; credencial `sp2` (Luan) no ar, SJC coletando pela backup (teams 64→122); RUNBOOK atualizado |
 | P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | pending — investigar (pode simplificar P1-16 e P2-13) |
 | P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos; o rejectionService faz fallback de 4 endpoints | Dados | pending — pode cobrir DL/LE/RL sem requisição extra |
-| P1-25 | Outro sistema usa a MESMA conta EDP (`clarissa.alves` = nossa `es`) com volume alto — risco de saturar/travar GUA/CAC | Ops | pending — alinhar com o outro time |
+| P1-25 | Outro sistema usa a MESMA conta EDP (`clarissa.alves` = nossa `es`) — e faz **relogin por item sem limite**: pode BLOQUEAR o ES sozinho | Ops | pending — **avisar o autor com prioridade** (agravado 20/08) |
 | P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | pending — falso positivo diário |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-14 | `/Sessions/{id}/collaborators` — fecha a lacuna dos Collaborators vazios | Dados | pending |
@@ -84,6 +84,32 @@
 | P3-9 | Constantes duplicadas (SETORES, ENGELMIG_ID) em módulo único | Backend | pending |
 | P3-10 | Acessibilidade básica (role, aria, tabindex) | Frontend | pending |
 | P3-11 | "Andamento" ao vivo retém notas transferidas/canceladas (acc) | Dados/Frontend | **done** (22/07) |
+| P0-8 | `note_rejections` PK = `note_id`: a regra "rejeitada > concluída" não é representável (nota rejeitada por 2 equipes guarda 1 linha) | Dados | **medindo** — `scripts/diag-rejeicoes-multiplas.js` pronto (21/08), rodar na VM antes de migrar |
+| P1-27 | Histórico multi-dia: Set único nos 3 buckets + dedup por código (não UUID) → nota concluída+rejeitada cai num bucket só | Dados | **código done** (21/08) — Set por bucket + dedup por UUID; 7 testes |
+| P1-28 | Checkpoints usam `RegisteredAt2` contra a própria regra documentada 15 linhas acima | Dados/Frontend | **done** (21/08) — TimeStamp UTC primeiro + reparo do cache antigo; 5 testes |
+| P1-29 | Breaker é em memória: restart do PM2 zera e crash-loop queima os 5 logins (furo no P1-20) | Ops/Backend | **código done** (21/08) — breaker em app_settings + boot usa getToken; RUNBOOK atualizado |
+| P1-30 | `_lastSectorReport` global sobrescrito por request concorrente → saúde verde com setor ausente (furo no P1-21) | Ops/Backend | **done** (21/08) — getTeams(filters, out); 1 teste |
+| P1-31 | Nenhum `fetch` da WPA tem timeout + `_singleFlight` nunca solta a promise pendurada → setor travado até restart | Ops/Backend | **done** (21/08) — WPA_HTTP_TIMEOUT_MS (default 20s) nos dois fetch |
+| P1-32 | `_classifyLoginError` é fail-open: mensagem nova da EDP = breaker não abre | Ops/Backend | **done** (21/08) — abre cooldown curto na 2ª falha desconhecida; 5 testes |
+| P1-33 | `/Notes/{id}/completeInterruptions` → motivo de rejeição uniforme (fecha DL/LE/RL) + a chave que falta ao P0-8 | Dados | pending — **maior alavancagem** |
+| P1-34 | `_reconstruirDeslogada` não aplica rejeitada>concluída → card de deslogada conta a nota 2× | Dados/Frontend | **done** (21/08) — 3 testes |
+| P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | pending |
+| P2-19 | Equipe fora da whitelist descartada ANTES do snapshot, sem log → histórico não-backfillável | Dados | pending |
+| P2-20 | Leitura do histórico depende da whitelist de HOJE → desativar equipe apaga produção já reportada | Dados/Governança | pending |
+| P2-21 | `ConclusionStatus` (pontualidade) + `DesiredConclusionDate` descartados no `normalizarNotaV2` → KPI de SLA a custo zero | Dados/Produto | pending |
+| P2-22 | 429/503 não retentados → bucket vazio silencioso indistinguível de "não teve rejeição" | Ops/Dados | pending |
+| P2-23 | Lock do snapshot: `finally` da execução antiga libera a nova → execuções sobrepostas em cascata | Ops/Backend | pending |
+| P2-24 | Não existe cadastro de escala por dia → o P1-26 não tem onde guardar o dado | Dados/Schema | pending |
+| P2-25 | pgShim sem nenhum `setTypeParser`: numeric volta string; `quantidadeExec` tem 2 tipos no mesmo jsonb | Dados/Backend | pending |
+| P2-26 | `snapshots` é a única tabela sem chave de idempotência (INSERT puro) | Dados | pending |
+| P2-27 | Nota sem `id` tem 3 comportamentos incompatíveis (um deles com `Math.random()` em função "pura") | Dados | pending |
+| P2-28 | `collaborators` vazio ao vivo → ranking de rejeições por colaborador sem linhas (aprofunda P2-14) | Dados | pending |
+| P2-29 | `*/45` = minutos 0 e 45 (48 logins/dia); RUNBOOK e log de boot dizem 20:30, cron é 23:50 | Ops/Docs | pending |
+| P2-30 | Sem orçamento global de concorrência contra a WPA: caudas fire-and-forget fora do lock | Ops | pending |
+| P2-31 | Varredura de campos: `Checkpoints[].Try`, `SessionBreakReason.Responsible`, `LastLocationComunication`, `LastUpdateWallet`, `Address` na lista, `Team.Description`, `Assigned[]`, probe do `Team.SectorId`, KB errada sobre placa | Dados | pending |
+| P3-12 | `_hojeBRT` com `-3h` fixo sobrevive em 5 lugares apesar do `timeUtil` | Backend | pending (latente) |
+| P3-13 | Snapshot persiste os campos `_*`, incluindo cópia da carteira inicial do dia (~16MB/dia) | Dados/Ops | pending |
+| P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
 
 ---
 
@@ -463,6 +489,52 @@
   dado. **Não há necessidade de alargar a régua pra D+1..D+3.**
   - O guard continua valendo como rede de segurança — um reparo automático que
     pode subtrair é perigoso independentemente desta causa específica.
+
+---
+
+## P0-8 — `note_rejections` tem PK = `note_id`: a regra que reportamos à EDP não é representável no schema
+
+- **Categoria:** Dados
+- **Status:** medindo — script de medição pronto (21/08/2026), rodar na VM antes de migrar
+- **Origem:** revisão paralela por agentes, 20/08/2026 (5 análises dos scripts
+  Python do outro projeto). Conferido linha a linha antes de registrar.
+- **Evidência:**
+  - `db/schema-atual.sql:518` — `ADD CONSTRAINT note_rejections_pkey PRIMARY KEY (note_id)`
+    (idem `supabase/migrations/008_note_rejections.sql`). `team_name`,
+    `session_date` e `rejection_date` são **atributos**, não chave.
+  - `services/cronService.js:685` — `upsert(chunk, { onConflict: 'note_id' })`:
+    a segunda rejeição da mesma nota **sobrescreve** a primeira.
+  - `services/dataWriter.js:263-275` — `_rejIndexByNote` monta chave
+    `note_id|team_name → [dias]`, isto é, foi escrito assumindo que uma nota
+    pode ter rejeições de **várias** equipes. A tabela só entrega a última.
+- **Impacto:** a regra vigente (decisão do dono do produto, 31/07/2026) fala
+  literalmente do caso *"equipe A rejeita → nota reprogramada → equipe B conclui
+  100%"*. Esse caso **não cabe na tabela**. Cenário concreto: nota rejeitada pela
+  ECTSJ80 em 03/07 e pela ECTSJ85 em 10/07 → sobra uma linha (a de 10/07) →
+  `_contaComoExecutada` não vê a rejeição da ECTSJ80 → **a nota volta a contar
+  como produção dela**. É a mesma família do P0-7, por perda de linha em vez de
+  chave que não casa. O total de rejeições também subconta 1 por nota com 2+
+  visitas rejeitadas.
+- **Por que é P0:** enfraquece silenciosamente o P1-16/P0-7, que foram fechados
+  esta semana e cujo resultado (julho −934, junho +682) já foi conferido. Não
+  sabemos o volume: **a própria PK impede contar por SQL** — para medir é preciso
+  varrer `snapshots` (retenção ilimitada, então é possível).
+- **Ação:**
+  1. ⬜ medir primeiro: script que varre `snapshots` e conta notas com rejeições
+     de 2+ equipes ou em 2+ dias (sem tocar o banco de produção).
+  2. ⬜ migração aditiva: PK composta `(note_id, team_name, rejection_date)`,
+     ou `(note_id, interruption_id)` usando o `Id` que o
+     `/Notes/{id}/completeInterruptions` devolve (ver P1-33).
+  3. ⬜ backfill a partir dos snapshots (as linhas sobrescritas estão perdidas
+     na tabela, mas são reconstruíveis).
+  4. ⬜ re-consolidar os meses afetados só depois de medir o delta em dry-run.
+- **Critério de aceite:** existe nota com 2 equipes distintas e 2 linhas em
+  `note_rejections`; `_rejIndexByNote` devolve 2 entradas para ela; teste novo
+  cobre "A rejeita em D1, B conclui em D2" e "A rejeita em D1, A conclui em D3".
+- **Esforço:** medição 1h · migração + backfill 4-6h · re-consolidação 2h.
+- **Rollback:** a migração é aditiva (PK mais larga aceita tudo que a antiga
+  aceitava). Reverter = restaurar a PK antiga após dedup por `note_id`.
+- **Relacionado:** P0-7, P1-15, P1-16, P1-24, P1-33, P2-13.
 
 ---
 
@@ -1316,7 +1388,26 @@ feita em PR separado depois dos testes.
   1. ⬜ Alinhar: **conta EDP dedicada por sistema** (foi o que fizemos pro SJC).
   2. ⬜ Até lá, ao investigar falha intermitente em ES, verificar se o outro script
      rodou na janela.
-- **Relacionado:** P1-20, P1-22.
+- **AGRAVAMENTO (revisão paralela, 20/08/2026) — deixou de ser "volume alto" e
+  passou a ser "eles podem BLOQUEAR a nossa conta ES sozinhos":**
+  o `monitor_stc_es.py` refaz login **por item, sem limite**. Em `:225-227` um
+  401/403 chama `relogin()`; o `login_wpa()` levanta `RuntimeError` se o status
+  não for 200 (`:179-182`); e esse erro é engolido pelo `except Exception` de
+  **cada laço por item** (`:744-748`, `:840-845`, `:923-927`, `:977-980`,
+  `:1097-1100`), todos com `continue`. Ou seja: se a conta bloquear (ou a senha
+  mudar), o script continua iterando a janela de 15 dias e tenta um `POST
+  /signin` novo **para cada nota** — centenas a milhares de tentativas falhas
+  numa única execução, na conta `clarissa.alves` que serve DESG/DESC/DEPT
+  (`wpaService.js:51`, `:64-66`). O nosso breaker (P1-20) **não protege disso**:
+  quem queima o orçamento de tentativas é o processo deles.
+  Para contraste, o `import_wpa_es.py` loga **uma vez** e nunca reloga (`:933`) —
+  seguro nesse aspecto; o preço é que, se o token expira no meio, as etapas
+  restantes falham em silêncio e as tabelas ficam parciais sem erro.
+  - ⬜ **Avisar o autor com prioridade:** cap de relogins por execução (ex.: 2) e
+    abortar o pipeline em erro de login, em vez de `continue`.
+  - ⬜ Do nosso lado: tratar bloqueio de conta como cenário **esperado**, não
+    excepcional (P1-29, P1-32).
+- **Relacionado:** P1-20, P1-22, P1-29, P1-32, P2-30.
 
 ---
 
@@ -1382,6 +1473,249 @@ feita em PR separado depois dos testes.
 - **⚠️ Regra da casa:** mexe em número reportável à EDP → medir, validar no
   portal, revisar com o José, e só então aplicar. Ver P1-15/P1-16.
 - **Relacionado:** P1-14, P1-15, P1-16, P2-13.
+
+---
+
+## P1-27 — Histórico multi-dia: um Set único para os 3 buckets, e dedup por CÓDIGO em vez de UUID
+
+- **Categoria:** Dados / Leitura
+- **Status:** código done (21/08/2026) — 7 testes
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `db/queries.js:367` cria o acumulador
+  `{ conc: [], exec: [], rej: [], codigos: new Set() }` e os três laços seguintes
+  (`:371`, `:378`, `:388`) compartilham **o mesmo** `codigos`. Quem chegar
+  primeiro na ordem `captured_at DESC` "consome" o código.
+- **Impacto:** só no caminho de **range multi-dia** (`getTeamsByDateFromSnapshots`,
+  usado por `/api/teams/historico`, `routes/index.js:304`). O caminho
+  `isSingleDay` (`db/queries.js:311`) está limpo. Nota concluída **e** rejeitada
+  entra em um bucket só, sorteado pela ordem dos snapshots: se cair em `conc`,
+  conta como produção e desaparece de "OS Rejeitadas"; se cair em `rej`, a
+  produção subconta. É o bug de 20/07/2026 reaparecendo num caminho de leitura
+  que a correção não cobriu.
+- **Agravante:** o dedup é por `n.codigo || n.code`, não por UUID. O portal WPA
+  exibe linhas duplicadas (fato validado na conferência de julho) e a regra da
+  casa é contar por UUID.
+- **Ação:** ⬜ um Set por bucket (`codConc`, `codExec`, `codRej`); dedup por
+  `n.id` com `codigo` só como fallback; aplicar a mesma exclusão
+  rejeitada>concluída do caminho single-day.
+- **Critério de aceite:** teste com 2 snapshots onde a mesma nota está em
+  `notasConcluidas` e `notasRejeitadas` → aparece nos dois buckets do retorno, e
+  a produção do range é igual à soma das produções dos dias individuais.
+- **Esforço:** 2h (função isolada) + 1h de teste.
+- **Rollback:** trivial, uma função.
+- **Relacionado:** P1-15, P1-16, P2-11.
+
+---
+
+## P1-28 — Checkpoints usam `RegisteredAt2`, contra a regra escrita 15 linhas acima na mesma função
+
+- **Categoria:** Dados / Frontend
+- **Status:** done (21/08/2026) — 5 testes
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/notaProcessor.js:110-125` estabelece a regra, com o
+  probe de 08/06/2026 citado: *"Campos VINDOS DO APP MÓVEL (Conclusion,
+  Timestamp, **cp.TimeStamp**): a versão 2 está CORROMPIDA — a EDP cola '-03:00'
+  no fim da string UTC sem converter o valor"*. E `conclusao` (`:125`) obedece:
+  `_normTz(nota.ConclusionDate)  // NUNCA usar ConclusionDate2 — corrompido`.
+  Mas os checkpoints fazem o oposto, em dois lugares:
+  ```js
+  // notaProcessor.js:38 — ordenação
+  .sort((a, b) => new Date(a.RegisteredAt2 || a.TimeStamp) - new Date(b.RegisteredAt2 || b.TimeStamp))
+  // notaProcessor.js:48 — valor persistido no cache
+  timestamp: cp.RegisteredAt2 || _normTz(cp.TimeStamp),
+  ```
+- **Impacto — depende da variante que a API manda, e nas duas está errado:**
+  - se `RegisteredAt2` vier no formato BR (`"11/05/2026 14:23:45"`, como
+    `docs/WPA-EDP-KNOWLEDGE-BASE.md:1158` registra): `new Date()` lê M/D, então
+    **dia 13 a 31 vira `Invalid Date`** → ordenação de checkpoints é no-op
+    (o comentário "Checkpoints ordenados cronologicamente" fica falso), a rota
+    do Mapa sai fora de ordem, e `dispMin`/`execMin` viram `NaN` — o guard de
+    render é `!== null` e `NaN !== null` é `true`, então o card imprime
+    `🚗 NaNmin`;
+  - se vier ISO com offset falso (o que o probe viu em `ConclusionDate2`):
+    **+3h em todo checkpoint** — exatamente o bug que `conclusao` já corrigiu.
+- **Ação:** ⬜ inverter para `_normTz(cp.TimeStamp) || cp.RegisteredAt2`,
+  alinhando com a regra já escrita; ⬜ 1 probe em
+  `/api/Notes/{id}/details/optimized` para registrar o formato atual no
+  comentário datado; ⬜ avaliar um helper único de data (o
+  `converter_data_robusta` deles é o modelo) que resolveria isto, a sentinela
+  `0001-01-01` do P2-17 e o `ConclusionDate2` de uma vez.
+- **Critério de aceite:** checkpoint de nota do dia 15+ ordena corretamente e o
+  card de deslocamento mostra minutos, não `NaN`.
+- **Esforço:** 1h + probe.
+- **Rollback:** duas linhas.
+- **Relacionado:** P2-17 (sentinela `0001-01-01`), P1-14.
+
+---
+
+## P1-29 — Circuit breaker é em memória: restart do PM2 zera e um crash-loop queima os 5 logins (furo no P1-20)
+
+- **Categoria:** Ops / Backend
+- **Status:** código done (21/08/2026) — breaker em app_settings; RUNBOOK atualizado
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:**
+  - `services/wpaService.js:141` — `const _breaker = new Map()`, em memória por
+    decisão documentada em `:143-145`.
+  - `services/cronService.js:1179` — `setTimeout(runTokenRefresh, 2000)` no boot
+    → `runTokenRefresh` chama `forceRefresh()` (`cronService.js:97`), que vai
+    direto ao `login()` e **pula o `getToken()`** (`wpaService.js:399-445`), isto
+    é, ignora o cache em memória **e** o cache no banco. Todo boot faz um
+    `/signin` fresco obrigatório.
+  - `ecosystem.config.js:9-11` — `autorestart: true`, `max_memory_restart: '1G'`,
+    e o comentário datado registrando que *"pm2 reiniciou 161x num dia"*.
+- **Impacto:** credencial errada no `.env` + crash-loop = 5 logins em segundos,
+  com o breaker recém-zerado a cada boot. É **literalmente o incidente da conta
+  do Ismael** (13/08), e o comentário do P1-20 (`wpaService.js:61-63`,
+  *"no máximo 1 tentativa por janela de cooldown — nunca chega às 5"*) **não vale
+  sob restart**.
+- **Ação:** ⬜ persistir o breaker em `app_settings` (chave
+  `wpa_breaker_<conta>`, mesmo padrão do `snapshot_last_ok`) e consultá-lo em
+  `login()` antes do primeiro `/signin`; ⬜ trocar o `runTokenRefresh` do boot
+  por `getToken()` — só o cron periódico precisa de `forceRefresh`.
+- **Critério de aceite:** com o breaker aberto e o processo reiniciado, o próximo
+  boot **não** emite `/signin`; teste cobre "breaker persistido sobrevive a
+  reinício simulado".
+- **Esforço:** 3h + testes.
+- **Rollback:** flag de env para voltar ao breaker só-memória.
+- **Relacionado:** P1-20, P1-22, P1-32.
+
+---
+
+## P1-30 — `_lastSectorReport` é global e é sobrescrito por request concorrente (furo no P1-21)
+
+- **Categoria:** Ops / Backend
+- **Status:** done (21/08/2026) — 1 teste
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/dataService.js:537` (`let _lastSectorReport`),
+  atribuído em `:586`, e **três `await` com I/O de banco depois dele**
+  (`_enrichComEscalaELogonReal`, `_enrichConcluidasDeEncerradas`,
+  `_enrichCarteiraInicial`, `:590-594`). O cron lê o global depois
+  (`cronService.js:133-134`).
+- **Impacto:** snapshot com DSSJ falhando (breaker aberto em `sp` e `sp2`);
+  durante os enriquecimentos, um browser chama `/api/teams` com escopo GUA →
+  esse `getTeams` sobrescreve o global com `{ok:['DESG','DEPT'], failed:[]}` →
+  `snapshot_last_ok` grava `sectors_failed: []` e **não** emite
+  `snapshot_partial`. **SJC fica ausente da coleta com marcador de saúde verde**,
+  anulando exatamente o P1-21, entregue em 14/08. Variante pior: 0 equipes +
+  report limpo → `_classifySnapshotOutcome` devolve `'empty'`
+  (`cronService.js:87-91`) e uma queda real é registrada como "dia vazio".
+- **Ação:** ⬜ `getTeams` retornar `{ teams, report }` (ou aceitar um objeto de
+  saída) e o `runSnapshot` usar o report **daquela** chamada. Não usar estado de
+  módulo para dado por-chamada.
+- **Critério de aceite:** teste com duas chamadas concorrentes a `getTeams` com
+  escopos diferentes → cada uma recebe o próprio report.
+- **Esforço:** 2h + testes.
+- **Rollback:** manter o global como espelho durante uma release.
+- **Relacionado:** P1-21, P1-22, P1-3.
+
+---
+
+## P1-31 — Nenhum `fetch` da WPA tem timeout, e o `_singleFlight` nunca solta a promise pendurada
+
+- **Categoria:** Ops / Backend
+- **Status:** done (21/08/2026)
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/wpaService.js:264-271` (`/identity/signin`) e
+  `:512-519` (`wpaFetch`) — nenhum `timeout`, nenhum `signal`. O padrão existe no
+  repo: `services/osrmService.js:106` usa `timeout: 15000`, e o `node-fetch@2`
+  já suporta. O `_singleFlight` (`wpaService.js:1181-1187`) só remove a entrada
+  no `.finally()`.
+- **Impacto:** promise que nunca resolve = `_inflightSector.get(sectorId)` fica
+  pendurada **para sempre**, e todo `getTeams`/`/api/teams`/snapshot daquele
+  setor passa a aguardar a mesma promise morta. Um socket derrubado pelo Fortinet
+  sem FIN trava o painel para todos os usuários até `pm2 restart` — e o
+  `snapshot_last_ok` congela, mas `snapshots` ainda tem linhas recentes, então o
+  `health-check.js:56-60` só acusa 30 min depois.
+- **Ação:** ⬜ `timeout: Number(process.env.WPA_HTTP_TIMEOUT_MS) || 20000` nos
+  dois `fetch`; ⬜ conferir que o timeout rejeita a promise do `_singleFlight`
+  (o `.finally()` então limpa sozinho).
+- **Critério de aceite:** teste com servidor que aceita a conexão e nunca
+  responde → `wpaFetch` rejeita em ≤20s e o setor volta a ser consultável.
+- **Esforço:** 1h.
+- **Rollback:** variável de ambiente.
+- **Relacionado:** P1-21, P1-29, P2-22.
+
+---
+
+## P1-32 — `_classifyLoginError` é fail-open: mensagem nova da EDP = breaker nunca abre
+
+- **Categoria:** Ops / Backend
+- **Status:** done (21/08/2026) — 5 testes
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/wpaService.js:150-158` — dois regexes em português;
+  qualquer outra coisa devolve `{kind:'other'}`. E `:186-188`:
+  `if (cls.kind === 'other') return null` → o breaker **não abre**.
+- **Impacto:** se a EDP trocar o texto ("Senha incorreta", "Too many attempts")
+  ou passar a responder 429/HTML no `/signin`, cada trigger independente
+  (snapshot */15, cron de token, notas xx:05, `/api/teams` de cada browser,
+  classifier) gasta uma tentativa. É a reprodução literal do incidente de 13/08,
+  com a proteção inteira apoiada numa string **que a EDP controla**.
+- **Ação:** ⬜ inverter o default: contar falhas não-transientes consecutivas por
+  conta e abrir cooldown curto (15-30 min) a partir da 2ª, independente da
+  mensagem; manter os cooldowns longos para os casos classificados.
+  `kind:'other'` deixa de ser "não abre" e passa a ser "abre curto".
+- **Critério de aceite:** teste com mensagem de erro desconhecida → breaker abre
+  na 2ª falha.
+- **Esforço:** 2h + testes.
+- **Rollback:** o comportamento novo é mais restritivo; reverter = voltar o
+  `return null`.
+- **Relacionado:** P1-20, P1-29.
+
+---
+
+## P1-33 — `/Notes/{id}/completeInterruptions`: motivo de rejeição uniforme + a chave que falta ao P0-8
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido: **zero referências** ao
+  endpoint no repo (`grep -rn completeInterruptions` = 0).
+- **Evidência (script do outro projeto):** `import_wpa_es.py` chama
+  `GET /api/Notes/{id}/completeInterruptions` (sem nenhum query param) e lê
+  `Id`, `TeamName`, `Date`, `Notes`, `Try`, `RejectionReasonId`.
+- **Por que é o achado mais alavancado da revisão — resolve dois problemas:**
+  1. **motivo de rejeição uniforme para todos os tipos**, 1 request, sem
+     `sectorId`. Hoje o `services/rejectionService.js:22-24` documenta em texto
+     que `DL`, `LE` e `RL` têm *"endpoint desconhecido"* e grava
+     `motivo_codes: []` (`:31-33`), enquanto o fallback tenta até 9 caminhos por
+     nota para `DL` (`:80-92`);
+  2. o `Id` da interrupção e o `Try` são exatamente a **chave composta** que o
+     P0-8 precisa para representar "nota rejeitada por 2 equipes".
+- **Não é duplicata do P1-24:** aquele é o `Interruptions[]` que já vem no
+  `details/optimized` e traz só `Date`/`Try`/`Notes` — **sem id de motivo**.
+- **Ação:** ⬜ 1 probe numa nota DL rejeitada conhecida para registrar o formato
+  de `RejectionReasonId` (código tipo `"0101|0031"` ou UUID?) e se ele casa com
+  o catálogo que já lemos em `rejectionService.js:126-139`; ⬜ se casar, trocar o
+  fallback de 9 endpoints por 1 chamada; ⬜ usar `Id`/`Try` na PK do P0-8.
+- **Critério de aceite:** nota DL rejeitada passa a ter `motivo_codes` populado.
+- **Esforço:** probe 30min · integração 3-4h.
+- **Rollback:** manter o fallback atual como segunda tentativa.
+- **Relacionado:** P0-8, P1-24, P2-31.
+
+---
+
+## P1-34 — `_reconstruirDeslogada` não aplica a regra rejeitada>concluída
+
+- **Categoria:** Dados / Frontend
+- **Status:** done (21/08/2026) — 3 testes
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `db/queries.js:1310-1317` monta
+  `executadas = conc.length` sem passar pelo filtro de exclusão; o front consome
+  cru em `public/index.html:6958-6959` e `:7038-7039` quando `t.deslogada`.
+- **Impacto:** equipe que não logou hoje, com 12 concluídas na última sessão das
+  quais a EDP rejeitou 3 → o card mostra **12 executadas + 3 rejeitadas**, a
+  mesma nota nos dois contadores, enquanto uma equipe logada na mesma situação
+  mostraria 9. Pior: os chips por subcategoria (`public/index.html:6939`) usam
+  `_notasConcluidasReais(t)` e filtram por range, então dão ~0 enquanto o
+  contador diz 12 — quebrando o "chips batem por construção" afirmado em `:6937`.
+  **Não vaza para a EDP** (o agregado de KPIs exclui deslogadas, `:6802`), mas é
+  número visível divergindo de si mesmo no mesmo card.
+- **Ação:** ⬜ aplicar o mesmo Set de exclusão em `_reconstruirDeslogada`;
+  ⬜ passar `metrics.subcatCont` pronto (sem filtro de range) para os chips.
+- **Critério de aceite:** card de equipe deslogada com nota concluída+rejeitada
+  mostra 11 executadas + 1 rejeitada, e os chips somam 11.
+- **Esforço:** 2h.
+- **Rollback:** trivial.
+- **Relacionado:** P1-15, P1-16, P1-27.
 
 ---
 
@@ -2167,6 +2501,386 @@ feita em PR separado depois dos testes.
 
 ---
 
+## P2-18 — `note_details` tem TTL de 90 dias e é a ÚNICA fonte de checkpoints (quebra a promessa de reconstrução retroativa)
+
+- **Categoria:** Dados / Retenção
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/dataWriter.js:948-965` (`cleanOldNoteDetails`, cutoff
+  `dateBRTMinusDays(90)`), agendado em `services/cronService.js:978`.
+  `db/deslocamentosQueries.js:5` declara que a análise vem
+  **exclusivamente** de `note_details.payload.checkpoints[]`. O snapshot não
+  guarda checkpoint nenhum: `dataWriter.js:42-55` grava contagens + `data: t`, e
+  `t` vem de `wpaService.js:1383-1428`, sem checkpoints.
+- **Impacto:** a decisão de 07/07/2026 promete que **qualquer métrica nova pode
+  ser reconstruída pro passado**. Para deslocamento/rota, essa promessa é falsa
+  além de 90 dias — e não é backfillável: exigiria 1 request por nota em meses
+  passados, na conta que bloqueia após 5 falhas. Os scripts do outro projeto
+  guardam `servico_detalhes`/`rota_dia` **permanentemente**.
+- **Ação:** ⬜ extrair para tabela estreita `note_checkpoints(note_id, seq, event,
+  try, ts, lat, lng)` antes do TTL (~5 linhas/nota, barato), ou tornar a
+  retenção configurável como a de snapshots.
+- **Esforço:** 4h + backfill dos 90 dias ainda vivos.
+- **Relacionado:** P2-15, P3-6, P1-28.
+
+---
+
+## P2-19 — Equipe fora da whitelist é descartada ANTES do snapshot, sem log: histórico não-backfillável
+
+- **Categoria:** Dados / Retenção
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/dataService.js:17-20` — `_filterOficiais` filtra por
+  `isOficial()` **sem log algum**; aplicado em `getTeams` (`:587`) → `cronService.js:133`
+  → `saveSnapshot` (`:163`). Em contraste, `services/notasMonitor.js:47-55` faz o
+  mesmo filtro **com** `log.warn('equipes_candidatas_cadastro')`.
+- **Impacto:** cadastrar uma equipe nova em `equipes_oficiais` hoje **não traz o
+  histórico dela** — é a única classe de dado que não é backfillável. E a coluna
+  `notas_snapshots.equipe_oficial` (`db/schema-atual.sql:162`) mais o índice
+  `idx_notas_snapshots_oficial` existem exatamente para marcar isso, mas **nunca
+  recebem `false`**: o código descarta em vez de marcar. Índice morto.
+- **Ação:** ⬜ gravar snapshot bruto de TODA equipe Engelmig (filtrando por
+  `CompanyId`) e aplicar a whitelist na **leitura** — que é o que
+  `db/queries.js:51-54` (`_onlyOficiais`) já faz; ⬜ coluna `equipe_oficial` em
+  `snapshots` para não mexer em nenhum número atual; ⬜ no mínimo, um `log.warn`
+  com as siglas descartadas.
+- **Esforço:** log 15min · snapshot bruto 4h (avaliar impacto no tamanho).
+- **Relacionado:** whitelist `equipes_oficiais` (decisão de negócio), P2-20.
+
+---
+
+## P2-20 — Ler o histórico depende da whitelist de HOJE: desativar uma equipe apaga produção já reportada
+
+- **Categoria:** Dados / Governança
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `db/queries.js:51-54` chama `isOficial()`, que lê o cache vivo
+  de `equipes_oficiais` (`services/equipesOficiais.js:265-273`).
+  `team_daily_totals` (`db/schema-atual.sql:342-350`) não tem `equipe_oficial`
+  nem o `tipo` da equipe — `tipo` vem de `getMeta()` em runtime
+  (`db/queries.js:1324`, `wpaService.js:1391`). `equipes_oficiais` é UPDATE
+  in-place, só `updated_at`, sem histórico.
+- **Impacto:** `UPDATE equipes_oficiais SET ativo=false` no fim do contrato de
+  uma equipe **apaga do painel a produção de julho já reportada à EDP**. Trocar o
+  `tipo` de uma equipe reescreve retroativamente todo relatório por tipo. Sem log,
+  sem versão.
+- **Ação:** ⬜ versionar a whitelist (`vigente_de`/`vigente_ate`); ⬜ congelar o
+  `tipo` na linha de `team_daily_totals` no momento da escrita.
+- **Esforço:** 6h (migração + ajuste nas leituras).
+- **Relacionado:** P2-19.
+
+---
+
+## P2-21 — `ConclusionStatus` e `DesiredConclusionDate` são descartados no `normalizarNotaV2`: KPI de SLA a custo zero de rede
+
+- **Categoria:** Dados / Produto
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/wpaService.js:1132-1139` (`normalizarNotaV2`) devolve
+  só `{id, codigo, tipoCode, tipoNome, status, conclusionDate}`; idem
+  `normalizarNotaHist` (`:804-813`). Os dois campos **chegam no mesmo payload**
+  que já baixamos ~86×/snapshot. Nós mesmos decodificamos a semântica em
+  22/07/2026: `scripts/audit-indicadores.js:357-358` registra
+  **`ConclusionStatus` = PONTUALIDADE** (`ok` = no prazo, `late` = fora da
+  Conclusão Desejada), e `:30` afirma explicitamente que
+  *"normalizarNotaV2 descarta ConclusionStatus"*. Capturamos em **um** lugar só:
+  `services/notasMonitor.js:105` (fluxo de notas devolvidas), não no pipeline de
+  produção. `DesiredConclusionDate` só aparece em `notaProcessor.js:124`, isto é,
+  a partir do fetch caro por nota.
+- **Impacto:** "nota atendida dentro do prazo" é o indicador mais provável de a
+  EDP cobrar num contrato de 60 meses, e hoje **não é reconstruível além de 90
+  dias** (o detalhe morre no TTL do P2-18). Dois campos a mais no
+  normalizador e passa a valer para todo snapshot novo, sem um único request extra.
+- **Ação:** ⬜ acrescentar `conclusionStatus`, `desiredConclusionDate` (e `city`)
+  em `normalizarNotaV2`/`normalizarNotaHist`; ⬜ depois, KPI de pontualidade por
+  equipe/regional.
+- **Esforço:** 1h para capturar · KPI depois.
+- **Relacionado:** P2-18, P2-31.
+
+---
+
+## P2-22 — 429 / 503 não são retentados e viram bucket vazio silencioso
+
+- **Categoria:** Ops / Dados
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/wpaService.js:1310-1325` (`_safeNotes`) —
+  `if (!res.ok) { console.warn(...'esvaziando bucket'); return []; }`. O retry do
+  `wpaFetch` (`:494-541`) só cobre erro de rede e cold-start detectado por **corpo
+  HTML** contendo "Web App - Unavailable" (`_isAzureColdStartResponse`, `:475-482`).
+  Grep por `429|Retry-After` em `services/` = nada.
+- **Impacto:** sob throttle (a API é Azure App Service, e o pipeline Python do
+  outro projeto martela a mesma conta), `notes/rejected` e `notes/executed`
+  voltam 429 → `rejeitadas=[]` e `executadas=[]`. O `_accApply`
+  (`wpaService.js:1041-1047`) considera o payload íntegro porque `baixadas` (do
+  V2) passou → não re-injeta andamento. O snapshot grava zeros e **nada, em log ou
+  banco, diz que foi throttle e não realidade**. Em processo recém-reiniciado o
+  `_acc` está vazio e as rejeitadas também se perdem.
+- **Ação:** ⬜ tratar 429/503 como transientes no `wpaFetch`, respeitando
+  `Retry-After`; ⬜ `_safeNotes` devolver `{notes, failed:true}` e propagar a flag
+  até o report, para bucket-vazio-por-falha nunca virar bucket-vazio-real.
+- **Esforço:** 3h + testes.
+- **Relacionado:** P1-31, P1-13, P2-32.
+
+---
+
+## P2-23 — Lock do snapshot destrava em 5 min mas a execução continua: o `finally` da antiga libera a nova
+
+- **Categoria:** Ops / Backend
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/cronService.js:27` (`MAX_RUN_MS = 5*60_000`),
+  `:122-129` (se `elapsed >= MAX_RUN_MS`, loga `snapshot_unstuck` e **segue**),
+  `:130-131` (sobrescreve `isRunning`), `:241-243` (`finally { isRunning = false }`).
+- **Impacto:** não há cancelamento — a execução "travada" segue viva (e sem
+  timeout, P1-31, pode nunca morrer). Quando ela termina, o `finally` dela zera o
+  flag **da execução nova**, liberando o lock para uma terceira. O lock se
+  corrompe em vez de degradar. Cada execução são ~270 fetches na conta
+  compartilhada, e `saveSnapshot` usa `insert` puro (`dataWriter.js:57`), então
+  execuções sobrepostas **duplicam linhas** em `snapshots`.
+- **Ação:** ⬜ trocar o booleano por token de execução (`currentRun = {id}`); o
+  `finally` só limpa se o id for o dele. Com o P1-31 no ar, o `MAX_RUN_MS` deixa
+  de ser necessário como escape.
+- **Esforço:** 2h.
+- **Relacionado:** P1-31, P2-26, P3-4.
+
+---
+
+## P2-24 — Não existe cadastro de escala por dia: o P1-26 não tem onde guardar o dado
+
+- **Categoria:** Dados / Schema
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido: `grep -rn "collaboratorshifts|ScaleCategory"`
+  em `services/ db/ routes/ scripts/` = **0 ocorrências**.
+- **Evidência:** o que existe é um turno **estático** por equipe:
+  `equipes_oficiais.escala_inicio/escala_fim time without time zone`
+  (`db/schema-atual.sql:116-117`), lido em `services/equipesOficiais.js:180-183`.
+  Nada equivalente à tabela `escalas` deles (horário por código de escala) nem ao
+  `ESCALA_EXCLUIR`.
+- **Impacto:** (a) impossível distinguir folga de falta — é a **raiz do P1-26**,
+  agora com o diagnóstico: não há onde guardar; (b) equipe em 12x36 ou turno
+  rotativo é modelada por um único par de horários, silenciosamente errado;
+  (c) `escala_inicio/fim` é UPDATE in-place — mudar o turno hoje reescreve o
+  "atrasou para logar" de todos os dias passados.
+- **Parcialmente coberto:** o `shiftType` da WPA (`"T07 07:00"`) **é** capturado
+  por snapshot (`wpaService.js:1412-1415`), então a escala de quem **logou** é
+  reconstruível. Falta exatamente quem não logou.
+- **Ação:** ⬜ tabela `escala_dia(setor, equipe, data, codigo_escala, inicio, fim)`
+  alimentada por `/collaboratorshifts/{setor}/{mes}/{ano}` — 1 request por
+  setor/mês, custo irrelevante; ⬜ tabela de referência dos códigos com os
+  excluídos (`FOL, DR, DES, FER, DIS, AFO, NA, SAV, SIN, TRE`). **Não confirmado:**
+  se o endpoint devolve meses passados (aceita mês/ano como parâmetro, mas testar
+  custa login na conta escassa).
+- **Esforço:** 6h.
+- **Relacionado:** P1-26, P1-1, P2-15.
+
+---
+
+## P2-25 — pgShim não registra NENHUM type parser: `numeric` volta string, e `quantidadeExec` tem dois tipos no mesmo jsonb
+
+- **Categoria:** Dados / Backend
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido: `grep -rn setTypeParser` = 0.
+- **Evidência:** `services/pgShim.js:32` importa só `Pool`. Logo: DATE (1082) →
+  `Date` (é o P2-17), TIMESTAMPTZ (1184) → `Date` (ok), **NUMERIC (1700) →
+  string**, **BIGINT (20) → string**.
+- **Onde já morde:** `note_subcategorias.quantidade` é numeric →
+  `db/subcategoriasQueries.js:70` devolve string → `cronService.js:366` repassa →
+  `services/notaProcessor.js:93` grava `quantidadeExec` como **string** no
+  `note_details.payload`, enquanto o branch de fallback
+  (`services/classifierService.js:223`, `ativC93.Amount`) grava **número**. O
+  mesmo campo do mesmo jsonb tem dois tipos conforme o caminho.
+- **Onde NÃO morde (verificado):** todas as agregações envolvem em `Number()`
+  (`db/queries.js:496,533,569,838,983,1116`; `dataWriter.js:528`;
+  `cronService.js:864`); `count` é integer; `osrm_cache` é integer.
+- **Ação:** ⬜ registrar os parsers uma vez no pgShim (`1700 → parseFloat`,
+  `1082 → 'YYYY-MM-DD'`). O de DATE elimina de uma vez a família de bugs
+  Date×string do P1-15/P2-12 e ~10 `_ymdDate()`/`Number()` defensivos.
+  **Rodar `node --test` antes** — há testes que assumem o `Date` atual.
+- **Esforço:** 2h + revisão da suíte.
+- **Relacionado:** P2-17, P1-15, P2-12.
+
+---
+
+## P2-26 — `snapshots` é a única tabela sem chave de idempotência (INSERT puro)
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `db/schema-atual.sql:541-542` — PK é a sequência;
+  `services/dataWriter.js:57` usa `.insert(rows)`, não upsert. Nenhum UNIQUE em
+  `(date, team_name, captured_at)`.
+- **Impacto:** contraria o "Idempotência sempre" do CLAUDE.md. Duas execuções no
+  mesmo ciclo (restart do PM2 + snapshot de boot, backfill manual, ou o P2-23)
+  duplicam linhas numa tabela **retida para sempre**. Não infla totais (tudo
+  dedupa por UUID), mas pode inverter o "primeiro/último snapshot" de
+  `team_daily_carteira` (`dataWriter.js:989-1004`) quando dois compartilham
+  `captured_at`.
+- **Ação:** ⬜ `UNIQUE (date, team_name, captured_at)` + `.upsert()`.
+- **Esforço:** 2h (checar duplicatas existentes antes de criar o UNIQUE).
+- **Relacionado:** P2-23, P3-14.
+
+---
+
+## P2-27 — Nota sem `id` tem três comportamentos incompatíveis no mesmo pipeline
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:**
+  | caminho | linha | comportamento |
+  |---|---|---|
+  | intraday | `services/dataWriter.js:415` | `` `sem-id:${…}:${Math.random()}` `` → **conta** |
+  | consolidação | `services/dataWriter.js:612-613` | `if (id && !e._conc.has(id))` → **descarta** |
+  | subcategorias | `services/dataWriter.js:476` | `if (!n.id) return;` → **descarta** |
+
+  E `normalizarNotaV2` (`wpaService.js:1133`) / `normalizarNotaHist` (`:806`)
+  fazem `id: n.Id || null`, então o caso-limite existe por construção.
+- **Impacto:** a mesma nota aparece no painel ao vivo, desaparece na consolidação
+  e nunca entra na aba de subcategorias — três números. Além disso o
+  `Math.random()` está dentro de função rotulada `FUNÇÃO PURA (testável)`
+  (`dataWriter.js:368`), o que a torna não-determinística.
+- **Ação:** ⬜ um comportamento único (descartar + `log.warn` com contador é o
+  mais defensável) travado em teste.
+- **Esforço:** 2h.
+- **Relacionado:** P0-3, P2-2.
+
+---
+
+## P2-28 — `collaborators` vem sempre vazio ao vivo: o ranking de rejeições por colaborador não tem linhas
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Aprofundamento do P2-14, com impacto
+  concreto identificado.
+- **Evidência:** `services/wpaService.js:1398` monta
+  `collaborators: (s.Collaborators || []).map(normalizarColaborador)` a partir de
+  **`Sessions/all/date`**, que o nosso próprio código (`wpaService.js:778-779`) e
+  o cookbook documentam como devolvendo `Collaborators` **vazio**. O backfill
+  histórico faz certo: `getTeamsByDate` chama `getSessionDetail(sid)` por sessão
+  (`wpaService.js:828, 837`) — o caminho ao vivo não faz.
+- **Impacto verificado no código:** `services/cronService.js:477-482` deriva
+  `collaborator_codes/collaborator_names` de `t.collaborators` para gravar em
+  `note_rejections`; `db/rejectionsQueries.js:167-168` faz `unnest` desses arrays
+  para o ranking de rejeições por colaborador. Com o array vazio, **essa consulta
+  não tem linhas**. O `scripts/backfill-rejections.js:92-98` lê dos snapshots, que
+  vêm do mesmo caminho vazio, então o backfill não corrige.
+  **Não confirmado:** o estado real da tabela em produção (sem acesso ao banco).
+- **Ação:** ⬜ conferir a tabela em produção; ⬜ chamar `getSessionDetail` ao vivo
+  como o backfill já faz (talvez sem precisar do endpoint novo do P2-14);
+  ⬜ se implementar o P2-14, copiar o normalizador dict×lista deles
+  (`_nomes_colaboradores`) — o `teamsstatus/V2` devolve ora dict, ora lista.
+- **Esforço:** diagnóstico 30min · correção 3h.
+- **Relacionado:** P2-14.
+
+---
+
+## P2-29 — Cron `*/45` não é "a cada 45 min", e RUNBOOK + log de boot divergem do cron real
+
+- **Categoria:** Ops / Documentação
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:**
+  - `services/cronService.js:1116` — `cron.schedule('*/45 * * * *', runTokenRefresh)`.
+    No campo de minutos, `*/45` = minutos **0 e 45**: os intervalos reais são
+    45 min e 15 min, alternando. São **48 `/signin` forçados por dia** (cada um
+    ignora token válido — ver P1-29) em vez dos ~32 pretendidos, na conta
+    compartilhada.
+  - `services/cronService.js:1149` — consolidação em `'50 23 * * *'`, mas o log de
+    boot (`:1176`) diz "consolidação 20:30", o cabeçalho do arquivo (`:8`) diz
+    "20:30 BRT" e o `docs/handoff/RUNBOOK.md` repete em **três** lugares
+    (`:227`, `:510`, `:539`).
+  - O mesmo log diz "snapshot 15 min (06–20h)" enquanto o cron é `*/15 5-23`
+    (`:1126`) + madrugada `30 0,2,4` (`:1133`).
+- **Impacto:** incidente às 22h — quem opera pelo RUNBOOK conclui que a
+  consolidação já rodou e investiga o agregado; na verdade ela roda às 23:50,
+  5 min depois do último snapshot das 23:45, e sem lock entre `runConsolidate` e
+  `runSnapshot`.
+- **Ação:** ⬜ definir a intenção do token refresh e escrever o cron explícito;
+  ⬜ corrigir o log de boot e as 3 ocorrências do RUNBOOK; ⬜ dar margem maior
+  entre o último snapshot e a consolidação.
+- **Esforço:** 1h.
+- **Relacionado:** P1-29, P3-4.
+
+---
+
+## P2-30 — Não existe orçamento global de concorrência contra a WPA: as caudas do snapshot ficam fora do lock
+
+- **Categoria:** Ops
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/cronService.js:206` (`runClassifyNewNotes`), `:223`
+  (`runCacheNotaDetails`), `:229` (`runClassifyRejections`), `:235`
+  (`runSyncEscalas`) — todos disparados **sem `await`**, e o `isRunning` é
+  liberado em `:241-243`. Custo dessas caudas: até 30 × `/details/optimized`
+  (50-150 KB cada) em concorrência 4 (`:309`, `:354`); `classificarBatch` em
+  concorrência 10 (`:440`); `runClassifyRejections` em concorrência 4 onde **cada
+  nota custa até 9 requests** (`rejectionService.js:80-92`).
+- **Impacto:** num dia com muitas rejeições DL/LE/RL, a cauda das 07:00 ainda
+  está varrendo 9 endpoints por nota quando o snapshot das 07:15 abre seus ~270
+  fetches e o `runNotasCollect` das 07:05 dispara o `Promise.all` sobre 4 setores.
+  Nenhum desses caminhos conhece os outros — e é a mesma conta que o pipeline
+  Python do outro projeto está martelando.
+- **Ação:** ⬜ semáforo único de saída para a WPA (fila + limite global, ex.: 12
+  em voo) atravessado por `wpaFetch` — é o único ponto por onde tudo passa
+  (`wpaService.js:493`), então é mudança localizada e testável sem staging.
+- **Esforço:** 4h + testes.
+- **Relacionado:** P1-25, P1-31, P2-22, P3-4.
+
+---
+
+## P2-31 — Campos e buckets que existem e não aproveitamos (varredura completa)
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Cada item foi conferido por grep no
+  repo (0 ocorrências, salvo onde indicado).
+- **Lista:**
+  1. **`Checkpoints[].Try`** — `notaProcessor.js:39-56` mapeia 10 campos do
+     checkpoint e **não** o `Try`; lemos só o `Try` de nível de nota (`:134`).
+     Separa 1ª visita de re-visita na trilha GPS → retrabalho e deslocamento
+     improdutivo por nota. É o que torna a "rota do dia" deles interpretável.
+  2. **`SessionBreakReason.Responsible`** (+ `.Text`) — quem autorizou a parada
+     (EDP × equipe). Sem esse campo, "parada longa" é ruído; com ele, dá para
+     excluir a parada determinada pela distribuidora do indicador de
+     improdutividade. Mesmo princípio do P1-26.
+  3. **`LastLocationComunication`** (V2, nível do item) — separa "app comunicou"
+     de "**GPS** comunicou": app travado × equipe sem sinal. Distinto do
+     `LastStatusUpdateWithoutSignal` do P2-17.
+  4. **`Team.LastUpdateWallet`** (em `Sessions/all/date`) — há quanto tempo a
+     carteira da equipe não sincroniza, sem depender de `IsOnline`.
+  5. **`Address`/`Neighborhood`/`City` na lista de notas da sessão** — hoje só
+     lemos do `details/optimized` (fetch caro): `classifierService.js:205`,
+     `notaProcessor.js:105-107`. A regra **RAMAL BT** do indicador C93 (auditado
+     pela EDP) depende de `Address` (`classifierService.js:201-206`,
+     `notaProcessor.js:199-201`); o campo já chega de graça na lista, servindo de
+     **cross-check independente** do C93 e de pré-filtro.
+  6. **`Team.Description`** — descrição legível da equipe; pista de `tipo` quando
+     aparece equipe fora da whitelist.
+  7. **`Assigned[]` do V2** — `wpaService.js:619` documenta o bucket ("notas
+     atribuídas ainda não baixadas") e o único lugar que o toca é uma rota de
+     debug (`routes/index.js:1395`). A coleta real usa só `Concluded[]` +
+     `Downloaded[]` (`:1286-1291`) e ele fica fora do `carteiraInicialCount`
+     (`:983-993`). Bucket existente e não usado — decidir se entra.
+  8. **`Team.SectorId` aninhado — PROBE, possível bug de regional.**
+     `import_wpa_es.py` lê `team.get("SectorId")` em `Sessions/all/date`; nós
+     fazemos `s.SectorId || s.Sector?.Code || sectorId` (`wpaService.js:1251` ao
+     vivo, `:840` no backfill) e **nunca** olhamos `s.Team?.SectorId`. Se o setor
+     vier só dentro de `Team`, nosso valor cai sempre no `|| sectorId` do
+     parâmetro e a **regional de equipe visitante fica errada** — número que vai
+     para a EDP. 1 probe resolve.
+  9. **KB com afirmação provavelmente falsa:** `docs/WPA-EDP-KNOWLEDGE-BASE.md:3306-3307`
+     diz que `Vehicle.Code` vazia em `sessions/all` **"não tem como recuperar"**.
+     Eles leem `Vehicle.Label` do mesmo endpoint; nós lemos `Vehicle?.Code`
+     (`wpaService.js:1396`, `:861`). Corrigir a KB junto com o P2-17 item 3 —
+     senão alguém no futuro confia nela.
+- **Ação:** ⬜ probe dos itens 8 e 9 (1 request cada); ⬜ capturar 1-6 nos
+  normalizadores; ⬜ decidir o 7.
+- **Esforço:** probes 1h · captura 3h · uso no painel depois.
+- **Relacionado:** P2-17, P2-21, P2-15, P1-26.
+
+---
+
 # P3 — Baixa prioridade (higiene, faça se sobrar tempo)
 
 ## P3-1 — Dividir `routes/index.js` por domínio
@@ -2436,3 +3150,123 @@ Depois entra P2. P0-1/P0-2/P1-1(config)/P1-11 dependem de você (VM/org/staging)
 5. Insira na posição correta por severidade (não anexe no fim se for P0).
 6. Renumere se necessário (`P1-N` → mantenha únicos).
 7. Commit com mensagem `docs(backlog): adiciona item P1-N — <título curto>`.
+
+## P3-12 — `_hojeBRT` com `-3h` fixo sobrevive em 5 lugares, apesar do `timeUtil`
+
+- **Categoria:** Backend / Higiene
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/timeUtil.js:5-13` existe **exatamente** para matar o
+  hack, e o comentário lista o motivo ("Brasil pode reativar horário de verão").
+  Mas o `-3h` fixo continua em `services/dataService.js:24` e `:135`,
+  `services/cronService.js:781` e `:885`, e `services/wpaService.js:169` —
+  enquanto `dataWriter.js:13-15` usa `dateBRT()`.
+- **Impacto:** latente. Hoje as duas versões concordam (offset fixo desde 2019).
+  Se o DST voltar, `dataService._hojeBRT()` e o `date` gravado por `saveSnapshot`
+  divergem por uma hora todo dia — snapshot gravado em `date=D` sendo buscado
+  como `D-1`, com efeito direto no `_enrichComEscalaELogonReal` e nos dois
+  `datasParaConsolidar` do cron.
+- **Ação:** ⬜ trocar as 5 ocorrências por `dateBRT()`/`dateBRTMinusDays()`.
+- **Esforço:** 1h + suíte.
+- **Relacionado:** P1-14, P3-9.
+
+---
+
+## P3-13 — O snapshot persiste os campos internos `_*`, incluindo uma cópia da carteira inicial do dia
+
+- **Categoria:** Dados / Ops
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026. Conferido.
+- **Evidência:** `services/dataWriter.js:54` grava `data: t` — o objeto **já
+  enriquecido**, porque `saveSnapshot` é chamado depois dos enrichs
+  (`cronService.js:133` → `:163`). Entre os campos vai
+  `t._carteiraInicialUUIDs`, que é a lista de UUIDs lida do **primeiro** snapshot
+  do dia (`dataService.js:271`).
+- **Impacto:** cada um dos ~96 snapshots diários por equipe carrega essa lista
+  redundante; contribui direto para os ~16 MB/dia citados em `dataWriter.js:919`,
+  numa tabela retida para sempre. Sem efeito em número nenhum.
+- **Ação:** ⬜ remover as chaves que começam com `_` antes do insert.
+- **Esforço:** 30min.
+- **Relacionado:** P2-26, retenção ilimitada de snapshots.
+
+---
+
+## P3-14 — Higiene apontada pela revisão paralela (5 itens pequenos, conferidos)
+
+- **Categoria:** Backend / Dados / Higiene
+- **Status:** pending
+- **Origem:** revisão paralela 20/08/2026.
+- **Lista:**
+  1. **Índice prometido em comentário que não existe.**
+     `services/dataService.js:480` afirma *"índice em (date, team_name,
+     captured_at) torna isso barato"*; os índices reais de `snapshots` são só
+     `(captured_at DESC)` e `(date, team_name)` (`db/schema-atual.sql:747-757`).
+     Os `DISTINCT ON (team_name) … ORDER BY team_name, captured_at`
+     (`dataService.js:232-241`, `:343-361`; `dataWriter.js:989-997`) fazem sort
+     numa tabela retida para sempre. Criar o índice de 3 colunas.
+  2. **`tipoCode: n.Type || '??'` entra na agregação como tipo válido.**
+     `wpaService.js:808` e `:1135` produzem `'??'`; `_aggregateTeamDailyTotals`
+     só barra falsy (`dataWriter.js:398`). Nota sem `Type` gravaria
+     `team_daily_totals.tipo_code = '??'`, criando coluna fantasma na matriz de
+     tipos, e nenhum ponto de leitura filtra o valor. Ocorrência real não
+     observada.
+  3. **Armadilha no `pgShim.upsert`:** `cols` é a UNIÃO das chaves de todas as
+     linhas do lote e ausência vira NULL explícito (`services/pgShim.js:294-297`),
+     incluído no `DO UPDATE SET` (`:310`) → uma linha sem a chave **apaga** o
+     valor existente. Hoje inofensivo (os lotes do dataWriter são homogêneos),
+     mas espera o próximo upsert parcial. Comentário de aviso ou `COALESCE`.
+  4. **`getSummary` reintroduz os 4 setores em paralelo** —
+     `dataService.js:627-628` faz `Promise.all` × `Promise.all`, o padrão que o
+     próprio arquivo proíbe por escrito em `:558-566` (*"com 4 setores em paralelo
+     chegava-se a ~240 fetches simultâneos… notas vinham vazias
+     intermitentemente"*). **Verificado: `/api/summary` não é chamado por nada no
+     front** (0 refs em `public/`), então é armadilha adormecida, não incidente
+     ativo. Serializar ou remover a rota.
+  5. **`catch` que engole erro de dado sem registrar:**
+     `cronService.js:685` (`if (!error) gravadas += …` — falha do upsert de
+     `note_rejections` não é logada nem contada); `cronService.js:363-367`
+     (`} catch {}` no `getSubcategoriasByIds` → cai da classificação
+     autoritativa para a heurística e **persiste** o resultado);
+     `dataService.js:123` e `:151` (`if (error) break;` em duas paginações,
+     documentado como "falha silenciosa" em `:85-86`, sem `log.warn`). Todos
+     viram `log.warn` com motivo.
+- **Esforço:** 3h no conjunto.
+- **Relacionado:** P2-25, P2-26, P3-6.
+
+---
+
+## Nota — o que a revisão paralela de 20/08/2026 checou e encontrou LIMPO
+
+Registrado porque "não achamos nada" também é evidência, e evita re-auditar:
+
+- **`Math.max` entre fontes: não existe.** As 8 ocorrências em `services/`,
+  `db/` e `routes/` são clamps de parâmetro ou threshold de drift. O code smell
+  que o CLAUDE.md proíbe (e que causou o incidente original) está ausente.
+- **Subcategorias × total geral: a regra de rejeição é a mesma.**
+  `upsertSubcatTotals` (`dataWriter.js:470-474`) e `_aggregateTeamDailyTotals`
+  (`:392-396`) montam o mesmo `_rejIds` a partir de `t.notasRejeitadas`, e o
+  P1-16 injeta ali — os dois herdam a regra por construção. A única assimetria é
+  a nota sem `id` (P2-27).
+- **Régua D × D+1: nenhum consumidor divergente novo.** `health-check.js:88`
+  varre `D-DIAS..D-1` (não toca o dia em curso) e o `verify-consolidacao.js`
+  documenta a régua D+1 no cabeçalho.
+- **Carteira inicial degrada com log, não em silêncio.**
+  `_enrichCarteiraInicial` usa `DISTINCT ON … ORDER BY captured_at ASC`, então
+  equipe ausente do primeiro snapshot cai no primeiro em que aparecer, e o
+  console imprime `N/total equipes com primeiro snapshot do dia`.
+- **Formato de data no parâmetro da API está certo.** `toWpaDate`
+  (`wpaService.js:670-673`) produz `M/D/YYYY` — mês primeiro, igual ao
+  `%m/%d/%Y` deles. Sem o bug clássico de "funciona até o dia 12".
+- **Acesso aninhado a dado da EDP é consistente.** A varredura por
+  `.Team|.Session|.Data|.Vehicle|.Sector|.Collaborator` sem `?.` devolveu 2 hits,
+  ambos já guardados por condicional na mesma expressão (`routes/index.js:1287`,
+  `:1326`).
+- **Whitelist é aplicada ANTES de toda soma.** `_onlyOficiais` cobre os ~22
+  pontos de `db/queries.js`; `daily_totals`/`daily_subcat_totals` foram
+  aposentados deliberadamente por isso (`dataWriter.js:354-362`). Nenhum total
+  intermediário exibido inclui equipe fora da whitelist.
+- **Contagem por UUID confirmada** em `bucketMath.js:45-47`,
+  `_aggregateTeamDailyTotals` e `upsertSubcatTotals`. Os furos são só os do
+  P1-27, P1-34 e P2-27.
+
+---

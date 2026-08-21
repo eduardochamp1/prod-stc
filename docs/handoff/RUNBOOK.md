@@ -101,7 +101,7 @@ protege — não trava a conta):
 node -e "require('dotenv').config(); const w=require('./services/wpaService'); w.login({account:'sp'}).then(r=>console.log('>>> LOGIN OK (userId='+r.userId+')')).catch(e=>console.log('>>> FALHOU: '+e.message)).finally(()=>setTimeout(()=>process.exit(0),500));"
 ```
 
-Só depois de `>>> LOGIN OK`, reinicie (o restart também limpa o breaker em memória):
+Só depois de `>>> LOGIN OK`, reinicie:
 
 ```bash
 pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
@@ -111,10 +111,44 @@ pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
 `WPA_ACCOUNTS_DISABLED=sp` no `.env` + restart. Com a backup ativa, SJC segue via
 `sp2`. Reativar = tirar do `.env` + restart.
 
+> ⚠️ **MUDOU EM 21/08/2026 (P1-29): reiniciar NÃO limpa mais o breaker.**
+> Ele agora é persistido em `app_settings.wpa_breaker`, porque o restart zerava a
+> proteção e um crash-loop (`autorestart` + os 161 restarts num dia registrados no
+> `ecosystem.config.js`) queimava os 5 logins da EDP em segundos — o incidente da
+> conta do Ismael acontecia COM o P1-20 no ar. Para liberar antes do prazo, depois
+> de corrigir o `.env`:
+>
+> ```bash
+> node -e 'require("dotenv").config(); require("./db/queries").setSetting("wpa_breaker",{accounts:{},ts:new Date().toISOString()}).then(()=>console.log("breaker limpo no banco")).finally(()=>process.exit(0));'
+> ```
+>
+> E **em seguida reinicie** — limpar o banco não apaga o breaker do processo que
+> já está rodando; o restart zera a memória e a hidratação não encontra mais nada:
+>
+> ```bash
+> pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
+> ```
+>
+> Ver o estado atual sem limpar:
+>
+> ```bash
+> node -e 'require("dotenv").config(); require("./db/queries").getSetting("wpa_breaker").then(r=>console.log(JSON.stringify(r&&r.data,null,2))).finally(()=>process.exit(0));'
+> ```
+
 **Se a conta travou na EDP** ("bloqueado após 5 tentativas, aguarde até HH:MM"): o
 circuit breaker (P1-20) já impede isso daqui pra frente — no máx. 1 tentativa por
-janela. Se acontecer mesmo assim, é só esperar o horário do desbloqueio ou usar a
-backup. NUNCA fique reiniciando pra tentar logar com senha errada — é o que trava.
+janela, e desde o P1-29 isso vale TAMBÉM entre reinícios. Se acontecer mesmo assim,
+é só esperar o horário do desbloqueio ou usar a backup. NUNCA fique reiniciando pra
+tentar logar com senha errada — é o que trava.
+
+**Mensagem de erro nova da EDP:** desde o P1-32 uma mensagem que não casa com
+nossos regexes ("Senha incorreta", "Too many attempts", 429/HTML) também abre o
+breaker — cooldown curto (20 min, `WPA_UNKNOWN_ERROR_COOLDOWN_MIN`) a partir da 2ª
+falha consecutiva. Antes disso, texto desconhecido = breaker nunca abria.
+
+**Timeout:** desde o P1-31 toda chamada à EDP tem timeout de 20s
+(`WPA_HTTP_TIMEOUT_MS`). Se o painel travar num setor específico, não é mais
+promise pendurada — investigue o log.
 
 ### Verificar saúde geral
 

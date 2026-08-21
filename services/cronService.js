@@ -11,7 +11,7 @@
 const cron                    = require('node-cron');
 const { getTeams, getLastSectorReport } = require('./dataService');
 const { collectSnapshot: collectNotas } = require('./notasMonitor');
-const { forceRefresh, isSectorDisabled } = require('./wpaService');
+const { forceRefresh, getToken, isSectorDisabled } = require('./wpaService');
 const { dateBRT, hourBRT }    = require('./timeUtil');
 const log                     = require('./logger').forModule('cron');
 
@@ -104,6 +104,19 @@ async function runTokenRefresh() {
   }
 }
 
+/**
+ * Aquecimento de token no BOOT: usa getToken (respeita cache em memória e no
+ * banco) em vez de forçar /signin. Ver P1-29.
+ */
+async function runTokenWarm() {
+  try {
+    const token = await getToken();
+    log.info('token_warm_ok', { has_token: Boolean(token) });
+  } catch (err) {
+    log.error('token_warm_failed', { msg: err.message });
+  }
+}
+
 // ── NOTAS DEVOLVIDAS (monitor de tratamento backoffice) ─────────────────────
 
 async function runNotasCollect() {
@@ -130,8 +143,12 @@ async function runSnapshot() {
   isRunning   = true;
   isRunningAt = Date.now();
   try {
-    const allTeams = await getTeams();
-    const sectorReport = getLastSectorReport();   // { ok, failed, skipped } por setor
+    // P1-30 (20/08/2026): o report tem que ser o DESTA chamada. Antes lia o
+    // global, que um /api/teams de browser podia sobrescrever durante os
+    // enriches — snapshot gravava saúde verde com setor faltando.
+    const sectorOut = {};
+    const allTeams = await getTeams({}, sectorOut);
+    const sectorReport = sectorOut.report || getLastSectorReport();   // { ok, failed, skipped } por setor
 
     // Separa equipes reais (vindas do WPA) das equipes-fantasma (_ghostFromAcc).
     // Ghosts existem para manter KPIs no frontend e nos totais quando uma equipe
@@ -1176,7 +1193,12 @@ function startCron() {
   console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health/retry-outros 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00, notas-devolvidas xx:05');
 
   // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
-  setTimeout(runTokenRefresh, 2000);
+  // P1-29 (20/08/2026): o boot chamava runTokenRefresh, que usa forceRefresh e
+  // portanto IGNORA o cache em memória E o cache no banco — um /signin fresco
+  // obrigatório a cada reinício. Com autorestart + crash-loop (161 restarts num
+  // dia, ver ecosystem.config.js) isso queimava o orçamento de 5 tentativas da
+  // EDP em segundos. getToken() reaproveita o token válido e só loga se preciso.
+  setTimeout(runTokenWarm, 2000);
 
   // Snapshot imediato ao iniciar (se dentro do horário — usa hora BRT, não UTC)
   const horaBRT = hourBRT();
