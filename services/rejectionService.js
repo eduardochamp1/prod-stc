@@ -44,6 +44,10 @@
  * UMA chamada. Não era "endpoint que não existe": era tipo que nunca foi tentado.
  * Corrigido incluindo VL/SM na tabela (+ cache negativo, ver _noPathForTipo).
  *
+ * CONFIRMADO no mesmo dia: `/api/notes/vl` EXISTE — o backfill trouxe data e
+ * motivo em 20/20 notas VL. Promovido pra KNOWN_PATHS. Detalhe que contraria a
+ * nota de 25/05: path POR TIPO funciona pro VL, então nem tudo é por formulário.
+ *
  * Estratégia pra tipos com endpoint desconhecido:
  *   - Auto-descoberta: tenta uma lista de candidatos e cacheia o primeiro que
  *     retornar 200 com `Data.Rejection`. Cache vive enquanto o processo vive.
@@ -86,6 +90,16 @@ const KNOWN_PATHS = {
   MD: ['md'],
   LN: ['lnrl'],
   SF: ['sfdl', 'sfrl'],
+  // VL confirmado em 21/08/2026: o backfill descobriu `/api/notes/vl` e trouxe
+  // data + motivo em 20/20 notas, em ~1s. Promovido de CANDIDATE pra KNOWN pra
+  // não pagar os 4 FALLBACK_PATHS em 404 na primeira nota VL de cada processo.
+  //
+  // ⚠️ Nuance que contraria a nota de 25/05/2026 logo abaixo: ela concluiu que
+  // "o endpoint é por FORMULÁRIO, não por tipo — por isso 'rl'/'rlrl' deram 404".
+  // Verdade pra RL, mas NÃO é regra geral: `vl` é path POR TIPO e existe. Ou
+  // seja, valem os dois padrões, e manter candidatos por tipo na lista tem
+  // retorno real — foi o que resolveu o VL.
+  VL: ['vl'],
 };
 
 // Pra tipos sem endpoint confirmado, varremos esses candidatos.
@@ -109,8 +123,9 @@ const CANDIDATE_PATHS = {
   // `_rejIndexByNote` cai pro `session_date` (o dia em que o coletor VIU), que
   // com o arrasto entre snapshots pode estar 1 dia à frente do fato e SUPRIMIR
   // produção legítima (backlog P2-32).
-  // Como o endpoint é por FORMULÁRIO e não por tipo (descoberta de 25/05/2026),
-  // FALLBACK_PATHS é exatamente o que fez DL/LE/RL funcionarem.
+  // FALLBACK_PATHS (endpoint por FORMULÁRIO) foi o que resolveu DL/LE/RL. Pro VL,
+  // quem respondeu foi o path POR TIPO `vl` — já promovido a KNOWN_PATHS. Os dois
+  // padrões existem, então a lista mantém as duas famílias de candidato.
   VL: [...FALLBACK_PATHS, 'vl', 'vlrl', 'vldl', 'vistoria'],
   SM: [...FALLBACK_PATHS, 'sm', 'smrl', 'smdl'],
   DL: [...FALLBACK_PATHS, 'dl', 'dlrl', 'dldl', 'desligamento', 'corte'],

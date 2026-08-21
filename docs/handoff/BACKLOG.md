@@ -3064,6 +3064,11 @@ de falha que não aparece em relatório.
   4. ✅ teste de guarda-corpo: todo tipo visto em produção tem de ter entrada em
      `KNOWN_PATHS` ou `CANDIDATE_PATHS` — tipo novo sem mapeamento falha a suíte
      em vez de gravar rejeição vazia em silêncio.
+  4b. ✅ **`/api/notes/vl` CONFIRMADO** (21/08, backfill `--tipo VL --limite 20`):
+     20/20 ganharam `rejection_date` E `motivo_codes`, em ~1s, zero erro.
+     Promovido pra `KNOWN_PATHS`. Nuance registrada no arquivo: `vl` é path POR
+     TIPO, o que contraria a generalização de 25/05 ("é por formulário, não por
+     tipo") — os dois padrões existem e convivem.
   5. ⬜ backfill das 1302 linhas existentes: o retry normal filtra por PRESENÇA na
      tabela (`cronService.js` ~660), então nunca volta nelas.
      `scripts/backfill-rejeicoes-sem-data.js` (novo) faz UPDATE só das que estão
