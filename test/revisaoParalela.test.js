@@ -347,3 +347,32 @@ test('desloc: limit vazio ou ausente vira null (não NaN)', () => {
   assert.equal(a, b);
   assert.ok(!a.includes('null,"limit":NaN') && !a.includes('NaN'));
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// note_details.first_cp_at — coluna indexável pro passo 1 da aba Deslocamento
+// ─────────────────────────────────────────────────────────────────────────────
+test('first_cp_at: extrai o timestamp do primeiro checkpoint em ISO', () => {
+  // Não exportamos a função (é detalhe do write path), então validamos a regra
+  // que a migração e o write path têm de concordar: primeiro checkpoint, ISO,
+  // e null para tudo que o cast do Postgres rejeitaria.
+  const extrair = (payload) => {
+    const cps = payload && payload.checkpoints;
+    if (!Array.isArray(cps) || cps.length === 0) return null;
+    const ts = cps[0] && cps[0].timestamp;
+    if (!ts || typeof ts !== 'string') return null;
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  };
+
+  assert.equal(extrair({ checkpoints: [{ timestamp: '2026-08-15T14:23:45Z' }] }),
+               '2026-08-15T14:23:45.000Z');
+  assert.equal(extrair({ checkpoints: [{ timestamp: '2026-08-15T11:23:45-03:00' }] }),
+               '2026-08-15T14:23:45.000Z');
+  // O formato BR antigo (P1-28) é Invalid Date → null, e o script de migração
+  // reporta essas linhas em "TEM checkpoint mas sem valor" em vez de escondê-las.
+  assert.equal(extrair({ checkpoints: [{ timestamp: '15/08/2026 11:23:45' }] }), null);
+  assert.equal(extrair({ checkpoints: [] }), null);
+  assert.equal(extrair({}), null);
+  assert.equal(extrair(null), null);
+  assert.equal(extrair({ checkpoints: [{ timestamp: null }] }), null);
+});

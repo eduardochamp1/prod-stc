@@ -31,6 +31,11 @@ const { getClient } = require('../services/dbClient');
 const { getRoute }  = require('../services/osrmService');
 const { inRegionalsSql } = require('../services/regionals');
 
+// Usa a coluna indexada `note_details.first_cp_at` em vez da expressão jsonb.
+// Só ligue DEPOIS de scripts/migrar-first-cp-at.js reportar "TEM checkpoint mas
+// sem valor: 0" — antes disso a coluna esconderia notas ainda não preenchidas.
+const USE_FIRST_CP = process.env.DESLOC_USE_FIRST_CP === '1';
+
 // ── helper: extrai deslocamentos de um payload.checkpoints[] ─────────────────
 
 /**
@@ -154,7 +159,17 @@ async function listDeslocamentos(de, ate, opts = {}) {
   //          Cruza em memória.
 
   const params = [de, ate];
-  const wherePeriodo = `
+  // O filtro pela EXPRESSÃO jsonb não é indexável (o cast pra timestamptz não é
+  // IMMUTABLE), então esta variante faz varredura completa de note_details com
+  // detoast do jsonb linha a linha — medido em 4,3s só neste passo (21/08/2026).
+  // A coluna `first_cp_at` + índice resolvem; a troca fica atrás de flag porque,
+  // enquanto o backfill não terminar, usar a coluna ESCONDERIA as notas com
+  // first_cp_at NULL. Ligar só depois que scripts/migrar-first-cp-at.js reportar
+  // "TEM checkpoint mas sem valor: 0".
+  const wherePeriodo = USE_FIRST_CP
+    ? `nd.first_cp_at >= $1::date
+       AND nd.first_cp_at < ($2::date + interval '1 day')`
+    : `
     (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz >= $1::date
     AND (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz < ($2::date + interval '1 day')
   `;
@@ -163,13 +178,18 @@ async function listDeslocamentos(de, ate, opts = {}) {
   // dias mais ANTIGOS (previsível), não dias do meio. Antes era LIMIT 3000 sem
   // ORDER, que truncava por ordem física e fazia dias inteiros sumirem do meio
   // do período (ex: 09/10/11/06 sumiam apesar de terem ~1400 notas).
+  // Com a flag, o `first_ts` também vem da COLUNA: assim o índice serve o filtro
+  // E a ordenação. Se viesse da expressão, o ORDER BY forçaria sort à parte.
+  const selFirstTs = USE_FIRST_CP
+    ? `nd.first_cp_at AS first_ts`
+    : `(nd.payload->'checkpoints'->0->>'timestamp')::timestamptz AS first_ts`;
   const sqlNotas = `
     SELECT
       nd.note_id,
       nd.numero,
       nd.tipo,
       nd.payload->'checkpoints' AS checkpoints,
-      (nd.payload->'checkpoints'->0->>'timestamp')::timestamptz AS first_ts
+      ${selFirstTs}
     FROM note_details nd
     WHERE nd.payload->'checkpoints' IS NOT NULL
       AND jsonb_array_length(nd.payload->'checkpoints') >= 2
@@ -203,6 +223,24 @@ async function listDeslocamentos(de, ate, opts = {}) {
 
   // jsonb_array_elements + extração de id — restringido ao período/filtros
   // pra não escanear 63k linhas. Custo ~ N_snapshots_no_periodo × notas_por_snap.
+  //
+  // 21/08/2026 — DUAS mudanças aqui, na investigação da lentidão da aba:
+  //
+  // (a) FILTRA pelos ids que o passo 1 encontrou. Antes montava o mapa de TODAS
+  //     as notas de TODOS os snapshots do período e filtrava em memória — mas o
+  //     mapa só é consultado via `mapaTeam.get(n.note_id)` para as notas do
+  //     passo 1 (ver o laço mais abaixo). Semanticamente idêntico, e corta
+  //     drasticamente as linhas que entram no sort do DISTINCT ON.
+  //
+  // (b) ORDER BY EXPLÍCITO. O DISTINCT ON estava SEM ORDER BY, e em Postgres isso
+  //     significa que a linha escolhida é ARBITRÁRIA: para uma nota que passou por
+  //     duas equipes no período, qual delas ficava com o deslocamento dependia da
+  //     ordem física da varredura. Agora é definido — vence o snapshot mais
+  //     RECENTE (última equipe a deter a nota no período). É mudança de
+  //     comportamento, de indefinido para definido, e era obrigatória junto com
+  //     (a): mexer no plano mudaria o vencedor de qualquer forma.
+  params2.push(rawNotas.map(n => n.note_id));
+  const phIds = '$' + params2.length;
   const sqlMap = `
     SELECT DISTINCT ON (nota_item->>'id')
       nota_item->>'id'   AS note_id,
@@ -218,6 +256,8 @@ async function listDeslocamentos(de, ate, opts = {}) {
          ) AS nota_item
     WHERE ${snapWhere}
       AND nota_item->>'id' IS NOT NULL
+      AND nota_item->>'id' = ANY(${phIds}::text[])
+    ORDER BY nota_item->>'id', s.captured_at DESC
   `;
   const { rows: mapaRows } = await pool.query(sqlMap, params2);
   const t2 = Date.now();

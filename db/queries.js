@@ -884,6 +884,26 @@ async function getNoteDetailCache(noteId) {
  * Insere/atualiza uma OS no cache. Sempre upsert por note_id (UUID).
  * O payload deve ser o output do notaProcessor SEM fotos (incluirFotos=false).
  */
+/**
+ * Timestamp do PRIMEIRO checkpoint de um payload, como ISO — ou null.
+ *
+ * Existe por causa da lentidão da aba Deslocamento (21/08/2026): a query dela
+ * filtrava por `(payload->'checkpoints'->0->>'timestamp')::timestamptz`, uma
+ * expressão que NÃO pode ser indexada (o cast pra timestamptz não é IMMUTABLE,
+ * porque depende do TimeZone da sessão quando a string não traz offset). Sem
+ * índice, cada consulta varria `note_details` inteiro — até 90 dias de payloads
+ * completos de nota, com detoast do jsonb linha a linha. Guardar o valor numa
+ * COLUNA resolve: aí é um btree comum.
+ */
+function _firstCheckpointAt(payload) {
+  const cps = payload && payload.checkpoints;
+  if (!Array.isArray(cps) || cps.length === 0) return null;
+  const ts = cps[0] && cps[0].timestamp;
+  if (!ts || typeof ts !== 'string') return null;
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 async function setNoteDetailCache(noteId, numero, tipo, sectorId, payload) {
   const sb = getClient();
   const { error } = await sb
@@ -895,6 +915,7 @@ async function setNoteDetailCache(noteId, numero, tipo, sectorId, payload) {
         tipo:       tipo   || null,
         sector_id:  sectorId || null,
         payload,
+        first_cp_at: _firstCheckpointAt(payload),   // ver _firstCheckpointAt (21/08)
         fetched_at: new Date().toISOString(),
       },
       { onConflict: 'note_id' },
