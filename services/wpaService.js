@@ -943,6 +943,36 @@ function _scaleEndFromCatalog(shiftType, catalogo) {
 }
 
 /**
+ * Fim do turno COM a procedência — é o que o fluxo ao vivo usa.
+ *
+ * Existe por uma lição de 22/08/2026: subimos o P2-33 (fim vindo do catálogo em
+ * vez de inferido como início+9h) e não havia como saber, pelo log de produção,
+ * se o valor tinha vindo do catálogo ou do fallback. O `runSyncEscalas` só loga
+ * quando o valor MUDA, e os 5 turnos em uso pelas nossas equipes
+ * (T06/T07/T08/E07/E08) coincidem exatamente com início+9h — então o log ficou
+ * mudo, e o silêncio foi lido como "o casamento ShiftType×codigo está quebrado",
+ * quando estava funcionando. Três rodadas de query em produção pra descobrir.
+ *
+ * Medição do mesmo dia, que dá a dimensão: dos 164 turnos com fim no catálogo,
+ * 64 (39%) NÃO são início+9h — nenhum deles em uso hoje. No dia em que a EDP
+ * mover uma equipe pra C70 (07:00→16:48) ou V4 (07:00→15:20), a diferença passa
+ * a valer, e o log tem que dizer isso em voz alta.
+ *
+ * @returns {{fim: string|null, origem: "catalogo"|"inferido"|"sem-turno", inferido: string|null}}
+ *   `inferido` é sempre o +9h, exposto de propósito: é o que permite ao caller
+ *   logar só quando o catálogo DISCORDA do palpite, sem poluir o resto.
+ */
+function _escalaFimComOrigem(shiftType, catalogo) {
+  if (!shiftType) return { fim: null, origem: 'sem-turno', inferido: null };
+
+  const inferido = _shiftEndFromStart(_parseShiftStart(shiftType), 9);
+  const doCatalogo = _scaleEndFromCatalog(shiftType, catalogo);
+
+  if (doCatalogo) return { fim: doCatalogo, origem: 'catalogo', inferido };
+  return { fim: inferido, origem: 'inferido', inferido };
+}
+
+/**
  * Catálogo de turnos do setor, com cache de 12h (a EDP muda turno raramente).
  * GET /api/scaletypes/matches?sectorId={X}
  */
@@ -1698,6 +1728,11 @@ async function _getTeamsBySectorUncached(sectorId) {
   // default = 6 connections/origin → fila gigante → timeouts → _safeNotes
   // engolia silenciosamente → cards vinham vazios em ALL.
   // Limite de 8: cap em 16 fetches simultâneos por setor.
+  // Procedência do fim de turno por equipe, só pra logar o resumo do setor.
+  // NÃO entra no payload da equipe: snapshot é retido pra sempre, e campo que
+  // ninguém consome custa espaço por anos.
+  const _origensFim = [];
+
   const result = await _mapConcurrent(engelmigSessions, 8, async s => {
     const teamName     = (s.Team?.Name || '').trim();
     const teamId       = s.Team?.Id;
@@ -1853,6 +1888,10 @@ async function _getTeamsBySectorUncached(sectorId) {
       }
     }
 
+    // Fim do turno + procedência (ver _escalaFimComOrigem).
+    const _fimTurno = _escalaFimComOrigem(v2?.ShiftType, escalaCatalogo);
+    _origensFim.push({ teamName, shiftType: v2?.ShiftType || null, ..._fimTurno });
+
     const _statusTag = v2 ? '' : (sessaoEncerrada ? ' [ENCERRADA]' : ' [SEM V2]');
     console.log(
       `[WPA]   ${sectorId}/${teamName}: ` +
@@ -1900,8 +1939,8 @@ async function _getTeamsBySectorUncached(sectorId) {
       // (8h trabalho + 1h refeição) fica como fallback pra turno que não está no
       // catálogo — a premissa antiga de que "o WPA não dá o fim" era falsa, mas o
       // fallback segue útil quando a EDP cria um turno e não o cataloga.
-      escalaFimWPA:    _scaleEndFromCatalog(v2?.ShiftType, escalaCatalogo)
-                       || _shiftEndFromStart(_parseShiftStart(v2?.ShiftType), 9),
+      // A procedência é acumulada em _origensFim e sai no resumo do setor.
+      escalaFimWPA:    _fimTurno.fim,
       // "Hr. Apresentação" da EDP — v2.SessionBegin (nível 1) reflete o checkin
       // REAL do dia atual, diferente de Session.BeginTime/sessions.current que
       // mantém a sessão física aberta (pode ser de dia anterior se a equipe
@@ -1916,6 +1955,25 @@ async function _getTeamsBySectorUncached(sectorId) {
       notasRejeitadas: rejeitadas,
     };
   });
+
+  // Resumo da procedência do fim de turno — 1 linha por setor por ciclo. É a
+  // resposta pra "o catálogo está sendo usado?", que antes exigia ir ao banco.
+  if (_origensFim.length > 0) {
+    const cont = { catalogo: 0, inferido: 0, 'sem-turno': 0 };
+    for (const o of _origensFim) cont[o.origem] = (cont[o.origem] || 0) + 1;
+
+    // Divergência = o catálogo contradisse o +9h. Hoje isso é 0 (os turnos em uso
+    // coincidem); quando deixar de ser, aparece aqui em vez de passar batido.
+    const diverg = _origensFim
+      .filter(o => o.origem === 'catalogo' && o.inferido && o.fim !== o.inferido)
+      .map(o => `${o.teamName} ${o.shiftType} ${o.fim}≠${o.inferido}`);
+
+    console.log(
+      `[WPA] ${sectorId} escala-fim: catalogo=${cont.catalogo} inferido=${cont.inferido}` +
+      ` sem-turno=${cont['sem-turno']}` +
+      (diverg.length > 0 ? ` | ⚠️ catálogo discorda do +9h: ${diverg.join(', ')}` : '')
+    );
+  }
 
   _accRecord(result);
   const augmented = _accApply(result);
@@ -2019,7 +2077,7 @@ module.exports = {
   // Exportado pra teste (P2-14/P2-28) — lista, objeto, dict único ou Data:null.
   _normalizeSessionCollaborators,
   // Exportados pra teste — catálogo de turnos (fim real do turno).
-  _normalizeScaleType, _scaleEndFromCatalog,
+  _normalizeScaleType, _scaleEndFromCatalog, _escalaFimComOrigem,
   // Exportados pra teste — busca de nota pelo número humano.
   _isNoteNumber, _normalizeSearchNote,
 };
