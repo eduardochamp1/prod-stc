@@ -55,9 +55,9 @@
 | P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | pending — investigar (pode simplificar P1-16 e P2-13) |
 | P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos | Dados | pending — **premissa revista 21/08**: DL/LE/RL JÁ têm motivo e data (auto-descoberta funciona); o valor do item é outro |
 | P1-25 | Outro sistema usa a MESMA conta EDP (`clarissa.alves` = nossa `es`) — e faz **relogin por item sem limite**: pode BLOQUEAR o ES sozinho | Ops | pending — **avisar o autor com prioridade** (agravado 20/08) |
-| P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | pending — falso positivo diário |
+| P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | pending — falso positivo diário; **fonte de dado resolvida em 22/08** pelo P2-33 |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
-| P2-14 | `/Sessions/{id}/collaborators` — fecha a lacuna dos Collaborators vazios | Dados | pending |
+| P2-14 | `/Sessions/{id}/collaborators` — fecha a lacuna dos Collaborators vazios | Dados | **done** (87072f5, 22/08) — **por outra rota**: `collaborators/{sessionId}/session`. A premissa deste item estava errada, ver correção abaixo |
 | P2-15 | `/sessions/{id}/break` (intervalos) + horários previstos — base de "previsto × realizado" e da linha do tempo | Dados | pending — habilita prevenção |
 | P2-16 | `filterByExhibitionSector=true` no V2 pode ser a CAUSA do nosso fallback cross-setor (eles não usam e não precisam) | Backend | pending — testar sem o parâmetro |
 | P2-17 | Achados menores: placa no histórico, `SessionEndBy`, sinal, `VehicleCategory`, parser de DATE no pgShim, sentinela `0001-01-01` | Dados | pending |
@@ -93,23 +93,30 @@
 | P1-32 | `_classifyLoginError` é fail-open: mensagem nova da EDP = breaker não abre | Ops/Backend | **done** (21/08) — abre cooldown curto na 2ª falha desconhecida; 5 testes |
 | P1-33 | `/Notes/{id}/completeInterruptions` → motivo de rejeição uniforme (fecha DL/LE/RL) + a chave que falta ao P0-8 | Dados | pending — **maior alavancagem** |
 | P1-34 | `_reconstruirDeslogada` não aplica rejeitada>concluída → card de deslogada conta a nota 2× | Dados/Frontend | **done** (21/08) — 3 testes |
+| P1-35 | Token vencido chega como **500 "Token is invalid!"**, não 401 — `wpaFetch` propagava sem relogin e `_safeNotes` engolia em bucket vazio: token morto virava "equipe sem produção" no snapshot | Dados/Ops | **done** (87072f5, 22/08) — invalida + reloga 1× por request; 11 testes |
+| P1-36 | Cron de token fazia `/signin` INCONDICIONAL às :00 e :45 (32 logins/dia) na conta `es`, compartilhada com o GQO nos MESMOS setores — e cada login invalida o token anterior | Ops | **done** (87072f5, 22/08) — `ensureFreshToken` decide pelo `exp` do JWT; 9 testes |
 | P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | pending |
 | P2-19 | Equipe fora da whitelist descartada ANTES do snapshot, sem log → histórico não-backfillável | Dados | pending |
 | P2-20 | Leitura do histórico depende da whitelist de HOJE → desativar equipe apaga produção já reportada | Dados/Governança | pending |
 | P2-21 | `ConclusionStatus` (pontualidade) + `DesiredConclusionDate` descartados no `normalizarNotaV2` → KPI de SLA a custo zero | Dados/Produto | pending |
 | P2-22 | 429/503 não retentados → bucket vazio silencioso indistinguível de "não teve rejeição" | Ops/Dados | pending |
 | P2-23 | Lock do snapshot: `finally` da execução antiga libera a nova → execuções sobrepostas em cascata | Ops/Backend | pending |
-| P2-24 | Não existe cadastro de escala por dia → o P1-26 não tem onde guardar o dado | Dados/Schema | pending |
+| P2-24 | Não existe cadastro de escala por dia → o P1-26 não tem onde guardar o dado | Dados/Schema | pending — **destravado em 22/08**: `escalas_catalogo` (P2-33) já traz `dias_trabalhados`/`dias_nao_trabalhados` e a janela de intervalo |
 | P2-25 | pgShim sem nenhum `setTypeParser`: numeric volta string; `quantidadeExec` tem 2 tipos no mesmo jsonb | Dados/Backend | pending |
 | P2-26 | `snapshots` é a única tabela sem chave de idempotência (INSERT puro) | Dados | pending |
 | P2-27 | Nota sem `id` tem 3 comportamentos incompatíveis (um deles com `Math.random()` em função "pura") | Dados | pending |
-| P2-28 | `collaborators` vazio ao vivo → ranking de rejeições por colaborador sem linhas (aprofunda P2-14) | Dados | pending |
+| P2-28 | `collaborators` vazio ao vivo → ranking de rejeições por colaborador sem linhas (aprofunda P2-14) | Dados | **done** (87072f5, 22/08) — cascata: sessão → V2 (de graça) → fetch por sessão; 11 testes |
 | P2-29 | `*/45` = minutos 0 e 45 (48 logins/dia); RUNBOOK e log de boot dizem 20:30, cron é 23:50 | Ops/Docs | pending |
 | P2-30 | Sem orçamento global de concorrência contra a WPA: caudas fire-and-forget fora do lock | Ops | pending |
 | P2-31 | Varredura de campos: `Checkpoints[].Try`, `SessionBreakReason.Responsible`, `LastLocationComunication`, `LastUpdateWallet`, `Address` na lista, `Team.Description`, `Assigned[]`, probe do `Team.SectorId`, KB errada sobre placa | Dados | pending |
 | P2-32 | Resíduo do P0-8: **VL (1278 rejeições, 100% sem RejectedAt) nunca era tentado** — tipo fora de CANDIDATE_PATHS não faz UMA chamada. Sem RejectedAt o dia vem do arrasto e suprime produção | Dados | **código done** (21/08) — VL/SM mapeados + cache negativo; falta backfill das 1302 linhas |
 | P3-12 | `_hojeBRT` com `-3h` fixo sobrevive em 5 lugares apesar do `timeUtil` | Backend | pending (latente) |
 | P3-13 | Snapshot persiste os campos `_*`, incluindo cópia da carteira inicial do dia (~16MB/dia) | Dados/Ops | pending |
+| P2-33 | `scaletypes/matches` não era usado: o fim do turno era INFERIDO como início+9h e esse palpite ia pra `equipes_oficiais.escala_fim` (tabela de negócio) | Dados | **done** (87072f5, 22/08) — fim real da EDP + catálogo em `escalas_catalogo`; 11 testes |
+| P2-34 | Não havia como resolver o NÚMERO humano da nota → UUID; `/wpa/nota` só varria `teams_current` e falhava justo pra nota de auditoria | Dados/Ops | **done** (87072f5, 22/08) — `SearchNotesByNumber` como 2º fallback; 10 testes |
+| P2-35 | `Checkpoints[].Try` vinha de graça no `details/optimized` e era descartado; a tentativa era inferida por "cada novo event=0" | Dados | **done** (87072f5, 22/08) — mapeado; 5 testes |
+| P2-36 | `Sessions/all/date` devolve sessões de OUTRAS datas (os 3 outros projetos deduplicam por `Id`; nós não) — falta medir se são só sessões abertas esquecidas ou ruído | Dados | pending — medição de 1 grep, ver abaixo |
+| P2-37 | Failover ES é conta ÚNICA (`DESG/DESC/DEPT: [es]`): se a `es` trava, 3 regionais param juntas. Medição do GQO (17/08) abre saída | Ops | pending — mitiga o P1-25 sem credencial nova |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
 
 ---
@@ -3601,3 +3608,155 @@ Registrado porque "não achamos nada" também é evidência, e evita re-auditar:
   P1-27, P1-34 e P2-27.
 
 ---
+
+---
+
+## Lote de 22/08/2026 — comparação com os outros três projetos WPA da empresa
+
+Origem: leitura dos mapas de endpoint de três projetos internos que consomem a
+MESMA API WPA da EDP — o GQO, o de São José dos Campos e o legado do ES. Nenhum
+deles é documentação oficial (a EDP não tem API documentada), mas cada um mediu
+coisas que nós não medimos. O que segue foi conferido contra o nosso código antes
+de virar item — e em dois pontos eles nos corrigiram.
+
+### P1-35 — token vencido chega como 500, não como 401
+
+- **Categoria:** Dados/Ops
+- **Status:** **done** (87072f5, 22/08/2026)
+- **Evidência deles:** o mapa do ES legado registra, na seção de
+  particularidades de resposta: `401/403` é o esperado, mas `500` com
+  `{"ExceptionMessage": "Token is invalid! -> Bearer eyJhbG…"}` é *"o que ocorria
+  na maioria dos endpoints de dados"*.
+- **Evidência nossa:** `grep "Token is invalid"` no repo dava **zero** ocorrências.
+  `wpaFetch` documentava por escrito que *"erros legítimos da API (401/404/500 com
+  JSON) são propagados direto sem retry"* — e `_safeNotes` captura a exceção e
+  devolve `[]` com um `console.warn "esvaziando bucket"`.
+- **Impacto:** token morto → 500 → bucket vazio → snapshot grava a equipe sem
+  rejeitadas e sem executadas. **Nada no banco distinguia "falhou" de "não teve".**
+  Mesma classe de falha do timeout curto de 21/08, por outra porta.
+- **Feito:** `_isTokenInvalidBody` reconhece 401 sempre, e 500/403 só com a
+  assinatura medida (403 com HTML continua sendo cold-start do Azure, com retry);
+  `_invalidateToken` descarta o token e o marca como morto — inclusive contra o
+  cache do banco, senão o request seguinte readotava o mesmo token recusado;
+  `wpaFetch` reloga e repete **uma** vez por request.
+- **Testes:** `test/tokenInvalido.test.js` (11).
+- **Relacionado:** P1-36, P1-25.
+
+### P1-36 — o cron de token queimava a conta compartilhada
+
+- **Categoria:** Ops
+- **Status:** **done** (87072f5, 22/08/2026)
+- **Evidência nossa:** `cron.schedule('*/45 * * * *', runTokenRefresh)` dispara às
+  :00 e :45 (32×/dia) e `runTokenRefresh` chamava `forceRefresh()`, que é
+  `login()` — `/signin` incondicional, ignorando o `exp` que nós mesmos
+  decodificamos do JWT. Sem argumento, sempre na conta `es`.
+- **Evidência deles:** o GQO declara `WPA_SETORES_2=DESG,DESC,DEPT` para
+  `clarissa.alves` — a nossa conta `es`, nos nossos três setores — e tem cron
+  próprio de renovação às 09h e 17h mais relogin reativo dentro de `except:` nu.
+  O ES legado **mediu vida de token de 51 horas** (17/08); o GQO afirma "~45 min".
+  As duas medições deles se contradizem, e só nós decodificamos o `exp`.
+- **Hipótese que isso levanta (NÃO confirmada):** se a WPA invalida o token
+  anterior a cada login novo — premissa registrada no nosso próprio código, em
+  `_loginPromises` — os dois sistemas se derrubam mutuamente o dia todo, e o
+  sintoma visível é exatamente o P1-35. Testável: guardar um token, forçar um
+  login novo, e reusar o antigo.
+- **Feito:** `ensureFreshToken` só faz `/signin` dentro da margem de 30 min do
+  `exp` (`WPA_TOKEN_REFRESH_MARGIN_MS`). O cron continua sendo o heartbeat, só
+  ficou barato. `forceRefresh` segue existindo para o `/admin/warm`.
+- **Como medir a vida real do token em produção:**
+  `pm2 logs wpa-monitor --lines 2000 --nostream | grep "Login OK"` — a linha já
+  imprime `exp=`. Se for de fato ~51h, dá pra afrouxar o cron.
+- **Testes:** `test/tokenRefreshPolicy.test.js` (9).
+
+### P2-33 — o fim do turno era um palpite gravado em tabela de negócio
+
+- **Categoria:** Dados
+- **Status:** **done** (87072f5, 22/08/2026)
+- **Evidência nossa:** o comentário em `cronService.runSyncEscalas` afirmava *"só
+  mexe em escala_inicio (o WPA não informa o fim do turno)"* — **errado duas
+  vezes**: o código já gravava `escala_fim`, e o valor gravado vinha de
+  `_shiftEndFromStart(..., 9)`, ou seja início + 9h inferido.
+- **Evidência deles:** os projetos SJC e ES legado usam
+  `GET /api/scaletypes/matches?sectorId={X}`, que devolve por turno: `Code`,
+  `StartTime`, `StartIntervalTime`, `EndIntervalTime`, `EndTime`, `Description`,
+  `WorkDays`, `DaysOff`. Uma chamada por setor, muda quase nunca. `grep scaletypes`
+  no nosso repo: **zero** ocorrências.
+- **Feito:** `getScaleTypes(sectorId)` com cache de 12h; `escalaFimWPA` passa a ser
+  o `EndTime` da EDP, com o +9h só como fallback pra turno não catalogado; o
+  catálogo é espelhado em `escalas_catalogo` (migration 012) por
+  `runSyncEscalaCatalogo`, tolerante à migration não ter rodado.
+- **⚠️ Ação humana:** rodar `supabase/migrations/012_escalas_catalogo.sql` na VM.
+  Sem ela o painel funciona igual (o fim real vem do catálogo em memória), mas a
+  tabela que destrava P1-26 e P2-24 não existe.
+- **Efeito esperado no 1º ciclo após o deploy:** o `sync-escalas` vai logar um
+  lote de `escala_fim` mudando de palpite para valor real. É esperado, e o log já
+  mostra de→para por equipe.
+- **Testes:** `test/escalaCatalogo.test.js` (11).
+- **Relacionado:** P1-26, P2-24, P2-15.
+
+### P2-34 — número humano da nota → UUID
+
+- **Categoria:** Dados/Ops
+- **Status:** **done** (87072f5, 22/08/2026)
+- **Problema:** `details/optimized` e `historic` só aceitam UUID, mas a operação —
+  e a EDP, quando questiona algo em auditoria — cita o **número**. A rota
+  `/api/wpa/nota/:noteId` resolvia número varrendo `teams_current` e logava
+  `codigo "X" não encontrado` justamente para nota que não é do dia corrente.
+- **Feito:** `searchNoteByNumber` (`GET /api/search/SearchNotesByNumber`) como 2º
+  fallback, só depois do caminho barato falhar. Número validado como `^\d{4,15}$`
+  antes de entrar numa URL que carrega o nosso Bearer (mesma preocupação do P1-4).
+- **Testes:** `test/noteByNumber.test.js` (10).
+
+### P2-14 (correção) — `Sessions/{id}/collaborators` NÃO é por sessão
+
+Este item, e a nossa `REVISAO-SCRIPTS-WPA-2026-08-14.md` §2.6, afirmavam que o
+endpoint é "de sessão" e que passar id de nota era o bug do outro time. **Duas
+fontes independentes dizem o contrário, e uma delas mediu:** o mapa do ES registra
+*"o parâmetro é o id do serviço, não o da sessão, apesar do `/Sessions/` no
+caminho; com id de sessão a resposta vinha `Data: null`, sem erro HTTP"*, e o GQO
+diz o mesmo. A nossa afirmação nunca foi medida.
+
+Nada foi "corrigido" com base nela — o P2-14 foi fechado por **outra rota**:
+`GET /api/collaborators/{sessionId}/session`, que é indexada por sessionId e
+rodou em produção no projeto SJC por anos. Se alguém for reabrir o endpoint
+original, o modo de falha é `Data: null` com HTTP 200, que passa por qualquer
+normalizador desatento.
+
+### P2-36 — `Sessions/all/date` devolve sessões de outras datas
+
+- **Categoria:** Dados
+- **Status:** pending — é medição, não correção
+- **Evidência deles:** os **três** projetos documentam que a resposta inclui
+  sessões de datas além da pedida, e todos deduplicam por `Id`. O GQO quantifica:
+  janela de 15 dias reprocessava a mesma sessão ~16×.
+- **Evidência nossa:** `getSessionsByDate` não deduplica, e o fluxo ao vivo decide
+  **de propósito** não cortar por data (*"sessões abertas de dias anteriores devem
+  aparecer"*). A premissa é boa, mas o filtro não checa `EndTime === null`: sessão
+  **encerrada** de outro dia entra junto.
+- **Por que não mexi:** não sei se são 2 sessões esquecidas ou ruído em volume, e
+  o nosso código já loga o número. Mudar o filtro no escuro pode remover sessão
+  legítima do card.
+- **Como medir:**
+  `pm2 logs wpa-monitor --lines 3000 --nostream | grep "de dias anteriores"`
+- **Se o volume for alto:** filtrar as encerradas de outras datas e deduplicar por
+  `Id` no `getSessionsByDate` (o backfill já se salva em parte, porque estampa a
+  data a partir de `s.BeginTime`).
+
+### P2-37 — failover do ES: hoje é conta única
+
+- **Categoria:** Ops
+- **Status:** pending
+- **Evidência nossa:** `SECTOR_ACCOUNT_CHAIN` é
+  `DESG: [es], DESC: [es], DEPT: [es], DSSJ: [sp, sp2]`. Se a `es` trava — e o
+  P1-25 diz que outro sistema pode travá-la sozinho — **três regionais param
+  juntas**, sem backup.
+- **Evidência deles que abre a saída:** o GQO mediu em 17/08 que as duas contas
+  (`clarissa.alves` e `ismael.borges`) veem os **mesmos** 4 setores e as mesmas
+  equipes, e devolvem resultado **idêntico** em `details/optimized`,
+  `notes/executed`, `notes/rejected`, `break`, `historic` e
+  `completeInterruptions` — *"nenhuma assimetria de permissão foi reproduzida"*.
+- **Ação:** ⬜ confirmar com 1 probe que a conta `sp` responde para `DESG`;
+  ⬜ se sim, estender a cadeia do ES com `sp2` como último recurso. O circuit
+  breaker (P1-20) já garante no máximo 1 tentativa por janela, então a backup não
+  trava "por nossa causa".
+- **Relacionado:** P1-25, P1-22.
