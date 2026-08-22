@@ -11,7 +11,7 @@
 const cron                    = require('node-cron');
 const { getTeams, getLastSectorReport } = require('./dataService');
 const { collectSnapshot: collectNotas } = require('./notasMonitor');
-const { forceRefresh, getToken, isSectorDisabled } = require('./wpaService');
+const { ensureFreshToken, getToken, isSectorDisabled } = require('./wpaService');
 const { dateBRT, hourBRT }    = require('./timeUtil');
 const log                     = require('./logger').forModule('cron');
 
@@ -92,13 +92,20 @@ function _classifySnapshotOutcome(teamsCount, report) {
 
 // ── RENOVAÇÃO DE TOKEN ────────────────────────────────────────────────────────
 
+// 22/08/2026: era forceRefresh() — /signin INCONDICIONAL a cada disparo, ou seja
+// 32 logins/dia na conta `es`, que o projeto GQO usa nos MESMOS setores
+// DESG/DESC/DEPT (P1-25). Como a WPA invalida o token anterior a cada login novo,
+// os dois sistemas se derrubavam mutuamente, e o token morto voltava como 500
+// "Token is invalid!" que o _safeNotes engolia em bucket vazio. Agora o `exp` do
+// JWT decide: ensureFreshToken só loga dentro da margem de 30 min. O cron
+// continua sendo o heartbeat — só ficou barato.
 async function runTokenRefresh() {
   try {
-    const result = await forceRefresh();
-    const exp = result?.token
-      ? new Date(JSON.parse(Buffer.from(result.token.split('.')[1], 'base64').toString()).exp * 1000).toISOString()
-      : null;
-    log.info('token_refreshed', { exp });
+    const r = await ensureFreshToken();
+    log.info(r.refreshed ? 'token_refreshed' : 'token_ainda_valido', {
+      exp: r.expireAt ? new Date(r.expireAt).toISOString() : null,
+      account: r.account,
+    });
   } catch (err) {
     log.error('token_refresh_failed', { msg: err.message });
   }
@@ -252,6 +259,13 @@ async function runSnapshot() {
     runSyncEscalas(teams).catch(err =>
       log.error('sync_escalas_failed', { msg: err.message })
     );
+
+    // Persiste o catálogo de turnos da EDP (scaletypes/matches) em
+    // escalas_catalogo. getScaleTypes tem cache de 12h, então na prática isso é
+    // 1 request por setor por meio-dia. Não bloqueia o snapshot.
+    runSyncEscalaCatalogo().catch(err =>
+      log.error('sync_escala_catalogo_failed', { msg: err.message })
+    );
   } catch (err) {
     log.error('snapshot_failed', { msg: err.message });
     _recordSnapshotError(err);   // P1-3: falha visível no /admin/health
@@ -266,8 +280,15 @@ async function runSnapshot() {
 // Aqui comparamos com a escala_inicio salva e atualizamos quando diverge —
 // elimina manutenção manual e mantém o indicador de atraso de logon correto.
 //
-// Só mexe em escala_inicio (o WPA não informa o fim do turno). escala_fim
-// continua editável manualmente via Admin.
+// 22/08/2026 — este comentário dizia "só mexe em escala_inicio (o WPA não
+// informa o fim do turno); escala_fim continua editável manualmente via Admin".
+// Estava errado em duas frentes: o código JÁ gravava escala_fim (com o valor
+// INFERIDO início+9h), e o WPA informa o fim de verdade — em
+// GET /api/scaletypes/matches, endpoint que os outros três projetos da empresa
+// usam e nós não. Agora t.escalaFimWPA vem do catálogo, com o +9h só como
+// fallback pra turno não catalogado. Edição manual via Admin é sobrescrita pelo
+// cron, como já era antes — o que mudou é que o valor gravado deixou de ser um
+// palpite.
 async function runSyncEscalas(teams) {
   if (process.env.DATA_MODE === 'mock') return;
   if (!teams || teams.length === 0) return;
@@ -315,6 +336,77 @@ async function runSyncEscalas(teams) {
     console.log(`[CRON] sync-escalas: ✓ ${ok} escala(s) atualizada(s) — ` +
       updates.slice(0, 8).map(u => `${u.sigla} ${u.de || '∅'}-${u.deFim || '∅'}→${u.para}-${u.paraFim}`).join(', ') +
       (updates.length > 8 ? ` (+${updates.length - 8})` : ''));
+  }
+}
+
+// ── CATÁLOGO DE TURNOS (scaletypes/matches → escalas_catalogo) ────────────────
+// Espelha no banco a definição de turno que a EDP publica por setor: entrada,
+// janela de intervalo, saída, e ciclo de dias trabalhados/folga.
+//
+// Serve a três coisas (22/08/2026): auditar de onde saiu o escala_fim de cada
+// equipe; dar ao P1-26 os dias de folga, que é o que falta pra "equipe não
+// logou" parar de acusar quem está de folga; e dar ao P2-15 o intervalo
+// previsto pra comparar com o realizado.
+//
+// Tolera a migration 012 não ter rodado: loga e segue. O painel não depende
+// desta tabela — o fim do turno já chega pelo catálogo em memória.
+async function runSyncEscalaCatalogo() {
+  if (process.env.DATA_MODE === 'mock') return;
+
+  const { getScaleTypes, isSectorDisabled: setorDesativado } = require('./wpaService');
+  const { getClient } = require('./dbClient');
+  const sb = getClient();
+  if (!sb) return;
+
+  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
+  let gravados = 0;
+  let turnos   = 0;
+
+  for (const sectorId of SETORES) {
+    if (setorDesativado(sectorId)) continue;   // conta desativada — não cutuca (P1-21)
+
+    let catalogo;
+    try {
+      catalogo = await getScaleTypes(sectorId);
+    } catch (err) {
+      log.warn('escala_catalogo_fetch_falhou', { sectorId, msg: err.message });
+      continue;
+    }
+    if (!catalogo || catalogo.length === 0) continue;
+    turnos += catalogo.length;
+
+    const linhas = catalogo.map(e => ({
+      codigo:               e.codigo,
+      sector_id:            sectorId,
+      descricao:            e.descricao,
+      inicio_escala:        e.inicio,
+      inicio_intervalo:     e.intervaloInicio,
+      fim_intervalo:        e.intervaloFim,
+      fim_escala:           e.fim,
+      dias_trabalhados:     e.diasTrabalho,
+      dias_nao_trabalhados: e.diasFolga,
+      updated_at:           new Date().toISOString(),
+    }));
+
+    const { error } = await sb
+      .from('escalas_catalogo')
+      .upsert(linhas, { onConflict: 'codigo,sector_id' });
+
+    if (error) {
+      // Tabela ausente = migration 012 pendente. É aviso, não falha do ciclo.
+      const faltaTabela = /escalas_catalogo|does not exist|relation/i.test(error.message || '');
+      if (faltaTabela) {
+        log.warn('escala_catalogo_sem_tabela', { msg: 'rode supabase/migrations/012_escalas_catalogo.sql' });
+        return;   // não insiste nos outros setores
+      }
+      log.warn('escala_catalogo_upsert_falhou', { sectorId, msg: error.message });
+      continue;
+    }
+    gravados += linhas.length;
+  }
+
+  if (gravados > 0) {
+    log.info('escala_catalogo_ok', { turnos, gravados });
   }
 }
 
@@ -1129,7 +1221,9 @@ function startCron() {
     return;
   }
 
-  // Renovação de token a cada 45 min, 24/7 (garante sessão ativa mesmo fora do horário de snapshot)
+  // Heartbeat de token 24/7. ATENÇÃO: no campo de minutos isso dispara às :00 e
+  // :45 (intervalos alternados de 45 e 15 min), não "a cada 45 min" — ver P2-29.
+  // Desde 22/08/2026 o disparo é barato: só faz /signin dentro da margem do exp.
   tokenJob = cron.schedule('*/45 * * * *', runTokenRefresh, {
     timezone: 'America/Sao_Paulo',
   });
@@ -1312,6 +1406,7 @@ module.exports = {
   runSyncLogoffs,
   runClassifyRejections, runBackfillRejeicoes,
   runSyncEscalas,
+  runSyncEscalaCatalogo,
   // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
   _classifySnapshotOutcome,
 };

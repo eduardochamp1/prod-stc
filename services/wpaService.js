@@ -528,7 +528,7 @@ async function login(opts = {}) {
 async function getToken(accountKey = DEFAULT_ACCOUNT) {
   // 1. Cache em memória válido → usa direto (caso normal, 0 latência adicional)
   const cached = _tokens.get(accountKey);
-  if (cached && Date.now() < cached.expireAt - 60_000) return cached.token;
+  if (cached && !_deadTokens.has(cached.token) && Date.now() < cached.expireAt - 60_000) return cached.token;
 
   // 2. Cache compartilhado (Supabase) — evita login redundante entre containers.
   //    Em Lambdas Vercel cold-start, o token gravado pelo cron rpa1 (que mantém
@@ -537,7 +537,9 @@ async function getToken(accountKey = DEFAULT_ACCOUNT) {
   if (store) {
     try {
       const fromStore = await store.loadToken(accountKey);
-      if (fromStore?.token && Date.now() < fromStore.expiresAt - 60_000) {
+      // !_deadTokens: o cache do banco pode guardar justamente o token que a EDP
+      // acabou de recusar — readotá-lo faz o request seguinte falhar igual.
+      if (fromStore?.token && !_deadTokens.has(fromStore.token) && Date.now() < fromStore.expiresAt - 60_000) {
         _tokens.set(accountKey, { token: fromStore.token, expireAt: fromStore.expiresAt });
         console.log(`[WPA] Token (account=${accountKey}) carregado do cache Supabase — exp=${new Date(fromStore.expiresAt).toISOString()}`);
         return fromStore.token;
@@ -558,7 +560,7 @@ async function getToken(accountKey = DEFAULT_ACCOUNT) {
       if (store) {
         try {
           const fromStore = await store.loadToken(accountKey);
-          if (fromStore?.token && Date.now() < fromStore.expiresAt - 60_000) {
+          if (fromStore?.token && !_deadTokens.has(fromStore.token) && Date.now() < fromStore.expiresAt - 60_000) {
             _tokens.set(accountKey, { token: fromStore.token, expireAt: fromStore.expiresAt });
             console.log(`[WPA] Token (account=${accountKey}) via double-check (outro container ganhou a corrida)`);
             return;
@@ -594,6 +596,91 @@ function getTokenStatus(accountKey = DEFAULT_ACCOUNT) {
   return { valid: true, reason: 'ok', expiresAt: new Date(cached.expireAt).toISOString(), expiresIn: `${secsLeft}s`, account: accountKey };
 }
 
+// ── TOKEN MORTO E POLÍTICA DE RENOVAÇÃO ─────────────────────────────
+//
+// 22/08/2026 — comparação com os outros três projetos da empresa que consomem a
+// mesma API WPA (GQO, SJC e o ES legado) trouxe duas coisas que não estavam aqui:
+//
+// (a) A EDP NÃO sinaliza token vencido só com 401/403. Na maioria dos endpoints
+//     de dados a resposta é **500** com corpo
+//     {"ExceptionMessage": "Token is invalid! -> Bearer eyJhbG..."}.
+//     O nosso wpaFetch propagava "500 com JSON" sem retry e sem relogin, e
+//     _safeNotes engolia a exceção devolvendo bucket vazio: token morto virava
+//     "equipe sem rejeitadas e sem executadas", gravado no snapshot como se fosse
+//     realidade. É a mesma classe de falha do timeout curto de 21/08/2026, por
+//     outra porta — e nada no banco distinguia "falhou" de "não teve".
+//
+// (b) Renovar por relógio queima a conta. O cron de token chamava forceRefresh()
+//     (= /signin incondicional) às :00 e :45, 32 logins/dia, na conta `es`
+//     (clarissa.alves) que o projeto GQO usa para os MESMOS setores DESG/DESC/DEPT
+//     (P1-25). Como a WPA invalida o token anterior ao receber um login novo (ver
+//     _loginPromises abaixo), os dois sistemas se derrubavam mutuamente — e o
+//     sintoma visível era (a). O `exp` do JWT, que já decodificamos no login,
+//     passa a decidir: só reloga dentro da margem.
+const _TOKEN_INVALID_RE = /Token is invalid/i;
+
+// Tokens que a EDP já recusou. Sem isso _invalidateToken limpa a memória e o
+// getToken readota o MESMO token morto do cache do banco no request seguinte.
+const _deadTokens = new Set();
+const _DEAD_TOKENS_MAX = 20;
+
+/** Margem antes do `exp` em que vale relogar. 30 min cobre um ciclo de snapshot. */
+const TOKEN_REFRESH_MARGIN_MS = Number(process.env.WPA_TOKEN_REFRESH_MARGIN_MS) || 30 * 60_000;
+
+/**
+ * A resposta é a EDP dizendo que o token morreu?
+ * 401 sempre; 500 e 403 só com a assinatura medida — 403 com HTML é cold-start do
+ * Azure (tratado antes, com retry), e confundir os dois faria o sistema relogar a
+ * cada hibernação do App Service, queimando a conta compartilhada.
+ */
+function _isTokenInvalidBody(status, text) {
+  if (status === 401) return true;
+  if (status !== 500 && status !== 403) return false;
+  return _TOKEN_INVALID_RE.test(String(text || ''));
+}
+
+async function _isTokenInvalidResponse(res) {
+  if (!res || res.ok) return false;
+  if (res.status === 401) return true;
+  if (res.status !== 500 && res.status !== 403) return false;
+  try {
+    return _isTokenInvalidBody(res.status, await res.clone().text());
+  } catch {
+    return false;   // corpo ilegível: não assume token morto
+  }
+}
+
+/** Descarta o token da conta e o marca como morto (memória + cache do banco). */
+function _invalidateToken(accountKey) {
+  const cached = _tokens.get(accountKey);
+  if (cached?.token) {
+    _deadTokens.add(cached.token);
+    if (_deadTokens.size > _DEAD_TOKENS_MAX) _deadTokens.delete(_deadTokens.values().next().value);
+  }
+  _tokens.delete(accountKey);
+}
+
+/** true se vale gastar um /signin: sem token, exp ilegível, ou dentro da margem. */
+function _needsTokenRefresh(cached, now = Date.now(), marginMs = TOKEN_REFRESH_MARGIN_MS) {
+  if (!cached || !cached.token) return true;
+  const exp = cached.expireAt;
+  if (typeof exp !== 'number' || !Number.isFinite(exp)) return true;
+  return now >= exp - marginMs;
+}
+
+/**
+ * O que o cron de token deve chamar: mantém o token quente SEM /signin
+ * desnecessário. Só toca a rede quando _needsTokenRefresh diz que vale.
+ * @returns {Promise<{refreshed: boolean, expireAt: number|null, account: string}>}
+ */
+async function ensureFreshToken(accountKey = DEFAULT_ACCOUNT) {
+  const cached = _tokens.get(accountKey);
+  if (!_needsTokenRefresh(cached)) {
+    return { refreshed: false, expireAt: cached.expireAt, account: accountKey };
+  }
+  await getToken(accountKey);   // memória → banco → /signin, com single-flight
+  return { refreshed: true, expireAt: _tokens.get(accountKey)?.expireAt ?? null, account: accountKey };
+}
 // ── FETCH HELPER ──────────────────────────────────────────────────────────────
 
 /**
@@ -633,6 +720,8 @@ async function wpaFetch(path, options = {}) {
   // o auth está; só protege contra cold-start ocasional. Total ~9s.
   const BACKOFF_MS = [3000, 6000];
   const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
+
+  let tokenRetried = false;   // relogin por token recusado: no máximo 1 por request
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const token = await getToken(accountKey);
@@ -675,6 +764,21 @@ async function wpaFetch(path, options = {}) {
       continue;
     }
 
+    // Token recusado pela EDP → invalida e tenta de novo UMA vez com token novo.
+    // Sem isso o 500 "Token is invalid!" chegava como exceção ao _safeNotes, que
+    // devolvia bucket vazio, e o snapshot gravava "equipe sem produção".
+    // Checado DEPOIS do cold-start: 403 com HTML é Azure hibernando, não token.
+    if (!tokenRetried && await _isTokenInvalidResponse(res)) {
+      tokenRetried = true;
+      _invalidateToken(accountKey);
+      if (attempt === MAX_ATTEMPTS) {
+        console.warn(`[WPA] wpaFetch ${path} token recusado (HTTP ${res.status}, conta=${accountKey}) na última tentativa — propagando`);
+        return res;
+      }
+      console.warn(`[WPA] wpaFetch ${path} token recusado pela EDP (HTTP ${res.status}, conta=${accountKey}) — relogando e repetindo`);
+      continue;
+    }
+
     return res;
   }
 }
@@ -713,6 +817,157 @@ function _shiftEndFromStart(hhmm, horas = 9) {
   const hh = String(Math.floor(totalMin / 60)).padStart(2, '0');
   const mm = String(totalMin % 60).padStart(2, '0');
   return `${hh}:${mm}`;
+}
+
+// ── BUSCA DE NOTA PELO NÚMERO (search/SearchNotesByNumber) ───────────────────
+//
+// 22/08/2026: `details/optimized` e `historic` só aceitam o UUID da nota, mas a
+// operação — e a EDP, quando questiona algo em auditoria — cita o NÚMERO. Este
+// endpoint é a ponte, e não existia aqui: a rota /api/wpa/nota resolvia número
+// varrendo `teams_current`, e logava "não encontrado" justamente para nota que
+// não é do dia corrente, que é o caso de auditoria.
+//
+// Aqui `Data` é OBJETO, não lista — ao contrário da maioria dos endpoints.
+const _NOTE_NUMBER_RE = /^\d{4,15}$/;
+
+/**
+ * O valor pode ir na query string como número de nota?
+ * Só dígitos: o número entra numa URL que carrega o nosso Bearer, então nada de
+ * `&`, espaço ou `..` — mesma preocupação do P1-4 (SSRF no /wpa/probe).
+ */
+function _isNoteNumber(v) {
+  if (v === null || v === undefined) return false;
+  if (typeof v === 'number') return Number.isInteger(v) && _NOTE_NUMBER_RE.test(String(v));
+  return typeof v === 'string' && _NOTE_NUMBER_RE.test(v.trim());
+}
+
+/** Resposta do SearchNotesByNumber → { id, numero, equipe, tipo } ou null. */
+function _normalizeSearchNote(payload) {
+  let d = payload?.Data;
+  if (Array.isArray(d)) d = d[0];        // se a EDP virar a resposta em lista
+  if (!d || !d.Id) return null;          // sem UUID não serve pra nada
+  const team = d.Team;
+  return {
+    id:     d.Id,
+    numero: d.Number !== null && d.Number !== undefined ? String(d.Number) : null,
+    equipe: (typeof team === 'string' ? team : team?.Name) || null,
+    tipo:   d.Type || null,
+  };
+}
+
+/**
+ * Nota a partir do número humano.
+ * GET /api/search/SearchNotesByNumber?noteNumber={N}
+ * @returns {Promise<{id,numero,equipe,tipo}|null>} null = a WPA não achou.
+ */
+async function searchNoteByNumber(noteNumber) {
+  if (!_isNoteNumber(noteNumber)) throw new Error(`número de nota inválido: "${noteNumber}"`);
+  const n = String(noteNumber).trim();
+  const res = await wpaFetch(`/api/search/SearchNotesByNumber?noteNumber=${encodeURIComponent(n)}`);
+  if (!res.ok) throw new Error(`WPA SearchNotesByNumber ${res.status}`);
+  return _normalizeSearchNote(await res.json());
+}
+
+// ── CATÁLOGO DE TURNOS (scaletypes/matches) ──────────────────────────────────
+//
+// 22/08/2026: o comentário em cronService.runSyncEscalas dizia "o WPA não informa
+// o fim do turno", e por isso _shiftEndFromStart INFERIA fim = início + 9h — valor
+// que o cron gravava em `equipes_oficiais.escala_fim`, tabela de negócio. O WPA
+// informa: é este endpoint, usado pelos outros três projetos da empresa que
+// consomem a mesma API. Uma chamada por setor, muda quase nunca.
+//
+// Além do fim real, ele traz a janela de intervalo prevista
+// (StartIntervalTime/EndIntervalTime) e WorkDays/DaysOff — o que o P1-26 precisa
+// pra distinguir folga de falta, e o P2-15 pra comparar previsto × realizado.
+const _scaleTypesCache = new Map();   // sectorId → { at, list }
+const SCALETYPES_TTL_MS = Number(process.env.WPA_SCALETYPES_TTL_MS) || 12 * 3600_000;
+
+/**
+ * "07:00:00", "2026-08-22T22:00:00" ou "22:00" → "HH:MM". Sentinela de nulo da
+ * EDP (`0001-01-01T00:00:00`) vira null: tratá-la como 00:00 faria o painel
+ * afirmar que o turno acaba à meia-noite.
+ */
+function _hhmmFromWpa(v) {
+  if (v === null || v === undefined) return null;
+  const str = String(v);
+  if (str.startsWith('0001-01-01')) return null;
+  const m = str.match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return `${String(m[1]).padStart(2, '0')}:${m[2]}`;
+}
+
+function _intOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Um item de scaletypes/matches → forma nossa. Sem `Code` não serve pra nada. */
+function _normalizeScaleType(raw) {
+  if (!raw || !raw.Code) return null;
+  return {
+    codigo:          String(raw.Code),
+    descricao:       raw.Description || null,
+    inicio:          _hhmmFromWpa(raw.StartTime),
+    intervaloInicio: _hhmmFromWpa(raw.StartIntervalTime),
+    intervaloFim:    _hhmmFromWpa(raw.EndIntervalTime),
+    fim:             _hhmmFromWpa(raw.EndTime),
+    diasTrabalho:    _intOrNull(raw.WorkDays),
+    diasFolga:       _intOrNull(raw.DaysOff),
+  };
+}
+
+/**
+ * Fim REAL do turno, a partir do `ShiftType` que o teamsstatus/V2 devolve.
+ *
+ * O V2 manda "T07 07:00"; o catálogo pode trazer o código completo ou só o
+ * prefixo ("E22"), então casamos pelos dois. Sem match, ou com entrada sem fim,
+ * devolve null — e o caller cai no +9h inferido, que continua sendo o fallback.
+ */
+function _scaleEndFromCatalog(shiftType, catalogo) {
+  if (!shiftType || !Array.isArray(catalogo) || catalogo.length === 0) return null;
+  const alvo  = String(shiftType).trim().toUpperCase();
+  const curto = alvo.split(/\s+/)[0];
+
+  const porCodigo = new Map();
+  for (const e of catalogo) {
+    if (!e?.codigo) continue;
+    const cod = String(e.codigo).trim().toUpperCase();
+    if (!porCodigo.has(cod)) porCodigo.set(cod, e);
+    const pref = cod.split(/\s+/)[0];
+    if (!porCodigo.has(pref)) porCodigo.set(pref, e);
+  }
+
+  const achado = porCodigo.get(alvo) || porCodigo.get(curto);
+  return achado?.fim || null;
+}
+
+/**
+ * Catálogo de turnos do setor, com cache de 12h (a EDP muda turno raramente).
+ * GET /api/scaletypes/matches?sectorId={X}
+ */
+async function getScaleTypes(sectorId) {
+  const hit = _scaleTypesCache.get(sectorId);
+  if (hit && Date.now() - hit.at < SCALETYPES_TTL_MS) return hit.list;
+
+  const res = await wpaFetch(`/api/scaletypes/matches?sectorId=${encodeURIComponent(sectorId)}`);
+  if (!res.ok) throw new Error(`WPA scaletypes/matches ${res.status}`);
+  const j = await res.json();
+  const list = (Array.isArray(j?.Data) ? j.Data : []).map(_normalizeScaleType).filter(Boolean);
+
+  _scaleTypesCache.set(sectorId, { at: Date.now(), list });
+  console.log(`[WPA] scaletypes ${sectorId}: ${list.length} turno(s) no catálogo`);
+  return list;
+}
+
+/** Versão que não derruba a coleta: falha aqui só devolve o fim ao +9h inferido. */
+async function _safeScaleTypes(sectorId) {
+  try {
+    return await getScaleTypes(sectorId);
+  } catch (err) {
+    console.warn(`[WPA] scaletypes ${sectorId} falhou: ${err.message} — fim de turno volta a ser inferido (+9h)`);
+    return [];
+  }
 }
 
 /**
@@ -1291,6 +1546,65 @@ function normalizarColaborador(c) {
 }
 
 /**
+ * Normaliza QUALQUER payload de colaboradores da WPA numa lista nossa.
+ *
+ * P2-14 / P2-28 (22/08/2026): o caminho ao vivo lia `Collaborators` de
+ * `Sessions/all/date`, que a EDP devolve VAZIO — e `db/rejectionsQueries.js`
+ * faz `unnest` desses arrays pro ranking de rejeições por colaborador, que por
+ * isso não tinha linhas. Aqui absorvemos as três formas que a API usa:
+ *
+ *   • `Data` como LISTA        → rota `collaborators/{sessionId}/session`
+ *   • `Data` como OBJETO       → sessão única
+ *   • `Data.Collaborators`     → ora LISTA, ora DICT ÚNICO (varia por equipe;
+ *     documentado pelos três outros projetos que consomem esta API), com os
+ *     campos ora planos (`Name`/`Code`, shape do teamsstatus/V2), ora
+ *     aninhados em `Collaborator.{Name,Code}`.
+ *
+ * `Data: null` vira `[]` de propósito: é o que a WPA responde, SEM erro HTTP,
+ * quando o id não serve pra rota — estourar aqui derrubaria a coleta da equipe.
+ */
+function _normalizeSessionCollaborators(payload) {
+  const data = payload?.Data;
+  if (!data) return [];
+
+  let itens;
+  if (Array.isArray(data)) {
+    itens = data;
+  } else if (data.Collaborators !== undefined && data.Collaborators !== null) {
+    itens = Array.isArray(data.Collaborators) ? data.Collaborators : [data.Collaborators];
+  } else {
+    itens = [data];
+  }
+
+  return itens
+    .filter(Boolean)
+    .map(normalizarColaborador)
+    .filter(c => c.nome !== '—' || c.matricula !== '—');   // linha sem nome E sem matrícula é inútil
+}
+
+/**
+ * Colaboradores de uma sessão — nome e matrícula reais.
+ * GET /api/collaborators/{sessionId}/session
+ *
+ * Por que ESTA rota e não `/api/Sessions/{id}/collaborators`: a nossa própria
+ * documentação afirmava que aquela é "por sessão", mas sem medição — e dois
+ * outros projetos que consomem a mesma API dizem o contrário, com o ES medindo
+ * que, recebendo id de SESSÃO, ela devolve `Data: null` sem erro HTTP (ela
+ * espera o id do SERVIÇO, apesar do nome). Esta aqui é a que rodou em produção
+ * no projeto SJC por anos, indexada por sessionId; traz `Code` e `Name` (mais
+ * `Cpf` e `Phone2`, que não usamos).
+ *
+ * Custo: 1 request por sessão. Por isso o caller só chega aqui quando as duas
+ * fontes de graça (a lista de sessões e o item do V2) vieram vazias.
+ */
+async function getSessionCollaborators(sessionId) {
+  if (!sessionId) return [];
+  const res = await wpaFetch(`/api/collaborators/${encodeURIComponent(sessionId)}/session`);
+  if (!res.ok) throw new Error(`WPA collaborators/session ${res.status}`);
+  return _normalizeSessionCollaborators(await res.json());
+}
+
+/**
  * Combina sessions/current (filtro Engelmig + metadados) + teamsstatus/V2 (notas).
  * Retorna array de equipes normalizado com contagem correta de concluídas.
  *
@@ -1347,9 +1661,10 @@ async function _getTeamsBySectorUncached(sectorId) {
   // Bug exposto em 08/06/2026 às 21h BRT quando carteira inicial do dia caiu
   // pra valor minúsculo enquanto KPIs do dia inteiro ainda apareciam corretos.
   const todayBRT = dateBRT();
-  const [sessions, statusList] = await Promise.all([
+  const [sessions, statusList, escalaCatalogo] = await Promise.all([
     getSessionsByDate(sectorId, todayBRT),
     getV2Cached(sectorId),
+    _safeScaleTypes(sectorId),   // cacheado 12h — 1 request por setor por meio-dia
   ]);
 
   // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current).
@@ -1508,6 +1823,36 @@ async function _getTeamsBySectorUncached(sectorId) {
     const carteiraCount = baixadas.length + executadas.length;
     const allNotas      = [...baixadas, ...executadas, ...concluidas, ...rejeitadas];
 
+    // ── COLABORADORES: cascata de fontes (P2-14 / P2-28, 22/08/2026) ─────────
+    // Antes daqui o card ao vivo lia só `s.Collaborators`, que a EDP devolve
+    // VAZIO em Sessions/all/date — o ranking de rejeições por colaborador ficava
+    // sem linhas, e o backfill não corrigia porque lê dos mesmos snapshots.
+    //
+    // A ordem existe pra não pagar rede à toa:
+    //   1. s.Collaborators        — grátis (na prática vem vazio, mas é de graça)
+    //   2. v2.Session.Collaborators — grátis: o teamsstatus/V2 JÁ está baixado, e
+    //      os três outros projetos que consomem esta API mapeiam este campo. Cobre
+    //      toda equipe com sessão ativa, que é a maioria do ciclo.
+    //   3. collaborators/{sessionId}/session — 1 request, só pro que sobrou
+    //      (tipicamente sessão encerrada, que não aparece no V2).
+    // Sempre embrulhado em { Collaborators } explícito: passar o objeto de sessão
+    // cru faria o normalizador tratá-lo como colaborador único, e um campo Name ou
+    // Code solto da sessão viraria colaborador inventado.
+    let collaborators = _normalizeSessionCollaborators({ Data: { Collaborators: s.Collaborators } });
+    if (collaborators.length === 0 && v2?.Session) {
+      collaborators = _normalizeSessionCollaborators({ Data: { Collaborators: v2.Session.Collaborators } });
+    }
+    if (collaborators.length === 0 && s.Id) {
+      try {
+        collaborators = await getSessionCollaborators(s.Id);
+      } catch (err) {
+        // Falha aqui não pode esvaziar a equipe: colaborador é enriquecimento,
+        // não bucket de produção. Mas logamos — array vazio silencioso foi
+        // exatamente o que escondeu este problema por meses.
+        console.warn(`[WPA] ${sectorId}/${teamName}: collaborators/session falhou: ${err.message}`);
+      }
+    }
+
     const _statusTag = v2 ? '' : (sessaoEncerrada ? ' [ENCERRADA]' : ' [SEM V2]');
     console.log(
       `[WPA]   ${sectorId}/${teamName}: ` +
@@ -1515,7 +1860,7 @@ async function _getTeamsBySectorUncached(sectorId) {
       `${s.EndTime ? `fim=${s.EndTime.slice(0, 16)} ` : ''}` +
       `baixadas=${baixadas.length} exec=${executadas.length} ` +
       `conc=${concluidas.length} rej=${rejeitadas.length} ` +
-      `carteira=${carteiraCount}${_statusTag}`
+      `carteira=${carteiraCount} colab=${collaborators.length}${_statusTag}`
     );
 
     return {
@@ -1532,8 +1877,10 @@ async function _getTeamsBySectorUncached(sectorId) {
       sessionEnd:   s.EndTime || null,
       // Placa: só existe em sessions/current (V2 tem apenas VehicleCategory)
       vehiclePlate: s.Vehicle?.Code || '—',
-      // Colaboradores: sessions/current usa estrutura aninhada Collaborator.{Name,Code}
-      collaborators: (s.Collaborators || []).map(normalizarColaborador),
+      // Colaboradores: resolvidos acima pela cascata (P2-14/P2-28). A estrutura
+      // varia entre aninhada (Collaborator.{Name,Code}) e plana, e entre lista e
+      // dict único — _normalizeSessionCollaborators absorve os quatro casos.
+      collaborators,
       relogins:    0,
       sessions:    [],
       deviceModel: s.Device?.Model || null,
@@ -1549,8 +1896,12 @@ async function _getTeamsBySectorUncached(sectorId) {
       // sincronizar equipes_oficiais.escala_inicio automaticamente.
       shiftType:     v2?.ShiftType     || null,
       escalaInicioWPA: _parseShiftStart(v2?.ShiftType),
-      // Fim inferido: início + 9h (8h trabalho + 1h refeição). WPA não dá fim.
-      escalaFimWPA:    _shiftEndFromStart(_parseShiftStart(v2?.ShiftType), 9),
+      // Fim do turno: o REAL, do catálogo scaletypes/matches (22/08/2026). O +9h
+      // (8h trabalho + 1h refeição) fica como fallback pra turno que não está no
+      // catálogo — a premissa antiga de que "o WPA não dá o fim" era falsa, mas o
+      // fallback segue útil quando a EDP cria um turno e não o cataloga.
+      escalaFimWPA:    _scaleEndFromCatalog(v2?.ShiftType, escalaCatalogo)
+                       || _shiftEndFromStart(_parseShiftStart(v2?.ShiftType), 9),
       // "Hr. Apresentação" da EDP — v2.SessionBegin (nível 1) reflete o checkin
       // REAL do dia atual, diferente de Session.BeginTime/sessions.current que
       // mantém a sessão física aberta (pode ser de dia anterior se a equipe
@@ -1632,11 +1983,15 @@ module.exports = {
   login,
   getToken,
   forceRefresh,
+  ensureFreshToken,   // o que o cron deve usar: só reloga dentro da margem do exp
   getTokenStatus,
   wpaFetch,
   // Endpoints individuais (usados em rotas de debug)
   getSessions,
   getSessionDetail,
+  getSessionCollaborators,   // P2-14/P2-28 — colaboradores reais por sessão
+  getScaleTypes,             // catálogo de turnos da EDP (fim real, intervalo, dias)
+  searchNoteByNumber,        // número humano da nota → UUID (entrada de auditoria)
   getNoteDetail,
   getNotasDevolvidas,
   getTeamsSimple,
@@ -1657,4 +2012,14 @@ module.exports = {
   isAccountDisabled, isSectorDisabled, _disabledAccounts,
   // Failover de conta por setor (backup SJC).
   _accountsForSector, _resolveUsableAccount,
+  // Exportados pra teste (22/08/2026) — token morto (500 "Token is invalid!") e
+  // política de renovação pelo exp em vez de pelo relógio do cron.
+  _isTokenInvalidBody, _isTokenInvalidResponse, _invalidateToken, _needsTokenRefresh,
+  _tokens, _deadTokens,
+  // Exportado pra teste (P2-14/P2-28) — lista, objeto, dict único ou Data:null.
+  _normalizeSessionCollaborators,
+  // Exportados pra teste — catálogo de turnos (fim real do turno).
+  _normalizeScaleType, _scaleEndFromCatalog,
+  // Exportados pra teste — busca de nota pelo número humano.
+  _isNoteNumber, _normalizeSearchNote,
 };

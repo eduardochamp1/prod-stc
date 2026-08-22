@@ -5,7 +5,8 @@
 
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
-const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail } = require('../services/wpaService');
+const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail,
+        searchNoteByNumber, _isNoteNumber } = require('../services/wpaService');
 const { dateBRT } = require('../services/timeUtil');
 const { inRegionals } = require('../services/regionals');
 
@@ -977,6 +978,27 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
       }
     } catch (e) {
       console.warn('[wpa/nota] resolve por codigo falhou:', e.message);
+    }
+  }
+
+  // Segundo fallback (22/08/2026): a nota pode simplesmente não estar em
+  // teams_current — nota antiga, de equipe que não é do setor pedido, ou
+  // justamente a que a EDP questiona em auditoria citando o número. O endpoint
+  // search/SearchNotesByNumber da WPA resolve número → UUID. 1 request, e só
+  // depois de o caminho barato (banco) ter falhado.
+  if (!isUuid && !resolvedFromCodigo && _isNoteNumber(noteId)) {
+    try {
+      const achada = await searchNoteByNumber(noteId);
+      if (achada?.id) {
+        noteId = achada.id;
+        resolvedFromCodigo = true;
+        console.log(`[wpa/nota] resolvido via SearchNotesByNumber: ${noteIdOriginal} → ${noteId}`
+          + ` (equipe ${achada.equipe || '?'})`);
+      } else {
+        console.warn(`[wpa/nota] SearchNotesByNumber não achou a nota "${noteIdOriginal}"`);
+      }
+    } catch (e) {
+      console.warn('[wpa/nota] SearchNotesByNumber falhou:', e.message);
     }
   }
 

@@ -68,6 +68,11 @@ function processarNota(nota, opts = {}) {
       return {
         id:          cp.Id,
         event:       cp.Event,
+        // cp.Try é a TENTATIVA do checkpoint (1..6 medido em 21/08/2026), distinta de
+        // nota.Try em `operacional.tentativa`. Vinha de graça no details/optimized e
+        // era descartada; a análise de deslocamento inferia a tentativa por "cada
+        // novo event=0". 0 é valor legítimo, então só ausência vira null.
+        tentativa:   cp.Try === undefined || cp.Try === null ? null : cp.Try,
         timestamp:   _cpTs(cp),                 // P1-28 — UTC primeiro, BR só como fallback
         mileage:     cp.Mileage,
         latitude:    cp.Latitude,
