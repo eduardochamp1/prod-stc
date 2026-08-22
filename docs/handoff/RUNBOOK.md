@@ -203,6 +203,34 @@ node -e "require('./services/cronService').runSnapshot()"
 Deve levar 30-90 segundos. Ao final, `psql -c "SELECT max(captured_at)..."` deve
 mostrar timestamp novo.
 
+### Aplicar uma migration de banco
+
+```bash
+cd ~/prod-stc
+psql -d wpa_monitor -f supabase/migrations/NNN_nome.sql
+```
+
+Duas armadilhas, as duas pisadas em 22/08/2026 aplicando a 012:
+
+- **Não use `psql "$DATABASE_URL"`.** `DATABASE_URL` vive no `.env`, não no
+  shell da VM. A variável expande vazia, o psql cai no banco default do usuário,
+  e o erro é `FATAL: database "usr_jose" does not exist` — que parece problema de
+  Postgres e é só variável vazia. O `psql -d wpa_monitor` sem credencial funciona
+  porque `usr_jose` autentica por `peer`.
+- **Owner.** Esse psql roda como `usr_jose`, mas o app conecta como `wpa_app`.
+  Tabela criada por `usr_jose` e não reatribuída fica **sem permissão de escrita
+  para o app** — é o mesmo motivo do passo `REASSIGN OWNED BY` no restore.
+  Da 012 em diante a migration faz isso sozinha, no fim do arquivo; ao escrever
+  uma nova, copie o bloco `DO ... IF EXISTS (pg_roles) ... ALTER TABLE OWNER` da
+  012. Guardado por `IF EXISTS` porque em máquina de desenvolvimento a role
+  `wpa_app` não existe e um ALTER solto abortaria a migration inteira.
+
+Conferir que pegou (deve listar as colunas e o Owner `wpa_app`):
+
+```bash
+psql -d wpa_monitor -c "\d escalas_catalogo"
+```
+
 ## Backfills
 
 > ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**

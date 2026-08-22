@@ -54,3 +54,21 @@ COMMENT ON TABLE escalas_catalogo IS
 COMMENT ON COLUMN escalas_catalogo.fim_escala IS
   'Fim real do turno, direto da EDP. Substitui a inferência inicio+9h que era '
   'gravada em equipes_oficiais.escala_fim.';
+
+-- Owner do app.
+--
+-- Na VM o `psql -d wpa_monitor` roda como `usr_jose` (autenticação peer), mas a
+-- aplicação conecta como `wpa_app` (DATABASE_URL no .env). Tabela criada por
+-- usr_jose e não reatribuída fica sem permissão de escrita para o app — foi por
+-- isso que o RUNBOOK ganhou o passo "REASSIGN OWNED BY usr_jose TO wpa_app" no
+-- procedimento de restore. Aqui isso é feito pela própria migration, para não
+-- depender de alguém lembrar (22/08/2026).
+--
+-- Guardado por IF EXISTS: em máquina de desenvolvimento a role `wpa_app` não
+-- existe, e um ALTER TABLE solto abortaria a migration inteira.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wpa_app') THEN
+    EXECUTE 'ALTER TABLE escalas_catalogo OWNER TO wpa_app';
+  END IF;
+END $$;
