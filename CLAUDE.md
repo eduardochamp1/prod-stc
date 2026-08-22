@@ -99,6 +99,7 @@ git push
 | [`docs/handoff/BACKLOG.md`](docs/handoff/BACKLOG.md) | **Fonte de verdade das prioridades.** Ordem: mais crítico primeiro. |
 | [`docs/handoff/ARCHITECTURE.md`](docs/handoff/ARCHITECTURE.md) | Mapa do sistema. Fluxo de dados. Invariantes. Onde vive cada métrica. |
 | [`docs/handoff/RUNBOOK.md`](docs/handoff/RUNBOOK.md) | Como operar em produção. Reinício, rollback, incidentes. |
+| [`docs/handoff/API-WPA-EDP.md`](docs/handoff/API-WPA-EDP.md) | **Todo endpoint da API WPA**: login/token, equipes, sessões, notas, motivo de rejeição. Mais nossos endpoints de backfill/conferência/fechamento, crons e as armadilhas que já causaram incidente. |
 | [`docs/handoff/AUDIT-2026-07-08.md`](docs/handoff/AUDIT-2026-07-08.md) | Auditoria completa (7 dimensões). Evidência congelada no tempo. |
 | `docs/` (fora de `handoff/`) | Knowledge base privado do dev (gitignored). Você não vê. |
 | `.claude/`, `_local/` | Workspace do dev (gitignored). |
