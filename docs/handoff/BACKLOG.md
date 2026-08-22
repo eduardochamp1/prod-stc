@@ -117,6 +117,7 @@
 | P2-35 | `Checkpoints[].Try` vinha de graça no `details/optimized` e era descartado; a tentativa era inferida por "cada novo event=0" | Dados | **done** (87072f5, 22/08) — mapeado; 5 testes |
 | P2-36 | `Sessions/all/date` devolve sessões de OUTRAS datas (os 3 outros projetos deduplicam por `Id`; nós não) — falta medir se são só sessões abertas esquecidas ou ruído | Dados | pending — medição de 1 grep, ver abaixo |
 | P2-37 | Failover ES é conta ÚNICA (`DESG/DESC/DEPT: [es]`): se a `es` trava, 3 regionais param juntas. Medição do GQO (17/08) abre saída | Ops | pending — mitiga o P1-25 sem credencial nova |
+| P2-38 | O breaker é hidratado do banco de forma ASSÍNCRONA, mas o roteamento de conta é SÍNCRONO: no 1º ciclo após cada restart o setor pode ser roteado pra conta quebrada | Ops/Backend | pending — medido em produção 22/08, se autocorrige em ~30s |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
 
 ---
@@ -3760,3 +3761,75 @@ normalizador desatento.
   breaker (P1-20) já garante no máximo 1 tentativa por janela, então a backup não
   trava "por nossa causa".
 - **Relacionado:** P1-25, P1-22.
+
+---
+
+## P2-38 — o breaker hidrata async, mas o roteamento de conta decide sync
+
+- **Categoria:** Ops/Backend
+- **Status:** pending
+- **Origem:** observado nos logs de produção do deploy de 22/08/2026, ao ver o
+  `scaletypes DSSJ` falhar e funcionar 24 segundos depois sem intervenção.
+
+### O que acontece
+
+```
+11:21:17  [WPA] scaletypes DSSJ falhou: WPA login (account=sp) em cooldown
+                [invalid_credential] por ~699min — ... fim de turno volta a ser inferido (+9h)
+11:21:41  [WPA] scaletypes DSSJ: 173 turno(s) no catálogo        <- funcionou, via sp2
+```
+
+### Por que
+
+- `_resolveUsableAccount` (`services/wpaService.js:133`) é **síncrona** e decide
+  pulando conta com breaker aberto via `_breakerRemaining`
+  (`wpaService.js:217`), que lê **só o Map em memória**;
+- `_hydrateBreaker` (`wpaService.js:295`) é **assíncrona** e só é aguardada dentro
+  do `login()` (`wpaService.js:477`). O comentário ali diz "hidrata antes da
+  primeira decisão" — e está certo sobre a decisão de **logar**, mas a decisão de
+  **rotear** já foi tomada antes, com o Map ainda vazio.
+
+Resultado num processo recém-subido: a cadeia `DSSJ: [sp, sp2]` devolve `sp`,
+porque o breaker persistido ainda não chegou na memória. O `login()` então
+hidrata, vê o cooldown e recusa — corretamente, sem gastar tentativa na EDP.
+
+### Impacto
+
+- **Não queima login:** o breaker segura na última linha de defesa. Esse lado
+  está certo e foi confirmado em produção.
+- **Perde o primeiro ciclo do setor:** a requisição que foi roteada pra conta
+  quebrada falha. Em `getSessionsByDate` isso derruba o setor no ciclo (coberto
+  pela resiliência por setor do P1-21); em `notes/*` cai no `_safeNotes`, que
+  devolve **bucket vazio em silêncio** — a variante ruim, porque entra no
+  snapshot como "equipe sem produção".
+- **Dano limitado, não nulo:** `_unionTeamsFromSnapshots` une os snapshots do dia,
+  então um ciclo posterior recupera o dado. O problema é o snapshot único — se o
+  restart cair perto do fechamento, ou se for o primeiro snapshot do dia.
+- **O log engana quem lê:** a mensagem acusa `Usuário ou senha inválidos` da conta
+  `sp` num momento em que o setor está sendo servido pela `sp2`. Quem for
+  investigar vai atrás da credencial errada.
+
+### Caminhos possíveis (não escolhido)
+
+1. `await _hydrateBreaker()` uma vez no ponto de entrada da coleta, antes de
+   qualquer roteamento — o mais direto, e resolve para o snapshot;
+2. tornar `_resolveUsableAccount` assíncrona e aguardar a hidratação — corrige em
+   todo caminho, inclusive requisição HTTP que chega antes do warm-up, mas
+   contamina as assinaturas de quem chama;
+3. hidratar no boot (`runTokenWarm`) — barato, mas não cobre processo que atende
+   requisição antes do warm-up terminar.
+
+A (1) parece o melhor custo/benefício; a (2) é a única que fecha o caso todo.
+
+### Nota sobre a interação com o P1-35
+
+Desde 22/08 o `wpaFetch` invalida o token e reloga 1× quando a EDP responde
+`500 "Token is invalid!"`. Se a conta roteada estiver com breaker aberto, esse
+relogin também é recusado e o resultado cai no mesmo `_safeNotes`. Não é
+regressão — antes o 500 já terminava lá — mas é um segundo caminho chegando no
+mesmo ponto cego, o que reforça o item.
+
+- **Esforço:** 1h para a opção 1 com teste; 3h para a 2.
+- **Rollback:** trivial, é uma linha de `await`.
+- **Relacionado:** P1-20 (breaker), P1-21 (resiliência por setor), P1-22 (backup
+  SJC), P1-29 (breaker persistido), P1-35.
