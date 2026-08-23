@@ -868,6 +868,95 @@ async function searchNoteByNumber(noteNumber) {
   return _normalizeSearchNote(await res.json());
 }
 
+// ── ESCALA CADASTRADA DO MÊS (collaboratorshifts) ────────────────────────────
+//
+// A escala PLANEJADA, em três níveis: equipe → colaboradores → escalas por dia.
+// É o dado que faltava para o P1-26 (o "equipe não logou" do /admin/health acusa
+// quem está de folga) e para o P2-24 (não existia cadastro de escala por dia).
+//
+// Uma chamada por setor e mês. O ano é PARÂMETRO: no legado dos outros projetos
+// ele estava hardcoded (`.../{mes}/2026`), o que vira bug em 01/01/2027.
+
+/** Data da WPA → "YYYY-MM-DD". Sentinela 0001-01-01 e lixo devolvem null. */
+function _dataDaEscala(v) {
+  if (!v) return null;
+  const str = String(v).trim();
+  if (str.startsWith('0001-01-01')) return null;   // sentinela de nulo da EDP
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+/** Aceita lista, objeto único ou nada — o padrão da WPA em Collaborators e Scale. */
+function _comoLista(v) {
+  if (v === null || v === undefined) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+/**
+ * Achata a resposta de collaboratorshifts em linhas de
+ * `{ sectorId, equipe, colaboradorCodigo, colaboradorNome, data, codigoEscala }`.
+ *
+ * Guardamos no grão do COLABORADOR, e não da equipe como o P2-24 propunha: dois
+ * colaboradores da mesma equipe podem ter códigos diferentes no mesmo dia (um em
+ * FOL, outro em T07). No grão da equipe essa informação se perde e a resposta
+ * "a equipe estava escalada?" fica ambígua. A visão de equipe é derivada em
+ * services/escalaDia.classificarDia.
+ *
+ * Linha sem data ou sem código é descartada: não serve para decidir nada, e
+ * gravá-la faria `classificarDia` contar um colaborador que não existe.
+ */
+function _normalizeCollaboratorShifts(payload, sectorId) {
+  const equipes = _comoLista(payload?.Data);
+  const linhas = [];
+
+  for (const eq of equipes) {
+    const equipe = String(eq?.Name || '').trim();
+    if (!equipe) continue;                      // sem nome não dá pra atribuir
+
+    for (const col of _comoLista(eq.Collaborators)) {
+      const codigo = col?.Code != null ? String(col.Code) : null;
+      const nome   = col?.Name || null;
+
+      for (const esc of _comoLista(col?.Scale)) {
+        const data = _dataDaEscala(esc?.Date);
+        const codigoEscala = esc?.ScaleCategoryName || null;
+        if (!data || !codigoEscala) continue;
+
+        linhas.push({
+          sectorId,
+          equipe,
+          colaboradorCodigo: codigo,
+          colaboradorNome:   nome,
+          data,
+          codigoEscala,
+        });
+      }
+    }
+  }
+
+  return linhas;
+}
+
+/**
+ * Escala cadastrada de um setor num mês.
+ * GET /api/collaboratorshifts/{setor}/{mes}/{ano}
+ *
+ * @param {string} sectorId  DESG | DEPT | DESC | DSSJ
+ * @param {number} mes       1..12 (sem zero à esquerda, como a rota espera)
+ * @param {number} ano       ano com 4 dígitos
+ */
+async function getCollaboratorShifts(sectorId, mes, ano) {
+  const m = Number(mes);
+  const a = Number(ano);
+  if (!Number.isInteger(m) || m < 1 || m > 12) throw new Error(`mês inválido: ${mes}`);
+  if (!Number.isInteger(a) || a < 2000 || a > 2100) throw new Error(`ano inválido: ${ano}`);
+
+  const path = `/api/collaboratorshifts/${encodeURIComponent(sectorId)}/${m}/${a}`;
+  const res = await wpaFetch(path, { account: _resolveUsableAccount(sectorId) });
+  if (!res.ok) throw new Error(`WPA collaboratorshifts ${res.status}`);
+  return _normalizeCollaboratorShifts(await res.json(), sectorId);
+}
+
 // ── CATÁLOGO DE TURNOS (scaletypes/matches) ──────────────────────────────────
 //
 // 22/08/2026: o comentário em cronService.runSyncEscalas dizia "o WPA não informa
@@ -2049,6 +2138,7 @@ module.exports = {
   getSessionDetail,
   getSessionCollaborators,   // P2-14/P2-28 — colaboradores reais por sessão
   getScaleTypes,             // catálogo de turnos da EDP (fim real, intervalo, dias)
+  getCollaboratorShifts,     // escala cadastrada do mês (P1-26 / P2-24)
   searchNoteByNumber,        // número humano da nota → UUID (entrada de auditoria)
   getNoteDetail,
   getNotasDevolvidas,
@@ -2078,6 +2168,8 @@ module.exports = {
   _normalizeSessionCollaborators,
   // Exportados pra teste — catálogo de turnos (fim real do turno).
   _normalizeScaleType, _scaleEndFromCatalog, _escalaFimComOrigem,
+  // Exportado pra teste — escala cadastrada do mês (3 níveis, dict×lista).
+  _normalizeCollaboratorShifts,
   // Exportados pra teste — busca de nota pelo número humano.
   _isNoteNumber, _normalizeSearchNote,
 };

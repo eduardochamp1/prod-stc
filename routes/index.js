@@ -1528,21 +1528,62 @@ router.get('/admin/health', async (_req, res) => {
         if (t.regional && byRegional[t.regional] !== undefined) byRegional[t.regional]++;
       }
 
-      // Diff: oficiais ausentes hoje
-      const missing = [];
-      for (const e of oficGua) {
-        if (!loggedSiglas.has(e.sigla.toUpperCase())) {
-          missing.push({ sigla: e.sigla, regional: 'GUA', tipo: e.tipo, placa: e.placa });
-        }
-      }
-      for (const e of oficCac) {
-        if (!loggedSiglas.has(e.sigla.toUpperCase())) {
-          missing.push({ sigla: e.sigla, regional: 'CAC', tipo: e.tipo, placa: e.placa });
-        }
+      // Diff: oficiais ausentes hoje, CRUZADO COM A ESCALA (P1-26, 22/08/2026).
+      //
+      // Antes daqui este bloco iterava a whitelist inteira e marcava como
+      // faltante quem não estava em teams_current — sem olhar escala. Equipe de
+      // folga, férias ou afastamento aparecia como "não logou" TODO DIA, e um
+      // alerta que grita todo dia é um alerta que ninguém lê.
+      //
+      // Direção do erro, deliberada (ver services/escalaDia.js): só sai da lista
+      // quem tem evidência POSITIVA de folga na escala. Sem escala carregada, ou
+      // sem linha para a equipe no dia, ela CONTINUA sendo reportada — suprimir
+      // por falta de dado esconderia ausência real.
+      const { classificarDia, getEscalaDoDia } = require('../services/escalaDia');
+
+      let escalaHoje = null;
+      try {
+        escalaHoje = await getEscalaDoDia(dateBRT());
+      } catch (e) {
+        console.warn('[admin/health] escala do dia indisponível:', e.message);
       }
 
+      const missing  = [];
+      const emFolga  = [];
+
+      const avaliar = (e, regional) => {
+        if (loggedSiglas.has(e.sigla.toUpperCase())) return;
+        const base = { sigla: e.sigla, regional, tipo: e.tipo, placa: e.placa };
+
+        // Sem escala legível: comportamento antigo, e o motivo fica explícito
+        // pra ninguém achar que o cruzamento rodou.
+        if (!escalaHoje) {
+          missing.push({ ...base, escala: 'indisponivel' });
+          return;
+        }
+
+        const cls = classificarDia(escalaHoje.get(e.sigla.toUpperCase()));
+        if (cls.escalada) {
+          missing.push({ ...base, escala: cls.motivo, codigosEscala: cls.codigos });
+        } else {
+          emFolga.push({ ...base, codigosEscala: cls.codigos });
+        }
+      };
+
+      for (const e of oficGua) avaliar(e, 'GUA');
+      for (const e of oficCac) avaliar(e, 'CAC');
+
       out.teams_logged_today  = { total: loggedSiglas.size, byRegional };
-      out.teams_missing_today = { total: missing.length, lista: missing };
+      // `lista` mantém sigla/regional/tipo/placa — o front (public/index.html)
+      // monta a tabela com esses 4 campos. Os campos novos são aditivos.
+      out.teams_missing_today = {
+        total: missing.length,
+        lista: missing,
+        escala_fonte: escalaHoje ? 'escala_dia' : 'indisponivel',
+      };
+      // Quem não logou PORQUE está de folga. Fica visível de propósito: some do
+      // alerta, não do relatório.
+      out.teams_em_folga_today = { total: emFolga.length, lista: emFolga };
 
       // Idade do último snapshot — pega o updated_at mais recente
       if (teams.length > 0) {
@@ -2716,6 +2757,23 @@ router.post('/admin/sync-logoffs', async (req, res) => {
     res.json({ ok: true, ...(result || {}) });
   } catch (err) {
     console.error('[sync-logoffs]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/sync-escala-dia
+// Puxa a escala cadastrada do mês corrente (GET /api/collaboratorshifts) para os
+// 4 setores e grava em `escala_dia`. O cron já faz isso às 05:20; esta rota existe
+// pra popular sem esperar o dia seguinte — sem ela, o cruzamento do P1-26 só passa
+// a valer amanhã. 1 request por setor.
+router.post('/admin/sync-escala-dia', async (req, res) => {
+  try {
+    const c = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const result = await c.runSyncEscalaDia();
+    res.json({ ok: true, ...(result || {}) });
+  } catch (err) {
+    console.error('[sync-escala-dia]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

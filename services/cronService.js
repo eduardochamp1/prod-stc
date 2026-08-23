@@ -410,6 +410,79 @@ async function runSyncEscalaCatalogo() {
   }
 }
 
+// ── ESCALA CADASTRADA POR DIA (collaboratorshifts → escala_dia) ───────────────
+// Traz a escala PLANEJADA do mês corrente para cada setor e grava no grão do
+// colaborador. É o que permite ao /admin/health parar de acusar equipe de folga
+// como "não logou" (P1-26) — ver services/escalaDia.js.
+//
+// Custo: 1 request por setor por execução. Roda 1x/dia de propósito: a conta `es`
+// é compartilhada com outro projeto da empresa (P1-25), e pendurar isso na cauda
+// do snapshot custaria ~384 requests/dia para um dado que muda uma vez ao dia.
+//
+// Tolera a migration 013 não ter rodado: loga e segue, e o health degrada pro
+// comportamento antigo em vez de suprimir equipe no escuro.
+async function runSyncEscalaDia() {
+  if (process.env.DATA_MODE === 'mock') return;
+
+  const { getCollaboratorShifts, isSectorDisabled: setorDesativado } = require('./wpaService');
+  const { getClient } = require('./dbClient');
+  const sb = getClient();
+  if (!sb) return;
+
+  // Mês/ano de HOJE em BRT. Usar o relógio do servidor (UTC) faria a virada do
+  // mês acontecer 3h antes aqui do que na operação.
+  const hoje = dateBRT();                       // 'YYYY-MM-DD'
+  const [ano, mes] = hoje.split('-').map(Number);
+
+  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
+  let linhasTotal = 0;
+  let gravadas    = 0;
+
+  for (const sectorId of SETORES) {
+    if (setorDesativado(sectorId)) continue;     // conta desativada — não cutuca (P1-21)
+
+    let linhas;
+    try {
+      linhas = await getCollaboratorShifts(sectorId, mes, ano);
+    } catch (err) {
+      log.warn('escala_dia_fetch_falhou', { sectorId, mes, ano, msg: err.message });
+      continue;
+    }
+    if (!linhas || linhas.length === 0) continue;
+    linhasTotal += linhas.length;
+
+    const rows = linhas.map(l => ({
+      data:               l.data,
+      sector_id:          l.sectorId,
+      equipe:             l.equipe,
+      colaborador_codigo: l.colaboradorCodigo || '',   // PK não aceita nulo
+      colaborador_nome:   l.colaboradorNome,
+      codigo_escala:      l.codigoEscala,
+      updated_at:         new Date().toISOString(),
+    }));
+
+    const { error } = await sb
+      .from('escala_dia')
+      .upsert(rows, { onConflict: 'data,sector_id,equipe,colaborador_codigo' });
+
+    if (error) {
+      const faltaTabela = /escala_dia|does not exist|relation/i.test(error.message || '');
+      if (faltaTabela) {
+        log.warn('escala_dia_sem_tabela', { msg: 'rode supabase/migrations/013_escala_dia.sql' });
+        return;                                  // não insiste nos outros setores
+      }
+      log.warn('escala_dia_upsert_falhou', { sectorId, msg: error.message });
+      continue;
+    }
+    gravadas += rows.length;
+  }
+
+  if (gravadas > 0) {
+    log.info('escala_dia_ok', { mes, ano, linhas: linhasTotal, gravadas });
+  }
+  return { mes, ano, linhas: linhasTotal, gravadas };
+}
+
 // ── CACHE DE DETALHES DE OS ───────────────────────────────────────────────────
 // Para cada OS concluída/rejeitada que ainda não está em `note_details`, busca
 // o payload completo via WPA (sem fotos) e salva no Supabase. Limita a N por
@@ -1251,6 +1324,12 @@ function startCron() {
   // Sync de logoffs do dia anterior — roda às 03:00 BRT.
   // Usa /api/Sessions/all/date pra pegar sessões finalizadas (que somem do
   // /sessions/current após logoff) e atualiza sessionEnd nos snapshots.
+  // Escala cadastrada do dia, às 05:20 — antes da janela de snapshot (05:30),
+  // pra que o primeiro /admin/health do dia já saiba quem está de folga.
+  const escalaDiaJob = cron.schedule('20 5 * * *', () => runSyncEscalaDia(), {
+    timezone: 'America/Sao_Paulo',
+  });
+
   const syncLogoffsJob = cron.schedule('0 3 * * *', () => runSyncLogoffs(), {
     timezone: 'America/Sao_Paulo',
   });
@@ -1407,6 +1486,7 @@ module.exports = {
   runClassifyRejections, runBackfillRejeicoes,
   runSyncEscalas,
   runSyncEscalaCatalogo,
+  runSyncEscalaDia,
   // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
   _classifySnapshotOutcome,
 };
