@@ -52,13 +52,13 @@
 | P1-20 | Login WPA sem circuit breaker → retry em credencial inválida TRAVA a conta na EDP (incidente 13/08 18h) | Ops/Backend | **código done** (13/08) — breaker por conta + 13 testes; senha do `.env` é ação humana |
 | P1-21 | Snapshot era tudo-ou-nada entre contas: uma conta fora derrubava GUA/CAC e travava `snapshot_last_ok` | Ops/Backend | **código done** (14/08) — coleta resiliente por setor + saúde por conta ativa; 5 testes |
 | P1-22 | Conta de backup pra SJC (failover): backup só entra quando a primária cai; nunca trava por nossa causa | Ops/Backend | **done** (14/08) — cadeia [sp, sp2]; credencial `sp2` (Luan) no ar, SJC coletando pela backup (teams 64→122); RUNBOOK atualizado |
-| P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | pending — investigar (pode simplificar P1-16 e P2-13) |
-| P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos | Dados | pending — **premissa revista 21/08**: DL/LE/RL JÁ têm motivo e data (auto-descoberta funciona); o valor do item é outro |
+| P1-23 | `/Notes/{id}/historic` da WPA dá a JANELA DE POSSE da nota por equipe — hoje inferimos isso | Dados | **leitura done** (7c47055, 22/08) + `scripts/diag-nota-posse.js`; virar fonte de verdade segue **pending** — o item exige medir e validar no portal antes |
+| P1-24 | `Interruptions[]` já vem no `details/optimized` que JÁ cacheamos — e ignoramos | Dados | **campo exposto** (7c47055, 22/08) + `scripts/diag-interrupcoes-cache.js` (local, custo zero); trocar a fonte do motivo segue **pending** — alimenta a aba Rejeições |
 | P1-25 | Outro sistema usa a MESMA conta EDP (`clarissa.alves` = nossa `es`) — e faz **relogin por item sem limite**: pode BLOQUEAR o ES sozinho | Ops | pending — **avisar o autor com prioridade** (agravado 20/08) |
-| P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | pending — falso positivo diário; **fonte de dado resolvida em 22/08** pelo P2-33 |
+| P1-26 | "Equipe não logou" (`/admin/health`) não cruza com a ESCALA do dia → acusa quem está de folga | Dados/Ops | **done** (098dcfe, 22/08) — cruza com `escala_dia`; quem está de folga vai pra `teams_em_folga_today`; 22 testes |
 | P2-13 | Upsert de dia antigo sobrescreve com visão parcial → subconta ~0,8% | Dados | pending (conservador, dentro do limiar) |
 | P2-14 | `/Sessions/{id}/collaborators` — fecha a lacuna dos Collaborators vazios | Dados | **done** (87072f5, 22/08) — **por outra rota**: `collaborators/{sessionId}/session`. A premissa deste item estava errada, ver correção abaixo |
-| P2-15 | `/sessions/{id}/break` (intervalos) + horários previstos — base de "previsto × realizado" e da linha do tempo | Dados | pending — habilita prevenção |
+| P2-15 | `/sessions/{id}/break` (intervalos) + horários previstos — base de "previsto × realizado" e da linha do tempo | Dados | **itens 1 e 2 done** (56a0b80, 22/08) — `sessao_intervalo` com horário na PK + previsto via P2-33; item 3 (linha do tempo) depende do P1-23 |
 | P2-16 | `filterByExhibitionSector=true` no V2 pode ser a CAUSA do nosso fallback cross-setor (eles não usam e não precisam) | Backend | pending — testar sem o parâmetro |
 | P2-17 | Achados menores: placa no histórico, `SessionEndBy`, sinal, `VehicleCategory`, parser de DATE no pgShim, sentinela `0001-01-01` | Dados | pending |
 | P2-1 | Testes de contrato de rota (login, scope, health) | Qualidade | **done** (22/07) |
@@ -91,7 +91,7 @@
 | P1-30 | `_lastSectorReport` global sobrescrito por request concorrente → saúde verde com setor ausente (furo no P1-21) | Ops/Backend | **done** (21/08) — getTeams(filters, out); 1 teste |
 | P1-31 | Nenhum `fetch` da WPA tem timeout + `_singleFlight` nunca solta a promise pendurada → setor travado até restart | Ops/Backend | **done** (21/08) — WPA_HTTP_TIMEOUT_MS (default 20s) nos dois fetch |
 | P1-32 | `_classifyLoginError` é fail-open: mensagem nova da EDP = breaker não abre | Ops/Backend | **done** (21/08) — abre cooldown curto na 2ª falha desconhecida; 5 testes |
-| P1-33 | `/Notes/{id}/completeInterruptions` → motivo de rejeição uniforme (fecha DL/LE/RL) + a chave que falta ao P0-8 | Dados | pending — **maior alavancagem** |
+| P1-33 | `/Notes/{id}/completeInterruptions` → motivo de rejeição uniforme (fecha DL/LE/RL) + a chave que falta ao P0-8 | Dados | **endpoint done** (7c47055, 22/08); trocar o fallback de 9 caminhos segue **pending** — o item pede 1 probe pro formato do `RejectionReasonId` |
 | P1-34 | `_reconstruirDeslogada` não aplica rejeitada>concluída → card de deslogada conta a nota 2× | Dados/Frontend | **done** (21/08) — 3 testes |
 | P1-35 | Token vencido chega como **500 "Token is invalid!"**, não 401 — `wpaFetch` propagava sem relogin e `_safeNotes` engolia em bucket vazio: token morto virava "equipe sem produção" no snapshot | Dados/Ops | **done** (87072f5, 22/08) — invalida + reloga 1× por request; 11 testes |
 | P1-36 | Cron de token fazia `/signin` INCONDICIONAL às :00 e :45 (32 logins/dia) na conta `es`, compartilhada com o GQO nos MESMOS setores — e cada login invalida o token anterior | Ops | **done** (87072f5, 22/08) — `ensureFreshToken` decide pelo `exp` do JWT; 9 testes |
@@ -101,7 +101,7 @@
 | P2-21 | `ConclusionStatus` (pontualidade) + `DesiredConclusionDate` descartados no `normalizarNotaV2` → KPI de SLA a custo zero | Dados/Produto | pending |
 | P2-22 | 429/503 não retentados → bucket vazio silencioso indistinguível de "não teve rejeição" | Ops/Dados | pending |
 | P2-23 | Lock do snapshot: `finally` da execução antiga libera a nova → execuções sobrepostas em cascata | Ops/Backend | pending |
-| P2-24 | Não existe cadastro de escala por dia → o P1-26 não tem onde guardar o dado | Dados/Schema | pending — **destravado em 22/08**: `escalas_catalogo` (P2-33) já traz `dias_trabalhados`/`dias_nao_trabalhados` e a janela de intervalo |
+| P2-24 | Não existe cadastro de escala por dia → o P1-26 não tem onde guardar o dado | Dados/Schema | **done** (098dcfe, 22/08) — `escala_dia` no grão do COLABORADOR (dois da mesma equipe podem ter códigos diferentes no dia) |
 | P2-25 | pgShim sem nenhum `setTypeParser`: numeric volta string; `quantidadeExec` tem 2 tipos no mesmo jsonb | Dados/Backend | pending |
 | P2-26 | `snapshots` é a única tabela sem chave de idempotência (INSERT puro) | Dados | pending |
 | P2-27 | Nota sem `id` tem 3 comportamentos incompatíveis (um deles com `Math.random()` em função "pura") | Dados | pending |
@@ -115,9 +115,10 @@
 | P2-33 | `scaletypes/matches` não era usado: o fim do turno era INFERIDO como início+9h e esse palpite ia pra `equipes_oficiais.escala_fim` (tabela de negócio) | Dados | **done** (87072f5, 22/08) — fim real da EDP + catálogo em `escalas_catalogo`; 11 testes |
 | P2-34 | Não havia como resolver o NÚMERO humano da nota → UUID; `/wpa/nota` só varria `teams_current` e falhava justo pra nota de auditoria | Dados/Ops | **done** (87072f5, 22/08) — `SearchNotesByNumber` como 2º fallback; 10 testes |
 | P2-35 | `Checkpoints[].Try` vinha de graça no `details/optimized` e era descartado; a tentativa era inferida por "cada novo event=0" | Dados | **done** (87072f5, 22/08) — mapeado; 5 testes |
-| P2-36 | `Sessions/all/date` devolve sessões de OUTRAS datas (os 3 outros projetos deduplicam por `Id`; nós não) — falta medir se são só sessões abertas esquecidas ou ruído | Dados | pending — medição de 1 grep, ver abaixo |
-| P2-37 | Failover ES é conta ÚNICA (`DESG/DESC/DEPT: [es]`): se a `es` trava, 3 regionais param juntas. Medição do GQO (17/08) abre saída | Ops | pending — mitiga o P1-25 sem credencial nova |
-| P2-38 | O breaker é hidratado do banco de forma ASSÍNCRONA, mas o roteamento de conta é SÍNCRONO: no 1º ciclo após cada restart o setor pode ser roteado pra conta quebrada | Ops/Backend | pending — medido em produção 22/08, se autocorrige em ~30s |
+| P2-36 | `Sessions/all/date` devolve sessões de OUTRAS datas (os 3 outros projetos deduplicam por `Id`; nós não) | Dados | **dedup done** (2abf2fb, 22/08); filtrar sessão ENCERRADA de outra data segue **pending** — precisa da medição |
+| P2-37 | Failover ES é conta ÚNICA (`DESG/DESC/DEPT: [es]`): se a `es` trava, 3 regionais param juntas | Ops | **configurável done** (56a0b80, 22/08) — `SECTOR_ACCOUNT_CHAIN_<SETOR>` no `.env`; **ativar** pende de 1 probe, e passa a ser `.env`+restart, não deploy |
+| P2-38 | O breaker é hidratado do banco de forma ASSÍNCRONA, mas o roteamento de conta é SÍNCRONO: no 1º ciclo após cada restart o setor pode ser roteado pra conta quebrada | Ops/Backend | **done** (2abf2fb, 22/08) — `await _hydrateBreaker()` no `wpaFetch`, que cobre também requisição HTTP antes do warm-up |
+| P2-39 | Funções de cron são INVISÍVEIS à suíte: saem cedo quando não há banco, então erro de escopo dentro delas só estoura em produção, na hora agendada | Qualidade | pending — dois casos reais pegos em revisão em 22/08 |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
 
 ---
@@ -3833,3 +3834,34 @@ mesmo ponto cego, o que reforça o item.
 - **Rollback:** trivial, é uma linha de `await`.
 - **Relacionado:** P1-20 (breaker), P1-21 (resiliência por setor), P1-22 (backup
   SJC), P1-29 (breaker persistido), P1-35.
+
+---
+
+## P2-39 — funções de cron são invisíveis à suíte
+
+- **Categoria:** Qualidade
+- **Status:** pending
+- **Origem:** 22/08/2026, ao implementar o `runSyncIntervalos` (P2-15).
+- **O que aconteceu:** duas referências quebradas passaram por `node --check`, por
+  `require()` do módulo e pela suíte inteira (554 testes verdes):
+  `ENGELMIG_COMPANY_ID`, que estava declarada **dentro de outra função**, e
+  `dateBRTMinusDays`, que **não estava importada**. As duas só estourariam em
+  runtime — no cron das 03:10, sem ninguém olhando.
+- **Por que a suíte não pega:** toda função de cron começa com
+  `const sb = getClient(); if (!sb) return;`. Sem `DATABASE_URL` — que é o caso
+  nos testes — ela retorna antes de tocar em qualquer identificador do corpo. O
+  código nunca executa, então ReferenceError nunca acontece.
+- **Por que importa:** é exatamente a classe de erro que a revisão humana perde e
+  o teste deveria pegar. Foram pegos por leitura do diff, não por ferramenta — e
+  na próxima pode não ter leitura.
+- **Caminhos possíveis:**
+  1. um fake mínimo de `getClient()` injetável, para o corpo do cron rodar em
+     teste até o primeiro upsert. Resolve de verdade, custa um ponto de injeção;
+  2. um linter com `no-undef` (ESLint) — pega este caso específico sem tocar em
+     arquitetura, mas o repo não tem linter hoje e adicionar um é decisão sua;
+  3. um teste de fumaça que só `require` cada módulo e chama cada função de cron
+     exportada esperando que não lance ReferenceError — barato, mas não cobre o
+     corpo depois do early return.
+- **A (2) é a de melhor custo/benefício** para este defeito específico.
+- **Esforço:** 1h para o linter · 3h para o fake injetável.
+- **Relacionado:** P0-3 (matemática sem teste), P2-1.
