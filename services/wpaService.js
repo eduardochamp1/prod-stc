@@ -276,8 +276,10 @@ function _clearBreaker(accountKey) {
 //   DELETE FROM app_settings WHERE key = 'wpa_breaker';
 // (ou esperar o `until`). Está no RUNBOOK.
 const BREAKER_SETTING_KEY = 'wpa_breaker';
-let _breakerHydrated = false;
-let _breakerHydrating = null;
+// Estado da hidratação num objeto, e não em dois `let`, por dois motivos:
+// mantém `done` e `promise` juntos, e deixa o teste do P2-38 observar e
+// resetar o estado sem que a produção precise expor um método só pra teste.
+const _breakerHydration = { done: false, promise: null };
 
 /** Grava o mapa inteiro do breaker. Fire-and-forget: erro de banco é ignorado. */
 function _persistBreaker() {
@@ -293,9 +295,9 @@ function _persistBreaker() {
 
 /** Lê o breaker do banco uma única vez por processo. Entradas expiradas são ignoradas. */
 async function _hydrateBreaker() {
-  if (_breakerHydrated) return;
-  if (!_breakerHydrating) {
-    _breakerHydrating = (async () => {
+  if (_breakerHydration.done) return;
+  if (!_breakerHydration.promise) {
+    _breakerHydration.promise = (async () => {
       try {
         const sq = require('../db/queries');
         const row = await sq.getSetting(BREAKER_SETTING_KEY);
@@ -312,10 +314,10 @@ async function _hydrateBreaker() {
             `${new Date(until).toISOString()} — não vou tentar /signin até lá.`);
         }
       } catch (_) { /* sem banco → degrada pro comportamento antigo (memória só) */ }
-      _breakerHydrated = true;
+      _breakerHydration.done = true;
     })();
   }
-  return _breakerHydrating;
+  return _breakerHydration.promise;
 }
 
 // ── CONTA DESATIVADA (kill-switch operacional) ───────────────────────────────
@@ -707,6 +709,15 @@ async function _isAzureColdStartResponse(res) {
  * direto sem retry, pra não esconder problemas reais.
  */
 async function wpaFetch(path, options = {}) {
+  // P2-38 (medido em produção 22/08/2026): hidrata o breaker ANTES de escolher a
+  // conta. _resolveUsableAccount é síncrona e lê só o Map em memória, então num
+  // processo recém-subido ela achava que a conta com breaker persistido estava
+  // boa e roteava pra ela — o login recusava (o breaker segurava, nenhuma
+  // tentativa foi gasta na EDP), mas a requisição morria, e em notes/* isso cai
+  // no _safeNotes e vira bucket vazio silencioso no snapshot.
+  // É memoizado: 1 leitura de banco por processo, depois é um await resolvido.
+  await _hydrateBreaker();
+
   // Resolve qual conta usar pra essa requisição:
   //   1. options.account explícito (chamadas internas sabem qual conta)
   //   2. Inferir do sectorId no path (?sectorId=DSSJ → cadeia [sp, sp2], pega a
@@ -1185,6 +1196,40 @@ function toWpaDate(isoDate) {
 }
 
 /**
+ * Remove sessões repetidas na MESMA resposta, por `Id`, preservando a ordem.
+ *
+ * `Sessions/all/date` devolve sessões de outras datas além da pedida, e pode
+ * repetir a mesma sessão — comportamento documentado pelos três outros projetos
+ * da empresa que consomem esta API, e todos os três deduplicam por `Id`. O GQO
+ * mediu o custo de não deduplicar: numa janela de 15 dias a mesma sessão era
+ * reprocessada ~16 vezes.
+ *
+ * Duplicata aqui custa 2 fetches de nota por repetição (via _safeNotes) e infla
+ * a contagem de relogins da equipe.
+ *
+ * Sessão SEM `Id` é preservada: sem identificador não há como afirmar que são a
+ * mesma sessão, e colapsar apagaria sessão legítima.
+ *
+ * NÃO filtra por data — essa é a outra metade do P2-36, que segue pending: o
+ * fluxo ao vivo mostra sessão ABERTA de dia anterior de propósito (equipe que
+ * esqueceu de encerrar), e ainda não há medição de quanto do que chega é ruído.
+ */
+function _dedupSessionsById(sessions) {
+  if (!Array.isArray(sessions)) return [];
+  const vistos = new Set();
+  const saida = [];
+  for (const s of sessions) {
+    const id = s && s.Id;
+    if (id === null || id === undefined) { saida.push(s); continue; }
+    const chave = `${typeof id}:${id}`;   // 1 e "1" não são a mesma sessão
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    saida.push(s);
+  }
+  return saida;
+}
+
+/**
  * Sessões de um dia específico.
  * POST /api/Sessions/all/date?sectorId={sid}&date=M/D/YYYY
  */
@@ -1196,7 +1241,12 @@ async function getSessionsByDate(sectorId, isoDate) {
   );
   if (!res.ok) throw new Error(`WPA sessions/date ${res.status}`);
   const data = await res.json();
-  return data.Data || [];
+  const brutas = data.Data || [];
+  const unicas = _dedupSessionsById(brutas);
+  if (unicas.length !== brutas.length) {
+    console.log(`[WPA] sessions/date ${sectorId} ${isoDate}: ${brutas.length - unicas.length} sessão(ões) duplicada(s) na resposta — descartadas`);
+  }
+  return unicas;
 }
 
 /**
@@ -2162,6 +2212,10 @@ module.exports = {
   _accountsForSector, _resolveUsableAccount,
   // Exportados pra teste (22/08/2026) — token morto (500 "Token is invalid!") e
   // política de renovação pelo exp em vez de pelo relógio do cron.
+  // Exportado pra teste (P2-38) — hidratação do breaker antes do roteamento.
+  _breakerHydration, _hydrateBreaker,
+  // Exportado pra teste (P2-36) — dedup de sessões repetidas na mesma resposta.
+  _dedupSessionsById,
   _isTokenInvalidBody, _isTokenInvalidResponse, _invalidateToken, _needsTokenRefresh,
   _tokens, _deadTokens,
   // Exportado pra teste (P2-14/P2-28) — lista, objeto, dict único ou Data:null.
