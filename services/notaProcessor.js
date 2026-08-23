@@ -84,6 +84,25 @@ function processarNota(nota, opts = {}) {
       };
     });
 
+  // P1-24 (22/08/2026): `Interruptions[]` já vinha neste payload — que nós
+  // chamamos e cacheamos em `note_details` — e era descartado. O cabeçalho deste
+  // arquivo listava Checkpoints, Equipments, Seals, Materials e Activities e não
+  // mencionava Interruptions: nunca notamos o campo.
+  //
+  // Só EXPOSTO, não usado como fonte: trocar a origem do motivo de rejeição mexe
+  // na aba Rejeições, e o item exige medir antes. O passo 1 dele é justamente uma
+  // consulta local no note_details já cacheado — que este mapeamento habilita.
+  //
+  // `Try` aqui vem sempre 0 (2.058/2.058 medidos em 21/08/2026), ao contrário dos
+  // checkpoints, que usam 1 a 6.
+  const interrupcoes = (nota.Interruptions || [])
+    .filter(i => i && i.Date)
+    .map(i => ({
+      instante:  _normTz(i.Date),
+      tentativa: i.Try === undefined || i.Try === null ? null : i.Try,
+      texto:     i.Notes || null,
+    }));
+
   const equipamentos = (nota.Equipments || []).map(e => ({
     id:          e.Id,
     equipmentId: e.EquipmentId,
@@ -171,6 +190,7 @@ function processarNota(nota, opts = {}) {
       dataCriacao:      nota.CreationDate2 || _normTz(nota.CreationDate),
       statusSurvey:     nota.StatusSurvey  || null,
     },
+    interrupcoes,
     texto:       nota.Text,
     comentarios: nota.Comments,
     checkpoints,

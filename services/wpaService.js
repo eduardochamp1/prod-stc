@@ -879,6 +879,128 @@ async function searchNoteByNumber(noteNumber) {
   return _normalizeSearchNote(await res.json());
 }
 
+// ── POSSE, INTERRUPÇÕES E INTERVALOS ─────────────────────────────────────────
+//
+// Três endpoints que os outros projetos da empresa usam e nós não tínhamos.
+// Aqui só a LEITURA: nenhum deles é fonte de número ainda, e não é omissão —
+// os próprios itens do backlog travam isso em medição. O P1-23 diz "medir a
+// diferença ANTES de mudar qualquer coisa" e "mexe em número reportável à EDP →
+// medir, validar no portal, revisar com o José"; o P1-33 pede 1 probe antes de
+// trocar o fallback de motivo de rejeição.
+
+/** Instante da WPA → ISO com Z. Sentinela 0001-01-01 e vazio viram null. */
+function _instanteWpa(v) {
+  if (!v) return null;
+  const str = String(v).trim();
+  if (str.startsWith('0001-01-01')) return null;   // sentinela de nulo da EDP
+  return _normTzIso(str);
+}
+
+/** Anexa Z em ISO sem marcador de fuso — a EDP manda UTC sem dizer que é UTC. */
+function _normTzIso(s) {
+  if (!s || typeof s !== 'string') return s || null;
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(s)) return s;
+  if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) return s;
+  return s + 'Z';
+}
+
+/** Nome de equipe que pode vir como objeto {Name} ou string. */
+function _nomeEquipe(v) {
+  if (!v) return null;
+  return (typeof v === 'string' ? v : v.Name) || null;
+}
+
+/**
+ * P1-23 — janela de posse da nota por equipe.
+ * GET /api/Notes/{noteId}/historic
+ *
+ * `RemovedAt` nulo significa posse AINDA VIGENTE, e é preservado como null. O
+ * legado dos outros projetos preenchia com `Timestamp.max` pra facilitar
+ * comparação — aqui não, porque data máxima num campo de data é o tipo de
+ * sentinela que reaparece num relatório como se fosse fato.
+ */
+function _normalizeNoteHistoric(payload) {
+  return _comoLista(payload?.Data)
+    .map(h => ({
+      equipe: _nomeEquipe(h?.Team),
+      de:     _instanteWpa(h?.CreatedAt),
+      ate:    _instanteWpa(h?.RemovedAt),
+    }))
+    .filter(h => h.equipe);         // sem equipe a janela não atribui nada
+}
+
+async function getNoteHistoric(noteId) {
+  if (!noteId) return [];
+  const res = await wpaFetch(`/api/Notes/${encodeURIComponent(noteId)}/historic`);
+  if (!res.ok) throw new Error(`WPA Notes/historic ${res.status}`);
+  return _normalizeNoteHistoric(await res.json());
+}
+
+/**
+ * P1-33 — interrupções apontadas na execução da nota.
+ * GET /api/Notes/{noteId}/completeInterruptions   (sem query param, sem sectorId)
+ *
+ * ⚠️ `Try` vem SEMPRE 0: medido pelos outros projetos em 21/08/2026, 2.058 de
+ * 2.058 linhas, enquanto os checkpoints do details/optimized usam 1 a 6. Não dá
+ * pra casar interrupção com ciclo de execução por esse campo — quem tentar vai
+ * desligar a verificação em silêncio, que é pior que não ter verificação.
+ *
+ * O `Id` é metade da chave composta que o P0-8 precisa pra representar "nota
+ * rejeitada por 2 equipes"; por isso linha sem Id é descartada.
+ */
+function _normalizeNoteInterruptions(payload) {
+  return _comoLista(payload?.Data)
+    .map(i => ({
+      id:        i?.Id || null,
+      equipe:    i?.TeamName || null,
+      instante:  _instanteWpa(i?.Date),
+      tentativa: i?.Try === undefined || i?.Try === null ? null : i.Try,
+      texto:     i?.Notes || null,
+      motivo:    i?.Reason || null,
+      motivoId:  i?.RejectionReasonId || null,
+    }))
+    .filter(i => i.id);
+}
+
+async function getNoteInterruptions(noteId) {
+  if (!noteId) return [];
+  const res = await wpaFetch(`/api/Notes/${encodeURIComponent(noteId)}/completeInterruptions`);
+  if (!res.ok) throw new Error(`WPA Notes/completeInterruptions ${res.status}`);
+  return _normalizeNoteInterruptions(await res.json());
+}
+
+/**
+ * P2-15 — intervalos e paradas da sessão.
+ * GET /api/sessions/{sessionId}/break   (sessions MINÚSCULO nesta rota)
+ *
+ * É o dado que explica POR QUE a equipe está parada — almoço, callback, oficina —
+ * e sem ele o painel não distingue parada legítima de desvio.
+ *
+ * `EndTime` nulo é intervalo EM ABERTO: estado de negócio válido, não erro. Fica
+ * explícito em `emAberto` pra ninguém tratar como dado faltando.
+ */
+function _normalizeSessionBreaks(payload) {
+  return _comoLista(payload?.Data)
+    .map(b => {
+      const fim = _instanteWpa(b?.EndTime);
+      return {
+        motivo:      b?.SessionBreakReason?.Text || null,
+        responsavel: b?.SessionBreakReason?.Responsible || null,
+        inicio:      _instanteWpa(b?.StartTime),
+        fim,
+        emAberto:    fim === null,
+      };
+    })
+    .filter(b => b.inicio);         // sem início não dá pra posicionar no tempo
+}
+
+async function getSessionBreaks(sessionId) {
+  if (!sessionId) return [];
+  const res = await wpaFetch(`/api/sessions/${encodeURIComponent(sessionId)}/break`);
+  if (!res.ok) throw new Error(`WPA sessions/break ${res.status}`);
+  return _normalizeSessionBreaks(await res.json());
+}
+
 // ── ESCALA CADASTRADA DO MÊS (collaboratorshifts) ────────────────────────────
 //
 // A escala PLANEJADA, em três níveis: equipe → colaboradores → escalas por dia.
@@ -2189,6 +2311,9 @@ module.exports = {
   getSessionCollaborators,   // P2-14/P2-28 — colaboradores reais por sessão
   getScaleTypes,             // catálogo de turnos da EDP (fim real, intervalo, dias)
   getCollaboratorShifts,     // escala cadastrada do mês (P1-26 / P2-24)
+  getNoteHistoric,           // P1-23 — janela de posse da nota por equipe
+  getNoteInterruptions,      // P1-33 — interrupções + motivo de rejeição
+  getSessionBreaks,          // P2-15 — intervalos da sessão
   searchNoteByNumber,        // número humano da nota → UUID (entrada de auditoria)
   getNoteDetail,
   getNotasDevolvidas,
@@ -2224,6 +2349,8 @@ module.exports = {
   _normalizeScaleType, _scaleEndFromCatalog, _escalaFimComOrigem,
   // Exportado pra teste — escala cadastrada do mês (3 níveis, dict×lista).
   _normalizeCollaboratorShifts,
+  // Exportados pra teste — posse da nota, interrupções e intervalos.
+  _normalizeNoteHistoric, _normalizeNoteInterruptions, _normalizeSessionBreaks,
   // Exportados pra teste — busca de nota pelo número humano.
   _isNoteNumber, _normalizeSearchNote,
 };
