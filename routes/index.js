@@ -2761,6 +2761,26 @@ router.post('/admin/sync-logoffs', async (req, res) => {
   }
 });
 
+// POST /api/admin/sync-intervalos?date=YYYY-MM-DD
+// Coleta os intervalos das sessões de um dia (default: ontem BRT) e grava em
+// `sessao_intervalo`. O cron já faz isso às 03:10; esta rota serve pra popular
+// um dia específico ou recuperar noite em que o cron falhou. 1 request por sessão.
+router.post('/admin/sync-intervalos', async (req, res) => {
+  try {
+    const c = cron();
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const date = req.query.date;
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'Parâmetro date deve ser YYYY-MM-DD' });
+    }
+    const result = await c.runSyncIntervalos(date || undefined);
+    res.json({ ok: true, ...(result || {}) });
+  } catch (err) {
+    console.error('[sync-intervalos]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/admin/sync-escala-dia
 // Puxa a escala cadastrada do mês corrente (GET /api/collaboratorshifts) para os
 // 4 setores e grava em `escala_dia`. O cron já faz isso às 05:20; esta rota existe

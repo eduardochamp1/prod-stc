@@ -12,7 +12,7 @@ const cron                    = require('node-cron');
 const { getTeams, getLastSectorReport } = require('./dataService');
 const { collectSnapshot: collectNotas } = require('./notasMonitor');
 const { ensureFreshToken, getToken, isSectorDisabled } = require('./wpaService');
-const { dateBRT, hourBRT }    = require('./timeUtil');
+const { dateBRT, hourBRT, dateBRTMinusDays } = require('./timeUtil');
 const log                     = require('./logger').forModule('cron');
 
 let tokenJob        = null;
@@ -481,6 +481,95 @@ async function runSyncEscalaDia() {
     log.info('escala_dia_ok', { mes, ano, linhas: linhasTotal, gravadas });
   }
   return { mes, ano, linhas: linhasTotal, gravadas };
+}
+
+// ── INTERVALOS DA SESSÃO (sessions/{id}/break → sessao_intervalo) ─────────────
+// O dado que explica POR QUE a equipe está parada — refeição, callback, oficina —
+// e quem autorizou. Sem ele o painel não distingue parada legítima de desvio
+// (P2-15).
+//
+// Cadência DIÁRIA sobre as sessões de D-1, não no ciclo de 15min: é 1 request
+// por SESSÃO (~130/dia). No ciclo custaria ~2.900 requests/dia na conta que já
+// é compartilhada com outro projeto da empresa (P1-25). Roda às 03:10, depois do
+// sync-logoffs das 03:00, quando o dia já fechou e os intervalos não mudam mais.
+//
+// Tolera a migration 014 não ter rodado: loga e para. Nada no painel depende
+// desta tabela ainda.
+async function runSyncIntervalos(date) {
+  if (process.env.DATA_MODE === 'mock') return;
+
+  const { getSessionsByDate, getSessionBreaks, isSectorDisabled: setorDesativado,
+          ENGELMIG_COMPANY_ID } = require('./wpaService');
+  const { getClient } = require('./dbClient');
+  const sb = getClient();
+  if (!sb) return;
+
+  const dia = date || dateBRTMinusDays(1);
+  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
+  let sessoes = 0, intervalos = 0, gravados = 0;
+
+  for (const sectorId of SETORES) {
+    if (setorDesativado(sectorId)) continue;    // conta desativada (P1-21)
+
+    let lista;
+    try {
+      lista = await getSessionsByDate(sectorId, dia);
+    } catch (err) {
+      log.warn('intervalos_sessoes_falhou', { sectorId, dia, msg: err.message });
+      continue;
+    }
+
+    // Só as nossas: sem o filtro de CompanyId entrariam paradas de outras
+    // empreiteiras do setor.
+    const nossas = (lista || []).filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
+
+    for (const s of nossas) {
+      if (!s.Id) continue;
+      sessoes++;
+
+      let breaks;
+      try {
+        breaks = await getSessionBreaks(s.Id);
+      } catch (err) {
+        log.warn('intervalos_break_falhou', { sessionId: s.Id, msg: err.message });
+        continue;
+      }
+      if (!breaks || breaks.length === 0) continue;   // sessão sem parada é normal
+      intervalos += breaks.length;
+
+      const rows = breaks.map(b => ({
+        session_id:  s.Id,
+        inicio:      b.inicio,
+        fim:         b.fim,
+        data:        (s.BeginTime || dia).slice(0, 10),
+        sector_id:   sectorId,
+        equipe:      (s.Team?.Name || '').trim() || null,
+        motivo:      b.motivo,
+        responsavel: b.responsavel,
+        updated_at:  new Date().toISOString(),
+      }));
+
+      const { error } = await sb
+        .from('sessao_intervalo')
+        .upsert(rows, { onConflict: 'session_id,inicio' });
+
+      if (error) {
+        const faltaTabela = /sessao_intervalo|does not exist|relation/i.test(error.message || '');
+        if (faltaTabela) {
+          log.warn('intervalos_sem_tabela', { msg: 'rode supabase/migrations/014_sessao_intervalo.sql' });
+          return;
+        }
+        log.warn('intervalos_upsert_falhou', { sessionId: s.Id, msg: error.message });
+        continue;
+      }
+      gravados += rows.length;
+    }
+  }
+
+  if (gravados > 0) {
+    log.info('intervalos_ok', { dia, sessoes, intervalos, gravados });
+  }
+  return { dia, sessoes, intervalos, gravados };
 }
 
 // ── CACHE DE DETALHES DE OS ───────────────────────────────────────────────────
@@ -1330,6 +1419,12 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
+  // Intervalos das sessões de ontem, às 03:10 — depois do sync-logoffs, com o
+  // dia já fechado. 1 request por sessão, ver o comentário da função.
+  const intervalosJob = cron.schedule('10 3 * * *', () => runSyncIntervalos(), {
+    timezone: 'America/Sao_Paulo',
+  });
+
   const syncLogoffsJob = cron.schedule('0 3 * * *', () => runSyncLogoffs(), {
     timezone: 'America/Sao_Paulo',
   });
@@ -1487,6 +1582,7 @@ module.exports = {
   runSyncEscalas,
   runSyncEscalaCatalogo,
   runSyncEscalaDia,
+  runSyncIntervalos,
   // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
   _classifySnapshotOutcome,
 };

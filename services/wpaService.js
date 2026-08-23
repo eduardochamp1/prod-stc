@@ -114,9 +114,43 @@ async function _mapConcurrent(items, concurrency, mapper) {
 }
 
 /** Cadeia de contas de um setor (ordem de failover). Sempre array não-vazio. */
+/**
+ * P2-37 (22/08/2026) — a cadeia de contas de um setor pode ser sobrescrita por
+ * `SECTOR_ACCOUNT_CHAIN_<SETOR>` no .env, ex.: `SECTOR_ACCOUNT_CHAIN_DESG=es,sp2`.
+ *
+ * Por quê: `DESG/DESC/DEPT` têm cadeia de UMA conta. Se a `es` trava — e o P1-25
+ * diz que outro projeto da empresa, na MESMA conta e nos MESMOS setores, pode
+ * travá-la sozinho — três regionais param juntas, sem backup.
+ *
+ * O GQO mediu em 17/08 que as duas contas veem os mesmos setores e devolvem
+ * resultado idêntico, e o nosso catálogo de turnos (692 linhas = 4 × os mesmos
+ * 173) é a terceira evidência de que setor não filtra permissão. Mas ligar isso
+ * exige 1 probe em produção: ativar no escuro mandaria requisição de um setor
+ * para uma conta que talvez não o veja. Por env, ativar depois do probe é
+ * `.env` + restart, não deploy.
+ *
+ * Só aceita nomes de conta que EXISTEM em ACCOUNTS. Env inteiro inválido devolve
+ * null e o default vale — um erro de digitação não pode deixar setor sem conta.
+ */
+function _parseChainEnv(valor) {
+  if (!valor) return null;
+  const vistos = new Set();
+  const cadeia = [];
+  for (const parte of String(valor).split(',')) {
+    const acc = parte.trim().toLowerCase();
+    if (!acc || !ACCOUNTS[acc] || vistos.has(acc)) continue;
+    vistos.add(acc);
+    cadeia.push(acc);
+  }
+  return cadeia.length > 0 ? cadeia : null;
+}
+
 function _accountsForSector(sectorId) {
   if (!sectorId) return [DEFAULT_ACCOUNT];
-  return SECTOR_ACCOUNT_CHAIN[String(sectorId).toUpperCase()] || [DEFAULT_ACCOUNT];
+  const setor = String(sectorId).toUpperCase();
+  return _parseChainEnv(process.env[`SECTOR_ACCOUNT_CHAIN_${setor}`])
+    || SECTOR_ACCOUNT_CHAIN[setor]
+    || [DEFAULT_ACCOUNT];
 }
 
 /** Conta PRIMÁRIA do setor (1ª da cadeia). Pra mensagens/status; não roteia. */
@@ -2327,6 +2361,7 @@ module.exports = {
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)
   REGIONAL_MAP,
+  ENGELMIG_COMPANY_ID,   // filtro da empresa — o cron de intervalos também precisa
   // Exportados pra teste (P3-11) — acumulador diário.
   _accRecord, _accApply, _acc,
   // Exportados pra teste (P1-20) — circuit breaker de login.
@@ -2334,7 +2369,7 @@ module.exports = {
   // Kill-switch de conta (WPA_ACCOUNTS_DISABLED).
   isAccountDisabled, isSectorDisabled, _disabledAccounts,
   // Failover de conta por setor (backup SJC).
-  _accountsForSector, _resolveUsableAccount,
+  _accountsForSector, _resolveUsableAccount, _parseChainEnv,
   // Exportados pra teste (22/08/2026) — token morto (500 "Token is invalid!") e
   // política de renovação pelo exp em vez de pelo relógio do cron.
   // Exportado pra teste (P2-38) — hidratação do breaker antes do roteamento.
