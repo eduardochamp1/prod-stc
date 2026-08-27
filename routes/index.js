@@ -155,7 +155,11 @@ router.get('/teams', async (req, res) => {
   try {
     // wpa / mock: dados ao vivo da API WPA ou mock. O caminho Supabase (Vercel)
     // foi removido na Fase 4 — ver specs/aposentar-vercel-supabase-remote.md.
-    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals });
+    // `out` recebe o report POR SETOR desta chamada (P1-30). Sem ele, um setor
+    // que falha some do painel sem aviso: a resposta vinha 200 com lista vazia,
+    // igualzinho a um domingo (P1-39, incidente 24-25/08/2026).
+    const outColeta = {};
+    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals }, outColeta);
 
     // ── Summary do dia (UUID-aware, deduplicado, com canceladas) ──────────
     // Compara PRIMEIRO e ÚLTIMO snapshot do dia de cada equipe pra detectar:
@@ -167,12 +171,16 @@ router.get('/teams', async (req, res) => {
     let carteiraInicialDedup = null;
     try {
       const dataServiceLazy = require('../services/dataService');
-      // Filtra o summary pras equipes visíveis ao user (escopo de regional já
-      // aplicado em getTeams). Sem isso, summary global vazaria contagens
-      // de outras regionais que o user não pode ver.
-      const siglasFiltro = teams.map(t => t.teamName || t.sigla).filter(Boolean);
+      // Filtra o summary pelo escopo de regional do user. Sem isso, summary
+      // global vazaria contagens de outras regionais que o user não pode ver.
+      //
+      // 25/08/2026: aqui passava-se a lista de SIGLAS que `getTeams` acabou de
+      // devolver. Setor cuja coleta ao vivo falha não devolve equipe nenhuma —
+      // e lista vazia virava "sem filtro", servindo o banco inteiro rotulado
+      // como a regional do filtro. Ver comentário em dataService._buildDiaSummary.
+      // req.scope.regionals é garantido não-vazio pelo applyScope (403 se for).
       if (typeof dataServiceLazy._buildDiaSummary === 'function') {
-        diaSummary = await dataServiceLazy._buildDiaSummary(siglasFiltro);
+        diaSummary = await dataServiceLazy._buildDiaSummary(req.scope.regionals);
       }
       // Fallback / retrocompat: campo legado carteira_inicial_dedup continua presente
       // (frontend antigo pode ainda usar). Novos campos vão em diaSummary.
@@ -189,10 +197,29 @@ router.get('/teams', async (req, res) => {
       if (t && t._carteiraInicialUUIDs) delete t._carteiraInicialUUIDs;
     }
 
+    // ── Estado da COLETA por regional (P1-39) ─────────────────────────────
+    // Aditivo: front antigo ignora. `degradado` existe pra o front decidir num
+    // if só, sem varrer o mapa. Nunca deixa a rota cair — se isto falhar, o
+    // painel volta ao comportamento de antes (mostrar o que tem), e não a 500.
+    let coleta = null;
+    try {
+      const { buildColetaStatus } = require('../services/dataService');
+      let sectorLastOk = null;
+      const sqColeta = sbq();   // null em modo mock
+      if (sqColeta) {
+        try {
+          const row = await sqColeta.getSetting('sector_last_ok');
+          sectorLastOk = row && row.data;
+        } catch (_) { /* sem carimbo → `desde` fica null, não inventa horário */ }
+      }
+      coleta = buildColetaStatus(outColeta.report, sectorLastOk, req.scope.regionals);
+    } catch (_) { /* estado da coleta é observabilidade, não pode derrubar /teams */ }
+
     res.json({
       teams,
       count: teams.length,
       mode: MODE,
+      coleta,   // { degradado, regionais: { SJC: {status, setores, parcial, desde, msg} } }
       summary: {
         carteira_inicial_dedup: carteiraInicialDedup,
         dia: diaSummary,  // { inicial, atual, andamento, concluidas, rejeitadas, canceladas }

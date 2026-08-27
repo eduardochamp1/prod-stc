@@ -95,6 +95,9 @@
 | P1-34 | `_reconstruirDeslogada` não aplica rejeitada>concluída → card de deslogada conta a nota 2× | Dados/Frontend | **done** (21/08) — 3 testes |
 | P1-35 | Token vencido chega como **500 "Token is invalid!"**, não 401 — `wpaFetch` propagava sem relogin e `_safeNotes` engolia em bucket vazio: token morto virava "equipe sem produção" no snapshot | Dados/Ops | **done** (87072f5, 22/08) — invalida + reloga 1× por request; 11 testes |
 | P1-36 | Cron de token fazia `/signin` INCONDICIONAL às :00 e :45 (32 logins/dia) na conta `es`, compartilhada com o GQO nos MESMOS setores — e cada login invalida o token anterior | Ops | **done** (87072f5, 22/08) — `ensureFreshToken` decide pelo `exp` do JWT; 9 testes |
+| P1-37 | Coleta ao vivo de um setor falha → card da regional exibe os números das OUTRAS regionais | Dados/Segurança | **done** (25/08) — escopo do summary passa a vir de `req.scope.regionals` e filtra `snapshots.regional`; 3 testes |
+| P1-38 | `/wpa/nota/:noteId` resolve código→UUID varrendo `teams_current` SEM escopo de regional | Segurança | pending |
+| P1-39 | Setor cuja coleta falha some do painel SEM aviso: `/api/teams` descarta o `report` que o P1-30 já produz | Ops/Frontend | **done** (25/08) — `coleta` no payload + faixa no painel + `—` no lugar de `0`; 13 testes |
 | P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | pending |
 | P2-19 | Equipe fora da whitelist descartada ANTES do snapshot, sem log → histórico não-backfillável | Dados | pending |
 | P2-20 | Leitura do histórico depende da whitelist de HOJE → desativar equipe apaga produção já reportada | Dados/Governança | pending |
@@ -1835,6 +1838,124 @@ feita em PR separado depois dos testes.
 - **Esforço:** 2h.
 - **Rollback:** trivial.
 - **Relacionado:** P1-15, P1-16, P1-27.
+
+---
+
+## P1-37 — Coleta ao vivo de um setor falha → o card da regional exibe os números das OUTRAS regionais
+
+- **Categoria:** Dados / Segurança
+- **Status:** done (25/08/2026) — 3 testes
+- **Origem:** incidente reportado pelo usuário em 25/08/2026 ("o sistema não está
+  puxando as equipes de SP"). O sintoma reportado era a lista vazia; o vazamento
+  de escopo foi achado investigando os cards que *continuavam* mostrando número.
+- **Evidência:** `routes/index.js:172` montava o filtro do summary com
+  `teams.map(t => t.teamName || t.sigla)` — as siglas que a coleta AO VIVO
+  acabou de devolver. Em `services/dataService.js:340`, array vazio fazia a
+  cláusula sumir da query:
+  `const filterClause = (Array.isArray(siglasFiltro) && siglasFiltro.length > 0) ? 'AND team_name = ANY($2::text[])' : ''`.
+  Sem WHERE, as três queries (primeiro snap, último snap, `note_rejections`)
+  varrem o dia INTEIRO, de todas as regionais.
+- **Impacto medido (25/08/2026, 14:07 BRT):** credencial WPA de SJC inválida nas
+  duas contas (`sp` e `sp2`, breaker aberto — ver P1-20/P1-22), setor `DSSJ`
+  falhando em todo ciclo desde 24/08, **zero snapshot de SJC no dia**
+  (`SELECT ... FROM snapshots WHERE date='2026-08-25' AND regional='SJC'` → 0 linhas).
+  Ainda assim o painel filtrado em "São José dos Campos" exibia
+  **313 executadas, 40 em andamento, 53 rejeitadas e 814 / 1283 na carteira** —
+  todos de GUA+CAC. `/totais/subcat` (que É filtrado por regional) devolveu soma
+  0, e o frontend só sobrescreve o card `if (sum > 0)` (`public/index.html:6597`),
+  então nem o card de executadas foi corrigido. Número de outra regional é pior
+  que número nenhum: é o que vai para relatório da EDP.
+- **Ação:** ✅ `_buildDiaSummary` passa a receber `req.scope.regionals` e filtra
+  por `regional = ANY($2::text[])` — coluna que existe em `snapshots` e em
+  `note_rejections`, gravada pelo próprio writer. O recorte deixa de depender de
+  a coleta ao vivo ter dado certo.
+- **Critério de aceite:**
+  - [x] Regional sem snapshot no dia devolve **zero**, não o total das outras.
+  - [x] Escopo recorta o banco pela regional pedida (SJC não puxa GUA).
+  - [x] Escopo multi-regional soma só as regionais pedidas.
+  - [x] Os 9 testes de aritmética existentes seguem verdes (invariante fecha).
+- **Esforço:** 1h + testes.
+- **Rollback:** reverter o commit; o parâmetro é retrocompatível com `null`
+  (= sem filtro), que é o que os testes antigos já passavam.
+- **Índices:** `note_rejections` já tem `idx_rej_regional_date (regional, session_date)`.
+  `snapshots` tem `idx_snapshots_date_team (date, team_name)` — o `date` já
+  recorta pra ~6k linhas/dia, então o filtro de regional roda em cima de um
+  conjunto pequeno. Não foi criado índice novo; **se aparecer em `slow_request`,
+  o candidato é `(date, regional)`.**
+- **Relacionado:** P1-12 (mesma classe: vazamento regional), P1-20, P1-22, P1-30.
+
+---
+
+## P1-38 — `/wpa/nota/:noteId` resolve código→UUID varrendo `teams_current` SEM escopo de regional
+
+- **Categoria:** Segurança
+- **Status:** pending
+- **Origem:** achado de passagem enquanto se investigava o P1-37 (25/08/2026).
+  **Não** foi corrigido junto de propósito — é outra rota e outra classe de risco.
+- **Evidência:** `routes/index.js:966` — `const all = await sq.getTeamsCurrent({})`.
+  O `{}` cai no ramo "sem filtro" de `db/queries.js:252`
+  (`if (Array.isArray(filters.regionals) && filters.regionals.length > 0)`).
+- **Impacto:** quando o front manda um NÚMERO de OS em vez de UUID (cache antigo,
+  nota histórica sem UUID mapeado), a busca varre as equipes de TODAS as
+  regionais. Um usuário de GUA que informe um código de SJC resolve o UUID e
+  segue para o fetch de detalhes. É acesso pontual a UMA nota — não é contagem
+  agregada, e depende de conhecer o código exato — por isso P1 e não P0.
+- **Ação:** ⬜ passar `{ regionals: req.scope.regionals }` no `getTeamsCurrent`,
+  e considerar `_assertRegionals` (já existe em `db/queries.js:40`) nas rotas de
+  usuário — hoje `getTeamsCurrent` é a única leitura escopável sem essa guarda.
+- **Critério de aceite:** teste em que usuário GUA pede um código de SJC → 403 ou
+  não-encontrado, e admin segue resolvendo.
+- **Esforço:** 1h + teste.
+- **Rollback:** trivial.
+- **Relacionado:** P1-12, P0-4, P1-37.
+
+---
+
+## P1-39 — Setor cuja coleta falha some do painel SEM aviso nenhum
+
+- **Categoria:** Ops / Frontend
+- **Status:** done (25/08/2026) — 13 testes (8 buildColetaStatus + 5 sector_last_ok)
+- **Origem:** incidente de 24-25/08/2026 (credencial SJC inválida). O sintoma que
+  chegou ao dev não foi um alerta — foi o gestor perguntando por que SP sumiu,
+  **um dia inteiro depois** da coleta ter parado.
+- **Evidência:** `services/dataService.js:565` — `getTeams(filters, out)` já
+  aceita um objeto de saída e devolve `out.report = {ok, failed, skipped}`
+  (entregue no P1-30). `routes/index.js:158` chama
+  `getTeams({ ...req.query, regionals: req.scope.regionals })` — **sem o segundo
+  argumento**. O report é calculado, usado internamente e jogado fora; a resposta
+  de `/api/teams` não tem campo nenhum que distinga "a regional não tem equipe em
+  campo" de "a coleta desta regional falhou".
+- **Impacto:** com `DSSJ` falhando desde 24/08, o painel exibiu "Nenhuma equipe
+  encontrada" e `0 em campo` — visualmente idêntico a um domingo. O `snapshot_partial`
+  existe e estava correto no log desde o primeiro ciclo; ninguém lê log. Somado ao
+  P1-37 (que servia números de outra regional no mesmo card), o painel ficou
+  *plausível* e errado por ~18h. Detecção passiva, dependente de alguém reparar
+  na ausência.
+- **Ação:**
+  1. ✅ `/api/teams` passa `out` e devolve `coleta: { degradado, regionais }`.
+     `services/dataService.buildColetaStatus` (pura) traduz setor → regional.
+  2. ✅ Nova chave `app_settings.sector_last_ok`: carimbo POR SETOR do último
+     ciclo que coletou, com MERGE (`cronService._mergeSectorLastOk`). É de onde
+     sai o "desde HH:MM". `snapshot_last_ok` não servia: ficou VERDE o incidente
+     inteiro, porque GUA e CAC seguiram coletando.
+  3. ✅ Frontend: faixa acima dos cards (vermelha p/ falha, âmbar p/ kill-switch),
+     KPIs viram `—`, e a lista vazia deixa de dizer "Nenhuma equipe encontrada"
+     (afirmação falsa: as equipes existem, nós é que não as vemos).
+  4. ⬜ **Segue pending:** ligar no watchdog do P1-1 (`snapshot_partial` repetido
+     em N ciclos → alerta ativo). Depende de config humana do webhook.
+- **Critério de aceite:**
+  - [x] Setor único da regional cai → `falha`, `parcial:false`.
+  - [x] Regional com 2 setores e 1 caído → `parcial:true` e os números são
+        MANTIDOS (bug pego na verificação visual: a 1ª versão apagava dado bom).
+  - [x] Kill-switch → `pausada`, não `falha`.
+  - [x] Falha fora do escopo do usuário não degrada o painel dele.
+  - [x] Sem carimbo, `desde` fica null — nunca inventa horário.
+  - [x] `coleta` ausente (backend antigo / aba Histórico) → painel se comporta
+        como antes, sem aviso e sem esconder número.
+- **Esforço:** 2h backend + 2h frontend (realizado).
+- **Rollback:** o campo é aditivo; front antigo ignora.
+- **Relacionado:** P1-37 (mesmo incidente, outra metade), P1-30 (produziu o
+  report), P1-21, P1-1 (alerta ativo).
 
 ---
 

@@ -183,3 +183,86 @@ test('_buildDiaSummary: pool ausente → null (fallback do frontend)', async () 
   const s = await _buildDiaSummary(null);
   assert.equal(s, null);
 });
+
+// ── ESCOPO POR REGIONAL (incidente 25/08/2026) ───────────────────────────────
+// Sintoma: painel filtrado em "São José dos Campos" mostrava 313 executadas,
+// 40 em andamento, 53 rejeitadas e 814/1283 na carteira — todos números de
+// GUA+CAC. SJC não tinha UM snapshot no dia (credencial WPA da conta `sp`/`sp2`
+// inválida desde 24/08, breaker aberto, setor DSSJ falhando em todo ciclo).
+//
+// Mecanismo: o caller montava o filtro a partir das SIGLAS das equipes VIVAS
+// (routes/index.js → teams.map(...)). Coleta ao vivo falhou → lista vazia →
+// filtro vazio → a cláusula WHERE sumia da query → summary do banco INTEIRO
+// devolvido sob o rótulo da regional escolhida.
+//
+// O escopo agora vem de req.scope.regionals e é filtrado por snapshots.regional
+// direto no banco: independe da coleta ao vivo ter dado certo.
+function fakePoolRegional({ first = [], last = [], rej = [] }) {
+  return {
+    async query(sql, params) {
+      // Só filtra se a query REALMENTE trouxer a cláusula de regional.
+      const aplica = (rows) => {
+        if (!/regional\s*=\s*ANY/i.test(sql)) return rows;
+        const regs = params[1] || [];
+        return rows.filter(r => regs.includes(r.regional));
+      };
+      if (/note_rejections/i.test(sql)) return { rows: aplica(rej) };
+      if (/captured_at ASC/i.test(sql))  return { rows: aplica(first) };
+      if (/captured_at DESC/i.test(sql)) return { rows: aplica(last) };
+      return { rows: [] };
+    },
+  };
+}
+
+const teamRowReg = (name, regional, buckets) => ({ ...teamRow(name, buckets), regional });
+
+test('_buildDiaSummary: regional sem snapshot no dia devolve ZERO, não o total das outras', async () => {
+  pgShim._setPool(fakePoolRegional({
+    first: [teamRowReg('EBGPR62', 'GUA', { baixadas: ['a', 'b'] })],
+    last:  [teamRowReg('EBGPR62', 'GUA', { concluidas: ['a'], baixadas: ['b'] })],
+    rej:   [{ note_id: 'z', regional: 'GUA' }],
+  }));
+  const s = await _buildDiaSummary(['SJC']);
+  assert.equal(s.inicial, 0, 'carteira inicial de SJC não pode herdar a de GUA');
+  assert.equal(s.concluidas, 0, 'executadas de GUA não podem aparecer como SJC');
+  assert.equal(s.atual, 0);
+  assert.equal(s.rejeitadas, 0, 'note_rejections também tem que respeitar o escopo');
+  assertInvariante(s);
+});
+
+test('_buildDiaSummary: escopo recorta o banco pela regional pedida', async () => {
+  pgShim._setPool(fakePoolRegional({
+    first: [
+      teamRowReg('EBGPR62', 'GUA', { baixadas: ['a'] }),
+      teamRowReg('ECCSJ83', 'SJC', { baixadas: ['s1', 's2'] }),
+    ],
+    last: [
+      teamRowReg('EBGPR62', 'GUA', { concluidas: ['a'] }),
+      teamRowReg('ECCSJ83', 'SJC', { concluidas: ['s1'], baixadas: ['s2'] }),
+    ],
+  }));
+  const s = await _buildDiaSummary(['SJC']);
+  assert.equal(s.inicial, 2, 'só as duas notas de SJC');
+  assert.equal(s.concluidas, 1);
+  assert.equal(s.atual, 1);
+  assertInvariante(s);
+});
+
+test('_buildDiaSummary: escopo multi-regional soma as duas', async () => {
+  pgShim._setPool(fakePoolRegional({
+    first: [
+      teamRowReg('EBGPR62', 'GUA', { baixadas: ['a'] }),
+      teamRowReg('ECALE50', 'CAC', { baixadas: ['c'] }),
+      teamRowReg('ECCSJ83', 'SJC', { baixadas: ['s'] }),
+    ],
+    last: [
+      teamRowReg('EBGPR62', 'GUA', { concluidas: ['a'] }),
+      teamRowReg('ECALE50', 'CAC', { concluidas: ['c'] }),
+      teamRowReg('ECCSJ83', 'SJC', { concluidas: ['s'] }),
+    ],
+  }));
+  const s = await _buildDiaSummary(['GUA', 'CAC']);
+  assert.equal(s.inicial, 2, 'GUA + CAC, sem SJC');
+  assert.equal(s.concluidas, 2);
+  assertInvariante(s);
+});

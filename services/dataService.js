@@ -322,13 +322,27 @@ function _carteiraInicialDedupTotal(teams) {
  *
  * Aritmética: inicial = atual + andamento + concluidas + rejeitadas + canceladas.
  *
- * Filtragem: `siglasFiltro` (opcional) restringe o cálculo às equipes do escopo
- * do usuário (admin → todas; non-admin → só suas regionais). Sem isso, o summary
- * vazaria contagens de regionais que o user não deveria ver.
+ * Filtragem: `regionals` (string[] de siglas reais, vindo de req.scope.regionals)
+ * restringe o cálculo ao escopo do usuário. Sem isso, o summary vazaria
+ * contagens de regionais que o user não deveria ver. `null` = sem filtro
+ * (uso interno/cron, que não tem escopo de usuário).
+ *
+ * ⚠️ O ESCOPO VEM DA REGIONAL, NÃO DAS EQUIPES VIVAS (incidente 25/08/2026).
+ * Até aqui o filtro era a lista de SIGLAS que a coleta ao vivo tinha acabado de
+ * devolver. Quando a coleta de um setor falha, essa lista vem VAZIA — e array
+ * vazio fazia a cláusula WHERE sumir da query, devolvendo o banco INTEIRO sob o
+ * rótulo da regional escolhida. Em 25/08 a credencial WPA de SJC (contas `sp` e
+ * `sp2`) estava inválida, DSSJ falhava em todo ciclo, e o painel filtrado em
+ * "São José dos Campos" exibiu 313 executadas / 814 em carteira que eram de
+ * GUA+CAC — com ZERO snapshot de SJC no dia. Número de outra regional é pior
+ * que número nenhum: vai para relatório da EDP.
+ *
+ * `snapshots.regional` e `note_rejections.regional` são gravados pelo próprio
+ * writer, então o recorte não depende de a coleta ao vivo ter dado certo.
  *
  * Retorna null em caso de erro de DB — frontend cai em cálculo per-team.
  */
-async function _buildDiaSummary(siglasFiltro) {
+async function _buildDiaSummary(regionals) {
   try {
     const { _getPool } = require('./pgShim');
     const pool = _getPool();
@@ -337,11 +351,11 @@ async function _buildDiaSummary(siglasFiltro) {
 
     // 2 queries em paralelo: primeiro e último snapshot do dia por equipe.
     // DISTINCT ON é eficiente (1 row por equipe) e usa índice de captured_at.
-    const filterClause = (Array.isArray(siglasFiltro) && siglasFiltro.length > 0)
-      ? `AND team_name = ANY($2::text[])`
+    const filterClause = (Array.isArray(regionals) && regionals.length > 0)
+      ? `AND regional = ANY($2::text[])`
       : '';
     const params = [hoje];
-    if (filterClause) params.push(siglasFiltro);
+    if (filterClause) params.push(regionals);
 
     const queryFirst = `
       SELECT DISTINCT ON (team_name) team_name,
@@ -537,6 +551,75 @@ const SETORES = {
   ALL: ['DESG', 'DEPT', 'DESC', 'DSSJ'],
 };
 
+/**
+ * Traduz o report por SETOR (out.report do getTeams) para o estado por REGIONAL
+ * que o painel entende. FUNÇÃO PURA — sem I/O, testável.
+ *
+ * P1-39 (25/08/2026). Motivação: a coleta de SJC morreu em 24/08 (credencial WPA
+ * inválida nas duas contas) e o painel exibiu "Nenhuma equipe encontrada" com
+ * `0 em campo` — indistinguível de um domingo. O `snapshot_partial` estava certo
+ * no log desde o primeiro ciclo; ninguém lê log. Levou ~18h até um gestor
+ * perguntar por que SP tinha sumido. `0` e `indisponível` não são a mesma
+ * informação, e só quem chamou getTeams sabe a diferença.
+ *
+ * @param {object} report        { ok:[], failed:[{sector,msg}], skipped:[] }
+ * @param {object} sectorLastOk  { DSSJ: '2026-08-24T14:00:00Z', ... } — último
+ *                               ciclo em que o setor coletou (app_settings).
+ * @param {string[]} regionals   escopo do usuário; sem ele, todas as regionais.
+ * @returns {{degradado: boolean, regionais: Object}}
+ */
+function buildColetaStatus(report, sectorLastOk, regionals) {
+  const regs = (Array.isArray(regionals) && regionals.length > 0)
+    ? regionals
+    : Object.keys(SETORES).filter(k => k !== 'ALL');
+
+  const falhaMsg = new Map();
+  for (const f of (report && Array.isArray(report.failed) ? report.failed : [])) {
+    if (f && f.sector) falhaMsg.set(f.sector, f.msg || '');
+  }
+  const pulados = new Set(report && Array.isArray(report.skipped) ? report.skipped : []);
+  const lastOk = (sectorLastOk && typeof sectorLastOk === 'object') ? sectorLastOk : {};
+
+  const out = { degradado: false, regionais: {} };
+  for (const r of regs) {
+    const setores = SETORES[r] || [];
+    const comFalha  = setores.filter(s => falhaMsg.has(s));
+    const comPulado = setores.filter(s => pulados.has(s));
+    const afetados  = [...comFalha, ...comPulado];
+
+    if (afetados.length === 0) {
+      out.regionais[r] = { status: 'ok', setores: [], parcial: false, desde: null, msg: null };
+      continue;
+    }
+
+    // Kill-switch (WPA_ACCOUNTS_DISABLED) é decisão operacional consciente —
+    // "pausada" e não "falha". Mas segue degradando: ausência de dado tem de
+    // aparecer no painel de qualquer forma, senão o operador esquece que
+    // desligou. Falha ganha da pausa quando os dois estados coexistem.
+    const status = comFalha.length > 0 ? 'falha' : 'pausada';
+
+    // `desde` = o momento MAIS ANTIGO entre os setores afetados: o que o
+    // operador precisa saber é há quanto tempo o buraco existe, não qual setor
+    // caiu por último. Sem registro, fica null — nunca inventa horário.
+    let desde = null;
+    for (const s of afetados) {
+      const ts = lastOk[s];
+      if (!ts) continue;
+      if (desde === null || ts < desde) desde = ts;
+    }
+
+    out.regionais[r] = {
+      status,
+      setores: afetados,
+      parcial: afetados.length < setores.length,   // sobrou setor coletando?
+      desde,
+      msg: comFalha.length > 0 ? (falhaMsg.get(comFalha[0]) || null) : null,
+    };
+    out.degradado = true;
+  }
+  return out;
+}
+
 // Resultado por setor da ÚLTIMA chamada de getTeams (P1-3+): { ok:[], failed:[],
 // skipped:[] }. O runSnapshot lê pra marcar snapshot_last_ok/snapshot_error com
 // ciência de qual conta está fora — sem isso, uma conta desativada/quebrada
@@ -687,4 +770,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getLastSectorReport, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite };
+module.exports = { getTeams, getLastSectorReport, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite, buildColetaStatus };

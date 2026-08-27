@@ -148,6 +148,12 @@
         </div>
       </div>
 
+      <!-- Aviso de coleta degradada (P1-39). Fica ACIMA da produtividade e dos
+           cards de propósito: em 24-25/08/2026 a coleta de SJC ficou fora por
+           ~18h e o painel mostrou "0 em campo", indistinguível de um domingo.
+           Vazio e escondido quando está tudo bem. -->
+      <div id="coleta-alerta" class="coleta-alerta" style="display:none" role="status" aria-live="polite"></div>
+
       <div class="prod-section">
         <div class="prod-header">
           <div>
@@ -1802,6 +1808,10 @@
     // Carteira inicial deduplicada (UUIDs únicos cross-team) — backend resolve
     // dupla contagem de notas transferidas pelo EDP durante o dia.
     let _lastTeamsSummary = null;
+    // Estado da COLETA ao vivo por regional (P1-39): { degradado, regionais }.
+    // null = desconhecido (backend antigo ou modo histórico) — nesse caso o
+    // painel se comporta como antes, sem inventar aviso nem esconder número.
+    let _lastColeta = null;
     // ── Permissões: modelo unificado (Task 9) ──────────────────────────────
     // userRegionals  : imutável, populado em applyUserPermissions a partir do JWT.regionals[]
     // selectedRegionals: mutável, reflete o estado do dropdown (subset de userRegionals).
@@ -3201,6 +3211,71 @@
 
     function escapeHtml(s) {
       return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // ── AVISO DE COLETA DEGRADADA (P1-39) ─────────────────────────────────────
+    // Traduz `coleta` de /api/teams numa faixa acima dos cards. Existe porque em
+    // 24-25/08/2026 a coleta de SJC morreu e o painel mostrou "0 em campo" por
+    // ~18h sem dizer nada — o `snapshot_partial` estava certo no log desde o
+    // primeiro ciclo, mas ninguém lê log.
+    const REGIONAL_NOME = { GUA: 'Guarapari', CAC: 'Cachoeiro', SJC: 'São José dos Campos' };
+
+    /**
+     * Nenhuma regional do escopo tem QUALQUER dado entrando? Só então número
+     * nenhum é confiável e vale trocar tudo por `—`.
+     *
+     * `parcial` conta como TER dado: a regional tem mais de um setor e só parte
+     * caiu (ex.: GUA = DESG + DEPT), então os números exibidos são reais, apenas
+     * incompletos — a faixa de aviso já diz isso. Apagar aqui seria o erro
+     * oposto ao do incidente: esconder informação boa em vez de inventar ruim.
+     */
+    function _coletaTudoFora(coleta) {
+      if (!coleta || !coleta.regionais) return false;
+      const vals = Object.values(coleta.regionais);
+      return vals.length > 0 && vals.every(r => r.status !== 'ok' && !r.parcial);
+    }
+
+    function _horaCurta(iso) {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (isNaN(d)) return null;
+      const hoje = new Date().toDateString() === d.toDateString();
+      const hh = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      return hoje ? hh : `${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${hh}`;
+    }
+
+    function renderColetaAlerta(coleta) {
+      const box = document.getElementById('coleta-alerta');
+      if (!box) return;
+      // null = backend antigo ou modo histórico. Não sabemos ⇒ não afirmamos nada.
+      if (!coleta || !coleta.degradado || !coleta.regionais) {
+        box.style.display = 'none';
+        box.innerHTML = '';
+        return;
+      }
+      const fora = Object.entries(coleta.regionais).filter(([, r]) => r.status !== 'ok');
+      if (fora.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+      const soPausa = fora.every(([, r]) => r.status === 'pausada');
+      const linhas = fora.map(([sigla, r]) => {
+        const nome  = REGIONAL_NOME[sigla] || sigla;
+        const hora  = _horaCurta(r.desde);
+        const desde = hora ? ` desde <strong>${escapeHtml(hora)}</strong>` : '';
+        const verbo = r.status === 'pausada' ? 'pausada' : 'indisponível';
+        // "parcial" importa: a regional tem mais de um setor e só parte caiu —
+        // o número exibido é real, só está incompleto. Dizer "indisponível" seco
+        // faria o gestor descartar dado bom.
+        const parcial = r.parcial
+          ? ' <span class="coleta-detalhe">Parte dos setores segue coletando — os números abaixo estão incompletos, não errados.</span>'
+          : ' <span class="coleta-detalhe">Nenhum dado novo desta regional está entrando. Os números abaixo não incluem ela.</span>';
+        const motivo = (r.status !== 'pausada' && r.msg)
+          ? `<span class="coleta-motivo">${escapeHtml(String(r.msg).slice(0, 180))}</span>` : '';
+        return `<div><strong>${escapeHtml(nome)}</strong>: coleta ${verbo}${desde}.${parcial}${motivo}</div>`;
+      }).join('');
+
+      box.className = 'coleta-alerta' + (soPausa ? ' pausada' : '');
+      box.innerHTML = `<span class="coleta-icone">${soPausa ? '⏸' : '⚠'}</span><div>${linhas}</div>`;
+      box.style.display = 'flex';
     }
 
     // ── GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────────────────────
@@ -5600,6 +5675,10 @@ ${matrizHTML}
 
         allTeams = res.teams || [];
         _lastTeamsSummary = res.summary || null;
+        // Modo histórico lê de snapshots já gravados — o estado da coleta AO VIVO
+        // não diz nada sobre ele; por isso só vale no live (P1-39).
+        _lastColeta = hist ? null : (res.coleta || null);
+        renderColetaAlerta(_lastColeta);
         document.getElementById('sync-label').textContent =
           new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
         document.getElementById('last-update').textContent = hist
@@ -6600,6 +6679,11 @@ ${matrizHTML}
               document.getElementById('m-concluidas').textContent = sum;
               _renderPct(sum);
             }
+            // Este fetch resolve DEPOIS de renderMetrics e reescreve o card —
+            // sem reaplicar, o `—` do P1-39 voltaria a virar número. (Com a
+            // coleta fora, `sum` costuma ser 0 e o if nem entra; a guarda é pra
+            // não depender disso.)
+            _aplicarColetaFora();
           })
           .catch(() => { /* mantém summary.dia.concluidas */ });
       }
@@ -6665,6 +6749,34 @@ ${matrizHTML}
       } catch (err) {
         console.warn('[KPI] falha ao buscar /equipes:', err.message);
       }
+
+      // P1-39: nenhuma regional do escopo coletou → os KPIs não têm fonte.
+      // `0` afirma "não houve produção"; `—` diz "não sabemos". No incidente de
+      // 24-25/08 a diferença entre as duas frases custou ~18h.
+      _aplicarColetaFora();
+    }
+
+    /**
+     * Troca os KPIs por `—` quando NENHUMA regional do escopo está coletando.
+     * Escopo misto (uma regional fora, outra ok) mantém os números: eles são
+     * reais, só incompletos — e a faixa de aviso já diz isso. Apagar dado bom
+     * seria o erro oposto.
+     */
+    function _aplicarColetaFora() {
+      if (!_coletaTudoFora(_lastColeta)) return;
+      ['m-concluidas', 'm-executadas', 'm-rejeitadas', 'm-baixadas',
+       'm-relogins', 'm-ativas-num'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '—';
+      });
+      const pct = document.getElementById('m-concluidas-pct');
+      if (pct) pct.textContent = 'sem dado — coleta indisponível';
+      // Sub-infos que só fazem sentido com carteira real.
+      ['m-carteira-afazer', 'm-baixadas-inicial-wrap',
+       'm-carteira-entradas', 'm-carteira-canceladas'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
     }
 
     // ── SUBCATEGORIAS (enriquecimento lazy) ──────────────────────────────
@@ -6870,10 +6982,20 @@ ${matrizHTML}
       }
 
       if (teams.length === 0) {
-        // Se ainda há fetch ao vivo em voo, "Carregando…" (não "Nenhuma equipe").
-        document.getElementById('teams-grid').innerHTML = _teamsLoading
-          ? `<div class="empty-state"><div class="spinner"></div><br>Carregando equipes…</div>`
-          : `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
+        // Lista vazia tem TRÊS causas distintas e o painel tratava as três com a
+        // mesma frase (P1-39): fetch em voo, coleta caída, e "de fato ninguém em
+        // campo". "Nenhuma equipe encontrada" com a coleta fora é uma afirmação
+        // falsa — as equipes existem, nós é que não conseguimos vê-las.
+        let vazio;
+        if (_teamsLoading) {
+          vazio = `<div class="empty-state"><div class="spinner"></div><br>Carregando equipes…</div>`;
+        } else if (_coletaTudoFora(_lastColeta)) {
+          vazio = `<div class="empty-state">Coleta indisponível — não é possível saber quais equipes estão em campo.`
+                + `<br><small>Veja o aviso acima. Isto <b>não</b> significa que nenhuma equipe está trabalhando.</small></div>`;
+        } else {
+          vazio = `<div class="empty-state">Nenhuma equipe encontrada.</div>`;
+        }
+        document.getElementById('teams-grid').innerHTML = vazio;
         return;
       }
       // Range atual do monitor — usado pra filtrar contadores do card (Andamento,

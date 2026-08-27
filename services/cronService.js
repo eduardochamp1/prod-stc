@@ -79,6 +79,37 @@ async function _clearSnapshotError() {
   } catch (_) {}
 }
 
+// ── ÚLTIMO CICLO OK POR SETOR (P1-39) ────────────────────────────────────────
+// `snapshot_last_ok` responde "quando foi o último ciclo bem-sucedido" — e no
+// incidente de 24-25/08/2026 ele ficou VERDE o tempo todo, porque GUA e CAC
+// seguiram coletando enquanto SJC estava fora (credencial WPA inválida). A
+// informação "SJC não coleta desde ontem" não existia em lugar nenhum, e o
+// painel não tinha como dizer "indisponível desde HH:MM" em vez de mostrar 0.
+//
+// `sector_last_ok` guarda um carimbo POR SETOR. O merge é o que importa: gravar
+// o mapa inteiro apagaria o histórico justamente dos setores que falharam neste
+// ciclo — os únicos que precisamos datar.
+function _mergeSectorLastOk(anterior, sectorsOk, ts) {
+  const base = (anterior && typeof anterior === 'object' && !Array.isArray(anterior))
+    ? { ...anterior }
+    : {};
+  for (const s of (Array.isArray(sectorsOk) ? sectorsOk : [])) {
+    if (s) base[s] = ts;
+  }
+  return base;
+}
+
+/** Persiste o carimbo por setor. Best-effort: erro de banco não derruba o ciclo. */
+async function _recordSectorLastOk(sectorsOk) {
+  if (!Array.isArray(sectorsOk) || sectorsOk.length === 0) return;
+  try {
+    const sq = require('../db/queries');
+    const row = await sq.getSetting('sector_last_ok');
+    const merged = _mergeSectorLastOk(row && row.data, sectorsOk, new Date().toISOString());
+    await sq.setSetting('sector_last_ok', merged);
+  } catch (_) { /* setting opcional */ }
+}
+
 // Decisão PURA do desfecho do ciclo de snapshot (testável sem DB/rede):
 //   teamsCount > 0                     → 'ok'    (salvou algo; sucesso, ainda que parcial)
 //   0 equipes e algum setor FALHOU     → 'error' (queda real, não "dia vazio")
@@ -207,6 +238,7 @@ async function runSnapshot() {
       sectors_skipped: sectorReport.skipped,
       sectors_failed:  sectorReport.failed.map(f => f.sector),
     });
+    _recordSectorLastOk(sectorReport.ok);   // carimbo por setor (P1-39)
     _clearSnapshotError();   // ciclo deu certo → limpa erro de ciclo antigo
     if (sectorReport.failed.length > 0) {
       log.warn('snapshot_partial', {
@@ -1585,4 +1617,6 @@ module.exports = {
   runSyncIntervalos,
   // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
   _classifySnapshotOutcome,
+  // Exportado pra teste (P1-39) — merge do carimbo por setor.
+  _mergeSectorLastOk,
 };
