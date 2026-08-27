@@ -98,6 +98,7 @@
 | P1-37 | Coleta ao vivo de um setor falha → card da regional exibe os números das OUTRAS regionais | Dados/Segurança | **done** (25/08) — escopo do summary passa a vir de `req.scope.regionals` e filtra `snapshots.regional`; 3 testes |
 | P1-38 | `/wpa/nota/:noteId` e `/debug/*` serviam nota/payload de QUALQUER regional | Segurança | **done** (25/08) — 4 portas fechadas + `/debug` vira admin-only; 10 testes |
 | P1-39 | Setor cuja coleta falha some do painel SEM aviso: `/api/teams` descarta o `report` que o P1-30 já produz | Ops/Frontend | **done** (25/08) — `coleta` no payload + faixa no painel + `—` no lugar de `0`; 13 testes |
+| P1-40 | Suíte de testes chamava a API da EDP de verdade — `DATA_MODE=mock` não impedia | Qualidade/Ops | **done** (26/08) — mock deixa de tocar a rede em `/wpa/nota` e `/debug/*`; 1 teste de regressão |
 | P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | pending |
 | P2-19 | Equipe fora da whitelist descartada ANTES do snapshot, sem log → histórico não-backfillável | Dados | pending |
 | P2-20 | Leitura do histórico depende da whitelist de HOJE → desativar equipe apaga produção já reportada | Dados/Governança | pending |
@@ -1981,6 +1982,45 @@ feita em PR separado depois dos testes.
 - **Rollback:** o campo é aditivo; front antigo ignora.
 - **Relacionado:** P1-37 (mesmo incidente, outra metade), P1-30 (produziu o
   report), P1-21, P1-1 (alerta ativo).
+
+---
+
+## P1-40 — A suíte de testes chamava a API da EDP de verdade
+
+- **Categoria:** Qualidade / Ops
+- **Status:** done (26/08/2026) — 1 teste de regressão
+- **Origem:** descoberto ao rodar os testes do P1-38 **na VM**, logo após o
+  deploy. No meio da suíte apareceram linhas que não deveriam existir:
+  `[WPA] Token (account=sp) carregado do cache Supabase` seguido de
+  `[wpa] getNoteDetail OK noteId=1111... sector=DSSJ 37ms`.
+- **Evidência:** `routes/index.js` — `const nota = await getNoteDetail(noteId, sectorId)`
+  era chamado **sem checar `MODE`**, então `DATA_MODE=mock` não impedia nada. O
+  mesmo valia para as 5 rotas `/debug/*`, que chamam `wpaFetch` direto.
+- **Por que passou despercebido:** na máquina de dev não há `DATABASE_URL`, logo
+  não há token em cache e a chamada morre antes de sair. Na VM há as duas coisas.
+  O sintoma só existe onde há credencial — ou seja, só em produção.
+- **Impacto:** cada `node --test` fazia ~6 chamadas reais à EDP com token de
+  produção. E o risco maior não é o tráfego: com o token **vencido**, o
+  `wpaFetch` chama `getToken` → `login()` → `/signin`. **A suíte de testes
+  queimaria uma das 5 tentativas de login da conta na EDP** — exatamente o
+  recurso que o P1-20/P1-29 existem para proteger, e que custou ~30h de coleta
+  parada em 24-25/08. Um `pre-push` (P1-6) roda a suíte a cada push.
+- **Ação:** ✅ `/wpa/nota/:noteId` devolve 404 explicativo em modo mock, antes do
+  `getNoteDetail`. ✅ Middleware em `/debug/*` faz o mesmo — montado DEPOIS do
+  `requireAdmin`, para 403 por permissão continuar tendo precedência sobre 404
+  por modo, e os testes de autorização seguirem exercitando o guard real.
+- **Critério de aceite:**
+  - [x] Teste explícito: admin em `/wpa/nota` com mock → 404 com `debug.mode`.
+  - [x] Os testes de escopo caíram de 152ms para ~4ms (`/debug`: 735ms → 2ms) —
+        a queda de latência É a evidência de que a rede saiu do caminho.
+  - [x] Os 10 testes do P1-38 seguem verdes: o guard de escopo continua sendo
+        exercitado de verdade, não contornado pelo 404.
+- **Esforço:** 30min.
+- **Rollback:** trivial — o guard é um early-return.
+- **Regra que fica:** modo mock não toca a rede. Rota que chame serviço externo
+  precisa checar `MODE` antes, não depois.
+- **Relacionado:** P1-38 (onde apareceu), P1-20/P1-29 (o recurso protegido),
+  P1-6 (pre-push roda a suíte), P2-1.
 
 ---
 

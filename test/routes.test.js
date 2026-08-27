@@ -423,3 +423,18 @@ test('P1-38: /debug sem token → 401 (autenticação antes de autorização)', 
   const { status } = await get('/api/debug/notas?sectorId=DESG');
   assert.equal(status, 401);
 });
+
+test('P1-38: a suíte NUNCA chama a WPA de verdade (DATA_MODE=mock não toca a rede)', async () => {
+  // Regressão de 26/08/2026: rodando estes testes NA VM apareceram
+  // `[wpa] getNoteDetail OK ... sector=DSSJ` com token real no meio da suíte —
+  // a rota chamava a EDP porque o getNoteDetail não checava MODE. Na máquina de
+  // dev passava batido (sem DATABASE_URL não há token em cache). Com token
+  // vencido, a suíte dispararia /signin e queimaria uma das 5 tentativas de
+  // login da conta na EDP.
+  const t = await loginAs('admin', 'adminpass');
+  const { status, json } = await get(
+    '/api/wpa/nota/11111111-2222-3333-4444-555555555555?sectorId=DSSJ', t);
+  assert.equal(status, 404, 'em mock a rota para antes da WPA');
+  assert.equal(json.debug?.mode, 'mock');
+  assert.match(json.error, /mock/i);
+});

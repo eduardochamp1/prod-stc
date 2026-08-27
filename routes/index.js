@@ -105,6 +105,21 @@ router.use('/admin', requireAdmin);
 // /debug: são ferramentas manuais do dev, e admin é quem as usa.
 router.use('/debug', requireAdmin);
 
+// Nenhuma rota /debug toca a WPA em modo mock (26/08/2026). Todas as 5 chamam
+// wpaFetch direto, sem checar MODE — então a suíte de testes ia à EDP de
+// verdade. Fica DEPOIS do requireAdmin de propósito: 403 por permissão continua
+// tendo precedência sobre 404 por modo, e os testes de autorização seguem
+// exercitando o guard real. Mesmo motivo do bloco em /wpa/nota.
+router.use('/debug', (req, res, next) => {
+  if (MODE === 'mock') {
+    return res.status(404).json({
+      error: 'rotas /debug não operam em DATA_MODE=mock (não tocam a WPA).',
+      mode: MODE,
+    });
+  }
+  next();
+});
+
 // db/queries (leitura do Postgres): carregado em todos os modos que não sejam
 // mock. (O nome sbq é legado — antes "supabase queries"; hoje é o pg shim.)
 let _sbq = null;
@@ -1119,6 +1134,20 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     }
 
     // ── 2) Cache miss → busca ao vivo na WPA ─────────────────────────────
+    // ⚠️ 26/08/2026: esta chamada NÃO checava MODE, então `DATA_MODE=mock` não
+    // impedia nada — a rota ia à EDP de verdade. Descoberto rodando os testes do
+    // P1-38 NA VM: apareceram `getNoteDetail OK ... sector=DSSJ` com token real
+    // no meio da suíte. Na máquina de dev passava batido (sem DATABASE_URL não
+    // há token em cache). Pior: com token vencido, o wpaFetch dispararia
+    // /signin e a SUÍTE DE TESTES queimaria uma das 5 tentativas de login da
+    // conta na EDP — o mesmo recurso que o P1-20/P1-29 protegem.
+    // Modo mock não toca a rede. Ponto.
+    if (MODE === 'mock') {
+      return res.status(404).json({
+        error: 'Detalhe de nota não disponível em DATA_MODE=mock (a rota não chama a WPA aqui).',
+        debug: { noteIdOriginal, noteIdUsed: noteId, sectorId, mode: MODE },
+      });
+    }
     const nota = await getNoteDetail(noteId, sectorId);
     if (!nota) {
       console.warn(`[wpa/nota] WPA retornou payload vazio — noteId=${noteId} sectorId=${sectorId} resolvedFromCodigo=${resolvedFromCodigo}`);
