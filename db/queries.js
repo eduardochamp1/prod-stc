@@ -873,7 +873,7 @@ async function getNoteDetailCache(noteId) {
   const sb = getClient();
   const { data, error } = await sb
     .from('note_details')
-    .select('payload, fetched_at')
+    .select('payload, fetched_at, sector_id')   // sector_id: escopo no caller (P1-38)
     .eq('note_id', noteId)
     .maybeSingle();
   if (error) throw error;

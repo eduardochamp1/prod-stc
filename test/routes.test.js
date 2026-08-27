@@ -27,10 +27,14 @@ process.env.NODE_ENV    = 'test';
 process.env.DATA_MODE   = 'mock';
 process.env.JWT_SECRET  = 'test-secret-routes';
 process.env.CRON_SECRET = 'test-cron-secret';
-// 2 usuários: admin (todas) e guarapari (só GUA). Senhas conhecidas.
+// 3 usuários: admin (todas), guarapari (só GUA) e saopaulo (só SJC). Senhas
+// conhecidas. `saopaulo` existe pro P1-38: o default de sectorId da rota
+// /wpa/nota é 'DESG' (GUA), então só um usuário SEM GUA prova que o default
+// não fura o escopo.
 process.env.AUTH_USERS = [
   `admin:${sha256('adminpass')}:admin:GUA|CAC|SJC`,
   `guarapari:${sha256('guapass')}:user:GUA`,
+  `saopaulo:${sha256('sppass')}:user:SJC`,
 ].join(',');
 
 const app = require('../server');
@@ -323,3 +327,99 @@ test('P2-8: GET /css/app.css → 200 text/css com as variáveis de tema', async 
 // (getMonthTotals/getDailyHistory/getMetasCalculadas/getNotasDeEquipe em
 // db/queries.js e db/notasQueries.js). Cobertura 200-path fica pro P2-1 (fixtures
 // de DB no backlog).
+
+// ── P1-38: /wpa/nota/:noteId ignorava o escopo de regional ────────────────────
+// Achado em 25/08/2026 investigando o incidente de SJC. A rota devolve a nota
+// COMPLETA (endereço, cliente, colaboradores, checkpoints, e fotos com ?fotos=1)
+// e tinha QUATRO portas sem escopo:
+//   1. `?sectorId=` era validado só contra a lista de setores válidos
+//   2. o cache note_details era lido por UUID puro, sem olhar o sector_id gravado
+//   3. getTeamsCurrent({}) resolvia código→UUID varrendo todas as regionais
+//   4. searchNoteByNumber consultava a WPA sem escopo
+// Basta conhecer o número da OS — que circula em auditoria da EDP e é o que o
+// gestor tem na mão. Mesma classe do P0-4 e do P1-12.
+
+test('P1-38: usuário GUA pedindo ?sectorId=DSSJ → 403 (setor fora do escopo)', async () => {
+  const t = await loginAs('guarapari', 'guapass');
+  const { status, json } = await get(
+    '/api/wpa/nota/11111111-2222-3333-4444-555555555555?sectorId=DSSJ', t);
+  assert.equal(status, 403, 'DSSJ é SJC; o usuário só tem GUA');
+  assert.equal(json.code, 'SECTOR_REGIONAL_MISMATCH');
+});
+
+test('P1-38: usuário GUA pedindo ?sectorId=DESC (Cachoeiro) → 403', async () => {
+  const t = await loginAs('guarapari', 'guapass');
+  const { status } = await get(
+    '/api/wpa/nota/11111111-2222-3333-4444-555555555555?sectorId=DESC', t);
+  assert.equal(status, 403);
+});
+
+test('P1-38: usuário GUA no PRÓPRIO setor não é bloqueado pelo guard', async () => {
+  // Não afirma que a nota existe (em mock não existe) — afirma que o 403 de
+  // escopo não é disparado. Regressão: um guard cego bloquearia o caso legítimo.
+  const t = await loginAs('guarapari', 'guapass');
+  const { status } = await get(
+    '/api/wpa/nota/11111111-2222-3333-4444-555555555555?sectorId=DESG', t);
+  assert.notEqual(status, 403, 'DESG é GUA — o usuário tem escopo');
+});
+
+test('P1-38: admin acessa qualquer setor', async () => {
+  const t = await loginAs('admin', 'adminpass');
+  for (const s of ['DESG', 'DEPT', 'DESC', 'DSSJ']) {
+    const { status } = await get(
+      `/api/wpa/nota/11111111-2222-3333-4444-555555555555?sectorId=${s}`, t);
+    assert.notEqual(status, 403, `admin tem as 3 regionais — ${s} não pode dar 403`);
+  }
+});
+
+test('P1-38: sectorId inválido continua 400, não 403 (não confundir os erros)', async () => {
+  const t = await loginAs('guarapari', 'guapass');
+  const { status } = await get(
+    '/api/wpa/nota/11111111-2222-3333-4444-555555555555?sectorId=XXXX', t);
+  assert.equal(status, 400, 'setor inexistente é entrada inválida, não falta de permissão');
+});
+
+test('P1-38: sem ?sectorId, o default NÃO pode furar o escopo', async () => {
+  // O default da rota é 'DESG' (GUA). Para um usuário que não tem GUA, cair no
+  // default seria exatamente o vazamento que este item fecha.
+  const t = await loginAs('saopaulo', 'sppass');
+  const { status, json } = await get(
+    '/api/wpa/nota/11111111-2222-3333-4444-555555555555', t);
+  assert.equal(status, 403, 'usuário só de SJC não pode cair no default DESG');
+  assert.equal(json.code, 'SECTOR_REGIONAL_MISMATCH');
+});
+
+// ── P1-38 (extensão): /debug/* estava aberto a qualquer usuário autenticado ───
+// Mesmo eixo do vazamento acima, achado ao varrer os outros `req.query.sectorId`.
+// `router.use('/admin', requireAdmin)` cobria só /admin; as 5 rotas /debug/*
+// aceitam ?sectorId= livre e devolvem payload BRUTO da WPA (sessões, carteira,
+// notas do dia). Nada no front nem em scripts consome /debug — são ferramentas
+// de inspeção manual do dev, e não têm por que estar ao alcance de conta comum.
+
+test('P1-38: /debug/notas exige admin (não-admin → 403)', async () => {
+  const t = await loginAs('guarapari', 'guapass');
+  const { status } = await get('/api/debug/notas?sectorId=DSSJ', t);
+  assert.equal(status, 403, 'conta comum não inspeciona payload bruto de outro setor');
+});
+
+test('P1-38: /debug/* inteiro exige admin, não só uma rota', async () => {
+  const t = await loginAs('guarapari', 'guapass');
+  for (const p of ['/api/debug/historico-notas?sectorId=DSSJ&date=2026-08-25',
+                   '/api/debug/historico?sectorId=DSSJ&date=2026-08-25',
+                   '/api/debug/preroute?sectorId=DSSJ',
+                   '/api/debug/teamsstatus?sectorId=DSSJ']) {
+    const { status } = await get(p, t);
+    assert.equal(status, 403, `${p} tem que exigir admin`);
+  }
+});
+
+test('P1-38: admin continua entrando em /debug (o guard não quebra a ferramenta)', async () => {
+  const t = await loginAs('admin', 'adminpass');
+  const { status } = await get('/api/debug/notas?sectorId=DESG', t);
+  assert.notEqual(status, 403, 'admin é justamente quem usa essas rotas');
+});
+
+test('P1-38: /debug sem token → 401 (autenticação antes de autorização)', async () => {
+  const { status } = await get('/api/debug/notas?sectorId=DESG');
+  assert.equal(status, 401);
+});

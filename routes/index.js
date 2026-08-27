@@ -6,7 +6,7 @@
 const express = require('express');
 const { getTeams, getTeamDetail, getSummary } = require('../services/dataService');
 const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail,
-        searchNoteByNumber, _isNoteNumber } = require('../services/wpaService');
+        searchNoteByNumber, _isNoteNumber, REGIONAL_MAP } = require('../services/wpaService');
 const { dateBRT } = require('../services/timeUtil');
 const { inRegionals } = require('../services/regionals');
 
@@ -97,6 +97,13 @@ router.use(applyScope);
 // Todas as rotas /admin/* exigem role=admin (defesa em profundidade — frontend
 // também esconde botões pra não-admin, mas a API rejeita por sua conta).
 router.use('/admin', requireAdmin);
+
+// /debug/* também (P1-38, 25/08/2026). São 5 rotas de inspeção que aceitam
+// ?sectorId= livre e devolvem payload BRUTO da WPA (sessões, carteira, notas do
+// dia) — qualquer conta autenticada lia o de outra regional, o mesmo vazamento
+// que o guard de /wpa/nota fecha. Nada no frontend nem em scripts consome
+// /debug: são ferramentas manuais do dev, e admin é quem as usa.
+router.use('/debug', requireAdmin);
 
 // db/queries (leitura do Postgres): carregado em todos os modos que não sejam
 // mock. (O nome sbq é legado — antes "supabase queries"; hoje é o pg shim.)
@@ -260,6 +267,23 @@ async function _resolveTeamRegional(sigla) {
  * Admin (regional=ALL) sempre passa. Quando team é vazio/ALL/null, passa
  * (não-admin já tem o filtro por regional aplicado pelo authMiddleware).
  */
+/**
+ * O SETOR pedido pertence a alguma regional do escopo do usuário? FUNÇÃO PURA.
+ *
+ * P1-38 (25/08/2026). Irmã do `enforceTeamRegional` (P0-4), mas para o eixo
+ * SETOR — que é como `/wpa/nota/:noteId` endereça a EDP. Lá o `?sectorId=` era
+ * validado só contra a lista de setores existentes, nunca contra o escopo: um
+ * usuário de GUA passava `?sectorId=DSSJ` e lia a nota inteira de SJC.
+ *
+ * Setor desconhecido devolve false de propósito — quem valida a EXISTÊNCIA do
+ * setor é o 400 da rota, que roda antes. Aqui, na dúvida, nega.
+ */
+function _setorNoEscopo(sectorId, regionals) {
+  if (!Array.isArray(regionals) || regionals.length === 0) return false;
+  const reg = REGIONAL_MAP[sectorId];
+  return Boolean(reg) && regionals.includes(reg);
+}
+
 async function enforceTeamRegional(req, res, team) {
   if (!team || team === 'ALL') return true;
   // JWT v=2 usa req.user.regionals (array de siglas reais). NÃO existe mais
@@ -977,6 +1001,22 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     return res.status(400).json({ error: `sectorId inválido: ${sectorId}` });
   }
 
+  // ── ESCOPO DE REGIONAL (P1-38, 25/08/2026) ────────────────────────────────
+  // Esta rota devolve a nota COMPLETA (endereço, cliente, colaboradores,
+  // checkpoints, e fotos com ?fotos=1). Até aqui o `sectorId` era conferido só
+  // contra a lista de setores EXISTENTES — nunca contra o escopo do usuário.
+  // Um user de GUA passando ?sectorId=DSSJ lia qualquer nota de SJC; bastava o
+  // número da OS, que circula em auditoria da EDP. Mesma classe do P0-4/P1-12.
+  // Nota: o default 'DESG' também passava aqui, então quem não tem GUA furava o
+  // escopo sem sequer informar o parâmetro.
+  if (!_setorNoEscopo(sectorId, req.scope.regionals)) {
+    return res.status(403).json({
+      error: `Acesso negado: o setor ${sectorId} não pertence à(s) regional(is) do seu usuário `
+           + `(${req.scope.regionals.join(', ')}).`,
+      code: 'SECTOR_REGIONAL_MISMATCH',
+    });
+  }
+
   // Tolerância: se chegar número de OS em vez de UUID (cache antigo do front
   // ou notas históricas sem UUID mapeado), tenta resolver via teams_current.
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(noteId);
@@ -986,7 +1026,11 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     try {
       const sq = sbq();
       if (sq) {
-        const all = await sq.getTeamsCurrent({});
+        // P1-38: era getTeamsCurrent({}) — `{}` cai no ramo "sem filtro" de
+        // db/queries.js e varria as equipes de TODAS as regionais pra resolver
+        // o código. O escopo do setor já foi validado acima; aqui fecha o eixo
+        // da equipe, pra um código de outra regional não virar UUID válido.
+        const all = await sq.getTeamsCurrent({ regionals: req.scope.regionals });
         outer: for (const t of all) {
           for (const k of ['notasConcluidas','notasExecutadas','notasBaixadas','notasRejeitadas']) {
             for (const n of (t[k] || [])) {
@@ -1017,10 +1061,22 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
     try {
       const achada = await searchNoteByNumber(noteId);
       if (achada?.id) {
-        noteId = achada.id;
-        resolvedFromCodigo = true;
-        console.log(`[wpa/nota] resolvido via SearchNotesByNumber: ${noteIdOriginal} → ${noteId}`
-          + ` (equipe ${achada.equipe || '?'})`);
+        // P1-38: este fallback pergunta à WPA e ela responde sobre QUALQUER
+        // equipe, inclusive de regional fora do escopo. A busca é por número de
+        // OS — exatamente o dado que circula em auditoria. Se a equipe dona não
+        // é do escopo, tratamos como não encontrada: 404, não 403, pra não
+        // confirmar a existência da nota a quem não pode vê-la.
+        const regNota = achada.equipe ? await _resolveTeamRegional(achada.equipe) : null;
+        if (regNota && req.scope.regionals.includes(regNota)) {
+          noteId = achada.id;
+          resolvedFromCodigo = true;
+          console.log(`[wpa/nota] resolvido via SearchNotesByNumber: ${noteIdOriginal} → ${noteId}`
+            + ` (equipe ${achada.equipe || '?'})`);
+        } else {
+          console.warn(`[wpa/nota] nota "${noteIdOriginal}" pertence a ${achada.equipe || '?'}`
+            + ` (regional ${regNota || 'desconhecida'}) — fora do escopo ${req.scope.regionals.join(',')}`);
+          return res.status(404).json({ error: 'Nota não encontrada.' });
+        }
       } else {
         console.warn(`[wpa/nota] SearchNotesByNumber não achou a nota "${noteIdOriginal}"`);
       }
@@ -1040,7 +1096,17 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
         const sq = sbq();
         if (sq) {
           const cached = await sq.getNoteDetailCache(noteId);
-          if (cached?.payload) {
+          // P1-38: o cache é indexado por UUID puro. Sem esta checagem, um UUID
+          // de outra regional era servido daqui SEM sequer tocar a WPA — o
+          // `?sectorId=` legítimo passava no guard de cima e o cache entregava a
+          // nota de outro setor. `sector_id` é gravado pelo próprio
+          // setNoteDetailCache, então é a procedência real do payload.
+          // Cache antigo sem sector_id (gravado antes desta coluna existir) não
+          // é servido às cegas: cai no fetch ao vivo, que já é escopado.
+          if (cached?.payload && !_setorNoEscopo(cached.sector_id, req.scope.regionals)) {
+            console.warn(`[wpa/nota] cache de ${noteId} é do setor ${cached.sector_id || '?'}`
+              + ` — fora do escopo ${req.scope.regionals.join(',')}; ignorando o cache`);
+          } else if (cached?.payload) {
             console.log(`[wpa/nota] cache hit noteId=${noteId} fetched=${cached.fetched_at}`);
             // Corrige timestamps gravados antes do fix de TZ (08/06/2026) — caches
             // antigos têm ISO sem 'Z' nos campos de data, o front interpreta como

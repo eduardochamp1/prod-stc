@@ -96,7 +96,7 @@
 | P1-35 | Token vencido chega como **500 "Token is invalid!"**, não 401 — `wpaFetch` propagava sem relogin e `_safeNotes` engolia em bucket vazio: token morto virava "equipe sem produção" no snapshot | Dados/Ops | **done** (87072f5, 22/08) — invalida + reloga 1× por request; 11 testes |
 | P1-36 | Cron de token fazia `/signin` INCONDICIONAL às :00 e :45 (32 logins/dia) na conta `es`, compartilhada com o GQO nos MESMOS setores — e cada login invalida o token anterior | Ops | **done** (87072f5, 22/08) — `ensureFreshToken` decide pelo `exp` do JWT; 9 testes |
 | P1-37 | Coleta ao vivo de um setor falha → card da regional exibe os números das OUTRAS regionais | Dados/Segurança | **done** (25/08) — escopo do summary passa a vir de `req.scope.regionals` e filtra `snapshots.regional`; 3 testes |
-| P1-38 | `/wpa/nota/:noteId` resolve código→UUID varrendo `teams_current` SEM escopo de regional | Segurança | pending |
+| P1-38 | `/wpa/nota/:noteId` e `/debug/*` serviam nota/payload de QUALQUER regional | Segurança | **done** (25/08) — 4 portas fechadas + `/debug` vira admin-only; 10 testes |
 | P1-39 | Setor cuja coleta falha some do painel SEM aviso: `/api/teams` descarta o `report` que o P1-30 já produz | Ops/Frontend | **done** (25/08) — `coleta` no payload + faixa no painel + `—` no lugar de `0`; 13 testes |
 | P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | pending |
 | P2-19 | Equipe fora da whitelist descartada ANTES do snapshot, sem log → histórico não-backfillável | Dados | pending |
@@ -1886,28 +1886,53 @@ feita em PR separado depois dos testes.
 
 ---
 
-## P1-38 — `/wpa/nota/:noteId` resolve código→UUID varrendo `teams_current` SEM escopo de regional
+## P1-38 — `/wpa/nota/:noteId` e `/debug/*` serviam nota e payload de QUALQUER regional
 
 - **Categoria:** Segurança
-- **Status:** pending
-- **Origem:** achado de passagem enquanto se investigava o P1-37 (25/08/2026).
-  **Não** foi corrigido junto de propósito — é outra rota e outra classe de risco.
-- **Evidência:** `routes/index.js:966` — `const all = await sq.getTeamsCurrent({})`.
-  O `{}` cai no ramo "sem filtro" de `db/queries.js:252`
-  (`if (Array.isArray(filters.regionals) && filters.regionals.length > 0)`).
-- **Impacto:** quando o front manda um NÚMERO de OS em vez de UUID (cache antigo,
-  nota histórica sem UUID mapeado), a busca varre as equipes de TODAS as
-  regionais. Um usuário de GUA que informe um código de SJC resolve o UUID e
-  segue para o fetch de detalhes. É acesso pontual a UMA nota — não é contagem
-  agregada, e depende de conhecer o código exato — por isso P1 e não P0.
-- **Ação:** ⬜ passar `{ regionals: req.scope.regionals }` no `getTeamsCurrent`,
-  e considerar `_assertRegionals` (já existe em `db/queries.js:40`) nas rotas de
-  usuário — hoje `getTeamsCurrent` é a única leitura escopável sem essa guarda.
-- **Critério de aceite:** teste em que usuário GUA pede um código de SJC → 403 ou
-  não-encontrado, e admin segue resolvendo.
-- **Esforço:** 1h + teste.
-- **Rollback:** trivial.
-- **Relacionado:** P1-12, P0-4, P1-37.
+- **Status:** done (25/08/2026) — 10 testes de contrato de rota
+- **Origem:** achado de passagem durante o P1-37, no incidente de SJC. Ao tratar,
+  o buraco se mostrou **maior que o registrado**: eram 4 portas na rota da nota,
+  mais 5 rotas `/debug/*` abertas a qualquer conta autenticada.
+- **Evidência (as 4 portas de `/wpa/nota/:noteId`):**
+  1. `?sectorId=` era validado só contra a lista de setores EXISTENTES
+     (`['DESG','DEPT','DESC','DSSJ']`), nunca contra `req.scope.regionals`. O
+     default `'DESG'` também passava — quem não tem GUA furava o escopo **sem
+     sequer informar o parâmetro**.
+  2. O cache `note_details` era lido por UUID puro (`getNoteDetailCache`), sem
+     olhar o `sector_id` que o próprio `setNoteDetailCache` grava. A nota saía
+     daqui **sem tocar a WPA**.
+  3. `getTeamsCurrent({})` — o `{}` cai no ramo "sem filtro" de
+     `db/queries.js:252` e varria as equipes de todas as regionais para resolver
+     código→UUID.
+  4. `searchNoteByNumber` consultava a WPA por NÚMERO de OS, sem escopo.
+- **Evidência (`/debug/*`):** `router.use('/admin', requireAdmin)` cobria só
+  `/admin`. As 5 rotas `/debug/*` (`notas`, `historico-notas`, `historico`,
+  `preroute`, `teamsstatus`) aceitam `?sectorId=` livre e devolvem payload BRUTO
+  da WPA. Nada no frontend nem em `scripts/` as consome — são ferramentas
+  manuais do dev.
+- **Impacto:** a rota devolve a nota COMPLETA — endereço, cliente, colaboradores,
+  checkpoints, e fotos com `?fotos=1`. Bastava o **número da OS**, que é
+  justamente o dado que circula em auditoria da EDP e que o gestor tem na mão.
+  Não é contagem agregada como o P1-12: é o registro individual do cliente final.
+- **Ação:** ✅ `_setorNoEscopo(sectorId, regionals)` (pura, irmã do
+  `enforceTeamRegional` do P0-4) → 403 `SECTOR_REGIONAL_MISMATCH`; cache valida o
+  `sector_id` gravado antes de servir (cache antigo sem a coluna não é servido às
+  cegas — cai no fetch ao vivo, que já é escopado); `getTeamsCurrent` recebe o
+  escopo; `searchNoteByNumber` confere a regional da equipe dona e devolve **404,
+  não 403** (não confirma a existência da nota a quem não pode vê-la);
+  `router.use('/debug', requireAdmin)`.
+- **Critério de aceite:**
+  - [x] GUA pedindo `?sectorId=DSSJ` ou `DESC` → 403.
+  - [x] GUA no próprio setor (`DESG`) **não** é bloqueado — guard cego seria pior.
+  - [x] Admin acessa os 4 setores.
+  - [x] `sectorId` inexistente segue 400 (entrada inválida ≠ falta de permissão).
+  - [x] Usuário só-SJC **sem** `?sectorId` não cai no default `DESG`.
+  - [x] `/debug/*` inteiro exige admin; sem token é 401, não 403.
+- **Esforço:** 2h + testes.
+- **Rollback:** reverter o commit. O guard é aditivo — nenhuma rota nova, nenhum
+  campo removido do payload.
+- **Relacionado:** P0-4 (`enforceTeamRegional`, mesmo padrão no eixo equipe),
+  P1-12, P1-37, P1-18.
 
 ---
 
