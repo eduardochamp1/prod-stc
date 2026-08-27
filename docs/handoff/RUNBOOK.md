@@ -141,6 +141,45 @@ janela, e desde o P1-29 isso vale TAMBÉM entre reinícios. Se acontecer mesmo a
 é só esperar o horário do desbloqueio ou usar a backup. NUNCA fique reiniciando pra
 tentar logar com senha errada — é o que trava.
 
+**"Usuário ou senha inválidos" mas a senha ESTÁ certa** — como provar, sem expor o
+segredo e sem gastar tentativa (incidente 25/08/2026, SJC fora ~30h):
+
+A senha da conta `sp` no `.env` estava desatualizada e tinha **exatamente o mesmo
+número de caracteres** da nova. `len`, `cat .env` e leitura visual não denunciavam
+nada — as três "pareciam certas". Só comparação de hash separou as duas.
+
+```bash
+# 1) hash do que o .env carrega (não imprime a senha)
+cd ~/prod-stc && node -e 'require("dotenv").config({override:true});const c=require("crypto");for(const[k,p]of[["es","WPA_PASSWORD"],["sp","WPA_PASSWORD_SP"],["sp2","WPA_PASSWORD_SP2"]]){const P=process.env[p]||"";console.log(k.padEnd(4),"len="+P.length,"sha8="+(P?c.createHash("sha256").update(P).digest("hex").slice(0,8):"-"));}'
+
+# 2) hash da senha que sabidamente funciona (não ecoa, não vai pro histórico)
+read -rsp 'senha: ' P; echo; printf '%s' "$P" | sha256sum | cut -c1-8; unset P
+```
+
+Hashes diferentes = sequências diferentes. É aritmética, não opinião — serve
+justamente para quando "tenho certeza de que a senha está certa".
+
+Para descartar quoting antes de acusar a senha, hasheie as variantes da linha crua
+(cru / sem aspas / com trim / o que o dotenv devolve). No **dotenv 16.x**:
+`A=ab#c` carrega só `"ab"` (trunca no `#` em valor não-quotado), aspas **duplas**
+expandem `\n`, aspas **simples** são literais (prefira-as), e as pontas sofrem
+trim. Diferença de exatamente 2 caracteres entre cru e carregado = só o par de
+aspas, normal.
+
+Teste de desempate quando o hash não conclui: pegue o valor do `.env`
+(`grep '^WPA_PASSWORD_SP=' .env`) e tente logar com ELE no portal
+(https://edp-wpa-po.azurewebsites.net). O portal dá a mensagem real ("senha
+expirada", "troca no primeiro acesso"), enquanto a API devolve sempre o genérico
+`Usuário ou senha inválidos` — em **HTTP 200**, com `Error.Message` no corpo
+(`wpaService.js:450`); se fosse rede ou cold-start, o erro seria outro.
+
+> ⚠️ **`pm2 logs` mente sobre a origem da linha.** O prefixo (`79|wpa-mon`) é o id
+> ATUAL do app, aplicado na LEITURA — não o id de quem escreveu. Com
+> `merge_logs: true` todos gravam no mesmo arquivo, então linha de processo antigo
+> aparece com o id do processo novo e parece recente. Ancore com
+> `date -u` + `pm2 describe wpa-monitor | grep uptime` antes de concluir que um
+> sintoma sobreviveu ao restart.
+
 **Mensagem de erro nova da EDP:** desde o P1-32 uma mensagem que não casa com
 nossos regexes ("Senha incorreta", "Too many attempts", 429/HTML) também abre o
 breaker — cooldown curto (20 min, `WPA_UNKNOWN_ERROR_COOLDOWN_MIN`) a partir da 2ª

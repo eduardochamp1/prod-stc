@@ -546,10 +546,21 @@ async function login(opts = {}) {
         // pra que os próximos triggers não gastem tentativa (P1-20).
         const opened = _openBreaker(accountKey, err.message);
         if (opened) {
+          // ⚠️ 25/08/2026: esta mensagem dizia "corrija o .env e reinicie o
+          // processo" — o procedimento de ANTES do P1-29. Desde que o breaker
+          // passou a ser persistido (21/08), reiniciar NÃO limpa nada: o boot
+          // re-hidrata o `until` do banco e segue recusando /signin. É a
+          // PRIMEIRA mensagem que o operador vê no incidente, e contradizia a
+          // do cooldown logo acima (que já mandava apagar a chave). Custou um
+          // ciclo inteiro de recuperação fracassada em 25/08.
           console.warn(
             `[WPA] Breaker ABERTO (account=${accountKey}, ${opened.kind}) até ` +
             `${new Date(opened.until).toISOString()} — logins suspensos pra não travar ` +
-            `a conta. Corrija a credencial no .env e reinicie o processo.`);
+            `a conta. RECUPERAÇÃO (nesta ordem): 1) corrija a credencial no .env; ` +
+            `2) DELETE FROM app_settings WHERE key='wpa_breaker'; ` +
+            `3) pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save. ` +
+            `Só reiniciar NÃO resolve (breaker é persistido — P1-29), e "pm2 restart/reload" ` +
+            `não recarrega o .env em cluster mode.`);
         }
         throw err;
       }
