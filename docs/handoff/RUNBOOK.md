@@ -111,6 +111,38 @@ pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
 `WPA_ACCOUNTS_DISABLED=sp` no `.env` + restart. Com a backup ativa, SJC segue via
 `sp2`. Reativar = tirar do `.env` + restart.
 
+> ### ⚠️ SJC roda SEM FAILOVER desde 26/08/2026 — decisão, não bug
+>
+> `WPA_ACCOUNTS_DISABLED=sp2` está ativo no `.env` **de propósito**. A senha da
+> conta do Luan (`sp2`) ficou desatualizada no incidente de 24-25/08 e o José
+> decidiu **não renová-la**. A cadeia `DSSJ → [sp, sp2]` continua no código
+> (P1-22), mas na prática só a `sp` (Ismael) coleta São José dos Campos.
+>
+> **Por que a conta fica desativada em vez de só "com senha errada":** conta
+> errada e habilitada é pior que desabilitada. A cada expiração de cooldown ela
+> tentaria `/signin`, falharia, e consumiria uma das **5 tentativas** que a EDP
+> concede antes de travar a conta — queimando devagar a conta de uma pessoa que
+> nem usa o sistema. O kill-switch faz o roteador nunca escolhê-la, sem gastar
+> nada.
+>
+> **O que isso custa:** se a `sp` cair (senha expirada, bloqueio, revogação),
+> **SJC para inteiro** — não há para onde escorregar. Desde o P1-39 o painel
+> avisa na hora ("coleta de São José dos Campos indisponível desde HH:MM") em
+> vez de mostrar `0` como se fosse domingo, então a queda é visível; mas visível
+> não é o mesmo que coberta.
+>
+> **Para religar o failover** (quando houver uma segunda credencial válida —
+> do Luan ou de outra pessoa):
+> 1. `WPA_PASSWORD_SP2='...'` no `.env`, com **aspas simples**;
+> 2. confirmar o hash pelo método da seção "Usuário ou senha inválidos" acima —
+>    **antes** de qualquer restart;
+> 3. `sed -i '/^WPA_ACCOUNTS_DISABLED=/d' ~/prod-stc/.env` (confira que sobrou 0);
+> 4. `DELETE FROM app_settings WHERE key='wpa_breaker';`
+> 5. `pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save`.
+>
+> Não pule o passo 2. Foi exatamente ele que faltou em 25/08 e custou um ciclo
+> inteiro de recuperação fracassada.
+
 > ⚠️ **MUDOU EM 21/08/2026 (P1-29): reiniciar NÃO limpa mais o breaker.**
 > Ele agora é persistido em `app_settings.wpa_breaker`, porque o restart zerava a
 > proteção e um crash-loop (`autorestart` + os 161 restarts num dia registrados no
