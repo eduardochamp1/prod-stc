@@ -1,4 +1,4 @@
-/* Smoke test temporário — persistir snapshot de notas devolvidas.
+/* Smoke test do pipeline de notas devolvidas — GRAVA em produção.
  *
  * ⚠️⚠️ ESTE SCRIPT GRAVA EM PRODUÇÃO. ⚠️⚠️
  *
@@ -7,11 +7,19 @@
  * tabela `notas_snapshots` de produção. O prefixo `_` sugere que era descartável;
  * ficou commitado desde então.
  *
- * A auditoria recomendou APAGAR (o `git log` guarda, se voltar a fazer falta), mas
- * deletar arquivo é decisão do dono do repo — então por ora entrou a guarda
- * abaixo. Se você é o dono e concorda em apagar, apague; se este script tem uso
- * real, troque este comentário pela explicação do uso e tire o "temporário" do
- * título.
+ * A auditoria recomendou APAGAR. **Decisão de 28/08/2026: MANTER**, com a guarda
+ * abaixo. Então ele não é mais "temporário" — é uma ferramenta de smoke test do
+ * pipeline de notas devolvidas, que grava de verdade e por isso exige a flag.
+ *
+ * O que ele faz: coleta as notas devolvidas dos setores via WPA, filtra as da
+ * Engelmig pelo CompanyId e INSERE um snapshot em `notas_snapshots` com o
+ * timestamp do momento. Serve pra validar ponta a ponta que
+ * getTeamsSimple + getNotasDevolvidas + filterEngelmig + saveSnapshot estão
+ * funcionando — o mesmo caminho que o cron das :05 usa.
+ *
+ * ⚠️ Cada execução grava uma linha por nota devolvida. Não rode "pra ver o que
+ * acontece": o dado entra no histórico e o monitor de notas devolvidas passa a
+ * contar aquele instante como uma coleta real.
  */
 
 require('dotenv').config();

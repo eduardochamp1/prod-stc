@@ -20,9 +20,15 @@
  *     que aparece em vários snapshots do mesmo dia conta UMA vez.
  *
  * Uso:
- *   node scripts/backfill-daily-subcat.js                       # tudo
- *   node scripts/backfill-daily-subcat.js 2026-04-01            # de uma data
- *   node scripts/backfill-daily-subcat.js 2026-04-01 2026-04-30 # intervalo
+ *   node scripts/backfill-daily-subcat.js 2026-08-01            # de uma data
+ *   node scripts/backfill-daily-subcat.js 2026-08-01 2026-08-31 # intervalo
+ *   node scripts/backfill-daily-subcat.js --tudo                # histórico inteiro
+ *   node scripts/backfill-daily-subcat.js --force               # ignora o advisory lock
+ *
+ * ⚠️ 28/08/2026 (P2-44): rodar sem argumento NÃO é mais o atalho pra "tudo". Range
+ * acima de 250 mil linhas exige --tudo explícito. Antes, o default era o histórico
+ * completo e o processo morria de OOM em ~70s (697.945 linhas, 2.283 MB, com a
+ * coluna gorda 'data' num array JS) — sem dizer o que fazer. Ver P2-44.
  */
 
 require('dotenv').config();
@@ -44,29 +50,71 @@ function _sessionDate(team) {
   return null;
 }
 
+/**
+ * Snapshots do período, JÁ REDUZIDOS a um por (team, sessionBegin) — o mais
+ * recente de cada sessão.
+ *
+ * 28/08/2026 — P2-44. A versão anterior tinha paginação PRÓPRIA e SEM TETO, e
+ * acumulava tudo em `all[]` com a coluna gorda `data`. Na invocação padrão (sem
+ * `de`) o range era o histórico completo — medido na VM em 28/08: **697.945
+ * linhas, 2.283 MB** — e o processo morria com
+ * `FATAL ERROR: Ineffective mark-compacts near heap limit` em ~2.046 MB, que é o
+ * heap default do Node. O script estava INUTILIZÁVEL nessa forma.
+ *
+ * E como ele duplica o paginador em vez de usar o `_selectAll` do db/queries.js,
+ * nem o teto de 200 páginas de lá o alcançava — o `throw RANGE_TOO_LARGE` que o
+ * P1-41 adicionou é inatingível por este caminho. Corrigir o paginador central
+ * não cobre quem o copiou.
+ *
+ * O conserto é o mesmo do P1-41: reduzir no BANCO. O `indexSnapshots` logo abaixo
+ * sempre usou só um snapshot por `(team, sessionBegin)` — o `latestBySession`. O
+ * `DISTINCT ON` devolve exatamente isso, com a MESMA regra de escolha
+ * (`captured_at DESC`), sem trazer as 697 mil linhas.
+ *
+ * Usa `data->>'sessionBegin'` e não a coluna `session_begin` de propósito: é o
+ * campo que o `indexSnapshots` lê, e o objetivo aqui é não mudar nenhum número.
+ *
+ * Precisa de SQL cru — o pgShim (builder estilo supabase-js) não expressa
+ * DISTINCT ON. Mesma decisão de `getTeamSessionHistory` e de
+ * `getDeslogadasUltimaSessao`.
+ */
 async function fetchSnapshotsRange(de, ate) {
-  const sb = getClient();
-  const all = [];
-  let from = 0;
-  const PAGE = 1000;
-  while (true) {
-    // captured_at é CRÍTICO — usado em indexSnapshots pra escolher o snapshot
-    // MAIS RECENTE de cada (team, sessionBegin). Sem ele, comparações viram
-    // undefined > undefined = false, e o Map mantém o primeiro snapshot
-    // encontrado (que pode ser velho e com poucas notas concluídas).
-    let q = sb.from('snapshots')
-      .select('date, sector_id, regional, team_name, captured_at, data')
-      .order('captured_at', { ascending: false }); // mais recente primeiro
-    if (de)  q = q.gte('date', de);
-    if (ate) q = q.lte('date', ate);
-    const { data, error } = await q.range(from, from + PAGE - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    from += PAGE;
-  }
-  return all;
+  const { _getPool } = require('../services/pgShim');
+  const pool = _getPool();
+
+  const params = [];
+  const where = [];
+  if (de)  { params.push(de);  where.push(`s.date >= $${params.length}::date`); }
+  if (ate) { params.push(ate); where.push(`s.date <= $${params.length}::date`); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (s.team_name, s.data->>'sessionBegin')
+            s.date, s.sector_id, s.regional, s.team_name, s.captured_at, s.data
+       FROM snapshots s
+       ${whereSql}
+      ORDER BY s.team_name, s.data->>'sessionBegin', s.captured_at DESC`,
+    params);
+  return rows;
+}
+
+/**
+ * Quantas linhas de `snapshots` o range abrange, ANTES da redução. Barato:
+ * conta pelo índice de `date` e não toca a coluna `data`. Serve pra recusar
+ * range absurdo com número real em vez de deixar o processo morrer 70s depois
+ * com stack de V8 (P2-44).
+ */
+async function contarSnapshotsNoRange(de, ate) {
+  const { _getPool } = require('../services/pgShim');
+  const pool = _getPool();
+  const params = [];
+  const where = [];
+  if (de)  { params.push(de);  where.push(`date >= $${params.length}::date`); }
+  if (ate) { params.push(ate); where.push(`date <= $${params.length}::date`); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM snapshots ${whereSql}`, params);
+  return rows[0].n;
 }
 
 async function fetchSubcatMap(noteIds) {
@@ -114,9 +162,12 @@ function indexSnapshots(snapshots) {
   // da sessão) — assim não duplicamos contagem por aparecer em múltiplos snapshots.
   const latestBySession = new Map(); // key: `${team}|${sessionBegin}` → snapshot
 
-  // Snapshots vêm ordenados por captured_at DESC do fetchSnapshotsRange,
-  // então o primeiro snapshot de cada (team, sessionBegin) que encontrarmos
-  // já é o mais recente. Comparação explícita não necessária.
+  // 28/08/2026 (P2-44): o fetchSnapshotsRange agora devolve UMA linha por
+  // (team, sessionBegin) — o DISTINCT ON faz esta redução no banco, com a mesma
+  // regra (captured_at DESC). O Map abaixo virou redundante e foi MANTIDO de
+  // propósito: é barato, documenta a regra em JS, e se alguém trocar a query de
+  // volta o comportamento não muda em silêncio. Mesma decisão do P1-41 em
+  // getTeamSessionHistory.
   snapshots.forEach(snap => {
     const t = snap.data;
     if (!t) return;
@@ -221,9 +272,32 @@ async function _trabalho() {
 
   const t0 = Date.now();
 
-  console.log('\n[1/4] Carregando snapshots...');
+  // 28/08/2026 — P2-44. Range aberto era o default e matava o processo por OOM
+  // (697.945 linhas, 2.283 MB). Com o DISTINCT ON no fetchSnapshotsRange o
+  // histórico completo passou a caber, mas ainda é a operação mais pesada do
+  // repo — então ela deixou de ser o default silencioso: pede confirmação, com o
+  // número REAL de linhas do range.
+  const LIMIAR_CONFIRMA = 250000;
+  const totalLinhas = await contarSnapshotsNoRange(argDe, argAte);
+  console.log(`Linhas de snapshots no range: ${totalLinhas.toLocaleString('pt-BR')}`);
+  if (totalLinhas > LIMIAR_CONFIRMA && !process.argv.includes('--tudo')) {
+    console.error('');
+    console.error(`✖ Range grande demais pra rodar sem confirmação: ${totalLinhas.toLocaleString('pt-BR')} linhas`);
+    console.error(`  (limiar: ${LIMIAR_CONFIRMA.toLocaleString('pt-BR')})`);
+    console.error('');
+    console.error('  Antes de 28/08/2026 isto NÃO avisava: o processo carregava tudo num array');
+    console.error('  JS e morria de OOM em ~70s, com stack do V8 e nenhuma pista do que fazer.');
+    console.error('');
+    console.error('  Escolha uma:');
+    console.error('    node scripts/backfill-daily-subcat.js 2026-08-01              # um mês');
+    console.error('    node scripts/backfill-daily-subcat.js 2026-08-01 2026-08-31   # intervalo');
+    console.error('    node scripts/backfill-daily-subcat.js --tudo                  # histórico inteiro');
+    process.exit(1);
+  }
+
+  console.log('\n[1/4] Carregando snapshots (reduzidos a 1 por equipe/sessão no SQL)...');
   const snaps = await fetchSnapshotsRange(argDe, argAte);
-  console.log(`      ${snaps.length} snapshots no período`);
+  console.log(`      ${snaps.length} sessões no período (de ${totalLinhas.toLocaleString('pt-BR')} linhas brutas)`);
 
   console.log('\n[2/4] Indexando notas e coletando UUIDs...');
   const { events, noteIds } = indexSnapshots(snaps);

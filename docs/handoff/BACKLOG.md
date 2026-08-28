@@ -131,8 +131,8 @@
 | P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | pending — **auditoria 28/08** |
 | P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | pending — **auditoria 28/08**, preventivo |
 | P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | **done** (28/08) — opção A: endpoint removido, mais os imports, o log de boot e o campo do /api/status |
-| P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | **código done** (28/08) — _lock.js compartilhado nos 4 scripts de número; guarda no _probe-save. Falta decidir apagar o probe e verificar na VM |
-| P2-44 | `backfill-daily-subcat.js` MORRE de OOM na invocação padrão: paginação própria sem teto carrega as 697.945 linhas com a coluna `data` num array JS | Dados/Ops | pending — script inutilizável hoje; workaround é passar `--de` |
+| P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | **done** (28/08) — _lock.js nos 4 scripts de número; _probe-save MANTIDO por decisão, com guarda. Verificado na VM |
+| P2-44 | `backfill-daily-subcat.js` MORRE de OOM na invocação padrão: paginação própria sem teto carrega as 697.945 linhas com a coluna `data` num array JS | Dados/Ops | **código done** (28/08) — DISTINCT ON no SQL + recusa range >250k sem `--tudo`; falta rodar na VM |
 | P3-15 | `_loginTries` só perde entrada no login bem-sucedido — janela expirada fica pra sempre | Backend | pending — **auditoria 28/08** |
 | P3-16 | `openLightbox('${f.base64}')`: cada foto de OS entra DUAS vezes no DOM (~5,4 MB por foto de 2 MB) | Frontend | pending — **auditoria 28/08** |
 | P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | pending — **auditoria 28/08** |
@@ -3460,13 +3460,25 @@ de falha que não aparece em relatório.
 - **Workaround imediato:** passar um range curto, ex.
   `node scripts/backfill-daily-subcat.js --de 2026-08-01`.
 - **Ação:**
-  1. ⬜ mensagem útil: se o range for aberto, recusar pedindo `--de`, em vez de
-     morrer 70s depois com stack de V8;
-  2. ⬜ reduzir no SQL, como o P1-41 fez: o script quer o snapshot MAIS RECENTE
-     por `(team, sessionBegin)` — `DISTINCT ON` devolve isso sem trazer 697 mil
-     linhas. Confirmar a chave lendo o `indexSnapshots` antes de escrever a query;
-  3. ⬜ ou, se a redução no SQL não couber, processar por JANELAS (mês a mês) em
-     vez de carregar tudo — mas isso é paliativo, não conserto.
+  1. ✅ mensagem útil (28/08): antes de carregar, conta as linhas do range com um
+     `count(*)` barato e, acima de 250 mil, RECUSA pedindo um range ou `--tudo` —
+     imprimindo o número real. Antes o processo morria em ~70s com stack do V8 e
+     nenhuma pista.
+  2. ✅ reduzido no SQL (28/08): `DISTINCT ON (team_name, data->>'sessionBegin')`
+     com `ORDER BY … captured_at DESC`. A chave foi confirmada lendo o
+     `indexSnapshots`, que sempre usou só o mais recente por sessão
+     (`latestBySession`). Usa `data->>'sessionBegin'` e não a coluna
+     `session_begin` de propósito: é o campo que o JS lê, e o objetivo era não
+     mudar número nenhum. O dedup em JS foi mantido como cinto e suspensório.
+  3. ➖ processar por janelas não foi necessário.
+
+  ⚠️ **FALTA RODAR NA VM** (precisa de banco):
+  ```bash
+  node scripts/backfill-daily-subcat.js 2026-08-01 2026-08-31   # dry? não tem — ver nota
+  ```
+  Este script **não tem dry-run**: ele faz upsert direto. É idempotente (upsert por
+  chave única), então re-rodar não duplica — mas confira o antes/depois de
+  `daily_subcat_totals` no mês escolhido antes de rodar o histórico com `--tudo`.
 - **Critério de aceite:** `node scripts/backfill-daily-subcat.js` sem argumento
   roda até o fim (ou recusa com mensagem clara), sem OOM.
 - **Esforço:** mensagem 15min · redução no SQL 2-3h.
