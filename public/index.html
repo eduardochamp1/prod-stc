@@ -141,10 +141,6 @@
             </div>
           </div>
           <button class="btn-refresh" id="btn-hoje" onclick="irParaHoje()" style="display:none">↩ Hoje</button>
-          <button class="btn-refresh" id="btn-warm" onclick="acordarWpa()"
-            title="Força um login no WPA — útil quando o Azure App Service hiberna e clicar em OS retorna 502">⚡ Acordar
-            WPA</button>
-          <button class="btn-refresh" onclick="loadData()">↻ Atualizar</button>
         </div>
       </div>
 
@@ -326,7 +322,6 @@
             <span>Incluir conta paga</span>
           </label>
           <div style="flex:1"></div>
-          <button class="btn-refresh" onclick="loadRejeicoes()">↻ Atualizar</button>
         </div>
       </div>
 
@@ -345,7 +340,6 @@
             <span class="filter-label">Mês</span>
             <input type="month" class="month-input" id="metas-mes-input" onchange="loadMetasCalculadas()" />
           </div>
-          <button class="btn-refresh" onclick="loadMetasCalculadas()">↻ Atualizar</button>
         </div>
       </div>
 
@@ -379,12 +373,11 @@
               <option value="SJC">São José dos Campos</option>
             </select>
           </div>
-          <button class="btn-refresh" onclick="loadRanking()">↻ Atualizar</button>
         </div>
       </div>
 
       <div id="ranking-content">
-        <div class="empty-state">Selecione um mês e clique em Atualizar.</div>
+        <div class="empty-state">Carregando…</div>
       </div>
 
       <!-- ── APROVEITAMENTO DA CARTEIRA ─────────────────────────────────── -->
@@ -467,7 +460,6 @@
             </select>
           </div>
 
-          <button class="btn-refresh" onclick="loadMapa()">↻ Atualizar</button>
         </div>
         <div class="mapa-layout">
           <div class="mapa-sidebar">
@@ -516,7 +508,6 @@
               <option value="100">⚠ > 100% (e 15min)</option>
             </select>
           </div>
-          <button class="btn-refresh" onclick="loadDeslocamentos()">↻ Atualizar</button>
         </div>
       </div>
       <div id="desloc-content">
@@ -629,7 +620,6 @@
             <input type="text" class="hist-filter-colab" id="hist-colab-input" placeholder="Nome ou matrícula…"
               oninput="applyHistoricoFilters()" />
           </div>
-          <button class="btn-refresh" onclick="loadHistorico()">↻ Atualizar</button>
           <button class="btn-refresh" id="btn-export-xlsx"
             onclick="downloadHistoricoXLSX()"
             style="background:var(--verde);color:#fff;gap:6px"
@@ -646,11 +636,11 @@
       </div>
 
       <div id="hist-content">
-        <div class="empty-state">Selecione o período e clique em Atualizar.</div>
+        <div class="empty-state">Carregando…</div>
       </div>
 
       <div id="hist-subcats-content" style="display:none">
-        <div class="empty-state">Selecione o período e clique em Atualizar.</div>
+        <div class="empty-state">Carregando…</div>
       </div>
 
     </div>
@@ -725,7 +715,6 @@
             </div>
           </div>
           <div style="flex:1"></div>
-          <button class="btn-refresh" onclick="loadGraficos()">↻ Atualizar</button>
           <button class="btn-refresh" id="btn-export-graf-xlsx"
             onclick="downloadGraficosXLSX()"
             style="background:var(--verde);color:#fff"
@@ -1896,6 +1885,10 @@
           }
         } catch (_) { /* dropdown talvez ainda não inicializado */ }
       }, 50);
+
+      // O "Atualizar" agora vive no balão lateral, fora da aba. O rótulo tem
+      // de dizer qual aba ele recarrega, senão o botão único fica ambíguo.
+      if (typeof fabSyncAlvo === "function") fabSyncAlvo();
     }
 
     // ── NOTAS DEVOLVIDAS ──────────────────────────────────────────────────────
@@ -2516,7 +2509,7 @@
       if (!_rejFullList || !Array.isArray(_rejFullList.rows)) {
         if (countEl) countEl.textContent = '(0)';
         tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;opacity:.6;padding:20px">'
-          + 'Lista ainda nao carregada - clique em Atualizar.</td></tr>';
+          + 'Lista ainda nao carregada - use o ↻ Atualizar no balao de acoes rapidas.</td></tr>';
         return;
       }
       let rows = _rejFullList.rows.slice();
@@ -7675,7 +7668,15 @@ ${matrizHTML}
       window._notaDetalheAtual = null;
     }
 
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); closeNotaDirect(); closeLightbox(); } });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); closeNotaDirect(); closeLightbox(); fabFecharPorEsc(); } });
+    /* ESC no balão devolve o foco pro toggle — senão o foco fica órfão num
+       botão que acabou de virar hidden e o Tab reinicia do topo da página. */
+    function fabFecharPorEsc() {
+      if (typeof fabAberto !== 'function' || !fabAberto()) return;
+      fabSetAberto(false);
+      const t = document.getElementById('fab-acoes-toggle');
+      if (t) t.focus();
+    }
 
     // ── INIT ──────────────────────────────────────────────────────────────
     async function init() {
@@ -9550,6 +9551,155 @@ ${matrizHTML}
       ws['!cols'] = widths.map(w => ({ wch: Math.min(w + 2, 50) }));
     }
   </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       AÇÕES RÁPIDAS — balão lateral (28/08/2026)
+       Implementa docs/handoff/SPEC-balao-acoes-rapidas-2026-08-28.md
+
+       Antes: "⚡ Acordar WPA" e "↻ Atualizar" no header da aba Monitor, e o
+       "Atualizar" repetido em 8 abas (rejeições, metas, ranking, mapa,
+       deslocamento, histórico, gráficos) — com a aba Notas sem nenhum.
+
+       Agora: um bloco só, irmão dos .tab-panel e fora de todos eles. Sendo
+       position:fixed, ele aparece nas 9 abas sem repetir markup — é isso que
+       resolve "em todas as páginas". O "Atualizar" despacha pro loader da aba
+       ATIVA (currentTab), então um botão cobre as nove.
+
+       O id "btn-warm" e o title MIGRARAM LITERALMENTE do header: acordarWpa()
+       mexe no innerHTML e no disabled desse id pra dar feedback ("⏳ Acordando
+       WPA...", "✓ WPA pronto"). Trocar o id quebraria isso em silêncio.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="fab-acoes" id="fab-acoes">
+    <div class="fab-acoes-painel" id="fab-acoes-painel" role="group"
+         aria-label="Ações rápidas" hidden>
+      <span class="fab-acoes-titulo">Ações rápidas</span>
+      <span class="fab-acoes-alvo" id="fab-acoes-alvo"></span>
+      <button class="btn-refresh" id="btn-warm" onclick="acordarWpa()"
+        title="Força um login no WPA — útil quando o Azure App Service hiberna e clicar em OS retorna 502">⚡ Acordar WPA</button>
+      <button class="btn-refresh" id="fab-btn-atualizar" onclick="fabRecarregar()">↻ Atualizar</button>
+    </div>
+    <!-- type="button" explícito: o balão é irmão dos .tab-panel e um dia pode
+         cair dentro de um <form>; sem isso o default é submit. -->
+    <button class="fab-acoes-toggle" id="fab-acoes-toggle" type="button"
+            aria-expanded="false" aria-controls="fab-acoes-painel"
+            aria-label="Abrir ações rápidas" title="Ações rápidas"
+            onclick="fabToggle()">⚡</button>
+  </div>
+
+  <script>
+    /* ── AÇÕES RÁPIDAS (balão lateral) — 28/08/2026 ──────────────────────────
+       Um "Atualizar" pra todas as abas. Este mapa é a única coisa que precisa
+       de manutenção: aba nova entra aqui, senão o botão avisa no painel em vez
+       de falhar calado — e o teste test/fabAcoesRapidas.test.js quebra a suíte
+       antes de isso chegar em produção.
+
+       Arrow-wrapped de propósito: metade destes loaders é declarada milhares de
+       linhas ABAIXO deste ponto — referência direta quebraria por hoisting.
+
+       As chaves são os mesmos nomes que switchTab() põe em currentTab,
+       conferidos contra os ids tab-btn-* do HTML.
+
+       Rejeitado — reusar switchTab(currentTab): switchTab NÃO tem ramo pro
+       'monitor' (o Monitor carrega no boot), então o Atualizar da aba principal
+       ficaria sem fazer nada, em silêncio. E switchTab re-sincroniza dropdowns
+       num setTimeout — efeito colateral indesejado num "recarregar". */
+    const FAB_RECARREGAR = {
+      monitor:   { fn: () => loadData(),            rotulo: 'Monitor' },
+      rejeicoes: { fn: () => loadRejeicoes(),       rotulo: 'Rejeições' },
+      desloc:    { fn: () => loadDeslocamentos(),   rotulo: 'Deslocamentos' },
+      // loadNotasAll() e não initNotas(): initNotas monta o MultiSelect na
+      // primeira vez e só depois chama loadNotasAll(). Pra "recarregar", a
+      // metade certa é a segunda.
+      notas:     { fn: () => loadNotasAll(),        rotulo: 'Notas' },
+      graficos:  { fn: () => loadGraficos(),        rotulo: 'Gráficos' },
+      ranking:   { fn: () => loadRanking(),         rotulo: 'Ranking' },
+      mapa:      { fn: () => loadMapa(),            rotulo: 'Mapa' },
+      historico: { fn: () => loadHistorico(),       rotulo: 'Histórico' },
+      metas:     { fn: () => loadMetasCalculadas(), rotulo: 'Metas' },
+    };
+
+    function _fabTabAtual() {
+      return (typeof currentTab !== 'undefined' && currentTab) ? currentTab : '';
+    }
+
+    /** Diz QUAL aba o botão vai recarregar. Sem isto o botão único fica ambíguo,
+        já que ele não vive mais dentro da aba. Chamado no fim de switchTab. */
+    function fabSyncAlvo() {
+      const el = document.getElementById('fab-acoes-alvo');
+      if (!el) return;
+      const entry = FAB_RECARREGAR[_fabTabAtual()];
+      el.textContent = entry ? 'Recarrega: ' + entry.rotulo : 'Esta aba não tem recarga';
+    }
+
+    /* Estado lido do aria-expanded, NÃO da classe .aberto: a classe entra num
+       requestAnimationFrame (pra transição funcionar), então por um frame ela
+       ainda diria "fechado" e o toggle inverteria pro lado errado. O
+       aria-expanded é setado sincronamente — e de brinde o estado fica num só
+       lugar, que é o mesmo que o leitor de tela consulta. */
+    function fabAberto() {
+      const t = document.getElementById('fab-acoes-toggle');
+      return Boolean(t && t.getAttribute('aria-expanded') === 'true');
+    }
+
+    function fabSetAberto(abrir) {
+      const w = document.getElementById('fab-acoes');
+      const painel = document.getElementById('fab-acoes-painel');
+      const toggle = document.getElementById('fab-acoes-toggle');
+      if (!w || !painel || !toggle) return;
+
+      if (abrir) {
+        painel.hidden = false;   // antes da classe, senão não há estado inicial
+        // Um frame no meio: o painel acabou de sair do display:none e, sem isso,
+        // o navegador calcula início e fim juntos e a transição não acontece —
+        // o painel aparece seco.
+        requestAnimationFrame(function () { w.classList.add('aberto'); });
+        toggle.textContent = '✕';
+        toggle.setAttribute('aria-expanded', 'true');
+        toggle.setAttribute('aria-label', 'Fechar ações rápidas');
+        fabSyncAlvo();
+        const primeiro = painel.querySelector('button');
+        if (primeiro) primeiro.focus();
+      } else {
+        w.classList.remove('aberto');
+        toggle.textContent = '⚡';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.setAttribute('aria-label', 'Abrir ações rápidas');
+        // hidden só depois da transição, pra não cortar seco. E painel escondido
+        // de verdade não recebe foco no Tab.
+        setTimeout(function () {
+          if (!fabAberto()) painel.hidden = true;
+        }, 220);
+      }
+    }
+
+    function fabToggle() { fabSetAberto(!fabAberto()); }
+
+    /** O "Atualizar" do balão: despacha pro loader da aba ATIVA. */
+    function fabRecarregar() {
+      const tab = _fabTabAtual();
+      const entry = FAB_RECARREGAR[tab];
+      if (!entry) {
+        fabSyncAlvo();
+        console.warn('[fab] sem loader registrado pra aba', tab);
+        return;
+      }
+      try {
+        entry.fn();
+      } catch (err) {
+        console.warn('[fab] falha ao recarregar', tab, err && err.message);
+      }
+    }
+
+    /* Clique fora fecha — mesmo padrão dos painéis de Tipos/Subcategorias.
+       Clique nos DOIS botões não fecha (w.contains cobre o painel inteiro):
+       usar o Acordar WPA e em seguida o Atualizar é um par natural. */
+    document.addEventListener('click', function (e) {
+      if (!fabAberto()) return;
+      const w = document.getElementById('fab-acoes');
+      if (w && !w.contains(e.target)) fabSetAberto(false);
+    });
+  </script>
+
 </body>
 
 </html>

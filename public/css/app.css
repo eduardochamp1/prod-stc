@@ -4461,3 +4461,121 @@
       color: var(--text2);
       margin: 1px;
     }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AÇÕES RÁPIDAS — balão lateral (28/08/2026)
+   ───────────────────────────────────────────────────────────────────────────
+   Os botões "⚡ Acordar WPA" e "↻ Atualizar" viviam no header da aba Monitor, e
+   o "Atualizar" era repetido em 8 abas (rejeições, metas, ranking, mapa,
+   deslocamento, histórico, gráficos — e a aba Notas não tinha nenhum). Viraram
+   um balão fixo na borda direita: colapsado é só o círculo; ao clicar, expande
+   pra esquerda com os dois botões.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.fab-acoes {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 900;              /* abaixo dos modais, acima do conteúdo */
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+/* O círculo colado na direita. Metade dele fica "fora" da tela por desenho:
+   ocupa pouca área e sugere que há algo a puxar. */
+.fab-acoes-toggle {
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50% 0 0 50%;
+  background: var(--amarelo);
+  color: var(--preto);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: -2px 2px 10px rgba(35, 31, 32, 0.18);
+  /* Sem `transform` na transição: o estado aberto NÃO gira o ícone. O JS troca
+     o glifo ⚡ → ✕ (fabSetAberto). Girar o ⚡ em 180°, que era a ideia inicial,
+     não sinaliza "fechar" — um raio de cabeça pra baixo é só um raio torto. O ✕
+     dispensa cor e dispensa legenda. */
+  transition: background 0.15s, width 0.15s;
+  font-family: 'Roboto', sans-serif;
+  padding: 0;
+}
+
+.fab-acoes-toggle:hover { background: var(--amarelo2); width: 52px; }
+.fab-acoes-toggle:focus-visible { outline: 3px solid var(--verde); outline-offset: 2px; }
+
+/* O painel. Fechado: largura zero e invisível, e fora do fluxo de foco
+   (atributo `hidden` no JS) pra não capturar Tab. */
+.fab-acoes-painel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--branco);
+  border: 1px solid var(--cinza2);
+  border-right: none;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  /* Fechado: padding 0 também. Com box-sizing:border-box um `padding:12px` fixo
+     não cabe em `max-width:0` — o painel encolhia até ~26px em vez de zero e
+     sobrava uma lasca com borda e sombra colada na borda direita. */
+  padding: 0;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition: max-width 0.22s ease, opacity 0.18s ease, padding 0.22s ease;
+}
+
+/* O JS usa o atributo `hidden` pra tirar o painel do fluxo (e do Tab) quando
+   fechado. Sem esta regra o `display:flex` acima GANHA do `[hidden]{display:none}`
+   do navegador — atributo não vence declaração de autor. */
+.fab-acoes-painel[hidden] { display: none; }
+
+.fab-acoes.aberto .fab-acoes-painel {
+  max-width: 260px;
+  opacity: 1;
+  padding: 12px;
+  pointer-events: auto;
+}
+
+.fab-acoes-titulo {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text2);
+  white-space: nowrap;
+}
+
+/* Diz QUAL aba o "Atualizar" vai recarregar — sem isso o botão único fica
+   ambíguo, já que antes cada aba tinha o seu. */
+.fab-acoes-alvo {
+  font-size: 11px;
+  color: var(--text2);
+  white-space: nowrap;
+  margin-top: -4px;
+}
+
+.fab-acoes-painel .btn-refresh {
+  width: 100%;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+/* Telas estreitas: encosta mais embaixo pra não cobrir conteúdo no meio. */
+@media (max-width: 640px) {
+  .fab-acoes { top: auto; bottom: 84px; transform: none; }
+  .fab-acoes.aberto .fab-acoes-painel { max-width: 76vw; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fab-acoes-toggle,
+  .fab-acoes-painel { transition: none; }
+}
