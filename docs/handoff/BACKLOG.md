@@ -132,6 +132,7 @@
 | P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | pending — **auditoria 28/08**, preventivo |
 | P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | **done** (28/08) — opção A: endpoint removido, mais os imports, o log de boot e o campo do /api/status |
 | P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | **código done** (28/08) — _lock.js compartilhado nos 4 scripts de número; guarda no _probe-save. Falta decidir apagar o probe e verificar na VM |
+| P2-44 | `backfill-daily-subcat.js` MORRE de OOM na invocação padrão: paginação própria sem teto carrega as 697.945 linhas com a coluna `data` num array JS | Dados/Ops | pending — script inutilizável hoje; workaround é passar `--de` |
 | P3-15 | `_loginTries` só perde entrada no login bem-sucedido — janela expirada fica pra sempre | Backend | pending — **auditoria 28/08** |
 | P3-16 | `openLightbox('${f.base64}')`: cada foto de OS entra DUAS vezes no DOM (~5,4 MB por foto de 2 MB) | Frontend | pending — **auditoria 28/08** |
 | P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | pending — **auditoria 28/08** |
@@ -3417,6 +3418,62 @@ de falha que não aparece em relatório.
 - **Esforço:** medição 15min · correção junto do P1-33.
 - **Rollback:** n/a (só passa a gravar um campo que hoje fica nulo).
 - **Relacionado:** P0-8 (fechado), P1-16, P1-24, P1-33.
+
+---
+
+## P2-44 — `backfill-daily-subcat.js` estoura o heap na invocação padrão
+
+- **Categoria:** Dados / Ops
+- **Status:** pending
+- **Origem:** apareceu ao VERIFICAR o P2-43 em 28/08/2026. O advisory lock novo
+  funcionou (a 2ª cópia recusou), mas a 1ª morreu de OOM — ou seja, o teste de
+  aceite do P2-43 passou e revelou outro defeito no mesmo comando.
+- **Evidência (na VM, 28/08/2026):**
+  ```
+  $ node scripts/backfill-daily-subcat.js
+  🔒 advisory lock "backfill-daily-subcat" (215562701) adquirido.
+  Período: (início) → (hoje)
+  [1/4] Carregando snapshots...
+  FATAL ERROR: Ineffective mark-compacts near heap limit
+  Allocation failed - JavaScript heap out of memory
+  ```
+  Morreu com ~2.046 MB de heap (o limite default do Node é ~2 GB).
+- **Causa:** `fetchSnapshotsRange` (`scripts/backfill-daily-subcat.js`) tem
+  paginação PRÓPRIA, **sem teto de páginas**, e acumula tudo em `all[]`:
+  ```js
+  let q = sb.from('snapshots')
+    .select('date, sector_id, regional, team_name, captured_at, data')
+  ...
+  all.push(...data);
+  ```
+  Sem `--de`, o range é o histórico completo: **697.945 linhas** e **2.283 MB** de
+  tabela, com a coluna gorda `data`. Não cabe no heap.
+- **Por que não foi pego antes:** por não usar o `_selectAll`, o script não tem
+  nem o teto de 200 páginas que existe lá — e o OOM acontece ANTES de qualquer
+  aviso. Isso também **confirma a previsão do P1-41**: os dois desfechos possíveis
+  eram "truncar em silêncio" ou "o processo morrer no meio", e aqui é o segundo.
+  O `throw RANGE_TOO_LARGE` que o P1-41 adicionou é inalcançável neste caminho.
+- **Impacto:** o script está **inutilizável na invocação padrão**. Ele reescreve
+  `daily_subcat_totals` e `team_daily_subcat_totals` — as tabelas das abas de
+  subcategoria. Quem tentar reprocessar o histórico completo não consegue, e a
+  mensagem não diz o que fazer.
+- **Workaround imediato:** passar um range curto, ex.
+  `node scripts/backfill-daily-subcat.js --de 2026-08-01`.
+- **Ação:**
+  1. ⬜ mensagem útil: se o range for aberto, recusar pedindo `--de`, em vez de
+     morrer 70s depois com stack de V8;
+  2. ⬜ reduzir no SQL, como o P1-41 fez: o script quer o snapshot MAIS RECENTE
+     por `(team, sessionBegin)` — `DISTINCT ON` devolve isso sem trazer 697 mil
+     linhas. Confirmar a chave lendo o `indexSnapshots` antes de escrever a query;
+  3. ⬜ ou, se a redução no SQL não couber, processar por JANELAS (mês a mês) em
+     vez de carregar tudo — mas isso é paliativo, não conserto.
+- **Critério de aceite:** `node scripts/backfill-daily-subcat.js` sem argumento
+  roda até o fim (ou recusa com mensagem clara), sem OOM.
+- **Esforço:** mensagem 15min · redução no SQL 2-3h.
+- **Relacionado:** P1-41 (mesma causa-raiz: coluna `data` gorda × range grande),
+  P0-0 (o incidente de OOM que originou o advisory lock), P2-43 (foi verificando
+  ele que isto apareceu), P3-13 (a coluna `data` guarda campos `_*` que inflam o
+  payload — resolver aquilo reduz este).
 
 ---
 
