@@ -12,11 +12,16 @@
  * Exige "Authorization: Bearer ${CRON_SECRET}" (não usa o JWT de usuário — essas
  * rotas não teriam como obter um sem login interativo).
  *
- * Rodando local sem o header, aceita também ?secret=... como fallback de teste.
+ * ⚠️ 28/08/2026 (P1-43): o fallback `?secret=...` foi REMOVIDO. Ele não tinha
+ * gate de modo — valia em produção — e query string vaza pra log do PM2, log do
+ * Fortinet, histórico do navegador e header Referer. Só header agora, em
+ * qualquer ambiente. Quem chamava com `?secret=` precisa passar a usar:
+ *   curl -H "Authorization: Bearer $CRON_SECRET" .../api/cron/snapshot
  */
 
 const express = require('express');
 const router  = express.Router();
+const crypto  = require('crypto');
 const { dateBRT } = require('../services/timeUtil');
 
 const SECRET = (process.env.CRON_SECRET || '').trim();
@@ -29,17 +34,42 @@ if (!SECRET && process.env.DATA_MODE === 'wpa') {
   console.warn('[CRON] AVISO: CRON_SECRET vazio — endpoints /api/cron desprotegidos!');
 }
 
+/**
+ * Comparação de tempo constante. `timingSafeEqual` LANÇA quando os buffers têm
+ * tamanhos diferentes, então o tamanho é checado antes — e checar tamanho não
+ * vaza nada útil aqui (o comprimento do secret não é o segredo).
+ */
+function _secretIguais(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
 function checkSecret(req, res, next) {
   if (!SECRET) {
     // Chegou aqui apenas em modo não-wpa (mock/dev) sem secret
     console.warn('[CRON] CRON_SECRET não configurado — acesso liberado somente em modo não-wpa');
     return next();
   }
-  const auth   = req.headers.authorization || '';
-  const token  = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const fromQs = req.query.secret || '';
-  if (token !== SECRET && fromQs !== SECRET) {
-    return res.status(401).json({ error: 'Cron secret inválido' });
+  // 28/08/2026 — P1-43. O `?secret=` era descrito no topo deste arquivo como
+  // "fallback de teste", mas não tinha gate de modo: valia igual em produção.
+  // Query string vaza pra todo lugar onde existe log de request — `logs/out.log`
+  // do PM2, log de acesso do Fortinet, histórico do navegador, header `Referer`
+  // — e o `middleware/requestTiming.js` (22/08) loga `req.originalUrl`, ou seja
+  // gravava o segredo em disco a cada cron manual lento. Quem lesse a linha
+  // ganhava o poder de re-consolidar qualquer data; cruzado com o P2-13
+  // (re-consolidação de dia antigo SUBCONTA ~0,8%), isso rebaixa número já
+  // reportado à EDP, sem rastro de quem pediu. Agora só header.
+  const auth  = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!_secretIguais(token, SECRET)) {
+    if (req.query.secret) {
+      console.warn('[CRON] ?secret= na URL não é mais aceito (P1-43) — use Authorization: Bearer.');
+    }
+    return res.status(401).json({
+      error: 'Cron secret inválido. Use o header: Authorization: Bearer <CRON_SECRET>',
+    });
   }
   next();
 }
@@ -101,6 +131,13 @@ router.get('/consolidate', async (req, res) => {
     const t0 = Date.now();
     // Sem ?date usa BRT (America/Sao_Paulo) — evita consolidar "amanhã" depois das 21h UTC
     const date = req.query.date || dateBRT();
+    // 28/08/2026 — P1-43. `date` ia CRU pro runConsolidate, que APAGA e reescreve
+    // team_daily_totals/team_daily_subcat_totals de {date-1, date} — as tabelas de
+    // onde saem os números da EDP. Formato inválido virava erro engolido pelo
+    // try/catch interno do runConsolidate, e o wipe podia rodar mesmo assim.
+    if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date)) {
+      return res.status(400).json({ ok: false, error: `date inválida: "${date}". Use YYYY-MM-DD.` });
+    }
     await cronSrv.runConsolidate(date);
     res.json({ ok: true, ms: Date.now() - t0, date });
   } catch (err) {
@@ -110,3 +147,6 @@ router.get('/consolidate', async (req, res) => {
 });
 
 module.exports = router;
+// Exportados p/ teste (P1-43, 28/08/2026).
+module.exports._secretIguais = _secretIguais;
+module.exports._checkSecret  = checkSecret;

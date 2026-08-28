@@ -221,6 +221,48 @@ falha consecutiva. Antes disso, texto desconhecido = breaker nunca abria.
 (`WPA_HTTP_TIMEOUT_MS`). Se o painel travar num setor específico, não é mais
 promise pendurada — investigue o log.
 
+### Disparar snapshot / consolidação por HTTP (cron manual)
+
+As rotas `/api/cron/*` existem pra disparo manual ou por agendador externo. Elas
+**não** usam o JWT de usuário — usam o `CRON_SECRET`.
+
+> ⚠️ **MUDOU EM 28/08/2026 (P1-43): `?secret=` na URL não funciona mais.**
+> Ele valia em produção apesar de estar documentado como "fallback de teste", e
+> query string vaza pro `logs/out.log` do PM2, pro log de acesso do Fortinet, pro
+> histórico do navegador e pro header `Referer`. Quem lesse a linha podia disparar
+> `consolidate` em qualquer data — e re-consolidação de dia antigo SUBCONTA
+> (P2-13), ou seja rebaixaria número já reportado à EDP sem deixar rastro de quem
+> pediu. Agora é só header, em qualquer ambiente.
+
+Snapshot agora:
+
+```bash
+curl -s -H "Authorization: Bearer $CRON_SECRET" http://localhost:3002/api/cron/snapshot
+```
+
+Consolidar uma data — ⚠️ **APAGA e reescreve** `team_daily_totals` de `{data-1, data}`:
+
+```bash
+curl -s -H "Authorization: Bearer $CRON_SECRET" "http://localhost:3002/api/cron/consolidate?date=2026-08-27"
+```
+
+Se o `CRON_SECRET` não estiver no ambiente do shell, leia do `.env`:
+
+```bash
+export CRON_SECRET=$(grep -m1 '^CRON_SECRET' ~/prod-stc/.env | cut -d= -f2-)
+```
+
+A data agora é validada: qualquer coisa fora de `YYYY-MM-DD` real devolve **400**
+em vez de seguir pro `runConsolidate` — onde formato inválido virava erro engolido
+pelo `try/catch` interno e o wipe podia rodar mesmo assim.
+
+**Se algum agendador externo ainda chamar com `?secret=`, ele passa a tomar 401 em
+silêncio.** Confira antes de deployar:
+
+```bash
+crontab -l | grep -n "api/cron"
+```
+
 ### Verificar saúde geral
 
 ```bash

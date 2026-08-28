@@ -30,6 +30,31 @@ const LIMIAR_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 1500;
 })();
 
+// Parâmetros cujo VALOR nunca deve ir pro log. `secret` é o do /api/cron
+// (P1-43): ele viajava na query string e este middleware gravava `originalUrl`
+// inteira em disco a cada cron manual lento — ou seja, a observabilidade que eu
+// adicionei em 22/08 virou um vazamento de credencial. Os outros entram por
+// precaução, pra ninguém repetir o padrão.
+const PARAMS_SENSIVEIS = ['secret', 'token', 'password', 'senha', 'apikey', 'api_key'];
+
+/** Troca o valor de parâmetro sensível por `***`. Nunca lança. */
+function _redigirUrl(url) {
+  const u = String(url || '');
+  if (!u.includes('?')) return u;
+  try {
+    const [base, qs] = u.split('?');
+    const partes = qs.split('&').map(par => {
+      const i = par.indexOf('=');
+      const chave = i === -1 ? par : par.slice(0, i);
+      return PARAMS_SENSIVEIS.includes(chave.toLowerCase()) ? `${chave}=***` : par;
+    });
+    return `${base}?${partes.join('&')}`;
+  } catch {
+    // Se der qualquer coisa errada, é mais seguro logar só o caminho.
+    return u.split('?')[0];
+  }
+}
+
 function requestTiming(req, res, next) {
   if (LIMIAR_MS === 0) return next();
 
@@ -45,7 +70,7 @@ function requestTiming(req, res, next) {
       method: req.method,
       // req.route só existe depois do match; originalUrl mantém a querystring,
       // que costuma ser o que explica a lentidão (range de datas, regionais).
-      path: req.originalUrl ? req.originalUrl.slice(0, 200) : req.path,
+      path: req.originalUrl ? _redigirUrl(req.originalUrl).slice(0, 200) : req.path,
       status: res.statusCode,
       ms,
       // Quem pediu ajuda a separar "gestor abriu o mês inteiro" de cron.
@@ -58,4 +83,4 @@ function requestTiming(req, res, next) {
   next();
 }
 
-module.exports = { requestTiming, LIMIAR_MS };
+module.exports = { requestTiming, LIMIAR_MS, _redigirUrl };
