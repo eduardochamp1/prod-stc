@@ -2750,10 +2750,12 @@ feita em PR separado depois dos testes.
 >
 > Ressalvas registradas, ambas previstas pelo próprio script:
 >
-> 1. **`2026-07-31` foi apagado e reescrito** — o passe de 08-01 wipa
->    `{07-31, 08-01}`. O valor novo vem da régua de D+1 (a autoritativa), então
->    tende a ficar igual ou melhor; `07-30` recebeu upsert parcial. Conferir a
->    cauda de julho com `verify-consolidacao.js 2026-07-28 2026-08-01`.
+> 1. ✅ **`2026-07-31` foi apagado e reescrito** — o passe de 08-01 wipa
+>    `{07-31, 08-01}` — **e ficou intacto.** `verify-consolidacao.js 2026-07-28
+>    2026-08-01`: **5/5 dias ok, desvios absolutos = 0**. A reescrita pela régua de
+>    D+1 produziu exatamente o valor certo, e o upsert parcial em `07-30` não
+>    machucou nada. Zero desvio é até melhor que agosto (37), porque julho foi
+>    re-consolidado inteiro em 31/07 e não acumulou resíduo desde então.
 > 2. **`2026-08-26` ficou com a régua de D** (tabela 1.076 × régua 1.084, diff 8,
 >    limiar 22). Dentro do limiar, e o drift sweep das 02:00 — que só ADICIONA —
 >    cobre D-7..D-1 e devolve os 8 sozinho. Nada a fazer.
