@@ -2735,6 +2735,34 @@ feita em PR separado depois dos testes.
 
 ## P2-13 — Upsert de dia antigo SOBRESCREVE em vez de somar (subconta ~0,8%)
 
+> ## ✅ AGOSTO RE-CONSOLIDADO — 28/08/2026, aplicado e verificado
+>
+> ```
+> backup:  ~/backups/pre-reconsolida-ago-2026-08-28-1346.dump (702K, só as 2 tabelas)
+> apply:   backfill-consolidate.js 2026-08-01 2026-08-26 --apply
+> total:   20.801 → 19.581   =  -1.220 OS  (-5,9% no mês)
+> verify:  26/26 dias "ok" · nenhum drift acima do limiar
+>          soma dos desvios absolutos: 37 OS (ruído de dedup)
+> ```
+>
+> **As três medições convergiram no dia 17/08:** contagem por UUID = 983, régua de
+> D+1 = 983, tabela depois do apply = 983. Antes era 1.185.
+>
+> Ressalvas registradas, ambas previstas pelo próprio script:
+>
+> 1. **`2026-07-31` foi apagado e reescrito** — o passe de 08-01 wipa
+>    `{07-31, 08-01}`. O valor novo vem da régua de D+1 (a autoritativa), então
+>    tende a ficar igual ou melhor; `07-30` recebeu upsert parcial. Conferir a
+>    cauda de julho com `verify-consolidacao.js 2026-07-28 2026-08-01`.
+> 2. **`2026-08-26` ficou com a régua de D** (tabela 1.076 × régua 1.084, diff 8,
+>    limiar 22). Dentro do limiar, e o drift sweep das 02:00 — que só ADICIONA —
+>    cobre D-7..D-1 e devolve os 8 sozinho. Nada a fazer.
+>
+> **O que isto não resolve:** a causa. O resíduo volta a acumular a partir de agora,
+> porque o reparo automático é monotônico (P0-7) e não sabe remover excesso. Até o
+> P2-13 ser consertado na origem, agosto (e setembro) vão precisar de
+> re-consolidação manual periódica. Isso pede alarme — ver P1-1.
+
 > ## ✅ MEDIÇÃO DECISIVA — 28/08/2026: a tabela está INFLADA, re-consolidar é correto
 >
 > Em 21/08 a investigação parou com uma dúvida que travava a decisão: o excesso da
