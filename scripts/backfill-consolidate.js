@@ -100,28 +100,16 @@ async function currentCount(date) {
 }
 
 /**
- * Tenta pegar o advisory lock. Retorna o client dedicado que o segura (pra
- * soltar no fim) ou null se não conseguiu. Lock é por SESSÃO → solta sozinho se
- * o processo morrer (não trava o próximo run após um crash).
+ * 28/08/2026 (P2-43): o advisory lock que nasceu aqui virou `scripts/_lock.js`,
+ * compartilhado com os outros scripts de escrita — sete deles não tinham nada.
+ * A chave HISTÓRICA (429153001) é preservada em CHAVES_FIXAS do _lock.js: trocá-la
+ * faria uma cópia nova conviver com uma cópia velha durante um deploy, que é
+ * exatamente o que o lock existe pra impedir.
+ *
+ * O comportamento aqui é idêntico ao de antes: mesma chave, mesmo `--force`,
+ * mesma mensagem de recusa, lock por sessão (solta sozinho se o processo morrer).
  */
-async function acquireLock() {
-  const client = await _getPool().connect();
-  try {
-    const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [LOCK_KEY]);
-    if (rows[0] && rows[0].ok) return client;
-    client.release();
-    return null;
-  } catch (e) {
-    client.release();
-    throw e;
-  }
-}
-
-async function releaseLock(client) {
-  if (!client) return;
-  try { await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]); } catch (_) { /* ignore */ }
-  client.release();
-}
+const { comLock } = require('./_lock');
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
@@ -135,18 +123,7 @@ async function main() {
   const { datas, de, ate, apply, force, pauseMs } = parsed;
 
   // Advisory lock: impede 2 cópias concorrentes (proteção anti-OOM do P0-0).
-  let lockClient = await acquireLock();
-  if (!lockClient) {
-    if (!force) {
-      console.error('✖ Outro backfill-consolidate já está rodando (advisory lock ocupado).');
-      console.error('  Espere ele terminar. Rodar em paralelo foi o que derrubou o Postgres em 09/07.');
-      console.error('  Se tem CERTEZA que não há outra cópia (ex.: sobrou de um crash), use --force.');
-      process.exit(1);
-    }
-    console.warn('⚠️  --force: seguindo SEM advisory lock. Garanta que NÃO há outra cópia rodando.');
-  }
-
-  try {
+  return comLock('backfill-consolidate', { force }, async () => {
     console.log(`\n${apply ? '⚙️  APLICANDO' : '🔍 DRY-RUN (não grava)'} — ${datas.length} dia(s): ${de} → ${ate}` +
       `${apply ? ` · pausa ${pauseMs}ms` : ''}\n`);
     console.log('data'.padEnd(12), 'antes'.padStart(8), 'depois'.padStart(8), 'diff'.padStart(8), 'equipes'.padStart(8));
@@ -218,10 +195,10 @@ async function main() {
       console.log('');
       console.log(`   Confira o resultado com: node scripts/verify-consolidacao.js ${de} ${ate}\n`);
     }
-  } finally {
-    await releaseLock(lockClient);
+  }).finally(async () => {
+    // O lock é soltado pelo comLock; aqui só encerramos o pool do processo.
     try { const p = _getPool && _getPool(); if (p && p.end) await p.end(); } catch (_) { /* ignore */ }
-  }
+  });
 }
 
 // Roda só quando executado direto (node scripts/backfill-consolidate.js). Quando

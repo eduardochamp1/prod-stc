@@ -213,7 +213,7 @@ async function upsertChunked(table, rows, conflictCols) {
   return total;
 }
 
-async function main() {
+async function _trabalho() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('  Backfill diário por subcategoria — daily_subcat_totals');
   console.log('═══════════════════════════════════════════════════════════════');
@@ -263,6 +263,16 @@ async function main() {
   process.exit(0);
 }
 
+
+// 28/08/2026 — P2-43. Este script escreve em tabela de onde saem os números
+// reportados à EDP, e não tinha NENHUMA guarda contra duas cópias em paralelo.
+// O incidente de 09/07/2026 (P0-0) foi ~60 processos node concorrentes
+// derrubando o Postgres por OOM; a lição virou advisory lock, mas só no
+// backfill-consolidate.js. Agora é compartilhado — ver scripts/_lock.js.
+const { comLock } = require('./_lock');
+async function main() {
+  return comLock('backfill-daily-subcat', { force: process.argv.includes('--force') }, _trabalho);
+}
 main().catch(err => {
   console.error('\n❌ ERRO:', err.message);
   console.error(err.stack);

@@ -14,7 +14,7 @@ require('dotenv').config();
 const { upsertTeamDailyCarteira } = require('../services/dataWriter');
 const { dateBRT } = require('../services/timeUtil');
 
-async function main() {
+async function _trabalho() {
   const hoje = dateBRT();
   let inicio = process.argv[2];
   if (!inicio || !/^\d{4}-\d{2}-\d{2}$/.test(inicio)) {
@@ -45,4 +45,14 @@ async function main() {
   process.exit(erro > 0 ? 1 : 0);
 }
 
+
+// 28/08/2026 — P2-43. Este script escreve em tabela de onde saem os números
+// reportados à EDP, e não tinha NENHUMA guarda contra duas cópias em paralelo.
+// O incidente de 09/07/2026 (P0-0) foi ~60 processos node concorrentes
+// derrubando o Postgres por OOM; a lição virou advisory lock, mas só no
+// backfill-consolidate.js. Agora é compartilhado — ver scripts/_lock.js.
+const { comLock } = require('./_lock');
+async function main() {
+  return comLock('backfill-carteira', { force: process.argv.includes('--force') }, _trabalho);
+}
 main();
