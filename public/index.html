@@ -2710,11 +2710,18 @@
         : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
       qs.set('regionals', (_desExp.length ? _desExp : [...userRegionals]).join(','));
       if (teams.length > 0)          qs.set('team', teams.join(','));
-      // Limite 20000: cap do backend (commit bba4f4f). Cobre periodos longos
-      // sem cortar dados. Carregamento ~10s na 1a vez, <2s subsequentes
-      // (Cloudflare Worker + cache local). Cards (DESLOCAMENTOS/ACIMA/DESVIO)
-      // refletem todo o universo, nao so amostra.
-      qs.set('limit', '20000');
+      // Limite 60000: cap do backend (MAX_NOTAS_PERIODO em deslocamentosQueries).
+      // Cards (DESLOCAMENTOS/ACIMA/DESVIO) refletem todo o universo, nao so amostra.
+      //
+      // 28/08/2026 — era 20000, e o comentario aqui afirmava "cobre periodos longos
+      // sem cortar dados". Nao cobria: medido em producao no periodo 01/08 a 27/08,
+      // 21.852 deslocamentos eram extraidos e 20.000 chegavam — 1.852 caiam fora,
+      // empilhados com outras 4.610 notas ja cortadas antes, no backend. Os KPIs
+      // desta tela eram calculados sobre esse recorte sem nenhum aviso.
+      //
+      // Tem de bater com MAX_NOTAS_PERIODO: o limit entra na chave do memoCache,
+      // e chave divergente desfaz o single-flight das 3 rotas (test/deslocTruncamento).
+      qs.set('limit', '60000');
       if (acimaVal === '50' || acimaVal === '100') qs.set('acima', acimaVal);
       document.getElementById('desloc-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
       return qs.toString();
@@ -2809,6 +2816,20 @@
         </tr>`;
       }).join('');
 
+      // Truncamento NUNCA silencioso (28/08/2026). O backend corta quando o
+      // periodo estoura o teto de seguranca; se cortar, ele avisa em lista.truncado
+      // e a tela avisa tambem. Antes o corte existia e nao aparecia em lugar
+      // nenhum — os KPIs mostravam um recorte com cara de total.
+      const avisoTrunc = (lista && lista.truncado) ? `
+        <div style="background:#fdf3d7;border:1px solid #e8c96a;border-left:4px solid #f39c12;
+                    border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#7a5b12">
+          <strong>⚠ Período incompleto.</strong>
+          O volume deste intervalo passou do limite e ${lista.descartados ? lista.descartados.toLocaleString('pt-BR') + ' deslocamentos foram' : 'parte dos dados foi'}
+          descartada — os dias mais antigos do período são os primeiros a sair.
+          Os números abaixo <strong>não representam o intervalo inteiro</strong>.
+          Reduza o período para obter o total correto.
+        </div>` : '';
+
       content.innerHTML = `
         <style>
           .desloc-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:18px; }
@@ -2831,6 +2852,8 @@
           .desloc-tbl td { padding:6px 8px; border-bottom:1px solid rgba(255,255,255,.04); }
           .desloc-tbl tr:hover td { background:rgba(255,255,255,.03); }
         </style>
+
+        ${avisoTrunc}
 
         <div class="desloc-kpis">
           <div class="desloc-kpi">

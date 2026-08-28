@@ -36,6 +36,16 @@ const { inRegionalsSql } = require('../services/regionals');
 // sem valor: 0" — antes disso a coluna esconderia notas ainda não preenchidas.
 const USE_FIRST_CP = process.env.DESLOC_USE_FIRST_CP === '1';
 
+// Teto de notas lidas num período. É válvula de segurança contra OOM (a VM tem
+// 3,8GB e o PM2 reinicia em 1G), NÃO uma decisão de produto — por isso é folgado
+// e por isso, quando é atingido, a resposta carrega `truncado: true` e a tela
+// avisa. O valor antigo era 20000 embutido na query, e em 28/08/2026 ele estava
+// sendo atingido no uso normal (24.610 notas em 01/08→27/08) descartando os dias
+// mais antigos sem nenhum sinal. Truncar caladamente é o modo de falha que este
+// arquivo não pode ter: o número vai pra gestão e pode ser questionado em
+// auditoria de contrato.
+const MAX_NOTAS_PERIODO = 60000;
+
 // ── helper: extrai deslocamentos de um payload.checkpoints[] ─────────────────
 
 /**
@@ -150,13 +160,29 @@ async function listDeslocamentos(de, ate, opts = {}) {
   const t0 = Date.now();
   const THRESHOLD = await getThreshold();
 
-  // Estratégia em 2 passos (muito mais rápida que JOIN LATERAL):
+  // Estratégia em 4 passos.
   //
-  // Passo 1: SELECT direto em note_details filtrando por timestamp do primeiro
-  //          event=0. Só notas com checkpoint, no período. ~ms.
-  // Passo 2: SELECT mapa note_id → {team_name, regional, sector_id} a partir
-  //          das snapshots NO PERÍODO (com filtro de regional/team se vier).
-  //          Cruza em memória.
+  // Passo 1: IDENTIDADE das notas do período (note_id, numero, tipo, first_ts).
+  //          Colunas escalares apenas — NÃO toca no jsonb.
+  // Passo 2: mapa note_id → {team_name, regional, sector_id} a partir das
+  //          snapshots NO PERÍODO (com filtro de regional/team se vier).
+  // Passo 3: cruza em memória e aplica whitelist/tipo. Só aqui sabemos QUAIS
+  //          notas interessam — e só então (3b) buscamos o payload delas.
+  // Passo 4: extrai os pares 0→1 e enriquece com OSRM.
+  //
+  // 28/08/2026 — a ordem mudou, e o motivo é um BUG DE DADO, não performance.
+  // Antes o passo 1 puxava `payload->'checkpoints'` de TODAS as notas do período
+  // com `LIMIT 20000` fixo, e só o passo 2 descobria de quem elas eram. Medido em
+  // produção (01/08→27/08, perfil admin): 24.610 notas existiam, 20.000 entravam.
+  // As 4.610 descartadas saíam pelo `ORDER BY first_ts DESC` — ou seja, sumia o
+  // COMEÇO do período, e sumia em silêncio: KPIs, ranking e tendência eram
+  // calculados sobre um recorte sem nada na tela dizendo isso.
+  //
+  // O corte acontecia ANTES de saber a equipe, então ele descartava notas que
+  // talvez nem estivessem no escopo do usuário — e ainda assim roubava a vaga
+  // das que estavam. Buscar identidade primeiro (barato) e payload só dos
+  // sobreviventes (caro) resolve as duas coisas: o teto deixa de ser atingido no
+  // uso real e o detoast passa a ser pago só pelo que vai pra tela.
 
   const params = [de, ate];
   // O filtro pela EXPRESSÃO jsonb não é indexável (o cast pra timestamptz não é
@@ -183,25 +209,43 @@ async function listDeslocamentos(de, ate, opts = {}) {
   const selFirstTs = USE_FIRST_CP
     ? `nd.first_cp_at AS first_ts`
     : `(nd.payload->'checkpoints'->0->>'timestamp')::timestamptz AS first_ts`;
+
+  // Com a flag, NENHUMA coluna jsonb aparece aqui — nem no SELECT nem no WHERE.
+  // O passo 1 vira index scan puro em idx_note_details_first_cp_at, e o detoast
+  // dos payloads fica todo para o passo 3b, já filtrado por equipe.
+  //
+  // O guard `jsonb_array_length(...) >= 2` some do caminho da flag DE PROPÓSITO:
+  // exigi-lo aqui obrigaria o detoast que esta mudança existe para evitar. Ele
+  // não filtrava nada de fato — nota com 1 checkpoint não tem par 0→1, então
+  // extrairDeslocamentos() já devolve [] para ela no passo 4. O resultado final é
+  // idêntico; muda só onde a nota é descartada. No caminho SEM flag o guard fica,
+  // porque lá o jsonb é lido de qualquer jeito e ele poda linha mais cedo.
+  const whereTemCp = USE_FIRST_CP
+    ? `nd.first_cp_at IS NOT NULL`
+    : `nd.payload->'checkpoints' IS NOT NULL
+       AND jsonb_array_length(nd.payload->'checkpoints') >= 2`;
+
   const sqlNotas = `
     SELECT
       nd.note_id,
       nd.numero,
       nd.tipo,
-      nd.payload->'checkpoints' AS checkpoints,
       ${selFirstTs}
     FROM note_details nd
-    WHERE nd.payload->'checkpoints' IS NOT NULL
-      AND jsonb_array_length(nd.payload->'checkpoints') >= 2
+    WHERE ${whereTemCp}
       AND ${wherePeriodo}
     ORDER BY first_ts DESC
-    LIMIT 20000
+    LIMIT ${MAX_NOTAS_PERIODO}
   `;
   const { rows: rawNotas } = await pool.query(sqlNotas, params);
   const t1 = Date.now();
-  console.log(`[deslocamentos] passo 1: ${rawNotas.length} notas com checkpoint em ${t1 - t0}ms`);
+  const notasTruncadas = rawNotas.length >= MAX_NOTAS_PERIODO;
+  console.log(`[deslocamentos] passo 1: ${rawNotas.length} notas do período em ${t1 - t0}ms`
+    + (notasTruncadas ? `  ⚠️ TETO ${MAX_NOTAS_PERIODO} ATINGIDO — período truncado` : ''));
 
-  if (rawNotas.length === 0) return { total: 0, returned: 0, rows: [] };
+  if (rawNotas.length === 0) {
+    return { total: 0, returned: 0, rows: [], threshold: THRESHOLD, truncado: false };
+  }
 
   // Passo 2: mapa note_id → equipe. Lê snapshots no período (filtros aplicados).
   // Como pode ter 60k+ snapshots, restringimos por período pra evitar full scan.
@@ -283,7 +327,6 @@ async function listDeslocamentos(de, ate, opts = {}) {
       note_id:    n.note_id,
       numero:     n.numero,
       tipo:       n.tipo,
-      checkpoints: n.checkpoints,
       team_name:  info.team_name,
       regional:   info.regional,
       sector_id:  info.sector_id,
@@ -291,6 +334,24 @@ async function listDeslocamentos(de, ate, opts = {}) {
   }
   const t3 = Date.now();
   console.log(`[deslocamentos] passo 3: ${rows.length} notas finais após join+filtros em ${t3 - t2}ms`);
+
+  if (rows.length === 0) {
+    return { total: 0, returned: 0, rows: [], threshold: THRESHOLD, truncado: notasTruncadas };
+  }
+
+  // Passo 3b — AGORA sim o jsonb. Só das notas que sobreviveram ao escopo do
+  // usuário e à whitelist: é a única leitura cara do pipeline, e ela passou a ser
+  // proporcional ao que vai pra tela em vez de ao período inteiro.
+  const sqlPayloads = `
+    SELECT nd.note_id, nd.payload->'checkpoints' AS checkpoints
+      FROM note_details nd
+     WHERE nd.note_id = ANY($1::uuid[])
+  `;
+  const { rows: cpRows } = await pool.query(sqlPayloads, [rows.map(r => r.note_id)]);
+  const mapaCp = new Map(cpRows.map(r => [r.note_id, r.checkpoints]));
+  const t3b = Date.now();
+  console.log(`[deslocamentos] passo 3b: checkpoints de ${cpRows.length} notas em ${t3b - t3}ms`);
+  for (const r of rows) r.checkpoints = mapaCp.get(r.note_id) || null;
 
   const filtered = rows;
 
@@ -319,9 +380,16 @@ async function listDeslocamentos(de, ate, opts = {}) {
   // Cap maximo do enrichment OSRM. 20k pairs = ~10s na 1a consulta com OSRM
   // paralelizado (chunks de 10) e Worker cacheado. Subiu de 5000 -> 20000 pra
   // cobrir periodos de 15 dias inteiros (tipico ~7k notas * ~1.5 pairs = 10k).
-  const LIMIT = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), 20000);
+  //
+  // 28/08/2026 — teto subiu pra MAX_NOTAS_PERIODO pelo mesmo motivo do passo 1:
+  // medido em produção, 21.852 deslocamentos eram extraídos e 20.000 processados,
+  // então este slice sozinho descartava outros 1.852 em silêncio, EMPILHADO com o
+  // corte do passo 1. Agora, quando corta, a resposta diz.
+  const LIMIT = Math.min(Math.max(parseInt(opts.limit || 500, 10), 1), MAX_NOTAS_PERIODO);
   const cut = desloc.slice(0, LIMIT);
-  console.log(`[deslocamentos] passo 4: ${desloc.length} deslocamentos extraídos, processando ${cut.length} via OSRM...`);
+  const deslocTruncados = desloc.length > cut.length;
+  console.log(`[deslocamentos] passo 4: ${desloc.length} deslocamentos extraídos, processando ${cut.length} via OSRM...`
+    + (deslocTruncados ? `  ⚠️ ${desloc.length - cut.length} DESCARTADOS pelo teto ${LIMIT}` : ''));
   const tOsrm = Date.now();
   let osrmHits = 0, osrmMisses = 0, osrmFails = 0;
 
@@ -338,7 +406,14 @@ async function listDeslocamentos(de, ate, opts = {}) {
         if (r.cached) osrmHits++; else osrmMisses++;
         d.tempo_osrm_sec = r.duration_sec;
         d.distancia_m    = r.distance_m;
-        d.geometry       = r.geometry;
+        // 28/08/2026 — `d.geometry = r.geometry` saiu daqui. Era um LineString
+        // GeoJSON completo (overview=full) POR DESLOCAMENTO, indo inteiro na
+        // resposta: com 20 mil linhas, a geometria era a maior parte do corpo, e
+        // o servidor não tem middleware de compressão. Ninguém consumia. O front
+        // renderiza 500 linhas de tabela com campos escalares (renderDeslocamentos)
+        // e a aba Mapa busca a própria geometria direto do Worker
+        // (public/index.html, _fetchRouteGeometry). Continua gravada no
+        // `osrm_cache` — some só do corpo da resposta.
         if (d.tempo_osrm_sec === 0) {
           d.desvio_pct = null;
           d.status = 'origem_destino_iguais';
@@ -393,6 +468,11 @@ async function listDeslocamentos(de, ate, opts = {}) {
     returned: finalRows.length,
     rows: finalRows,
     threshold: THRESHOLD,   // UI usa pra rotular "> N× Maps" dinamicamente
+    // Truncar é aceitável; truncar em silêncio não. A tela usa isto pra avisar
+    // que o período exibido está incompleto, em vez de apresentar um recorte
+    // como se fosse o total.
+    truncado: notasTruncadas || deslocTruncados,
+    descartados: (desloc.length - cut.length) || 0,
   };
 }
 
@@ -401,7 +481,14 @@ async function rankingEquipes(de, ate, opts = {}) {
   // limit alto: precisamos de TODOS os deslocamentos do periodo pra ranking
   // honesto. Com OSRM paralelizado + Worker cacheado (commit e97691f), 20k
   // pairs sao ~10s na 1a vez e <2s nas subsequentes.
-  const lista = await (_listCached || listDeslocamentos)(de, ate, { ...opts, limit: 20000 });
+  //
+  // 28/08/2026 — tem de ser a MESMA constante que o front manda em `limit`, não
+  // um número solto. O `_key` inclui o limit: se este valor divergir do que
+  // /lista recebeu, as chaves param de colidir, o single-flight de 21/08 se
+  // desfaz e o pipeline caro volta a rodar 3x em paralelo. E pior — o ranking
+  // sairia calculado sobre uma lista mais curta que a dos KPIs, dois números
+  // discordando na mesma tela. Coberto por test/deslocTruncamento.test.js.
+  const lista = await (_listCached || listDeslocamentos)(de, ate, { ...opts, limit: MAX_NOTAS_PERIODO });
   const byTeam = new Map();
   for (const d of lista.rows) {
     if (d.status === 'sem_osrm' || d.tempo_osrm_sec === 0) continue;
@@ -433,7 +520,8 @@ async function tendenciaDiaria(de, ate, opts = {}) {
   // limit alto: tendencia precisa amostrar todos os dias do periodo, nao so os
   // mais recentes. Antes era 5000 e dias antigos sumiam quando rawNotas DESC
   // truncava neles. Com OSRM paralelizado, 20k pairs = ~10s 1a vez.
-  const lista = await (_listCached || listDeslocamentos)(de, ate, { ...opts, limit: 20000 });
+  // Mesma constante que o ranking e que o front — ver nota em rankingEquipes.
+  const lista = await (_listCached || listDeslocamentos)(de, ate, { ...opts, limit: MAX_NOTAS_PERIODO });
   const byDay = new Map();
   for (const d of lista.rows) {
     if (d.status === 'sem_osrm') continue;
@@ -529,6 +617,9 @@ module.exports = {
   // Resto
   extrairDeslocamentos,
   _key,   // exportado p/ teste: a chave decide se as 3 rotas compartilham o calculo
+  // exportado p/ teste: o front manda `limit` na querystring e o backend corta
+  // por este teto. Se os dois divergirem, a tela trunca de novo — em silêncio.
+  MAX_NOTAS_PERIODO,
   getThreshold,
   setThresholdCache,
   _memo,   // exposto pra debug/invalidate manual via rota admin se quiser
