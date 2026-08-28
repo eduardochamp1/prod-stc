@@ -2735,6 +2735,52 @@ feita em PR separado depois dos testes.
 
 ## P2-13 — Upsert de dia antigo SOBRESCREVE em vez de somar (subconta ~0,8%)
 
+> ## ✅ MEDIÇÃO DECISIVA — 28/08/2026: a tabela está INFLADA, re-consolidar é correto
+>
+> Em 21/08 a investigação parou com uma dúvida que travava a decisão: o excesso da
+> tabela sobre a régua podia ser **tabela inflada** (re-consolidar corrige) ou
+> **régua estreita** (re-consolidar APAGA produção legítima — o P0-6). Faltava a
+> única medição que separa os dois: contar UUIDs distintos, sem régua nenhuma.
+>
+> `scripts/diag-uuids-do-dia.js 2026-08-17`:
+>
+> ```
+> UUIDs distintos atribuídos ao dia:  1.286
+> excluídas pela regra rejeitada>concluída: 303
+> PRODUÇÃO REAL por UUID:               983
+> team_daily_totals (a tabela):       1.185   diff +202
+>
+> revelados por snapshot de 17/08:    1.276
+> revelados por snapshot de 18/08:       10
+> FORA da janela da régua de D+1:         0
+> ```
+>
+> **Zero UUIDs revelados fora da janela** → a régua de D+1 vê tudo, não é estreita.
+> E a contagem independente por UUID (983) bate com a RÉGUA, não com a tabela.
+> Logo: a tabela está inflada em +202 naquele dia, e a re-consolidação corrige.
+>
+> Isso REFUTA a minha preocupação de 21/08. Eu tinha razão em não aplicar sem
+> medir — três hipóteses minhas caíram naquela investigação — mas a medição, quando
+> feita, apontou pro lado de agir.
+>
+> **Dry-run de agosto (01 a 26), 28/08:**
+>
+> ```
+> TOTAL  20.801 → 19.581   =  -1.220
+> ```
+>
+> Distribuição: 02→09/08 quase todos ZERO (dias sem resíduo); 10→13/08 positivos
+> pequenos (+1, +9, +12, +17 — a subcontagem clássica deste item); 14/08 em diante
+> negativos grandes (-108 a -206), que é o resíduo inflacionário acumulado desde a
+> última re-consolidação de julho.
+>
+> **Nota operacional:** o passe de cada dia D é `consolidateDay(D+1)`, que wipa
+> `{D, D+1}`. Aplicar 01→26/08 portanto reescreve também **27/08**, sem reportá-lo
+> — e o valor dele fica com a régua de D (subcontado) até o cron das 23:50 de hoje
+> rodar `consolidateDay(28/08)` e re-selá-lo. Não é erro; é o comportamento
+> documentado no `verify-consolidacao.js`.
+
+
 > **MEDIÇÃO DE 21/08/2026 — agosto está com ~−645 de resíduo inflacionário.**
 > O dry-run `backfill-consolidate.js 2026-06-01 2026-08-20` deu TOTAL −308, mas
 > composto de duas coisas opostas:
