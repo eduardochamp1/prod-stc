@@ -138,6 +138,9 @@
 | P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | pending — **auditoria 28/08** |
 | P3-18 | Higiene: 74 rotas devolvem `err.message` cru; CLAUDE.md diz 266 testes (são 581); `LOG_LEVEL` maiúsculo é ignorado em silêncio | Backend/Docs | pending — **auditoria 28/08** |
 | P3-19 | `settingsScope.test.js` falhou 1× em 10 execuções da suíte completa, com mensagem inútil (`'test failed'`) e nenhum teste individual vermelho — e a suíte é o gate do `pre-push` | Qualidade | pending — **auditoria 28/08**, causa NÃO confirmada |
+| P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **variável restaurada 28/08** — falta o restart do PM2 e o guard de boot |
+| P2-44 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | pending — **medido 28/08** |
+| P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 
 ---
 
@@ -4565,3 +4568,114 @@ mesmo ponto cego, o que reforça o item.
 - **Relacionado:** **P2-41** (a hipótese depende dele e ele pode resolver isto de
   graça), P1-6 (o hook que a flakiness sabota), P2-39 (mesma família: a suíte
   não vê o que deveria ver).
+
+## P1-45 — `OSRM_HOST` sumiu do `.env` e o roteamento caiu 2 dias em silêncio
+
+- **Categoria:** Ops/Dados
+- **Status:** **variável restaurada** (28/08/2026) — falta o restart do PM2 e o
+  guard de boot. O guard é o item de verdade; a variável foi só o incidente.
+- **Evidência:** `services/osrmService.js:25` —
+  `process.env.OSRM_HOST || 'https://router.project-osrm.org'`. O default é
+  exatamente o domínio que o Fortinet bloqueia (`RUNBOOK.md:696` documenta isso).
+  Em 28/08, `grep OSRM_HOST ~/prod-stc/.env` na VM voltou **vazio**, e
+  `logs/err.log` tinha **19.706 × `OSRM HTTP 403`** (a página de bloqueio do
+  Fortinet), começando em **2026-08-26 18:25:07**. O `curl` pro Worker da mesma
+  VM devolveu `{"code":"Ok"}` — a Cloudflare estava sã o tempo todo.
+- **Como sumiu (correlação, não prova):** 26/08/2026 é o dia da edição do `.env`
+  que tirou a `sp2` de operação (`RUNBOOK.md:114`). O restart que veio junto fez
+  o app cair no default. Não há histórico do arquivo pra confirmar.
+- **Impacto:** o pior não foi a lentidão (107,3s de 126s numa carga da aba
+  Deslocamento, porque falha não é cacheada — ver P2-45). Foi o dado: com
+  `misses=0`, a `osrm_cache` **parou de aprender**, todo deslocamento novo nasceu
+  `status='sem_osrm'`, e `sem_osrm` é EXCLUÍDO dos KPIs, do ranking e da tendência
+  (`db/deslocamentosQueries.js`, `rankingEquipes` e `tendenciaDiaria`). A fatia
+  cega crescia todo dia e nada na tela dizia isso. O que ainda funcionava era
+  resíduo do backfill antigo.
+- **Por que não virou incidente antes:** nenhum alarme observa isso. A degradação
+  aparece como "a aba está lenta" — foi assim que chegou, dois dias depois.
+- **Ação:**
+  1. `pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save` —
+     **ainda pendente em 28/08 22:07** (`uptime 8h`, `restarts 0`: o processo é
+     anterior à edição do `.env`, então roda com a variável ausente e vive de
+     carona no cache que o `backfill-osrm.js` encheu).
+  2. Guard no boot: se `OSRM_HOST` não estiver definido, logar em nível de erro
+     e — melhor — **recusar o default bloqueado** em vez de silenciosamente
+     apontar pra um domínio que sabemos que não responde nesta rede.
+  3. Considerar o mesmo tratamento pras outras variáveis cujo default é inócuo em
+     dev e errado em produção (ver P1-44, mesma família).
+- **Critério de aceite:**
+  - [ ] Depois do restart, o log do passo 4 mostra `misses` > 0 — o servidor
+        buscando rota por conta própria, não só lendo cache.
+  - [ ] `fails` cai pra ~0.
+  - [ ] Subir o app sem `OSRM_HOST` produz erro visível no boot, não 403 mudo
+        horas depois.
+- **Esforço:** 5min o restart; 1h o guard.
+- **Rollback:** trivial — o guard é aditivo.
+- **Relacionado:** P2-45 (o custo de 71s só existiu porque falha não é cacheada),
+  P1-44 (variável que o código lê e o operador não vê), P1-1 (nenhum watchdog
+  observa degradação deste tipo).
+
+## P2-44 — Passo 2 dos deslocamentos: 27,4s expandindo jsonb de ~170 mil snapshots
+
+- **Categoria:** Dados/Perf
+- **Status:** pending — **medido em produção 28/08/2026**
+- **Evidência:** `db/deslocamentosQueries.js`, passo 2 — `jsonb_array_elements`
+  sobre `snapshots` no período, concatenando os 4 arrays de notas
+  (`notasConcluidas || notasRejeitadas || notasExecutadas || notasBaixadas`) e
+  aplicando `DISTINCT ON` com `ORDER BY`. Log de produção (01/08→27/08, admin):
+  `passo 2: mapa note_id→equipe com 19990 entradas em 27436ms`.
+- **Impacto:** depois do fix de 28/08 (a8959fd), é o maior custo restante da aba —
+  27,4s de ~45s. Com captura a cada 15min e retenção ilimitada, o período de 27
+  dias tem ~170 mil linhas de `snapshots`; cada uma detoasta a coluna `data`
+  inteira e expande centenas de notas. Cresce com o tempo e com o escopo do
+  usuário (admin vê 3,3× o que uma regional vê).
+- **Por que o filtro por id não ajuda:** `nota_item->>'id' = ANY(...)` só pode ser
+  avaliado DEPOIS da expansão. Ele reduz o que entra no sort do `DISTINCT ON`,
+  não o que é expandido. Foi por isso que inverter a ordem dos passos (feito em
+  a8959fd) matou o passo 1 mas não mexeu neste.
+- **Ação:** mesmo padrão do `first_cp_at` (`scripts/migrar-first-cp-at.js`):
+  materializar o que não dá pra indexar dentro do jsonb. Tabela
+  `nota_equipe_dia (note_id, date, team_name, regional, sector_id, captured_at)`,
+  escrita pelo cron junto do snapshot (mantendo idempotência do upsert), mais
+  script de backfill, mais flag de leitura — **ligada só depois** que o backfill
+  reportar zero pendências, exatamente como foi feito com o `first_cp_at`.
+- **⚠️ Cuidado de semântica:** hoje o `DISTINCT ON` com `ORDER BY ... captured_at
+  DESC` define que, para nota que passou por duas equipes no período, vence a
+  **última** a deter a nota. Isso foi decidido em 21/08 (antes era indefinido). A
+  tabela materializada tem que reproduzir essa regra, senão o ranking por equipe
+  muda de valor sem ninguém pedir.
+- **Critério de aceite:**
+  - [ ] Passo 2 abaixo de 2s no mesmo período de 27 dias.
+  - [ ] Ranking e tendência **idênticos** antes e depois, no mesmo período.
+  - [ ] Backfill reporta 0 notas com equipe conhecida e sem linha na tabela.
+- **Esforço:** 1 dia (migração + cron + backfill + flag + testes).
+- **Rollback:** a flag desliga a leitura e a query velha volta; a tabela pode ser
+  dropada depois.
+- **Relacionado:** P3-13 (coluna `data` gorda), P1-41 (mesma tabela, outro custo).
+
+## P2-45 — Falha do OSRM não é cacheada: re-tentada em toda carga, para sempre
+
+- **Categoria:** Backend
+- **Status:** pending — **medido 28/08/2026**
+- **Evidência:** `services/osrmService.js:157-160` — no `catch`, `getRoute` faz
+  `console.warn` e retorna `null` **sem gravar nada** no `osrm_cache`. O
+  `_throttle()` (`osrmService.js:50`) é global e serializa toda saída em
+  `ROUTING_MIN_INTERVAL_MS` (default 50ms), e cache hit não passa por ele — mas
+  **toda falha passa**.
+- **Impacto (aritmética do incidente P1-45):** 1.424 falhas × 50ms = **71,2s de
+  piso por carga da aba**, repetidos indefinidamente porque nada memoriza que
+  aquele par falhou. Os chunks de 10 não ajudam: com 20% de falha, ~90% dos
+  chunks têm ao menos um par que falha e esperam por ele. Medido: 107,3s.
+- **Ação:** gravar a falha no `osrm_cache` com marcador de "sem rota" **e
+  expiração**. A distinção importa e foi o que quase me fez escrever o conserto
+  errado: `NoRoute` (coordenada inválida) pode ser permanente; `HTTP 4xx/5xx`
+  (infra) **não pode**, senão um soluço de rede congela milhares de pares bons —
+  que é exatamente o que teria acontecido no P1-45 se o cache negativo já
+  existisse sem TTL.
+- **Critério de aceite:**
+  - [ ] Par que falha por `NoRoute` não gera 2ª requisição na carga seguinte.
+  - [ ] Par que falha por HTTP é re-tentado depois do TTL, não antes.
+  - [ ] Uma queda total do proxy não deixa resíduo permanente na tabela.
+- **Esforço:** 3h.
+- **Rollback:** `git revert` + `DELETE FROM osrm_cache WHERE source = 'falha'`.
+- **Relacionado:** P1-45 (o incidente que expôs isto).
