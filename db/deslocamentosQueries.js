@@ -155,6 +155,186 @@ function setThresholdCache(fator) {
 // requisicoes compartilham UM calculo pelo single-flight do memoCache.
 let _listCached = null;
 
+// ── Mapa note_id → equipe, montado por DIA e cacheado por dia ────────────────
+//
+// 28/08/2026 — o passo 2 era UMA consulta cobrindo o período inteiro: 21,1s
+// medidos em produção (01/08→27/08), 70% do tempo restante da aba. O custo é a
+// expansão de `jsonb_array_elements` sobre ~170 mil linhas de `snapshots` — com
+// captura a cada 15min e retenção ilimitada, o período tem muita linha e cada uma
+// detoasta a coluna `data` inteira.
+//
+// O filtro por note_id NÃO evita isso: `nota_item->>'id' = ANY(...)` só pode ser
+// avaliado DEPOIS da expansão, então ele reduzia o sort do DISTINCT ON, não o que
+// era expandido.
+//
+// A observação que destrava: **dia fechado é imutável**. O conjunto de snapshots
+// de 01/08 não muda mais nunca. Então o mapa daquele dia pode ser calculado uma
+// vez e reusado — por horas, e entre períodos diferentes (mudar o filtro de data
+// de 27 pra 20 dias reaproveita os 20 dias já calculados).
+//
+// ⚠️ O mapa por dia é calculado SEM o filtro de note_id, de propósito: se ele
+// dependesse das notas da consulta atual, o cache não serviria pra consulta
+// nenhuma além daquela. O preço é guardar mais entradas por dia do que a consulta
+// usa; o ganho é pagar o dia uma vez só.
+//
+// REJEITADO — ler só o ÚLTIMO snapshot de cada (dia, equipe), que cairia de ~170
+// mil linhas pra ~1.600: a suíte já prova que isso perde dado. Ver os testes
+// "une concluídas de todos os snapshots — recupera a que sumiu do último" e
+// "sem união seria só o último (contraste)". Nota SOME de snapshot posterior;
+// quem assumir acúmulo muda número em silêncio.
+const _memoCacheMod = require('../services/memoCache');
+const { dateBRT }   = require('../services/timeUtil');
+
+// Dois caches porque o TTL depende do dia. Dia fechado não recebe snapshot novo
+// nunca mais → pode viver horas. O dia CORRENTE ainda está sendo escrito pelo
+// cron a cada 15min → mantém o TTL curto de sempre, senão a aba de hoje congela.
+const _memoDiaFechado = _memoCacheMod.create({ ttlMs: 12 * 60 * 60 * 1000, name: 'desloc-mapa-dia',  maxEntries: 500 });
+const _memoDiaAberto  = _memoCacheMod.create({ ttlMs: 5 * 60 * 1000,       name: 'desloc-mapa-hoje', maxEntries: 60 });
+
+// A chave NÃO inclui note_ids (ver acima) — só o dia e os filtros que realmente
+// mudam quais snapshots entram na conta.
+function _keyDia(dia, opts) {
+  const o = opts || {};
+  return JSON.stringify({
+    dia,
+    teams:     Array.isArray(o.teams) && o.teams.length ? [...o.teams].sort() : (o.team_name || null),
+    regionais: Array.isArray(o.regionais) && o.regionais.length ? [...o.regionais].sort() : null,
+  });
+}
+
+async function _mapaEquipeDoDia(dia, opts = {}) {
+  const pool = _getPool();
+  const params = [dia];
+  let snapWhere = `s.date = $1`;
+  // Filtro de regional: `opts.regionais` é string[] de siglas reais (GUA/CAC/SJC).
+  // Caller (route) é responsável por garantir array — sem fallback singular.
+  if (Array.isArray(opts.regionais) && opts.regionais.length > 0) {
+    snapWhere += ` AND ${inRegionalsSql(opts.regionais, params, 's.regional')}`;
+  }
+  if (Array.isArray(opts.teams) && opts.teams.length > 0) {
+    const ph = opts.teams.map(t => { params.push(t); return `$${params.length}`; });
+    snapWhere += ` AND s.team_name IN (${ph.join(', ')})`;
+  } else if (opts.team_name) {
+    params.push(opts.team_name);
+    snapWhere += ` AND s.team_name = $${params.length}`;
+  }
+
+  // `captured_at` VAI no SELECT porque o merge entre dias precisa dele — ver
+  // _mapaEquipeDoPeriodo. Sem ele não dá pra reproduzir o DISTINCT ON global.
+  const sql = `
+    SELECT DISTINCT ON (nota_item->>'id')
+      nota_item->>'id'   AS note_id,
+      s.team_name,
+      s.regional,
+      s.sector_id,
+      s.captured_at
+    FROM snapshots s,
+         LATERAL jsonb_array_elements(
+           COALESCE(s.data->'notasConcluidas',  '[]'::jsonb) ||
+           COALESCE(s.data->'notasRejeitadas',  '[]'::jsonb) ||
+           COALESCE(s.data->'notasExecutadas',  '[]'::jsonb) ||
+           COALESCE(s.data->'notasBaixadas',    '[]'::jsonb)
+         ) AS nota_item
+    WHERE ${snapWhere}
+      AND nota_item->>'id' IS NOT NULL
+    ORDER BY nota_item->>'id', s.captured_at DESC
+  `;
+  const { rows } = await pool.query(sql, params);
+  // Compacta ANTES de cachear. Isto fica retido por até 12h, vezes o número de
+  // dias do período, vezes as combinações de filtro — então o formato importa: o
+  // `captured_at` do pg vem como objeto Date, e guardá-lo assim custa memória e
+  // ainda obriga a re-parsear a cada merge. Vira número uma vez, aqui.
+  return rows.map((r) => ({
+    note_id:   r.note_id,
+    team_name: r.team_name,
+    regional:  r.regional,
+    sector_id: r.sector_id,
+    ts:        new Date(r.captured_at).getTime(),
+  }));
+}
+
+const _mapaDiaFechadoCached = _memoDiaFechado.wrap(_mapaEquipeDoDia, _keyDia);
+const _mapaDiaAbertoCached  = _memoDiaAberto.wrap(_mapaEquipeDoDia, _keyDia);
+
+// Quantos dias consultar em paralelo. Baixo de propósito: o pool tem 10 conexões
+// (PG_POOL_MAX) e o cron escreve nas mesmas tabelas. Ocupar o pool inteiro numa
+// consulta de leitura faria o cron enfileirar — que é o cenário do P2-6.
+const CONC_DIAS = 4;
+
+/**
+ * Monta o mapa note_id → {team_name, regional, sector_id} do período inteiro,
+ * juntando os mapas diários.
+ *
+ * ⚠️ SEMÂNTICA — o merge reproduz, de propósito, o `DISTINCT ON` global que
+ * existia antes: para nota que passou por DUAS equipes no período, vence o
+ * snapshot de maior `captured_at`, ou seja, a ÚLTIMA equipe a deter a nota.
+ * Essa regra foi definida em 21/08/2026 (antes era ordem física, indefinida) e
+ * mudar ela mexeria no ranking por equipe sem ninguém pedir. Por isso o merge
+ * compara `captured_at` e não a data do dia: são coisas diferentes se algum
+ * snapshot for gravado fora de ordem.
+ */
+async function _mapaEquipeDoPeriodo(de, ate, opts = {}) {
+  const dias = [];
+  const cur = new Date(de + 'T00:00:00Z');
+  const end = new Date(ate + 'T00:00:00Z');
+  // Teto de iterações: guarda contra data inválida virar laço infinito. 400 dias
+  // é muito além de qualquer uso real (o histórico começa em 09/05/2026).
+  while (cur <= end && dias.length < 400) {
+    dias.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+
+  const hoje = dateBRT();
+  const porDia = [];
+
+  for (let i = 0; i < dias.length; i += CONC_DIAS) {
+    const lote = dias.slice(i, i + CONC_DIAS);
+    const res = await Promise.all(lote.map((d) =>
+      // Dia >= hoje ainda está sendo escrito (ou é futuro) → cache curto.
+      (d >= hoje ? _mapaDiaAbertoCached : _mapaDiaFechadoCached)(d, opts),
+    ));
+    for (const rows of res) porDia.push(rows);
+  }
+  return _mergeMapasDia(porDia);
+}
+
+/**
+ * Junta os mapas diários num só, aplicando a regra de desempate.
+ *
+ * Separada e pura DE PROPÓSITO: é a única parte desta mudança que pode alterar
+ * número reportado. O resto é cache — se o cache errar, o pior caso é lentidão.
+ * Se ISTO errar, o deslocamento vai pra equipe errada e o ranking muda calado.
+ * Testada em test/deslocMapaDia.test.js sem precisar de banco.
+ *
+ * @param {Array<Array<{note_id,team_name,regional,sector_id,ts}>>} porDia
+ * @returns {Map<string,{team_name,regional,sector_id}>}
+ */
+function _mergeMapasDia(porDia) {
+  const mapa     = new Map();   // note_id → { team_name, regional, sector_id }
+  const vencedor = new Map();   // note_id → captured_at (ms) de quem está ganhando
+
+  for (const rows of porDia) {
+    if (!Array.isArray(rows)) continue;
+    for (const m of rows) {
+      if (!m || !m.note_id) continue;
+      const ts = Number(m.ts);
+      if (!Number.isFinite(ts)) continue;   // sem carimbo não dá pra desempatar
+      const atual = vencedor.get(m.note_id);
+      // `>=` e não `>`: em empate de captured_at o primeiro visto permanece, o
+      // que mantém o resultado estável entre execuções. O DISTINCT ON do
+      // Postgres também é arbitrário no empate; o que não pode é variar.
+      if (atual !== undefined && atual >= ts) continue;
+      vencedor.set(m.note_id, ts);
+      mapa.set(m.note_id, {
+        team_name: m.team_name,
+        regional:  m.regional,
+        sector_id: m.sector_id,
+      });
+    }
+  }
+  return mapa;
+}
+
 async function listDeslocamentos(de, ate, opts = {}) {
   const pool = _getPool();
   const t0 = Date.now();
@@ -247,70 +427,15 @@ async function listDeslocamentos(de, ate, opts = {}) {
     return { total: 0, returned: 0, rows: [], threshold: THRESHOLD, truncado: false };
   }
 
-  // Passo 2: mapa note_id → equipe. Lê snapshots no período (filtros aplicados).
-  // Como pode ter 60k+ snapshots, restringimos por período pra evitar full scan.
-  // Multi-select: aceita opts.teams[] / opts.regionais[] (com fallback singular).
-  const params2 = [de, ate];
-  let snapWhere = `s.date >= $1 AND s.date <= $2`;
-  // Filtro de regional: `opts.regionais` é string[] de siglas reais (GUA/CAC/SJC).
-  // Caller (route) é responsável por garantir array — sem fallback singular.
-  if (Array.isArray(opts.regionais) && opts.regionais.length > 0) {
-    snapWhere += ` AND ${inRegionalsSql(opts.regionais, params2, 's.regional')}`;
-  }
-  if (Array.isArray(opts.teams) && opts.teams.length > 0) {
-    const ph = opts.teams.map(t => { params2.push(t); return `$${params2.length}`; });
-    snapWhere += ` AND s.team_name IN (${ph.join(', ')})`;
-  } else if (opts.team_name) {
-    params2.push(opts.team_name);
-    snapWhere += ` AND s.team_name = $${params2.length}`;
-  }
-
-  // jsonb_array_elements + extração de id — restringido ao período/filtros
-  // pra não escanear 63k linhas. Custo ~ N_snapshots_no_periodo × notas_por_snap.
-  //
-  // 21/08/2026 — DUAS mudanças aqui, na investigação da lentidão da aba:
-  //
-  // (a) FILTRA pelos ids que o passo 1 encontrou. Antes montava o mapa de TODAS
-  //     as notas de TODOS os snapshots do período e filtrava em memória — mas o
-  //     mapa só é consultado via `mapaTeam.get(n.note_id)` para as notas do
-  //     passo 1 (ver o laço mais abaixo). Semanticamente idêntico, e corta
-  //     drasticamente as linhas que entram no sort do DISTINCT ON.
-  //
-  // (b) ORDER BY EXPLÍCITO. O DISTINCT ON estava SEM ORDER BY, e em Postgres isso
-  //     significa que a linha escolhida é ARBITRÁRIA: para uma nota que passou por
-  //     duas equipes no período, qual delas ficava com o deslocamento dependia da
-  //     ordem física da varredura. Agora é definido — vence o snapshot mais
-  //     RECENTE (última equipe a deter a nota no período). É mudança de
-  //     comportamento, de indefinido para definido, e era obrigatória junto com
-  //     (a): mexer no plano mudaria o vencedor de qualquer forma.
-  params2.push(rawNotas.map(n => n.note_id));
-  const phIds = '$' + params2.length;
-  const sqlMap = `
-    SELECT DISTINCT ON (nota_item->>'id')
-      nota_item->>'id'   AS note_id,
-      s.team_name,
-      s.regional,
-      s.sector_id
-    FROM snapshots s,
-         LATERAL jsonb_array_elements(
-           COALESCE(s.data->'notasConcluidas',  '[]'::jsonb) ||
-           COALESCE(s.data->'notasRejeitadas',  '[]'::jsonb) ||
-           COALESCE(s.data->'notasExecutadas',  '[]'::jsonb) ||
-           COALESCE(s.data->'notasBaixadas',    '[]'::jsonb)
-         ) AS nota_item
-    WHERE ${snapWhere}
-      AND nota_item->>'id' IS NOT NULL
-      AND nota_item->>'id' = ANY(${phIds}::text[])
-    ORDER BY nota_item->>'id', s.captured_at DESC
-  `;
-  const { rows: mapaRows } = await pool.query(sqlMap, params2);
+  // Passo 2: mapa note_id → equipe, montado DIA A DIA e cacheado por dia.
+  // Ver _mapaEquipeDoDia e _mapaEquipeDoPeriodo logo acima deste arquivo.
+  const mapaTeam = await _mapaEquipeDoPeriodo(de, ate, opts);
   const t2 = Date.now();
-  console.log(`[deslocamentos] passo 2: mapa note_id→equipe com ${mapaRows.length} entradas em ${t2 - t1}ms`);
-
-  const mapaTeam = new Map();
-  for (const m of mapaRows) {
-    mapaTeam.set(m.note_id, { team_name: m.team_name, regional: m.regional, sector_id: m.sector_id });
-  }
+  // ⚠️ Este número SUBIU em relação aos logs de antes de 28/08/2026, e não é
+  // regressão: o mapa por dia é montado sem o filtro de note_id (pra poder ser
+  // cacheado), então conta TODAS as notas do período, não só as com checkpoint.
+  // Comparar com log antigo é comparar coisas diferentes.
+  console.log(`[deslocamentos] passo 2: mapa note_id→equipe com ${mapaTeam.size} entradas em ${t2 - t1}ms`);
 
   // Filtra equipes oficiais (whitelist em equipes_oficiais)
   const { rows: oficRows } = await pool.query(`SELECT sigla FROM equipes_oficiais WHERE ativo = true`);
@@ -617,6 +742,10 @@ module.exports = {
   // Resto
   extrairDeslocamentos,
   _key,   // exportado p/ teste: a chave decide se as 3 rotas compartilham o calculo
+  // exportados p/ teste: a regra de desempate entre dias é a única parte do
+  // cache por dia que pode mudar a equipe de um deslocamento.
+  _mergeMapasDia,
+  _keyDia,
   // exportado p/ teste: o front manda `limit` na querystring e o backend corta
   // por este teto. Se os dois divergirem, a tela trunca de novo — em silêncio.
   MAX_NOTAS_PERIODO,
