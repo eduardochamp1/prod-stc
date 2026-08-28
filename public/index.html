@@ -5211,7 +5211,18 @@ ${matrizHTML}
 
       try {
         const params = new URLSearchParams({ de, ate, regionals: decodeURIComponent(_histRegionalsCsv) });
-        const data = await fetch(`${API}/historico/sessoes?${params}`).then(r => r.json());
+        // 28/08/2026 — P1-41 Parte 3. Antes era `.then(r => r.json())` direto: um
+        // 400 do backend (data inválida, intervalo invertido) tinha o corpo
+        // parseado normalmente, `data.dias` vinha undefined, e a aba mostrava
+        // "nenhum dado" — o usuário concluía que não houve produção no período.
+        // Agora o erro do backend aparece com o texto que ele mandou.
+        const resp = await fetch(`${API}/historico/sessoes?${params}`);
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          document.getElementById('hist-content').innerHTML =
+            `<div class="empty-state">${escapeHtml(data.error || `Erro ${resp.status} ao carregar o histórico.`)}</div>`;
+          return;
+        }
         _histDias = data.dias || [];
         popularHistTeamSelect(_histDias);
         applyHistoricoFilters();

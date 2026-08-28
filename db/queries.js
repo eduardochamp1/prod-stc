@@ -34,7 +34,7 @@
 const { getClient } = require('../services/dbClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
 const { dateBRT } = require('../services/timeUtil');
-const { inRegionals } = require('../services/regionals');
+const { inRegionals, inRegionalsSql } = require('../services/regionals');
 
 /** Valida `regionals[]` e lança se vier vazio/inválido. */
 function _assertRegionals(regionals, fnName) {
@@ -117,8 +117,17 @@ async function _selectAll(queryFactory, pageSize = 1000, tieBreaker = 'id') {
     if (data.length < pageSize) break;
     page++;
   }
+  // 28/08/2026 — P1-41. Antes daqui saía um array TRUNCADO com cara de completo,
+  // e o único sinal era um console.warn que ninguém lê. Como a ordem é
+  // `captured_at DESC`, o que caía fora eram os dias mais ANTIGOS do intervalo:
+  // uma consulta de 90 dias devolvia 60 e reportava produção ZERO nos outros 30.
+  // Número errado é pior que erro. Agora estoura.
   if (page >= MAX_PAGES) {
-    console.warn(`[_selectAll] limite de páginas atingido (${MAX_PAGES * pageSize} rows)`);
+    const err = new Error(
+      `_selectAll: intervalo grande demais (>${MAX_PAGES * pageSize} linhas). ` +
+      `Reduza o período consultado.`);
+    err.code = 'RANGE_TOO_LARGE';
+    throw err;
   }
   return allRows;
 }
@@ -705,19 +714,51 @@ async function getTeamProducao(filters = {}) {
  */
 async function getTeamSessionHistory(de, ate, teamName, regionals) {
   _assertRegionals(regionals, 'getTeamSessionHistory');
-  const sb = getClient();
-  // Usa lte() inclusivo direto — sem precisar de truque +1 dia/UTC
-  const allRows = await _selectAll(() => {
-    let q = sb
-      .from('snapshots')
-      .select('team_name, regional, sector_id, date, captured_at, data')
-      .gte('date', de)
-      .lte('date', ate)
-      .order('captured_at', { ascending: false });
-    if (teamName && teamName !== 'ALL') q = q.eq('team_name', teamName);
-    q = inRegionals(q, regionals);
-    return q;
-  });
+
+  // 28/08/2026 — P1-41. Esta função SEMPRE usou só o snapshot mais recente por
+  // (date, team_name) — está no docstring acima e no `latest[key]` logo abaixo.
+  // Mas ela buscava TODAS as linhas do intervalo, com a coluna gorda `data`, e
+  // descartava o resto em memória. Medido na VM: julho tem 243.113 linhas em
+  // `snapshots` e a função usa ~4.340 (31 dias × ~140 equipes). Desperdício de
+  // 56×, e acima do teto de 200k do `_selectAll` — ou seja, a consulta MENSAL de
+  // julho vinha TRUNCADA, perdendo os ~5 primeiros dias (a ordem é
+  // `captured_at DESC`, então cai o mais antigo) e reportando produção zero neles.
+  //
+  // A auditoria propôs um teto de janela de 45 dias. Com a taxa real medida
+  // (6.200–7.800 linhas/dia, não os 3.360 estimados), 45 dias são ~353k linhas —
+  // acima do teto do `_selectAll`, então as duas correções se contradiriam. E um
+  // teto que funcionasse (≤24 dias) quebraria a consulta mensal, que é a mais
+  // usada.
+  //
+  // Fazer a redução no SQL resolve os dois sem teto nenhum: DISTINCT ON devolve
+  // uma linha por (date, team_name) — mesma regra de seleção, agora explícita —
+  // e a mesma consulta de julho passa de 243.113 linhas para ~4.340. É o mesmo
+  // padrão do P1-27 e do passo 2 dos deslocamentos: reduzir no banco, não em JS.
+  //
+  // Precisa de SQL cru: o pgShim (builder estilo supabase-js) não expressa
+  // DISTINCT ON. Mesma decisão de `getDeslogadasUltimaSessao` (`:1395`).
+  const { _getPool } = require('../services/pgShim');
+  const pool = _getPool();
+  if (!pool) {
+    console.warn('[getTeamSessionHistory] sem pool Postgres — devolvendo vazio');
+    return [];
+  }
+
+  const params = [de, ate];
+  let where = 's.date >= $1::date AND s.date <= $2::date';
+  if (teamName && teamName !== 'ALL') {
+    params.push(teamName);
+    where += ` AND s.team_name = $${params.length}`;
+  }
+  where += ` AND ${inRegionalsSql(regionals, params, 's.regional')}`;
+
+  const { rows: allRows } = await pool.query(
+    `SELECT DISTINCT ON (s.date, s.team_name)
+            s.team_name, s.regional, s.sector_id, s.date, s.captured_at, s.data
+       FROM snapshots s
+      WHERE ${where}
+      ORDER BY s.date, s.team_name, s.captured_at DESC`,
+    params);
 
   // Normaliza r.date pra string ISO 'YYYY-MM-DD'. O pg driver retorna colunas
   // DATE como Date objects, e o resto da função usa r.date como chave de obj
@@ -729,7 +770,11 @@ async function getTeamSessionHistory(de, ate, teamName, regionals) {
     }
   }
 
-  // Filtra pela whitelist e mantém apenas o snapshot mais recente por (date, team_name)
+  // Filtra pela whitelist (equipes_oficiais) — este filtro CONTINUA necessário.
+  // O dedup por (date, team_name) virou redundante em 28/08/2026, porque o
+  // DISTINCT ON acima já devolve uma linha por chave. Mantido de propósito: é
+  // barato, documenta a regra de seleção em JS, e se alguém trocar a query de
+  // volta o comportamento não muda em silêncio.
   const latest = {};
   _onlyOficiais(allRows, 'team_name').forEach(r => {
     const key = `${r.date}|${r.team_name}`;

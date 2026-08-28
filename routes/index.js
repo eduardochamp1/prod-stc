@@ -24,6 +24,44 @@ function _parseYearMonth(req, res) {
   }
   return raw || new Date().toISOString().slice(0, 7);
 }
+
+/**
+ * Valida um intervalo `de`/`ate`: data real e ordem correta. Responde 400 e
+ * devolve false quando inválido.
+ *
+ * 28/08/2026 — P1-41. O regex `^\d{4}-\d{2}-\d{2}$` que já existia nas rotas
+ * valida só o FORMATO: `9999-99-99` passa, e chega no Postgres como data
+ * inválida (erro 500 opaco). Intervalo invertido (`ate` < `de`) passava também,
+ * devolvendo lista vazia como se não houvesse produção.
+ *
+ * ⚠️ NÃO tem teto de dias, e isso é deliberado — a auditoria de 28/08 propôs 45
+ * dias, mas a medição na VM mostrou que o teto não resolve e atrapalha:
+ *   - a taxa real é 6.200–7.800 linhas/dia (não os 3.360 estimados), então 45
+ *     dias seriam ~353k linhas, ACIMA do teto de 200k do `_selectAll` — as duas
+ *     correções se contradiriam;
+ *   - um teto que funcionasse (≤24 dias) quebraria a consulta MENSAL, que é a
+ *     mais usada no painel.
+ * O que resolveu foi reduzir no SQL: `getTeamSessionHistory` passou a usar
+ * DISTINCT ON e a consulta mensal de julho caiu de 243.113 linhas para ~4.340.
+ * Com isso o intervalo largo deixou de ser um problema de volume. Ver o item
+ * P1-41 em docs/handoff/AUDIT-2026-08-28.md.
+ */
+function _checkJanela(req, res, de, ate) {
+  const d0 = Date.parse(`${de}T00:00:00Z`);
+  const d1 = Date.parse(`${ate}T00:00:00Z`);
+  if (!Number.isFinite(d0) || !Number.isFinite(d1)) {
+    res.status(400).json({ error: `Data inválida: de=${de} ate=${ate}` });
+    return false;
+  }
+  if (d1 < d0) {
+    res.status(400).json({
+      error: `Intervalo invertido: "ate" (${ate}) é anterior a "de" (${de}).`,
+    });
+    return false;
+  }
+  return true;
+}
+
 const { login: authLogin, authMiddleware, requireAdmin, compatRegionalParam, applyScope } = require('../middleware/auth');
 
 const router = express.Router();
@@ -835,6 +873,7 @@ router.get('/historico/sessoes', async (req, res) => {
     }
     if (!dateRe.test(de) || !dateRe.test(ate))
       return res.status(400).json({ error: 'Formato inválido. Use YYYY-MM-DD' });
+    if (!_checkJanela(req, res, de, ate)) return;   // P1-41 — data real e ordem
     if (!(await enforceTeamRegional(req, res, req.query.team))) return;
     if (!sq) return res.json({ dias: [] });
     const dias = await sq.getTeamSessionHistory(de, ate, req.query.team || null, req.scope.regionals);
@@ -3240,3 +3279,6 @@ router.get('/notas/equipe/:nome', async (req, res) => {
 });
 
 module.exports = router;
+// Exportado p/ teste (P1-41, 28/08/2026). O router é o export principal;
+// pendurar o helper nele evita mudar a forma do módulo pra quem já usa.
+module.exports._checkJanela = _checkJanela;
