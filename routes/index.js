@@ -491,7 +491,8 @@ router.get('/status', (req, res) => {
     version:  '1.1.0',
     mode:     process.env.DATA_MODE || 'mock',
     supabase: process.env.SUPABASE_SERVICE_KEY ? 'configurado ✓' : 'não configurado',
-    webhook:  process.env.WEBHOOK_SECRET ? 'configurado ✓' : 'não configurado',
+    // `webhook` saiu em 28/08/2026 junto com o endpoint /webhook/deploy (P2-42).
+    // Reportar o estado de um segredo que nada mais lê só ensina errado.
     ts:       new Date().toISOString(),
   });
 });

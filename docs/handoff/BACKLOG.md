@@ -130,7 +130,7 @@
 | P1-44 | `.env.example` não documenta 19 variáveis que o código lê — inclui o kill-switch de conta EDP e o que APAGA o histórico bruto | Governança | **done** (28/08) — eram 28, não 19 (as 4 credenciais do SJC eram invisíveis a grep); teste trava o drift |
 | P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | pending — **auditoria 28/08** |
 | P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | pending — **auditoria 28/08**, preventivo |
-| P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | pending — **auditoria 28/08**, precisa de decisão A/B |
+| P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | **done** (28/08) — opção A: endpoint removido, mais os imports, o log de boot e o campo do /api/status |
 | P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | pending — **auditoria 28/08** |
 | P3-15 | `_loginTries` só perde entrada no login bem-sucedido — janela expirada fica pra sempre | Backend | pending — **auditoria 28/08** |
 | P3-16 | `openLightbox('${f.base64}')`: cada foto de OS entra DUAS vezes no DOM (~5,4 MB por foto de 2 MB) | Frontend | pending — **auditoria 28/08** |

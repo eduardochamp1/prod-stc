@@ -10,8 +10,6 @@
 // teste). Em produção NODE_ENV não é 'test' → comportamento acima intacto.
 require('dotenv').config({ override: process.env.NODE_ENV !== 'test' });
 
-const crypto   = require('crypto');
-const { exec } = require('child_process');
 const express  = require('express');
 const cors     = require('cors');
 const path     = require('path');
@@ -53,48 +51,35 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── WEBHOOK DE DEPLOY (antes do JSON parser para preservar raw body) ──────────
-
-app.post('/webhook/deploy', express.raw({ type: 'application/json' }), (req, res) => {
-  const secret = process.env.WEBHOOK_SECRET;
-  if (!secret) {
-    console.warn('[WEBHOOK] WEBHOOK_SECRET não configurado — requisição ignorada.');
-    return res.status(500).json({ error: 'WEBHOOK_SECRET não configurado' });
-  }
-
-  // Verifica assinatura do GitHub
-  const sig = req.headers['x-hub-signature-256'] || '';
-  const digest = 'sha256=' + crypto.createHmac('sha256', secret).update(req.body).digest('hex');
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(digest))) {
-    console.warn('[WEBHOOK] Assinatura inválida — requisição rejeitada.');
-    return res.status(401).json({ error: 'Assinatura inválida' });
-  }
-
-  const payload = JSON.parse(req.body.toString());
-
-  // Só atualiza em push no branch main
-  if (payload.ref !== 'refs/heads/main') {
-    return res.json({ ok: true, msg: `Branch ${payload.ref} ignorada` });
-  }
-
-  const commit = payload.head_commit?.message || '—';
-  console.log(`[WEBHOOK] Push recebido: "${commit}" — iniciando deploy...`);
-  res.json({ ok: true, msg: 'Deploy iniciado' });
-
-  // Executa após responder para não travar o request
-  const projectDir = __dirname;
-  const cmd = `cd "${projectDir}" && git pull origin main && npm install --production && pm2 restart wpa-monitor`;
-
-  exec(cmd, { env: { ...process.env, PATH: process.env.PATH } }, (err, stdout, stderr) => {
-    if (err) {
-      console.error('[WEBHOOK] Erro no deploy:', err.message);
-      if (stderr) console.error('[WEBHOOK] stderr:', stderr);
-      return;
-    }
-    console.log('[WEBHOOK] Deploy concluído com sucesso.');
-    if (stdout) console.log('[WEBHOOK]', stdout.trim());
-  });
-});
+// ── WEBHOOK DE DEPLOY — REMOVIDO em 28/08/2026 (auditoria P2-42) ─────────────
+//
+// Existia aqui um POST /webhook/deploy PÚBLICO (montado antes de qualquer auth)
+// que, com a assinatura certa, executava:
+//   cd <projeto> && git pull origin main && npm install --production && pm2 restart wpa-monitor
+//
+// Removido, e não consertado, por três razões:
+//
+//  1. usava `pm2 restart`, que a REGRA 4 do CLAUDE.md proíbe — restart/reload não
+//     recarrega env var de forma confiável em cluster mode. O deploy rodava pela
+//     via que o próprio projeto documentou como quebrada, e a falha era
+//     silenciosa: o processo subia, com env velho. O procedimento correto é
+//     `pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save`.
+//
+//  2. `crypto.timingSafeEqual` LANÇA quando os buffers têm tamanhos diferentes,
+//     então POST sem o header `x-hub-signature-256` virava 500 (o Express
+//     capturava o throw), não 401 — e o log não distinguia scanner de erro real.
+//     Mesmo defeito que o P1-43 consertou no /api/cron.
+//
+//  3. era superfície de RCE mantida viva pra um fluxo que ninguém usa: o deploy
+//     é manual na VM (CLAUDE.md), `WEBHOOK_SECRET` não está no .env, e a rota
+//     rodava `npm install` — que depende de rede que o Fortinet filtra, com a
+//     flag `--production` deprecada desde o npm 9.
+//
+// Saíram junto os imports de `crypto` e `child_process`, usados só aqui.
+//
+// Se um dia o deploy automático voltar, ele volta DESENHADO: assinatura validada
+// sem lançar, procedimento de restart correto, e FORA do processo que serve o
+// painel. Ver P2-42 em docs/handoff/AUDIT-2026-08-28.md.
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -190,8 +175,7 @@ async function start() {
     console.log(`  http://localhost:${PORT}`);
     console.log(`  Modo    : ${process.env.DATA_MODE || 'mock'}`);
     console.log(`  WPA URL : ${process.env.WPA_URL || 'não configurado'}`);
-    console.log(`  Supabase: ${process.env.SUPABASE_SERVICE_KEY ? 'configurado ✓' : 'não configurado'}`);
-    console.log(`  Webhook : ${process.env.WEBHOOK_SECRET ? 'configurado ✓' : 'não configurado'}\n`);
+    console.log(`  Supabase: ${process.env.SUPABASE_SERVICE_KEY ? 'configurado ✓' : 'não configurado'}\n`);
   });
 }
 
