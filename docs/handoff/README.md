@@ -18,6 +18,7 @@ tem as rules of engagement.
 | [`BACKLOG.md`](./BACKLOG.md) | Antes de propor nova mudança. Prioridades ordenadas do mais crítico ao menos crítico. Cada item tem evidência, ação, aceite, esforço, rollback. |
 | [`RUNBOOK.md`](./RUNBOOK.md) | Em incidente. Comandos de emergência, restore, deploy, sintomas comuns. |
 | [`AUDIT-2026-07-08.md`](./AUDIT-2026-07-08.md) | Registro histórico da auditoria de arquitetura + CTO review de 08/07/2026. Não editar. |
+| [`AUDIT-2026-08-28.md`](./AUDIT-2026-08-28.md) | Auditoria de 28/08/2026 — 13 achados novos (P1-41…P3-19), escritos como **ordem de serviço executável**: código de hoje verbatim, código novo verbatim, teste, comando de verificação e rollback por item. É o documento a seguir quando o executor for uma AI menor. |
 
 ## Convenções
 

@@ -124,6 +124,19 @@
 | P2-38 | O breaker é hidratado do banco de forma ASSÍNCRONA, mas o roteamento de conta é SÍNCRONO: no 1º ciclo após cada restart o setor pode ser roteado pra conta quebrada | Ops/Backend | **done** (2abf2fb, 22/08) — `await _hydrateBreaker()` no `wpaFetch`, que cobre também requisição HTTP antes do warm-up |
 | P2-39 | Funções de cron são INVISÍVEIS à suíte: saem cedo quando não há banco, então erro de escopo dentro delas só estoura em produção, na hora agendada | Qualidade | pending — dois casos reais pegos em revisão em 22/08 |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
+| P1-41 | Histórico com intervalo largo TRUNCA em silêncio (200k linhas) e devolve produção ZERO nos dias mais antigos — e o intervalo completo já estoura o teto hoje | Dados | pending — **auditoria 28/08** |
+| P1-42 | Rate limit do login é contornável trocando um header (`X-Forwarded-For`): 100 tentativas, zero 429 — furo no P1-5 | Segurança | pending — **auditoria 28/08** |
+| P1-43 | `CRON_SECRET` aceito na query string (vaza pro log) + `GET /api/cron/consolidate?date=` reescreve histórico sem validar a data | Segurança/Dados | pending — **auditoria 28/08** |
+| P1-44 | `.env.example` não documenta 19 variáveis que o código lê — inclui o kill-switch de conta EDP e o que APAGA o histórico bruto | Governança | pending — **auditoria 28/08**, entregável do P0-1 |
+| P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | pending — **auditoria 28/08** |
+| P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | pending — **auditoria 28/08**, preventivo |
+| P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | pending — **auditoria 28/08**, precisa de decisão A/B |
+| P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | pending — **auditoria 28/08** |
+| P3-15 | `_loginTries` só perde entrada no login bem-sucedido — janela expirada fica pra sempre | Backend | pending — **auditoria 28/08** |
+| P3-16 | `openLightbox('${f.base64}')`: cada foto de OS entra DUAS vezes no DOM (~5,4 MB por foto de 2 MB) | Frontend | pending — **auditoria 28/08** |
+| P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | pending — **auditoria 28/08** |
+| P3-18 | Higiene: 74 rotas devolvem `err.message` cru; CLAUDE.md diz 266 testes (são 581); `LOG_LEVEL` maiúsculo é ignorado em silêncio | Backend/Docs | pending — **auditoria 28/08** |
+| P3-19 | `settingsScope.test.js` falhou 1× em 10 execuções da suíte completa, com mensagem inútil (`'test failed'`) e nenhum teste individual vermelho — e a suíte é o gate do `pre-push` | Qualidade | pending — **auditoria 28/08**, causa NÃO confirmada |
 
 ---
 
@@ -4051,3 +4064,359 @@ mesmo ponto cego, o que reforça o item.
 - **A (2) é a de melhor custo/benefício** para este defeito específico.
 - **Esforço:** 1h para o linter · 3h para o fake injetável.
 - **Relacionado:** P0-3 (matemática sem teste), P2-1.
+
+---
+
+# Lote de 28/08/2026 — auditoria de novos achados
+
+> Levantados na auditoria de 28/08/2026. **O detalhe executável de cada um vive
+> em [`AUDIT-2026-08-28.md`](AUDIT-2026-08-28.md)** — lá cada item tem o código
+> de hoje verbatim, o código novo verbatim, o teste a escrever, o comando de
+> verificação e o rollback. Os resumos abaixo existem pra manter este arquivo
+> como fonte única de prioridade.
+>
+> Baseline medida antes de qualquer conclusão: **581 testes, 45 suítes, 0 falhas**.
+>
+> Três itens **reabrem parcialmente** itens marcados `done`: o P1-42 é furo do
+> P1-5, o P2-40 é furo do P2-4, e o P3-5 é **substituído** pelo P1-41.
+
+## P1-41 — Histórico com intervalo largo TRUNCA em silêncio e devolve produção zero nos dias antigos
+
+- **Categoria:** Dados
+- **Status:** pending
+- **Evidência:** `db/queries.js:103-124` — `_selectAll` tem `MAX_PAGES = 200` e,
+  ao bater no teto, **devolve o array truncado como se estivesse completo**; o
+  único sinal é um `console.warn`. Dois call sites leem `snapshots` com a coluna
+  gorda `data` sem teto de intervalo: `db/queries.js:706`
+  (`getTeamSessionHistory`, servida por `GET /api/historico/sessoes` em
+  `routes/index.js:819`) e `db/queries.js:324`. A validação em
+  `routes/index.js:837` checa **só o formato** da data.
+- **Impacto:** a query ordena `captured_at DESC` (`db/queries.js:716`), então o
+  que o truncamento derruba são os **dias mais ANTIGOS**. Uma consulta de 90 dias
+  devolve os ~60 mais recentes e reporta **produção ZERO** nos 30 primeiros — sem
+  erro, sem aviso, e o número vai pro relatório da EDP. O outro desfecho possível
+  é pior de outro jeito: 200k linhas × ~4,8 KB ≈ **960 MB** num array, contra o
+  `max_memory_restart: '1G'` do `ecosystem.config.js:11` — o PM2 mata o worker no
+  meio do request.
+- **Por que piora sozinho:** ~3.360 linhas/dia (56 ciclos × ~60 equipes) e
+  retenção ILIMITADA por decisão de 07/07/2026 (`services/dataWriter.js:916-923`).
+  O teto de 200k cai em ~60 dias; o histórico começa em 09/05/2026, então em
+  28/08 já são ~112 dias — **o intervalo completo já estoura hoje**, e cresce
+  todo dia.
+- **Ação:** (1) medir na VM antes de escolher o teto — os dois `psql` estão no
+  AUDIT; (2) `_selectAll` lança `RANGE_TOO_LARGE` em vez de devolver array curto;
+  (3) `_checkJanela` com `MAX_JANELA_DIAS` (default 45) em `/historico/sessoes`,
+  validando largura E ordem; (4) o frontend precisa exibir o 400 — se cair no
+  catch genérico, o usuário lê "Erro ao carregar" e acha que é bug.
+- **Critério de aceite:**
+  - [ ] `?de=2026-05-09&ate=2026-08-28` → **400** com `code: RANGE_TOO_LARGE`.
+  - [ ] `?de=2026-08-01&ate=2026-08-28` → 200, **mesmos números de antes**.
+  - [ ] Intervalo invertido → 400.
+  - [ ] `_selectAll` estourando lança, não devolve array curto.
+  - [ ] `node --test` → 581 + 4 novos, 0 falhas.
+- **Esforço:** 3h.
+- **Rollback:** `git revert`. Tudo aditivo — uma constante, uma função, uma linha
+  de chamada, um `throw` no lugar de um `warn`. Sem schema, sem dado gravado.
+- **Relacionado:** **substitui o P3-5** (que previa o OOM mas não o número
+  errado, e por isso estava em P3), P3-13 (resolver a coluna `data` gorda aumenta
+  o teto de dias de graça).
+
+## P1-42 — Rate limit do login é contornável com um header (furo no P1-5)
+
+- **Categoria:** Segurança
+- **Status:** pending
+- **Evidência:** `routes/index.js:44-47` —
+  `const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress`.
+  O header é **enviado pelo cliente**, tem precedência sobre o IP real e não é
+  validado; não existe `app.set('trust proxy', ...)` no `server.js`.
+- **Impacto:** a chave do balde é `IP|username`. Trocando o header a cada
+  request, toda tentativa cai num balde novo em `count: 1` — **o teto de 10 em
+  5 min nunca é alcançado**. Medido: 100 tentativas com XFF diferente dão cem
+  `401` e **zero** `429`. O P1-5 está marcado done e o throttle, na prática, não
+  existe. Agrava que `_verifyPassword` (`middleware/auth.js:135`) ainda aceita
+  SHA-256 legado sem salt, e o `.env` de produção não migrou pra scrypt.
+- **Ação:** ler o IP do **socket**, não do header. Se um dia houver proxy
+  reverso, o certo é `app.set('trust proxy', 1)` — nunca o header cru. Somar um
+  balde secundário só por `username` (teto ~30), que fecha origem distribuída.
+- **Critério de aceite:**
+  - [ ] O loop de 100 tentativas com XFF variável produz `429` a partir da 11ª.
+  - [ ] 40 tentativas erradas no mesmo username → 429 antes da quadragésima.
+  - [ ] Login correto zera os dois contadores.
+- **Esforço:** 30min.
+- **Rollback:** `git revert`. Só memória do processo.
+- **Relacionado:** **P1-5 (reabrir como parcial)** — e a migração do `.env` de
+  produção pra scrypt, que segue pendente, fica mais urgente. P3-15 (o Map que
+  essa chave alimenta nunca é podado).
+
+## P1-43 — `CRON_SECRET` viaja na URL e um GET reescreve histórico consolidado
+
+- **Categoria:** Segurança / Dados
+- **Status:** pending
+- **Evidência:** `routes/cron.js:36-44` — `const fromQs = req.query.secret || ''`
+  e `if (token !== SECRET && fromQs !== SECRET)`. O comentário do topo do arquivo
+  descreve o `?secret=` como "fallback de teste" pra rodar local, mas **não há
+  gate de modo**: vale igual em produção. Segundo defeito em
+  `routes/cron.js:99-113` — `GET /consolidate` reescreve `daily_totals` e
+  `team_daily_totals` da data pedida, e `date` vai cru pro `runConsolidate` sem
+  validação de formato.
+- **Impacto:** query string vaza pro `logs/out.log` do PM2, pro log do Fortinet,
+  pro histórico do navegador e pro header `Referer` — e o
+  `middleware/requestTiming.js` loga requisições lentas. Quem ler uma dessas
+  linhas ganha o poder de re-consolidar qualquer data. Cruzando com o **P2-13**
+  (upsert de dia antigo sobrescreve com visão parcial, subconta ~0,8%), uma
+  re-consolidação não autorizada **rebaixa número já reportado à EDP**, em
+  silêncio e sem rastro de quem pediu. Um `GET` também não deveria mudar estado:
+  prefetch e crawler disparam sozinhos.
+- **Ação:** só header `Authorization: Bearer`, com comparação de tempo constante
+  (`timingSafeEqual` protegido contra o `RangeError` de tamanhos diferentes);
+  validar `date` com regex antes do `runConsolidate`; **atualizar o crontab da VM
+  e o RUNBOOK ANTES do deploy** — senão o cron externo começa a tomar 401 calado.
+- **Critério de aceite:**
+  - [ ] `?secret=<valor certo>` → **401**.
+  - [ ] `Authorization: Bearer <valor certo>` → **200**.
+  - [ ] `?date=abc` com header certo → **400**.
+  - [ ] `crontab -l` e o RUNBOOK sem `?secret=`.
+- **Esforço:** 1h (código) + coordenação do deploy com o crontab.
+- **Rollback:** `git revert`. O header sempre foi aceito, então os `curl` novos
+  continuam funcionando depois do revert — é seguro nos dois sentidos.
+- **Relacionado:** P2-13 (é o que transforma acesso indevido em número errado),
+  P1-4 (mesma família: credencial da EDP vazando por rota de diagnóstico).
+
+## P1-44 — `.env.example` esconde 19 variáveis que o código lê, incluindo os kill-switches
+
+- **Categoria:** Governança
+- **Status:** pending
+- **Evidência:** o `.env.example` documenta 12 chaves; o código lê 30. O `comm`
+  que reproduz está no AUDIT. As três que mais importam:
+  `CRON_SECRET` (`routes/cron.js:23` — **sem ela e com `DATA_MODE=wpa` o
+  processo faz `process.exit(1)` no boot**), `WPA_ACCOUNTS_DISABLED`
+  (`services/wpaService.js:371` — o kill-switch que desativou a `sp2` em 26/08,
+  commit `ac0af75`) e `SNAPSHOT_RETENTION_DAYS` (`services/dataWriter.js:921` —
+  ausente = retenção ilimitada; **setar apaga o histórico bruto** e mata o
+  backfill retroativo). Na direção contrária, `SUPABASE_URL` está documentado e
+  nenhum código lê — resíduo do P3-8.
+- **Impacto:** o P0-1 (bus factor 1) é o item mais crítico aberto, e este é o
+  primeiro arquivo que a próxima pessoa abre. Hoje ele **não sobe o sistema**,
+  **esconde os dois botões destrutivos** e **documenta uma variável morta**.
+- **Ação:** reescrever em blocos (obrigatórias · operacionais · ajuste fino ·
+  diagnóstico), com default, efeito de omitir e efeito de setar pra cada uma. As
+  três acima levam aviso explícito — o texto pronto está no AUDIT. Remover
+  `SUPABASE_URL`; conferir se `SUPABASE_SERVICE_KEY` ainda serve pra algo além do
+  log de boot (`server.js:200`).
+- **Critério de aceite:**
+  - [ ] O `comm -23` do AUDIT devolve vazio (fora `NODE_ENV` e `PATH`).
+  - [ ] `cp .env.example .env` + preencher só as OBRIGATÓRIA + `DATA_MODE=mock
+        node server.js` sobe sem erro.
+  - [ ] As três perigosas têm aviso; `SUPABASE_URL` saiu.
+- **Esforço:** 1h.
+- **Rollback:** `git revert`. É documentação — risco zero em produção.
+- **Relacionado:** **P0-1** (este é um entregável concreto dele), P3-8, P1-22.
+
+## P2-40 — 15 `onclick` com dado da EDP sem escape (furo no P2-4)
+
+- **Categoria:** Frontend / Segurança
+- **Status:** pending
+- **Evidência:** o P2-4 criou `escapeHtml` (`public/index.html:3212`) e o aplicou
+  em **texto**. Ele não cobre atributo HTML nem string JS dentro de atributo.
+  Restaram 15 sites (tabela completa no AUDIT): linhas 2063, 2352, 2365, 4903,
+  5284, 7086, 7178, **7372**, 7520, 7638, 8187, 8804, 9099, 9366. A 7372 é a pior
+  — interpola `n.tipoCode || n.tipoNome`, e `tipoNome` é **nome de catálogo de
+  serviço da EDP**: texto humano que a EDP edita sem nos avisar.
+- **Impacto:** um apóstrofo basta. `RAMAL D'AGUA` gera um `onclick` cuja string
+  JS fecha no meio: o atributo dá `SyntaxError` e **o chip da nota para de abrir
+  ao clique**. Sem erro visível, sem log no servidor. No dia em que a EDP
+  cadastrar um tipo com apóstrofo, os chips quebram em massa e ninguém sabe por
+  quê — o mesmo formato dos incidentes que este backlog já registrou: plausível e
+  errado. Como injeção exige campo da EDP contendo `');`, improvável — mas o JWT
+  vive no `localStorage` (`public/index.html:1206`), então o custo, se acontecer,
+  não é pequeno.
+- **Ação:** dois helpers ao lado do `escapeHtml` — `escapeAttr` (atributo) e
+  `escapeJsAttr` (string JS em atributo, escapando a barra invertida primeiro).
+  Depois, 14 edições mecânicas (a 7638 é o P3-16). **Uma linha por vez,
+  conferindo a aba no navegador**: são 8 abas diferentes e o frontend não tem
+  teste automatizado.
+- **Critério de aceite:**
+  - [ ] Com uma equipe renomeada pra `TESTE'X`, o clique no card, no chip e na
+        barra de rejeição continua funcionando.
+  - [ ] Console do navegador sem `SyntaxError` nas 8 abas.
+- **Esforço:** 2h.
+- **Rollback:** `git revert`. Só frontend.
+- **Relacionado:** **P2-4 (reabrir como parcial)**, P3-2, P3-16.
+
+## P2-41 — Nenhum handler de `unhandledRejection`: a próxima promise solta derruba o processo
+
+- **Categoria:** Ops
+- **Status:** pending — **preventivo, não é bug ativo**
+- **Evidência:** `grep -rn "unhandledRejection|uncaughtException"` no repo não
+  retorna nada. A VM roda **Node 24**, onde o default é `throw` — promise
+  rejeitada sem `.catch()` **mata o processo**.
+- **Ressalva honesta:** não achei uma promise solta hoje. Os fire-and-forget do
+  `runSnapshot` (`services/cronService.js:255-296`) todos têm `.catch()`, e os
+  helpers `_record*` (`cronService.js:33-110`) têm `try/catch` interno que engole
+  até com o Postgres fora. É cuidado real — e é por isso que isto é P2 e não P1.
+- **Impacto:** o cuidado é manual e não tem rede. O próximo `.then()` sem
+  `.catch()` deixa de ser erro logado e vira queda. E queda não é barata: `_acc`
+  é em memória (P1-13), então restart **subnotifica a produção do dia**; e
+  `services/cronService.js:1506` reagenda `runSnapshot` 5s após o boot, então
+  causa determinística (Postgres fora) vira **crash loop** até o PM2 desistir —
+  aí não é um ciclo perdido, é o painel fora do ar. É o encadeamento do incidente
+  de 09/07/2026, e o `autorestart` do PM2 não protege: participa dele.
+- **Ação:** dois handlers no `server.js` antes de `start()` (linha 168).
+  `unhandledRejection` **loga e segue** (ciclo perdido < painel fora do ar);
+  `uncaughtException` loga e **sai de propósito** (estado indefinido) — mas com a
+  causa no log, que é o que falta hoje. `console.error`, não `logger.js`: se a
+  queda for no logger, o console ainda funciona.
+- **Critério de aceite:**
+  - [ ] Rejeição solta provocada dentro do processo → `[FATAL] unhandledRejection`
+        no log e `/health` **continua respondendo**.
+- **Esforço:** 30min.
+- **Rollback:** `git revert`. Volta a morrer em silêncio.
+- **Relacionado:** P0-0 (o cenário que dispara), P1-13 (o que torna o restart
+  caro), P1-1 (o `[FATAL]` é gatilho natural de alerta).
+
+## P2-42 — `/webhook/deploy`: RCE latente, deploy fora do procedimento, 500 sem header
+
+- **Categoria:** Segurança / Ops
+- **Status:** pending — **precisa de decisão A/B antes de executar**
+- **Evidência:** `server.js:58-98`, endpoint **público** (antes de qualquer auth)
+  que executa, em `server.js:86`,
+  `git pull origin main && npm install --production && pm2 restart wpa-monitor`.
+  Três problemas: (1) `pm2 restart` é o que a **regra 4 do CLAUDE.md proíbe** —
+  não recarrega env var de forma confiável em cluster mode, e a falha é
+  silenciosa (sobe com env velho); (2) `server.js:68` chama
+  `crypto.timingSafeEqual` com buffers de tamanhos diferentes quando o header
+  falta — confirmado que **lança `RangeError`**, então POST sem header vira 500,
+  não 401; (3) o `CLAUDE.md` diz que o deploy é manual — é superfície de RCE
+  mantida viva pra um fluxo que não se usa. `npm install --production` também
+  está deprecado (npm 9+ quer `--omit=dev`).
+- **Ação — escolha uma, não invente uma terceira:**
+  - **A (recomendada):** remover `server.js:56-98`, tirar `WEBHOOK_SECRET` do
+    `.env.example` e a linha `Webhook :` do log de boot (`server.js:203`).
+  - **B:** só se estiver ativo na VM (`grep WEBHOOK_SECRET ~/prod-stc/.env` +
+    entregas recentes em Settings → Webhooks). Comparar tamanho antes do
+    `timingSafeEqual`, e trocar o comando pelo procedimento do CLAUDE.md
+    (`pm2 delete && pm2 start ecosystem.config.js && pm2 save`).
+- **Critério de aceite (A):** `POST /webhook/deploy` → 404; `grep WEBHOOK_SECRET`
+  nos `.js` → vazio.
+- **Critério de aceite (B):** POST sem header → **401** (não 500).
+- **Esforço:** 30min.
+- **Rollback:** `git revert` (na opção A, traz o webhook de volta).
+
+## P2-43 — 7 de 8 scripts de escrita sem o advisory lock; um grava em produção sem guarda
+
+- **Categoria:** Ops / Dados
+- **Status:** pending — **apagar arquivo precisa de decisão humana**
+- **Evidência:** `grep -rln "advisory_lock|pg_try_advisory" scripts/*.js` retorna
+  **só** `scripts/backfill-consolidate.js`. Sem lock: `backfill-daily-subcat.js`
+  (nenhuma guarda), `backfill-osrm.js`, `backfill-carteira.js`,
+  `reconsolidar-produtividade.js`, `reclassify-ramal-stuck.js`,
+  `reclassify-cs-quantidade.js` e **`scripts/_probe-save.js`**. Este último tem 12
+  linhas, se descreve como "Smoke test temporário — persistir snapshot", não tem
+  dry-run nem argumento, e **grava um snapshot em produção assim que roda**. Está
+  commitado desde então.
+- **Impacto:** o lock nasceu da lição do incidente de 09/07/2026 (P0-0: ~60
+  processos node em paralelo derrubaram o Postgres por OOM na VM de 3,8 GB sem
+  swap) — e ficou em um script só. `backfill-daily-subcat.js` e
+  `reconsolidar-produtividade.js` reescrevem exatamente as tabelas de onde saem os
+  números da EDP: duas cópias em paralelo, ou uma cópia concorrendo com o cron das
+  20:30, é o P3-4 acontecendo na mão, sem ninguém perceber.
+- **Ação:** extrair o lock pra `scripts/_lock.js` (sem mudar comportamento, e com
+  o `backfill-consolidate.js` passando a usá-lo — não duplicar); aplicar nos três
+  que escrevem em tabela de número; apagar o `_probe-save.js` **ou** dar-lhe uma
+  guarda explícita. **Perguntar antes de apagar.**
+- **Critério de aceite:**
+  - [ ] Duas cópias de `backfill-daily-subcat.js` → a 2ª **recusa** com mensagem.
+  - [ ] `backfill-consolidate.js` idêntico (1 dia já consolidado: números depois
+        == números antes).
+  - [ ] `_probe-save.js` apagado ou com guarda.
+- **Esforço:** 2h.
+- **Rollback:** `git revert`. Nenhum destes scripts está no cron.
+- **Relacionado:** P0-0, P3-4, P3-7.
+
+## P3-15 · P3-16 · P3-17 · P3-18 — higiene do lote de 28/08
+
+- **Status:** pending. **Detalhe e patch de cada um no
+  [`AUDIT-2026-08-28.md`](AUDIT-2026-08-28.md).**
+- **P3-15** — `routes/index.js:40`: `_loginTries` só perde entrada no login
+  bem-sucedido (`:78`); janela expirada fica pra sempre. Hoje é lento; enquanto o
+  XFF for a chave (P1-42), quem está do outro lado controla o crescimento. **Faça
+  o P1-42 primeiro** — depois dele o teto vira o nº de IPs da rede. Poda
+  oportunista no caminho frio resolve. *15min.*
+- **P3-16** — `public/index.html:7638`: `openLightbox` recebe o data URI inteiro
+  da foto, que assim entra **também** no atributo — cada foto duplicada no DOM
+  (~5,4 MB por foto de 2 MB). Passar o índice em vez do blob. *30min.*
+- **P3-17** — `services/memoCache.js:63-73`: `inflight.set` vem **depois** da
+  IIFE. Se `fn` lançar de forma síncrona, o `finally` roda antes do `set` e a
+  chave fica com uma promise rejeitada **pra sempre**. Latente: os 3 consumidores
+  (`db/deslocamentosQueries.js:512-518`) são `async`, e `async` nunca lança
+  síncrono. Registrar o in-flight antes de começar. *15min.*
+- **P3-18** — três de higiene: (a) 74 rotas devolvem `err.message` cru ao cliente
+  (`grep -c "error: err.message" routes/index.js`) — o P1-10 tirou o stack, não a
+  mensagem; **fazer junto com o P3-3**, não em 74 edições soltas. (b) o
+  `CLAUDE.md` diz "266 testes" e "~0,8s"; medido em 28/08 são **581 testes, 45
+  suítes, ~10s** — número errado na doc de entrada faz quem chega duvidar do
+  resto. (c) `services/logger.js:34` — `LOG_LEVEL=DEBUG` (maiúsculo) devolve
+  `undefined` e cai no default de produção, em silêncio. *1h no total.*
+
+## P3-19 — A suíte é intermitentemente vermelha, e a mensagem não diz nada
+
+- **Categoria:** Qualidade
+- **Status:** pending — **causa NÃO confirmada** (ver "o que eu sei" abaixo)
+- **Evidência:** durante a auditoria de 28/08/2026, uma execução de `node --test`
+  falhou assim:
+
+  ```
+  ✖ failing tests:
+  test at test\settingsScope.test.js:1:1
+  ✖ test\settingsScope.test.js (900.304ms)
+    'test failed'
+  ```
+
+  **Nenhum teste individual ficou vermelho** — o arquivo inteiro é que falhou, e
+  a mensagem é literalmente `'test failed'`.
+
+- **O que eu sei (medido):**
+  - `node --test test/settingsScope.test.js` sozinho: **passa**, 9/9, em ~418ms.
+  - Suíte completa: **1 falha em 10 execuções**. Nas outras 9, 581/581 verdes.
+  - Na execução que falhou, o arquivo levou **900ms** contra ~418ms sozinho —
+    ou seja, estava sob contenção (o runner do Node paraleliza por arquivo).
+  - Só docs tinham mudado entre a execução verde e a vermelha. Não foi regressão.
+
+- **O que eu NÃO sei:** a causa. Não consegui reproduzir sob demanda em 9
+  tentativas, então **não trate a hipótese abaixo como diagnóstico.**
+
+- **Hipótese (a investigar, não a assumir):** em node:test, quando todos os
+  subtestes passam mas o processo do arquivo sai com código != 0, o runner
+  reporta exatamente esse `'test failed'` sem detalhe. O que faria o processo sair
+  != 0 depois dos testes passarem é um erro assíncrono tardio sem handler — e
+  **não existe handler de `unhandledRejection` no projeto** (P2-41). Os dois
+  arquivos que sobem servidor fecham sem esperar:
+  `test/settingsScope.test.js:51` — `after(() => { if (server) server.close(); })`
+  e `test/routes.test.js:54` — `if (server) server.close();`. Nenhum dos dois
+  `await`. O `fetch` do Node (undici) usa keep-alive, então pode sobrar conexão
+  aberta quando o arquivo termina.
+
+- **Por que importa mesmo sendo 1 em 10:** a suíte é o **gate do `pre-push`**
+  (P1-6). Falha intermitente com mensagem inútil produz um de dois desfechos, e
+  os dois são ruins: ou o push é bloqueado sem motivo aparente, ou as pessoas
+  aprendem a re-rodar até passar — e aí a suíte para de significar alguma coisa.
+  Este projeto já viveu isso: a suíte ficou vermelha 4 semanas em 2026 sem
+  ninguém saber.
+
+- **Ação sugerida (nesta ordem):**
+  1. **Faça o P2-41 primeiro.** Se a hipótese estiver certa, o handler de
+     `unhandledRejection` transforma o `'test failed'` mudo numa causa impressa —
+     e aí este item se resolve sozinho, ou pelo menos passa a ser diagnosticável.
+  2. Tornar o teardown determinístico nos dois arquivos:
+     `after(async () => { if (server) await new Promise(r => server.close(r)); });`
+  3. Só então tentar reproduzir: `for i in $(seq 1 30); do node --test > /tmp/r$i.txt 2>&1 || cp /tmp/r$i.txt /tmp/FAIL.txt; done`
+     e ler o `FAIL.txt`.
+
+- **Critério de aceite:**
+  - [ ] 30 execuções seguidas da suíte completa, 0 falhas.
+  - [ ] Se voltar a falhar, a saída diz **qual** foi o erro (não `'test failed'`).
+- **Esforço:** 30min pro teardown; a investigação depende de reproduzir.
+- **Rollback:** `git revert`. Só mexe em teste.
+- **Relacionado:** **P2-41** (a hipótese depende dele e ele pode resolver isto de
+  graça), P1-6 (o hook que a flakiness sabota), P2-39 (mesma família: a suíte
+  não vê o que deveria ver).

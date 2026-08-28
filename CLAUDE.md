@@ -101,6 +101,7 @@ git push
 | [`docs/handoff/RUNBOOK.md`](docs/handoff/RUNBOOK.md) | Como operar em produção. Reinício, rollback, incidentes. |
 | [`docs/handoff/API-WPA-EDP.md`](docs/handoff/API-WPA-EDP.md) | **Todo endpoint da API WPA**: login/token, equipes, sessões, notas, motivo de rejeição. Mais nossos endpoints de backfill/conferência/fechamento, crons e as armadilhas que já causaram incidente. |
 | [`docs/handoff/AUDIT-2026-07-08.md`](docs/handoff/AUDIT-2026-07-08.md) | Auditoria completa (7 dimensões). Evidência congelada no tempo. |
+| [`docs/handoff/AUDIT-2026-08-28.md`](docs/handoff/AUDIT-2026-08-28.md) | Auditoria de 28/08/2026 — 13 achados novos (P1-41…P3-19) escritos como **ordem de serviço**: código atual verbatim, código novo verbatim, teste, verificação e rollback por item. Leia daqui se você for executar as correções. |
 | `docs/` (fora de `handoff/`) | Knowledge base privado do dev (gitignored). Você não vê. |
 | `.claude/`, `_local/` | Workspace do dev (gitignored). |
 | `services/`, `db/`, `routes/`, `middleware/` | Backend. Comece por `services/regionals.js` (44 linhas, modelo do estilo). |
