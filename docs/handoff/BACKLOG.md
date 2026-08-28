@@ -138,7 +138,7 @@
 | P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | pending — **auditoria 28/08** |
 | P3-18 | Higiene: 74 rotas devolvem `err.message` cru; CLAUDE.md diz 266 testes (são 581); `LOG_LEVEL` maiúsculo é ignorado em silêncio | Backend/Docs | pending — **auditoria 28/08** |
 | P3-19 | `settingsScope.test.js` falhou 1× em 10 execuções da suíte completa, com mensagem inútil (`'test failed'`) e nenhum teste individual vermelho — e a suíte é o gate do `pre-push` | Qualidade | pending — **auditoria 28/08**, causa NÃO confirmada |
-| P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **variável restaurada 28/08** — falta o restart do PM2 e o guard de boot |
+| P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **roteamento restaurado 28/08** (`fails=0 misses=4` na VM) — falta só o guard de boot |
 | P2-44 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | pending — **medido 28/08** |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 
@@ -4572,8 +4572,13 @@ mesmo ponto cego, o que reforça o item.
 ## P1-45 — `OSRM_HOST` sumiu do `.env` e o roteamento caiu 2 dias em silêncio
 
 - **Categoria:** Ops/Dados
-- **Status:** **variável restaurada** (28/08/2026) — falta o restart do PM2 e o
+- **Status:** **roteamento restaurado** (28/08/2026, restart às 22:26) — falta o
   guard de boot. O guard é o item de verdade; a variável foi só o incidente.
+- **Verificado na VM (28/08/2026 22:27):** `passo 4: OSRM concluído em 7.2s —
+  cache hits=27866 misses=4 fails=0`. Os dois critérios bateram: `fails` foi de
+  1.424 pra **0**, e `misses` saiu de 0 — o servidor voltou a buscar rota por
+  conta própria em vez de viver do que o `backfill-osrm.js` deixou. A
+  `osrm_cache` voltou a aprender, então a fatia `sem_osrm` para de crescer.
 - **Evidência:** `services/osrmService.js:25` —
   `process.env.OSRM_HOST || 'https://router.project-osrm.org'`. O default é
   exatamente o domínio que o Fortinet bloqueia (`RUNBOOK.md:696` documenta isso).
