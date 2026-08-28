@@ -79,9 +79,46 @@ const _loginTries = new Map();   // chave → { count, first }
 const LOGIN_MAX = 10;            // tentativas erradas
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;  // por 5 min
 
+// 28/08/2026 — P1-42. `x-forwarded-for` é enviado PELO CLIENTE, tinha precedência
+// sobre o IP real e não era validado em lugar nenhum (não existe
+// `app.set('trust proxy', ...)` no server.js). Isso deixava o P1-5 sem efeito:
+// trocando o header a cada request, cada tentativa caía num balde novo que sempre
+// começava em `count: 1` — o teto de 10 nunca era alcançado.
+//
+// O IP do socket não é falsificável por quem fala HTTP com a gente. O painel
+// escuta na rede interna e não tem proxy reverso na frente; se um dia tiver, o
+// certo é `app.set('trust proxy', 1)` no server.js e voltar a ler o XFF por essa
+// via — NUNCA confiar no header cru.
 function _loginKey(req, username) {
-  const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  const ip = req.socket?.remoteAddress || 'unknown';
   return `${ip}|${username || '?'}`;
+}
+
+// Balde secundário: só o username. Fecha o caso de origem distribuída — o IP
+// muda, o alvo não. Teto mais alto que o por-IP porque aqui trafega o login
+// legítimo de todo mundo que usa aquela conta.
+const LOGIN_MAX_USER = 30;
+function _loginKeyUser(username) { return `user|${username || '?'}`; }
+
+/**
+ * Estado de um balde: se está estourado e quantos segundos faltam.
+ * FUNÇÃO PURA (recebe o registro, não o Map) — testável sem HTTP.
+ */
+function _baldeEstourado(rec, teto, now, janelaMs) {
+  if (!rec) return { estourado: false, retryS: 0 };
+  if (now - rec.first >= janelaMs) return { estourado: false, retryS: 0 };
+  if (rec.count < teto) return { estourado: false, retryS: 0 };
+  return { estourado: true, retryS: Math.ceil((janelaMs - (now - rec.first)) / 1000) };
+}
+
+/** Registra uma tentativa ERRADA num balde (reinicia a janela se expirou). */
+function _contarErro(chave, now) {
+  const rec = _loginTries.get(chave);
+  if (!rec || now - rec.first >= LOGIN_WINDOW_MS) {
+    _loginTries.set(chave, { count: 1, first: now });
+  } else {
+    rec.count += 1;
+  }
 }
 
 // POST /api/auth/login  — única rota pública
@@ -90,11 +127,17 @@ router.post('/auth/login', (req, res) => {
   if (!username || !password)
     return res.status(400).json({ error: 'username e password obrigatórios' });
 
-  const key = _loginKey(req, username);
+  // P1-42: DOIS baldes. Por (IP do socket + username) e por username sozinho.
+  // Qualquer um estourado devolve 429 — o primeiro fecha brute force de uma
+  // origem, o segundo fecha origem distribuída contra a mesma conta.
+  const key     = _loginKey(req, username);
+  const keyUser = _loginKeyUser(username);
   const now = Date.now();
-  const rec = _loginTries.get(key);
-  if (rec && now - rec.first < LOGIN_WINDOW_MS && rec.count >= LOGIN_MAX) {
-    const retryS = Math.ceil((LOGIN_WINDOW_MS - (now - rec.first)) / 1000);
+
+  const porIp   = _baldeEstourado(_loginTries.get(key),     LOGIN_MAX,      now, LOGIN_WINDOW_MS);
+  const porUser = _baldeEstourado(_loginTries.get(keyUser), LOGIN_MAX_USER, now, LOGIN_WINDOW_MS);
+  if (porIp.estourado || porUser.estourado) {
+    const retryS = Math.max(porIp.retryS, porUser.retryS);
     res.set('Retry-After', String(retryS));
     return res.status(429).json({
       error: `Muitas tentativas. Tente novamente em ${retryS}s.`,
@@ -104,16 +147,14 @@ router.post('/auth/login', (req, res) => {
 
   const result = authLogin(username, password);
   if (!result) {
-    // Conta a tentativa errada (reinicia a janela se expirou)
-    if (!rec || now - rec.first >= LOGIN_WINDOW_MS) {
-      _loginTries.set(key, { count: 1, first: now });
-    } else {
-      rec.count += 1;
-    }
+    _contarErro(key, now);
+    _contarErro(keyUser, now);
     return res.status(401).json({ error: 'Usuário ou senha incorretos' });
   }
 
-  _loginTries.delete(key);   // sucesso → zera contador
+  // Sucesso → zera os DOIS contadores.
+  _loginTries.delete(key);
+  _loginTries.delete(keyUser);
   res.json({
     token:     result.token,
     v:         result.v,
@@ -3282,3 +3323,11 @@ module.exports = router;
 // Exportado p/ teste (P1-41, 28/08/2026). O router é o export principal;
 // pendurar o helper nele evita mudar a forma do módulo pra quem já usa.
 module.exports._checkJanela = _checkJanela;
+// P1-42 (28/08/2026) — baldes do rate limit de login.
+module.exports._loginKey       = _loginKey;
+module.exports._loginKeyUser   = _loginKeyUser;
+module.exports._baldeEstourado = _baldeEstourado;
+module.exports._loginTries     = _loginTries;
+module.exports._LOGIN_MAX      = LOGIN_MAX;
+module.exports._LOGIN_MAX_USER = LOGIN_MAX_USER;
+module.exports._LOGIN_WINDOW_MS= LOGIN_WINDOW_MS;

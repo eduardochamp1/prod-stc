@@ -125,7 +125,7 @@
 | P2-39 | Funções de cron são INVISÍVEIS à suíte: saem cedo quando não há banco, então erro de escopo dentro delas só estoura em produção, na hora agendada | Qualidade | pending — dois casos reais pegos em revisão em 22/08 |
 | P3-14 | Higiene: índice prometido inexistente, `tipoCode '??'`, armadilha do NULL no `pgShim.upsert`, `getSummary` paralelo adormecido, 4 `catch` que engolem erro de dado | Backend/Dados | pending |
 | P1-41 | Histórico com intervalo largo TRUNCA em silêncio (200k linhas) e devolve produção ZERO nos dias mais antigos — e o intervalo completo já estoura o teto hoje | Dados | **done** (28/08) — DISTINCT ON no lugar do teto de janela; julho ia truncado (243k linhas > teto 200k); 10 testes |
-| P1-42 | Rate limit do login é contornável trocando um header (`X-Forwarded-For`): 100 tentativas, zero 429 — furo no P1-5 | Segurança | pending — **auditoria 28/08** |
+| P1-42 | Rate limit do login é contornável trocando um header (`X-Forwarded-For`): 100 tentativas, zero 429 — furo no P1-5 | Segurança | **done** (28/08) — IP do socket + balde por usuário; 13 testes, 5 deles por HTTP real |
 | P1-43 | `CRON_SECRET` aceito na query string (vaza pro log) + `GET /api/cron/consolidate?date=` reescreve histórico sem validar a data | Segurança/Dados | **done** (28/08) — só header; data validada; +redação do segredo no log de slow_request; 13 testes |
 | P1-44 | `.env.example` não documenta 19 variáveis que o código lê — inclui o kill-switch de conta EDP e o que APAGA o histórico bruto | Governança | pending — **auditoria 28/08**, entregável do P0-1 |
 | P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | pending — **auditoria 28/08** |
