@@ -2353,15 +2353,17 @@
       font-weight: 700;
     }
 
-    /* ── Sub-tabs Histórico ──────────────────────────────────────────────────── */
-    .hist-subtabs {
+    /* ── Sub-tabs (Histórico e Deslocamentos) ─────────────────────────────── */
+    .hist-subtabs,
+    .desloc-subtabs {
       display: flex;
       gap: 4px;
       margin-bottom: 18px;
       padding-bottom: 8px;
       border-bottom: 1px solid var(--cinza2);
     }
-    .hist-subtab-btn {
+    .hist-subtab-btn,
+    .desloc-subtab-btn {
       padding: 8px 14px;
       border: none;
       background: transparent;
@@ -2373,13 +2375,15 @@
       border-radius: 6px 6px 0 0;
       transition: all 0.18s;
       border-bottom: 2px solid transparent;
-      margin-bottom: -9px; /* alinha com border-bottom do .hist-subtabs */
+      margin-bottom: -9px; /* alinha com o border-bottom da barra de sub-abas */
     }
-    .hist-subtab-btn:hover {
+    .hist-subtab-btn:hover,
+    .desloc-subtab-btn:hover {
       background: rgba(254, 196, 14, 0.08);
       color: var(--preto);
     }
-    .hist-subtab-btn.active {
+    .hist-subtab-btn.active,
+    .desloc-subtab-btn.active {
       color: var(--preto);
       border-bottom-color: var(--amarelo);
       background: rgba(254, 196, 14, 0.06);

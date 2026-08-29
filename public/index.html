@@ -474,6 +474,18 @@
 
     <!-- ── TAB: DESLOCAMENTOS ────────────────────────────────────────────── -->
     <div class="tab-panel" id="tab-desloc">
+      <!-- Sub-abas (28/08/2026). A tela que ocupava a aba inteira virou a
+           primeira sub-aba, SEM alterar nada dentro dela — os números têm de
+           ficar idênticos. A segunda (TMA) entra em seguida, com spec própria.
+           Mesmo padrão do Histórico (switchHistSubtab), inclusive o CSS. -->
+      <div class="desloc-subtabs">
+        <button class="desloc-subtab-btn active" id="desloc-subtab-elevado"
+                onclick="switchDeslocSubtab('elevado')">📍 Deslocamento Elevado</button>
+        <button class="desloc-subtab-btn" id="desloc-subtab-tma"
+                onclick="switchDeslocSubtab('tma')">⏱️ TMA</button>
+      </div>
+
+      <div id="desloc-sub-elevado">
       <div class="filter-bar">
         <div class="date-label">Deslocamentos — <strong id="desloc-periodo-label"></strong></div>
         <div class="filter-controls">
@@ -512,6 +524,15 @@
       </div>
       <div id="desloc-content">
         <div class="empty-state" style="font-size:12px">Carregando…</div>
+      </div>
+      </div><!-- /#desloc-sub-elevado -->
+
+      <!-- TMA — Tempo Médio de Atendimento (IssueDate → ConclusionDate).
+           Conteúdo entra na parte 2, com spec própria: precisa de endpoint e
+           consulta novos. A matéria-prima passou a ser preservada em 28/08
+           (P2-18) — antes disso o TTL de 90 dias apagava a data de emissão. -->
+      <div id="desloc-sub-tma" style="display:none">
+        <div class="empty-state" style="font-size:12px">Em construção.</div>
       </div>
     </div>
 
@@ -4795,6 +4816,31 @@ ${matrizHTML}
      *   'sessoes'  → tabela dia × equipe (visão original — sessões + colaboradores)
      *   'subcats'  → matriz dia × subcategoria (visão nova — TL11/OBSOLETO/L0/L1/C93/BTZ013/OUTROS)
      */
+    /* Sub-abas da aba Deslocamentos (28/08/2026). Mesma mecânica do
+       switchHistSubtab, logo abaixo.
+
+       NÃO chama loadDeslocamentos() ao voltar pra 'elevado': o conteúdo continua
+       montado no DOM (só escondido), e recarregar custaria o pipeline inteiro —
+       que na 1ª carga do dia é ~25s. Trocar de sub-aba tem de ser instantâneo.
+       Quem recarrega é o botão Atualizar do balão, como em qualquer outra aba. */
+    let _deslocSubAtiva = 'elevado';
+    function switchDeslocSubtab(name) {
+      _deslocSubAtiva = name;
+      document.querySelectorAll('.desloc-subtab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('desloc-subtab-' + name)?.classList.add('active');
+
+      const elevado = document.getElementById('desloc-sub-elevado');
+      const tma     = document.getElementById('desloc-sub-tma');
+      if (!elevado || !tma) return;
+      if (name === 'tma') {
+        elevado.style.display = 'none';
+        tma.style.display = '';
+      } else {
+        tma.style.display = 'none';
+        elevado.style.display = '';
+      }
+    }
+
     function switchHistSubtab(name) {
       _histSubcatActive = name;
       document.querySelectorAll('.hist-subtab-btn').forEach(b => b.classList.remove('active'));
