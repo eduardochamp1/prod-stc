@@ -139,7 +139,7 @@
 | P3-18 | Higiene: 74 rotas devolvem `err.message` cru; CLAUDE.md diz 266 testes (são 581); `LOG_LEVEL` maiúsculo é ignorado em silêncio | Backend/Docs | pending — **auditoria 28/08** |
 | P3-19 | `settingsScope.test.js` falhou 1× em 10 execuções da suíte completa, com mensagem inútil (`'test failed'`) e nenhum teste individual vermelho — e a suíte é o gate do `pre-push` | Qualidade | pending — **auditoria 28/08**, causa NÃO confirmada |
 | P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **roteamento restaurado 28/08** (`fails=0 misses=4` na VM) — falta só o guard de boot |
-| P2-44 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | pending — **medido 28/08** |
+| P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 
 ---
@@ -4647,7 +4647,7 @@ mesmo ponto cego, o que reforça o item.
   P1-44 (variável que o código lê e o operador não vê), P1-1 (nenhum watchdog
   observa degradação deste tipo).
 
-## P2-44 — Passo 2 dos deslocamentos: 27,4s expandindo jsonb de ~170 mil snapshots
+## P2-46 — Passo 2 dos deslocamentos: 27,4s expandindo jsonb de ~170 mil snapshots
 
 - **Categoria:** Dados/Perf
 - **Status:** pending — **medido em produção 28/08/2026**
@@ -4684,6 +4684,30 @@ mesmo ponto cego, o que reforça o item.
 - **Rollback:** a flag desliga a leitura e a query velha volta; a tabela pode ser
   dropada depois.
 - **Relacionado:** P3-13 (coluna `data` gorda), P1-41 (mesma tabela, outro custo).
+- **Mitigado em:** 28/08/2026 (`e9c67a9`), **sem** a tabela materializada.
+  - Observação que resolveu barato: **dia fechado é imutável**. O mapa de 01/08
+    não muda mais nunca, então é calculado uma vez e reusado — inclusive entre
+    períodos diferentes. Dois TTLs: 12h pro dia fechado, 5min pro dia corrente,
+    que o cron ainda está escrevendo.
+  - **Verificado na VM em 29/08 01:31 UTC:** 1ª carga (fria) 39.513 entradas em
+    **24.901ms**; 2ª carga, mudando só o "até" de 27/08 pra 26/08, 38.039
+    entradas em **36ms**. **692× mais rápido.**
+  - O mapa diário é montado SEM o filtro de note_id — se dependesse das notas da
+    consulta, não serviria pra nenhuma outra. Por isso a contagem no log SUBIU
+    (25.482 → ~39.000): conta todas as notas do período, não só as com
+    checkpoint. Não é regressão, é outra contagem.
+  - Semântica preservada: o merge entre dias reproduz o `DISTINCT ON` global
+    (vence o maior `captured_at`), extraído como função pura `_mergeMapasDia` e
+    coberto por `test/deslocMapaDia.test.js` — é a única parte capaz de mudar a
+    equipe de um deslocamento.
+  - **REJEITADO:** ler só o último snapshot de cada (dia, equipe), que cairia de
+    ~170 mil linhas pra ~1.600. A suíte já prova que nota SOME de snapshot
+    posterior ("une concluídas de todos os snapshots — recupera a que sumiu do
+    último"). O atalho mudaria número em silêncio.
+  - **Fica pendente:** a 1ª carga do dia ainda custa ~25s, e o cache morre a cada
+    restart do PM2 (é in-process). A tabela materializada continua sendo a
+    solução definitiva — só deixou de ser urgente. Reavaliar se a 1ª carga
+    incomodar na prática.
 
 ## P2-45 — Falha do OSRM não é cacheada: re-tentada em toda carga, para sempre
 
