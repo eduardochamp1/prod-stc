@@ -941,14 +941,59 @@ async function cleanOldSnapshots() {
 }
 
 /**
- * Remove note_details com mais de 90 dias (TTL).
- * Cache de payloads completos de OS — útil só para consultas recentes.
+ * Traduz o valor bruto de uma variável de retenção em dias.
+ *
+ * Contrato deliberado: TUDO que não for inteiro positivo vira 0, que significa
+ * "nunca apaga". É assimétrico de propósito — errar para ilimitado custa disco,
+ * errar para o outro lado custa histórico irrecuperável. Um `abc`, um `-1` ou um
+ * campo vazio no .env NÃO podem virar "apague tudo".
+ *
+ * Exportada pra teste: é a decisão inteira desta guarda.
+ *
+ * @param {string|number|undefined} valor  cru, como vem do .env
+ * @returns {number}  dias de retenção, ou 0 para ilimitado
+ */
+function _diasDeRetencao(valor) {
+  const n = parseInt(valor, 10);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n;
+}
+
+/**
+ * Remove note_details antigos. Retenção ILIMITADA por padrão.
+ * Cache de payloads de OS (sem fotos — ver jsdoc de setNoteDetailCache).
  * Chamado junto com cleanOldSnapshots no cron diário.
  */
 async function cleanOldNoteDetails() {
+  // Retenção configurável via NOTE_DETAILS_RETENTION_DAYS no .env.
+  // 0 ou ausente = NUNCA apaga. Mesma decisão de negócio que já vale pra
+  // snapshots (07/07/2026): manter o bruto pra reprocessar métricas futuras.
+  //
+  // Até 28/08/2026 isto apagava tudo com mais de 90 dias, e era o único ponto do
+  // sistema que contradizia aquela decisão. `note_details` é a ÚNICA fonte dos
+  // checkpoints (aba Deslocamento) e das datas de emissão/conclusão (TMA) — e
+  // NÃO é backfillável: exigiria 1 request por nota em meses passados, na conta
+  // da EDP que bloqueia após 5 falhas de login. Quando isto foi medido, o
+  // registro mais antigo era 28/05/2026 contra um histórico que começa em 09/05:
+  // ~19 dias de detalhes já tinham sido apagados pra sempre.
+  //
+  // Custo medido em 28/08/2026: 78.367 notas em 268 MB (3,58 KB/nota), 877
+  // notas/dia → 3,1 MB/dia ≈ 1,15 GB/ano. São 20% dos 16 MB/dia que `snapshots`
+  // já gasta com aval do negócio, contra 57 GB livres na VM.
+  //
+  // Ver docs/handoff/SPEC-retencao-note-details-2026-08-28.md (resolve P2-18).
+  const retentionDays = _diasDeRetencao(process.env.NOTE_DETAILS_RETENTION_DAYS);
+  if (retentionDays <= 0) {
+    log.info('clean_note_details_skipped', { reason: 'retencao ilimitada (NOTE_DETAILS_RETENTION_DAYS nao setado)' });
+    return;
+  }
+
   const sb = getClient();
-  // Cutoff = hoje BRT - 90 dias, em formato ISO com hora 00:00 UTC
-  const cutoff = dateBRTMinusDays(90) + 'T00:00:00.000Z';
+  // Cutoff em formato ISO com hora 00:00 UTC.
+  // ⚠️ Filtra por `fetched_at`, NÃO pela data da nota: nota buscada hoje
+  // sobrevive N dias a partir da BUSCA, não da conclusão. Comportamento
+  // preservado da versão anterior — registrado porque engana na leitura.
+  const cutoff = dateBRTMinusDays(retentionDays) + 'T00:00:00.000Z';
 
   const { error, count } = await sb
     .from('note_details')
@@ -1068,6 +1113,7 @@ module.exports = {
   consolidateDay, detectDrift, shouldAutoRepair,
   cleanOldSnapshots, cleanOldNoteDetails,
   // Exportadas pra teste (P0-3) — funções puras da regra de agregação.
+  _diasDeRetencao,            // P2-18 — valor ruim no .env não pode virar "apague tudo"
   _addDays,
   _sessionDate, _notaDate, _aggregateTeamDailyTotals,
   _unionTeamsFromSnapshots,   // P1-13 — união dos snapshots do dia

@@ -99,7 +99,7 @@
 | P1-38 | `/wpa/nota/:noteId` e `/debug/*` serviam nota/payload de QUALQUER regional | Segurança | **done** (25/08) — 4 portas fechadas + `/debug` vira admin-only; 10 testes |
 | P1-39 | Setor cuja coleta falha some do painel SEM aviso: `/api/teams` descarta o `report` que o P1-30 já produz | Ops/Frontend | **done** (25/08) — `coleta` no payload + faixa no painel + `—` no lugar de `0`; 13 testes |
 | P1-40 | Suíte de testes chamava a API da EDP de verdade — `DATA_MODE=mock` não impedia | Qualidade/Ops | **done** (26/08) — mock deixa de tocar a rede em `/wpa/nota` e `/debug/*`; 1 teste de regressão |
-| P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | pending |
+| P2-18 | `note_details` TTL 90d é a única fonte de checkpoints → deslocamento/rota irrecuperável e não-backfillável | Dados | **done** (28/08) — retenção ilimitada por padrão via `NOTE_DETAILS_RETENTION_DAYS`; os ~19 dias já apagados (antes de 28/05) seguem perdidos |
 | P2-19 | Equipe fora da whitelist descartada ANTES do snapshot, sem log → histórico não-backfillável | Dados | pending |
 | P2-20 | Leitura do histórico depende da whitelist de HOJE → desativar equipe apaga produção já reportada | Dados/Governança | pending |
 | P2-21 | `ConclusionStatus` (pontualidade) + `DesiredConclusionDate` descartados no `normalizarNotaV2` → KPI de SLA a custo zero | Dados/Produto | pending |
@@ -2920,7 +2920,7 @@ feita em PR separado depois dos testes.
 ## P2-18 — `note_details` tem TTL de 90 dias e é a ÚNICA fonte de checkpoints (quebra a promessa de reconstrução retroativa)
 
 - **Categoria:** Dados / Retenção
-- **Status:** pending
+- **Status:** **done** (28/08/2026) — ver "Feito em".
 - **Origem:** revisão paralela 20/08/2026. Conferido.
 - **Evidência:** `services/dataWriter.js:948-965` (`cleanOldNoteDetails`, cutoff
   `dateBRTMinusDays(90)`), agendado em `services/cronService.js:978`.
@@ -2938,6 +2938,33 @@ feita em PR separado depois dos testes.
   retenção configurável como a de snapshots.
 - **Esforço:** 4h + backfill dos 90 dias ainda vivos.
 - **Relacionado:** P2-15, P3-6, P1-28.
+- **Feito em:** 28/08/2026. Spec: `docs/handoff/SPEC-retencao-note-details-2026-08-28.md`.
+  - **Resolvido por retenção, não por extração.** A ação previa extrair uma
+    tabela estreita `note_checkpoints`. Medindo na VM, guardar o bruto saiu mais
+    barato de construir E estrategicamente melhor: 78.367 notas em 268 MB
+    (3,58 KB/nota, **sem fotos** — `incluirFotos:false` no cron), 877 notas/dia
+    → 3,1 MB/dia ≈ **1,15 GB/ano**. São **20%** dos 16 MB/dia que `snapshots` já
+    gasta com aval do negócio, contra **57 GB livres**. Assim qualquer indicador
+    futuro nasce backfillável, sem precisar adivinhar hoje quais campos alguém
+    vai querer amanhã — que é a promessa de 07/07/2026 que este TTL contradizia.
+  - `cleanOldNoteDetails` ganhou `NOTE_DETAILS_RETENTION_DAYS` (ausente/0 =
+    nunca apaga), espelhando `cleanOldSnapshots`. Documentada no `.env.example`
+    com o mesmo cabeçalho ⚠️⚠️ DESTRUTIVO.
+  - Decisão extraída pra função pura `_diasDeRetencao`, exportada pra teste: tudo
+    que não for inteiro positivo vira 0/ilimitado. Assimetria deliberada —
+    errar pra ilimitado custa disco, errar pro outro lado custa histórico. O
+    caso perigoso é negativo: sem a guarda, `dateBRTMinusDays(-30)` daria cutoff
+    no FUTURO e o delete levaria a tabela inteira.
+  - **+9 testes** (`test/retencaoNoteDetails.test.js`). Suíte: 671/671, 0 falhas.
+  - ⚠️ **Não recupera o que já foi apagado.** Quando isto foi medido, o registro
+    mais antigo era 28/05/2026 contra um histórico que começa em 09/05 — ~19
+    dias de detalhes perdidos pra sempre.
+  - **Dívida que reter pra sempre CONGELA** (§8 da spec): ~11 dias de payloads
+    anteriores a 08/06/2026 têm a conclusão 3h adiantada dentro do jsonb
+    (`ConclusionDate2` corrompido; conserto só na leitura, em
+    `fixCachedPayloadTz`). E `snapshots[].conclusionDate` usa
+    `ConclusionDate2 || ConclusionDate`, o campo que o `notaProcessor` proíbe —
+    as duas fontes de "conclusão" podem divergir. Decidir na rodada das sub-abas.
 
 ---
 
