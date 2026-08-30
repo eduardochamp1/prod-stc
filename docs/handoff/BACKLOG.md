@@ -141,6 +141,7 @@
 | P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **roteamento restaurado 28/08** (`fails=0 misses=4` na VM) — falta só o guard de boot |
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
+| P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
 
 ---
 
@@ -4735,3 +4736,52 @@ mesmo ponto cego, o que reforça o item.
 - **Esforço:** 3h.
 - **Rollback:** `git revert` + `DELETE FROM osrm_cache WHERE source = 'falha'`.
 - **Relacionado:** P1-45 (o incidente que expôs isto).
+
+## P2-47 — 10 equipes da whitelist não existem na escala do SGE
+
+- **Categoria:** Dados/Cadastro
+- **Status:** pending — **conferência 30/08/2026**
+- **Evidência:** `scripts/diag-escala-semana.js`, bloco 5, rodado em 30/08/2026.
+  Das 139 equipes ativas em `equipes_oficiais`, 17 não tinham nenhuma linha em
+  `escala_dia` no dia. Sete têm escala nos outros dias do mês (o vazio é só do
+  domingo); **dez têm zero linha no mês inteiro**:
+  `ECLSJ73`, `ECLSJ87`, `EDMA50`, `EPAVP37`, `EPAVP39`, `EPGUE82`,
+  `ETGPR18`, `ETGPR19`, `ETMRT15`, `ETPKE15` — 5 de SJC, 5 de GUA.
+  Quatro delas (`ETGPR18/19`, `ETMRT15`, `ETPKE15`) são CORTE L0, e o tipo
+  aparece normalmente com 9–10 equipes nos dias úteis: não é o tipo que está
+  fora, são essas quatro em específico.
+- **Impacto:** `db/escalaQueries.js:190` só conta equipe que tem linha de escala
+  com horário no catálogo. Equipe sem linha alguma **nunca entra em "esperadas",
+  em nenhum horário, em nenhum dia** — o KPI do Monitor subnotifica o previsto
+  em até 10 equipes, permanentemente.
+  ⚠️ As duas superfícies que usam escala discordam de propósito sobre "sem dado",
+  e é isso que torna o item ambíguo: `services/escalaDia.js:60` trata ausência
+  como **escalada** (`motivo: 'sem-dado'`, para não suprimir ausência real no
+  `/admin/health`), enquanto `escalaQueries.js` trata como **não-escalada**.
+  Uma das duas tem de mudar, e a decisão é de negócio, não técnica.
+- **Atenuante medido:** na conferência de 30/08 nenhuma das 17 estava em campo —
+  efeito prático **zero** naquele instante. E o modo de falha é **visível**: no
+  dia em que uma delas iniciar turno, ela aparece na lista "em campo e não
+  escaladas" e o painel mostra em campo > esperadas. Não é erro silencioso, que
+  é o motivo de isto ser P2 e não P1.
+- **Ação:** ⬜ descobrir POR QUE as dez não estão no `collaboratorshifts` —
+  as hipóteses são (a) equipe desativada no WPA e ainda `ativo` na whitelist,
+  (b) equipe sem colaborador vinculado no SGE, (c) sigla divergente entre
+  `equipes_oficiais` e o WPA. Note `ECASJ85` (whitelist, 6 dias de escala) ao
+  lado de `ECCSJ85` (escalada e em campo) — siglas a uma letra de distância,
+  então (c) precisa ser descartada com dado, não por leitura.
+  ⬜ Decidir a regra para "equipe sem escala cadastrada": entra no esperado
+  (como no `/admin/health`) ou fica fora (como hoje no KPI). As duas superfícies
+  têm de passar a concordar.
+- **Critério de aceite:**
+  - [ ] Cada uma das dez classificada em (a), (b) ou (c), com evidência.
+  - [ ] As de (a) saem da whitelist ou são marcadas `ativo = false`.
+  - [ ] `escalaDia.js` e `escalaQueries.js` tratam "sem dado" pela MESMA regra.
+  - [ ] O bloco 5 do `diag-escala-semana.js` volta a zero, ou o resíduo é
+        justificado por escrito.
+- **Esforço:** 3h (2h de investigação de cadastro, 1h de alinhamento da regra).
+- **Rollback:** nada a reverter na investigação. Se a regra de "sem dado" mudar
+  em `escalaQueries.js`, `git revert` do commit restaura o comportamento atual.
+- **Relacionado:** P1-26 e P2-24 (que criaram `escala_dia`), P2-33 (catálogo).
+- **Fonte:** conferência do KPI EM CAMPO × ESPERADAS, 30/08/2026 —
+  `scripts/diag-escala-agora.js` e `scripts/diag-escala-semana.js`.
