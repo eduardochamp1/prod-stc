@@ -202,42 +202,60 @@ function tabela(linhas, colunas) {
   // Se o mesmo colaborador aparece com turno em TODOS os domingos do mês, o
   // cadastro dele é administrativo (nunca recebeu DR), não operacional. É o
   // padrão que transforma "equipe escalada" em ruído no fim de semana.
-  H('3. COLABORADORES SEM FOLGA NO CADASTRO (todos os fins de semana do mês)');
+  // ⚠️ 30/08/2026 — BUG QUE ISSO CONSERTA. A 1ª versão usava como denominador os
+  // dias de fim de semana em que o colaborador TEM LINHA, não os do mês. Quem
+  // tinha um único sábado cadastrado saía como "1/1 — nunca folga", e o bloco
+  // acusou 48 pessoas com a conclusão invertida: o máximo real é 6 de 10, ou
+  // seja, ninguém trabalha todo fim de semana — é revezamento. Denominador
+  // errado produz o oposto da verdade, e aqui não se maquia número.
+  H('3. QUEM MAIS TRABALHA NO FIM DE SEMANA (sobre os dias de fds do mês)');
   const { rows: semFolga } = await pool.query(
-    `WITH fds AS (
+    `WITH dias_fds AS (
+       SELECT DISTINCT data FROM public.escala_dia
+        WHERE data BETWEEN $1::date AND $2::date AND extract(dow from data) IN (0,6)),
+     tot AS (SELECT count(*)::int AS n FROM dias_fds),
+     porcol AS (
        SELECT ed.equipe, ed.colaborador_codigo, ed.colaborador_nome,
-              count(*) AS dias_fds,
-              count(*) FILTER (WHERE ec.inicio_escala IS NOT NULL
-                                 AND ec.fim_escala    IS NOT NULL) AS fds_trabalhando
+              count(DISTINCT ed.data) FILTER (WHERE ec.inicio_escala IS NOT NULL
+                                                AND ec.fim_escala    IS NOT NULL) AS fds_trab
          FROM public.escala_dia ed
          LEFT JOIN public.escalas_catalogo ec
            ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
         WHERE ed.data BETWEEN $1::date AND $2::date
-          AND extract(dow from ed.data) IN (0, 6)
+          AND extract(dow from ed.data) IN (0,6)
         GROUP BY 1,2,3)
      SELECT upper(btrim(eo.sigla)) AS sigla, coalesce(upper(eo.tipo),'—') AS tipo,
-            fds.colaborador_nome, fds.dias_fds, fds.fds_trabalhando
-       FROM fds
+            porcol.colaborador_nome, porcol.fds_trab, tot.n AS fds_no_mes
+       FROM porcol, tot
        JOIN public.equipes_oficiais eo
-         ON upper(btrim(eo.sigla)) = upper(btrim(fds.equipe)) AND eo.ativo
-      WHERE fds.dias_fds > 0 AND fds.fds_trabalhando = fds.dias_fds
-        AND coalesce(upper(eo.tipo),'—') <> 'PLANTÃO'
-      ORDER BY 2, 1, 3`, [ini, fim]);
+         ON upper(btrim(eo.sigla)) = upper(btrim(porcol.equipe)) AND eo.ativo
+      WHERE tot.n > 0 AND porcol.fds_trab > 0
+        AND coalesce(upper(eo.tipo),'—') NOT LIKE 'PLANT%'
+      ORDER BY porcol.fds_trab DESC, 1, 3
+      LIMIT 25`, [ini, fim]);
 
+  const totalFds = semFolga.length ? Number(semFolga[0].fds_no_mes) : 0;
+  info(`dias de fim de semana no mês: ${totalFds}`);
   if (semFolga.length === 0) {
-    ok('nenhum colaborador não-plantão trabalha todos os fins de semana no cadastro.');
+    ok('nenhum colaborador não-plantão com turno em fim de semana.');
   } else {
-    bad(`${semFolga.length} colaborador(es) NÃO-PLANTÃO com turno em TODO sábado e domingo do mês.`);
+    const sempre = semFolga.filter(r => Number(r.fds_trab) === totalFds);
     console.log('');
-    tabela(semFolga.slice(0, 40), [
-      { rotulo: 'equipe',      get: r => r.sigla },
-      { rotulo: 'tipo',        get: r => r.tipo },
-      { rotulo: 'colaborador', get: r => (r.colaborador_nome || '?').slice(0, 38) },
-      { rotulo: 'fds trab/tot',get: r => `${r.fds_trabalhando}/${r.dias_fds}` },
+    tabela(semFolga, [
+      { rotulo: 'equipe',       get: r => r.sigla },
+      { rotulo: 'tipo',         get: r => r.tipo },
+      { rotulo: 'colaborador',  get: r => (r.colaborador_nome || '?').slice(0, 38) },
+      { rotulo: 'fds trab/mês', get: r => `${r.fds_trab}/${r.fds_no_mes}` },
+      { rotulo: '%',            get: r => `${Math.round((r.fds_trab / r.fds_no_mes) * 100)}%` },
     ]);
-    if (semFolga.length > 40) info(`(+${semFolga.length - 40} não listados)`);
     console.log('');
-    info('São estes cadastros que sustentam equipe não-plantão no esperado de fim de semana.');
+    if (sempre.length) {
+      bad(`${sempre.length} colaborador(es) não-plantão em TODOS os ${totalFds} dias de fim de semana.`);
+      info('Cadastro que nunca recebe folga sustenta equipe no esperado o fim de semana inteiro.');
+    } else {
+      ok(`ninguém não-plantão cobre os ${totalFds} dias — o maior é ${semFolga[0].fds_trab}/${totalFds}.`);
+      info('É revezamento de fim de semana, não cadastro sem folga. O esperado reflete escala real.');
+    }
   }
 
   // ── 4. O confronto que o KPI faz na tela: esperada × em campo ─────────────
@@ -306,6 +324,64 @@ function tabela(linhas, colunas) {
     info('As "(fora da whitelist)" são esperadas aqui — o KPI só conta equipe faturada.');
   } else {
     ok('ninguém em campo fora da escala.');
+  }
+
+  // ── 5. As equipes INVISÍVEIS pro KPI ──────────────────────────────────────
+  // Equipe da whitelist sem NENHUMA linha hoje não entra em "esperadas" em
+  // horário nenhum. Note a diferença que importa: equipe de FOLGA tem linha com
+  // DR; equipe sem linha alguma não foi cadastrada. A coluna dias_com_linha diz
+  // qual é o caso — se ela tem escala no resto do mês, o buraco é só de hoje;
+  // se tem 0 no mês inteiro, a equipe não existe no SGE e o KPI subnotifica
+  // todo dia, em silêncio.
+  H('5. EQUIPES DA WHITELIST SEM LINHA DE ESCALA HOJE (invisíveis pro KPI)');
+  const { rows: invisiveis } = await pool.query(
+    `SELECT upper(btrim(eo.sigla)) AS sigla, coalesce(upper(eo.tipo),'—') AS tipo,
+            coalesce(eo.regional,'—') AS regional,
+            count(DISTINCT ed.data) AS dias_com_linha,
+            count(DISTINCT ed.data) FILTER (WHERE ec.inicio_escala IS NOT NULL
+                                              AND ec.fim_escala    IS NOT NULL) AS dias_com_turno,
+            coalesce(to_char(max(ed.data),'YYYY-MM-DD'),'—') AS ultima_linha
+       FROM public.equipes_oficiais eo
+       LEFT JOIN public.escala_dia ed
+         ON upper(btrim(ed.equipe)) = upper(btrim(eo.sigla))
+        AND ed.data BETWEEN $1::date AND $2::date
+       LEFT JOIN public.escalas_catalogo ec
+         ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
+      WHERE eo.ativo
+        AND NOT EXISTS (SELECT 1 FROM public.escala_dia e2
+                         WHERE e2.data = $3::date
+                           AND upper(btrim(e2.equipe)) = upper(btrim(eo.sigla)))
+      GROUP BY 1,2,3 ORDER BY 4, 1`, [ini, fim, hoje]);
+
+  if (invisiveis.length === 0) {
+    ok('nenhuma — toda equipe da whitelist tem linha de escala hoje.');
+  } else {
+    warn(`${invisiveis.length} equipe(s) da whitelist sem linha de escala hoje.`);
+    console.log('');
+    tabela(invisiveis, [
+      { rotulo: 'equipe',     get: r => r.sigla },
+      { rotulo: 'tipo',       get: r => r.tipo },
+      { rotulo: 'regional',   get: r => r.regional },
+      { rotulo: 'dias c/linha no mês', get: r => r.dias_com_linha },
+      { rotulo: 'dias c/turno',        get: r => r.dias_com_turno },
+      { rotulo: 'última linha',        get: r => r.ultima_linha },
+      { rotulo: 'em campo agora?',     get: r => (emCampo.has(r.sigla) ? '⚠️ SIM' : 'não') },
+    ]);
+    console.log('');
+    const nunca = invisiveis.filter(r => Number(r.dias_com_linha) === 0);
+    const soHoje = invisiveis.filter(r => Number(r.dias_com_linha) > 0);
+    if (nunca.length) {
+      bad(`${nunca.length} não têm NENHUMA linha no mês inteiro — não existem no SGE.`);
+      info('Para essas o KPI subnotifica todo dia: nunca entram no esperado, em horário nenhum.');
+    }
+    if (soHoje.length) {
+      info(`${soHoje.length} têm escala em outros dias do mês — o buraco é só de hoje.`);
+    }
+    const trabalhando = invisiveis.filter(r => emCampo.has(r.sigla));
+    if (trabalhando.length) {
+      bad(`${trabalhando.length} estão EM CAMPO agora sem escala cadastrada: ${trabalhando.map(r => r.sigla).join(', ')}`);
+      info('Essas provam a subnotificação: trabalham, e o esperado não as conta.');
+    }
   }
 
   console.log('');
