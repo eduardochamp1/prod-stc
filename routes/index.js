@@ -3148,6 +3148,27 @@ function _parseDeslocFilters(req) {
   };
 }
 
+// ── ESCALA — quantas equipes deveriam estar em campo AGORA ───────────────────
+// Alimenta o KPI "TOTAL EQUIPES" do Monitor. Comparar 139 (whitelist) com 31
+// (em campo) não diz nada: a maioria está de folga a qualquer momento. O número
+// útil é quantas a ESCALA prevê pra este instante.
+const _escalaQ = require('../db/escalaQueries');
+
+// GET /api/escala/agora
+router.get('/escala/agora', async (req, res) => {
+  try {
+    const regionais = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length > 0)
+      ? req.scope.regionals : null;
+    res.json(await _escalaQ.equipesEsperadasAgora(regionais));
+  } catch (err) {
+    // Não derruba o Monitor: o KPI simplesmente não mostra o esperado. A tabela
+    // escala_dia depende de migration (013) e de cron — se faltar, o resto da
+    // tela tem de continuar funcionando.
+    console.warn('[escala/agora]', err.message);
+    res.status(200).json({ esperadas: null, erro: err.message });
+  }
+});
+
 // ── TMA (PO) — reparo apontado × fim do trabalho ─────────────────────────────
 // Distância entre o "Horário do Reparo" e o checkpoint "Finalizando Trabalho"
 // nas notas PO. Critério da operação: mínimo de 10 minutos.

@@ -165,18 +165,27 @@
       <div class="summary-grid">
         <div class="metric-card accent-preto">
           <div class="metric-label">Total equipes</div>
+          <!-- 30/08/2026 — o par passou a ser EM CAMPO × ESPERADAS pela escala.
+               Antes era whitelist (139) × em campo (31), e comparar os dois não
+               dizia nada: a maioria das 139 está de folga a qualquer instante.
+               Medido num único dia: 216 equipes com código DR (descanso). O
+               total da whitelist virou sub-texto — segue útil, mas não é a
+               comparação que interessa. Ver GET /api/escala/agora. -->
           <div style="display:flex;align-items:baseline;gap:14px;margin-top:2px">
-            <div style="display:flex;flex-direction:column;align-items:flex-start">
-              <div class="metric-value" id="m-total" style="line-height:1">—</div>
-              <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-top:2px">total</div>
-            </div>
-            <div style="font-size:28px;color:var(--text2);font-weight:300;line-height:1">/</div>
             <div style="display:flex;flex-direction:column;align-items:flex-start">
               <div class="metric-value verde" id="m-ativas-num" style="line-height:1">—</div>
               <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-top:2px">em campo</div>
             </div>
+            <div style="font-size:28px;color:var(--text2);font-weight:300;line-height:1">/</div>
+            <div style="display:flex;flex-direction:column;align-items:flex-start">
+              <div class="metric-value" id="m-esperadas" style="line-height:1">—</div>
+              <div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.06em;margin-top:2px">esperadas</div>
+            </div>
           </div>
+          <div class="metric-sub" id="m-escala-gap" style="display:none"></div>
           <div class="metric-sub" id="m-ativas" style="display:none"></div>
+          <div class="metric-sub" style="font-size:10px;opacity:.75">
+            <span id="m-total">—</span> na whitelist</div>
           <!-- Detalhamento por tipo de equipe: planejado (whitelist) / em campo agora.
                Só aparece no modo ao vivo (hoje) — "em campo agora" não faz sentido
                em histórico. Populado em renderMonitor (bloco /api/equipes). -->
@@ -7140,6 +7149,39 @@ ${matrizHTML}
         const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
         const eqData = await fetch(`${API}/equipes?regionals=${_regionalsCsv}`)
           .then(r => r.json()).catch(() => null);
+        // Esperadas pela escala AGORA. Só no modo ao vivo — "agora" não existe
+        // em histórico, e mostrar o turno de hoje ao lado do campo de 12/08
+        // seria comparar coisas de dias diferentes.
+        let escalaAgora = null;
+        if (isLiveToday) {
+          escalaAgora = await fetch(`${API}/escala/agora?regionals=${_regionalsCsv}`)
+            .then(r => r.json()).catch(() => null);
+        }
+        const espEl = document.getElementById('m-esperadas');
+        const gapEl = document.getElementById('m-escala-gap');
+        if (espEl) {
+          const esp = escalaAgora && Number.isFinite(escalaAgora.esperadas) ? escalaAgora.esperadas : null;
+          espEl.textContent = esp == null ? '—' : esp;
+          if (esp != null && gapEl) {
+            const falta = esp - ativas;
+            // Verde quando há gente igual ou acima do previsto; vermelho quando
+            // falta equipe em campo. O número cru vem junto: "faltam 3" é
+            // acionável, "-3" obriga o leitor a interpretar o sinal.
+            espEl.style.color = falta > 0 ? 'var(--vermelho, #e74c3c)' : 'var(--verde)';
+            gapEl.textContent = falta > 0
+              ? `faltam ${falta} equipe${falta > 1 ? 's' : ''} em campo`
+              : (falta < 0 ? `${-falta} a mais que o previsto` : 'escala completa');
+            gapEl.style.color = falta > 0 ? '#e74c3c' : 'var(--text2)';
+            gapEl.style.display = '';
+          } else if (gapEl) {
+            // Sem dado de escala o KPI não inventa: mostra "—" e explica.
+            espEl.style.color = '';
+            gapEl.textContent = escalaAgora && escalaAgora.erro
+              ? 'escala indisponível' : '';
+            gapEl.style.display = (escalaAgora && escalaAgora.erro) ? '' : 'none';
+          }
+        }
+
         if (eqData?.equipes) {
           const oficiais = eqData.equipes.filter(e => e.ativo);
           document.getElementById('m-total').textContent = oficiais.length;
@@ -7164,14 +7206,25 @@ ${matrizHTML}
             }
             const tipos = Object.keys(planByTipo)
               .sort((a, b) => planByTipo[b] - planByTipo[a] || a.localeCompare(b));
+            // "esc" = escaladas agora, entre o planejado e o real. É a coluna
+            // que diz se a falta é de escala ou de execução: 27 plan · 4 esc ·
+            // 4 campo está correto; 27 plan · 13 esc · 4 campo é problema.
+            const escByTipo = (escalaAgora && escalaAgora.porTipo) || null;
             bd.innerHTML = tipos.map(tp => {
               const plan = planByTipo[tp], real = realByTipo[tp] || 0;
               const realHtml = real > 0
                 ? `<b style="color:var(--verde)">${real}</b>`
                 : `<span style="opacity:.55">0</span>`;
+              let escHtml = '';
+              if (escByTipo) {
+                const esc = escByTipo[tp] || 0;
+                // Vermelho só quando falta gente em campo pro que a escala previu.
+                const cor = real < esc ? '#e74c3c' : 'inherit';
+                escHtml = `<b style="color:${cor}">${esc}</b> <span style="opacity:.5">esc</span> · `;
+              }
               return `<div style="display:flex;justify-content:space-between;gap:10px">`
                 + `<span style="text-transform:uppercase;letter-spacing:.03em">${escapeHtml(tp)}</span>`
-                + `<span><b>${plan}</b> <span style="opacity:.5">plan</span> · ${realHtml} <span style="opacity:.5">campo</span></span>`
+                + `<span><b>${plan}</b> <span style="opacity:.5">plan</span> · ${escHtml}${realHtml} <span style="opacity:.5">campo</span></span>`
                 + `</div>`;
             }).join('');
             bd.style.display = tipos.length ? '' : 'none';
