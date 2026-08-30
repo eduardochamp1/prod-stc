@@ -398,6 +398,19 @@ aí os dois viram instante absoluto e a subtração fecha:
 20:25:47Z (evento 4) − 20:18:45Z (RepairTime) = 7m02s
 ```
 
+E o erro **depende do fuso do processo**, o que o torna pior: medido com os
+valores reais da nota 104875481,
+
+```
+TZ=America/Sao_Paulo   RegisteredAt2 → +7,03 min    RegisteredAt → +7,03 min
+TZ=UTC   (a VM)        RegisteredAt2 → +7,03 min    RegisteredAt → −172,97 min
+```
+
+Ou seja: usar o campo cru **funciona na máquina do dev e quebra em produção**,
+com 3h de erro que ainda inverte o sinal. Viraria "reparo apontado 3h depois de
+terminar o trabalho" — absurdo plausível o bastante pra passar por anomalia de
+campo em vez de bug de código.
+
 `HasRepair` diz se houve reparo — nota com `false` não entra no indicador.
 
 #### Custo de ingestão
