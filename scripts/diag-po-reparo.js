@@ -40,7 +40,7 @@
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --dump-chaves
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --probe-endpoints
  *
- * ⚠️ Faz 1 requisição à API da WPA (ou 12, com --probe-endpoints). Todas GET.
+ * ⚠️ Faz 1 requisição à API da WPA (ou 11, com --probe-endpoints). Todas GET.
  * Não faz login novo se o token estiver válido. Não escreve no banco.
  */
 
@@ -222,21 +222,28 @@ async function main() {
     // `StatusSurvey` (ambas nulas nesta nota). A seção "Detalhes da Execução →
     // Ocorrência", com Ação/Dispositivo/CCC/Horário do Reparo, tem exatamente a
     // cara de um formulário de execução.
+    // Rodada 3 (30/08/2026). O HAR do portal (235 entradas, 136 chamadas de API)
+    // deu a lista COMPLETA — as capturas anteriores mostravam só o que cabia na
+    // tela. O HAR veio sem os corpos ("Save all as HAR" em vez de "with
+    // content"), mas os TAMANHOS de resposta já ordenam a fila: quase tudo
+    // voltou 24-26 bytes (array vazio / null) e um voltou 7.221.
+    //
+    // `/api/notes/po?noteId=` é a aposta: endpoint específico de PO, que é
+    // justamente o tipo de nota do indicador, e o único com conteúdo de verdade.
+    // Tem a cara da seção "Detalhes da Execução" — Circuito, PowerOn, Ocorrência
+    // (Ação, Dispositivo, Horário do Reparo) e CCC.
     const num = encodeURIComponent(NUMERO);
     const candidatos = [
-      `/api/Notes/${num}/completeLastSurveysByNumber`,
-      `/api/notes/dd/logs?noteId=${nid}`,
-      `/api/search/SearchNotesByNumber?noteNumber=${num}`,
-      // Rodada 1 — já sondados em 30/08, nenhum tinha o horário. Mantidos porque
-      // esta nota pode não ter registro e outra nota pode ter.
-      `/api/Notes/${nid}/completeInterruptions`,
-      `/api/notesMEC/${nid}`,
-      `/api/Notes/${nid}/historic`,
-      `/api/notes/getFormattedEquipments/${nid}`,
-      `/api/callback-information?noteId=${nid}`,
-      `/api/notes/${nid}/getnotebreakdisplacementtime`,
-      `/api/listener-mode/logs?noteId=${nid}`,
-      `/api/notes/clustering/getName/${nid}`,
+      `/api/notes/po?noteId=${nid}`,                       // 7.221 B ← aposta
+      `/api/noteactivities/${nid}/material`,               // 4.763 B
+      `/api/notes/${nid}/status`,                          // 1.340 B
+      `/api/Forms/FormsNote/${nid}`,                       //    66 B
+      `/api/notesPO/logsStatusFlow/${nid}`,                //    24 B
+      `/api/Notes/${nid}/${num}/ESCE/historic`,            //    24 B — o truncado
+      `/api/notes/${nid}/validationHistory`,               //    24 B
+      `/api/poerrormessage/${nid}`,                        //    26 B
+      `/api/Notes/noteProgramHistories/${nid}`,
+      `/api/smslog/${nid}`,
     ];
     for (const path of candidatos) {
       // try/catch em volta do endpoint INTEIRO: em 30/08 o completeInterruptions
