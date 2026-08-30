@@ -30,6 +30,10 @@
  *   Reprocessar tudo, inclusive o já gravado:
  *   node -r dotenv/config scripts/migrar-po-reparo.js --refazer
  *
+ *   Preencher a SIGLA da equipe nas linhas já gravadas (30/08). Só banco,
+ *   nenhuma requisição à EDP — resolve pelo mapa de snapshots, dia a dia:
+ *   node -r dotenv/config scripts/migrar-po-reparo.js --equipes
+ *
  * Reverter: DROP TABLE IF EXISTS public.note_po_reparo;
  *           (o `note_details` não é tocado em momento nenhum)
  */
@@ -54,6 +58,8 @@ const DDL = `
     numero            text,
     sector_id         text,
     team_id           uuid,
+    team_name         text,
+    regional          text,
     repair_time       timestamptz,
     has_repair        boolean,
     finalizando_em    timestamptz,
@@ -72,7 +78,7 @@ async function main() {
   if (!pool) { console.error('Sem pool. Rode com `node -r dotenv/config` na VM.'); process.exit(1); }
 
   const { getNotePoExecution, getNoteDetail } = require('../services/wpaService');
-  const { montarLinhaReparo, upsertPoReparo, faixaDoDelta } = require('../db/poReparoQueries');
+  const { montarLinhaReparo, upsertPoReparo, faixaDoDelta, dicionarioEquipes } = require('../db/poReparoQueries');
 
   console.log('\n=== backfill note_po_reparo ===\n');
 
@@ -91,9 +97,67 @@ async function main() {
   }
 
   await pool.query(DDL);
+  // Tabela criada antes de 30/08 não tem as colunas de equipe. ADD COLUMN IF
+  // NOT EXISTS é instantâneo (nullable, sem default) e idempotente.
+  await pool.query(`ALTER TABLE public.note_po_reparo
+                      ADD COLUMN IF NOT EXISTS team_name text,
+                      ADD COLUMN IF NOT EXISTS regional  text`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_note_po_reparo_finalizando
                       ON public.note_po_reparo (finalizando_em)`);
-  console.log('✅ tabela e índice prontos');
+  console.log('✅ tabela, colunas e índice prontos');
+
+  // ── Modo --equipes: preenche a sigla das linhas já gravadas ───────────────
+  //
+  // A EDP só manda o UUID da equipe. Até 30/08 a tela resolvia isso na CONSULTA,
+  // expandindo os snapshots a cada acesso (~25s) pra preencher uma coluna de
+  // texto que nunca muda. Agora a sigla é consolidada junto com o resto, e este
+  // modo preenche o que já estava gravado.
+  //
+  // Vai DIA A DIA de propósito: `_mapaEquipeDoPeriodo` cacheia por dia, então
+  // dias já vistos saem de graça. Não faz requisição à EDP — só banco.
+  if (flag('equipes')) {
+    const { _mapaEquipeDoPeriodo } = require('../db/deslocamentosQueries');
+    const { invalidarDicionarioEquipes } = require('../db/poReparoQueries');
+
+    const { rows: dias } = await pool.query(
+      `SELECT DISTINCT (finalizando_em AT TIME ZONE 'America/Sao_Paulo')::date AS dia
+         FROM public.note_po_reparo
+        WHERE team_name IS NULL AND finalizando_em IS NOT NULL
+        ORDER BY dia`);
+    console.log(`\n=== preenchendo equipe em ${dias.length} dia(s) ===`);
+    if (dias.length === 0) { console.log('nada pendente.'); await pool.end(); return; }
+
+    let atualizadas = 0, semEquipe = 0;
+    for (let i = 0; i < dias.length; i++) {
+      const dia = dias[i].dia.toISOString().slice(0, 10);
+      let mapa;
+      try {
+        mapa = await _mapaEquipeDoPeriodo(dia, dia, {});
+      } catch (err) {
+        console.warn(`  ⚠ ${dia}: ${err.message}`);
+        continue;
+      }
+      const { rows: pend } = await pool.query(
+        `SELECT note_id FROM public.note_po_reparo
+          WHERE team_name IS NULL
+            AND (finalizando_em AT TIME ZONE 'America/Sao_Paulo')::date = $1::date`, [dia]);
+      for (const p of pend) {
+        const eq = mapa.get(p.note_id);
+        if (!eq || !eq.team_name) { semEquipe++; continue; }
+        await pool.query(
+          `UPDATE public.note_po_reparo SET team_name = $2, regional = $3 WHERE note_id = $1`,
+          [p.note_id, eq.team_name, eq.regional || null]);
+        atualizadas++;
+      }
+      console.log(`  ${i + 1}/${dias.length}  ${dia}  ${pend.length} pendentes  → ${atualizadas} preenchidas`);
+    }
+    invalidarDicionarioEquipes();
+    console.log(`\n── RESULTADO ──`);
+    console.log(`  preenchidas:       ${atualizadas}`);
+    console.log(`  sem equipe no mapa: ${semEquipe}   (nota fora dos snapshots do dia)`);
+    await pool.end();
+    return;
+  }
 
   // Retomada: por padrão pula quem já tem linha. `--refazer` reprocessa tudo.
   const filtroFeitas = REFAZER ? '' :
@@ -124,6 +188,10 @@ async function main() {
         .map(cp => ({ event: cp.Event, registradoEm: cp.RegisteredAt2 || null }));
 
       const linha = montarLinhaReparo(poExec, cps);
+      // Sigla resolvida pelo dicionário (auto-alimentado). Se a equipe ainda não
+      // for conhecida, fica null e o --equipes preenche — nunca apaga.
+      const eq = linha.team_id ? (await dicionarioEquipes()).get(String(linha.team_id)) : null;
+      if (eq) { linha.team_name = eq.team_name; linha.regional = eq.regional; }
       await upsertPoReparo(n.note_id, n, linha);
 
       conta.ok++;

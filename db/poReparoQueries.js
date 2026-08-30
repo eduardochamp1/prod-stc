@@ -114,14 +114,19 @@ async function upsertPoReparo(noteId, { numero, sector_id }, linha) {
   const pool = _getPool();
   await pool.query(
     `INSERT INTO public.note_po_reparo
-       (note_id, numero, sector_id, team_id, repair_time, has_repair,
+       (note_id, numero, sector_id, team_id, team_name, regional, repair_time, has_repair,
         finalizando_em, delta_seg, prediction_repair, confirmation_date,
         classe, causa, clima, atualizado_em)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
      ON CONFLICT (note_id) DO UPDATE SET
        numero            = EXCLUDED.numero,
        sector_id         = EXCLUDED.sector_id,
        team_id           = EXCLUDED.team_id,
+       -- COALESCE: um upsert que não conseguiu resolver a equipe não pode
+       -- APAGAR o nome que o backfill já tinha gravado. Reprocessar uma nota
+       -- nunca pode piorar o que está na tabela.
+       team_name         = COALESCE(EXCLUDED.team_name, public.note_po_reparo.team_name),
+       regional          = COALESCE(EXCLUDED.regional,  public.note_po_reparo.regional),
        repair_time       = EXCLUDED.repair_time,
        has_repair        = EXCLUDED.has_repair,
        finalizando_em    = EXCLUDED.finalizando_em,
@@ -133,11 +138,46 @@ async function upsertPoReparo(noteId, { numero, sector_id }, linha) {
        clima             = EXCLUDED.clima,
        atualizado_em     = now()`,
     [noteId, numero || null, sector_id || null, linha.team_id,
+     linha.team_name || null, linha.regional || null,
      linha.repair_time, linha.has_repair, linha.finalizando_em, linha.delta_seg,
      linha.prediction_repair, linha.confirmation_date,
      linha.classe, linha.causa, linha.clima],
   );
 }
+
+/**
+ * Dicionário `team_id` (UUID da EDP) → sigla da equipe.
+ *
+ * 30/08/2026 — a EDP só manda o UUID em `Execution.ExecutedById`, e nem
+ * `teams_current` nem `equipes_oficiais` traduzem. A tela resolvia isso em tempo
+ * de CONSULTA, montando o mapa de snapshots: 170 mil linhas de jsonb expandidas
+ * para preencher uma coluna de texto que nunca muda. Era a única coisa dinâmica
+ * numa tela cujo dado é 100% consolidado — e os ~25s de espera vinham daí.
+ *
+ * Agora a sigla é gravada JUNTO com o resto, e este dicionário se auto-alimenta:
+ * o backfill resolve pelo mapa de snapshots uma vez, e a partir daí as notas
+ * novas resolvem por aqui, sem tocar em snapshot nenhum.
+ *
+ * Cache de 1h: equipe nova aparece no máximo uma hora depois — e enquanto não
+ * aparecer, o caller cai no mapa do dia (barato: um dia só).
+ */
+const _dicEquipe = { mapa: null, ts: 0 };
+async function dicionarioEquipes() {
+  if (_dicEquipe.mapa && (Date.now() - _dicEquipe.ts) < 3600000) return _dicEquipe.mapa;
+  const pool = _getPool();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (team_id) team_id, team_name, regional
+       FROM public.note_po_reparo
+      WHERE team_id IS NOT NULL AND team_name IS NOT NULL
+      ORDER BY team_id, atualizado_em DESC`);
+  const m = new Map(rows.map(r => [String(r.team_id), { team_name: r.team_name, regional: r.regional }]));
+  _dicEquipe.mapa = m;
+  _dicEquipe.ts = Date.now();
+  return m;
+}
+
+/** Zera o dicionário — usado pelo backfill depois de gravar equipes novas. */
+function invalidarDicionarioEquipes() { _dicEquipe.mapa = null; _dicEquipe.ts = 0; }
 
 // ── Fase 2 — leitura agregada ────────────────────────────────────────────────
 
@@ -404,27 +444,28 @@ async function resumoPoReparo(de, ate, opts = {}) {
   }
 
   const { rows: brutas } = await pool.query(
-    `SELECT note_id, numero, sector_id, repair_time, has_repair,
-            finalizando_em, delta_seg
+    `SELECT note_id, numero, sector_id, team_name, regional,
+            repair_time, has_repair, finalizando_em, delta_seg
        FROM public.note_po_reparo
       WHERE ${where}`, params);
 
-  // Equipe vem do mesmo mapa que a aba Deslocamento usa — ver a nota do export
-  // em deslocamentosQueries.js. Se falhar, o indicador ainda sai; só o ranking
-  // fica vazio. Número na tela não pode depender de uma consulta acessória.
-  let mapaEquipe = null;
-  try {
-    const { _mapaEquipeDoPeriodo } = require('./deslocamentosQueries');
-    mapaEquipe = await _mapaEquipeDoPeriodo(de, ate, opts);
-  } catch (err) {
-    console.warn('[po-reparo] mapa de equipe falhou — ranking sai vazio:', err.message);
-  }
+  // 30/08/2026 — a equipe vem da COLUNA, não mais de um mapa montado na hora.
+  //
+  // Antes esta função chamava `_mapaEquipeDoPeriodo`, que expande
+  // jsonb_array_elements sobre ~170 mil linhas de snapshots. Era a única parte
+  // dinâmica de uma tela cujo dado é 100% consolidado: nota concluída é
+  // imutável, e o delta já está gravado. Os ~25s de espera vinham de resolver o
+  // nome da equipe — texto que nunca muda — a cada consulta.
+  //
+  // Agora a sigla é gravada na ingestão (ver dicionarioEquipes) e a leitura é
+  // um SELECT indexado. O mapa de snapshots só é tocado pelo backfill.
+  const mapaEquipe = new Map(
+    brutas.filter(r => r.team_name)
+      .map(r => [r.note_id, { team_name: r.team_name, regional: r.regional }]));
 
   // ── Filtro de EQUIPE ──────────────────────────────────────────────────────
-  // Aplicado aqui, não no SQL: a tabela guarda o UUID da equipe (ExecutedById),
-  // e a sigla só existe no mapa de snapshots. Filtra ANTES de agregar, então
-  // cartões, distribuição, tendência e ranking passam a falar só das equipes
-  // escolhidas — que é o que "filtrar" tem de significar.
+  // Filtra ANTES de agregar, então cartões, distribuição, tendência e ranking
+  // passam a falar só das equipes escolhidas — que é o que "filtrar" significa.
   const equipeDe = id => ((mapaEquipe && mapaEquipe.get(id)) || {});
   const teams = Array.isArray(opts.teams) && opts.teams.length ? new Set(opts.teams) : null;
   const rows = teams
@@ -479,6 +520,8 @@ const resumoPoReparoCached = _memo.wrap(resumoPoReparo, (de, ate, opts) => JSON.
 
 module.exports = {
   upsertPoReparo,
+  dicionarioEquipes,
+  invalidarDicionarioEquipes,
   resumoPoReparo: resumoPoReparoCached,
   _resumoPoReparoRaw: resumoPoReparo,
   // Puras, exportadas pra teste — é onde mora a regra que pode errar 3 horas.

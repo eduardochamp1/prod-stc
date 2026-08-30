@@ -650,7 +650,7 @@ async function runCacheNotaDetails(teams) {
   const { getNoteDetail, getNotePoExecution } = require('./wpaService');
   const { processarNota, classificarSubCategoria } = require('./notaProcessor');
   const { getSubcategoriasByIds } = require('../db/subcategoriasQueries');
-  const { montarLinhaReparo, upsertPoReparo } = require('../db/poReparoQueries');
+  const { montarLinhaReparo, upsertPoReparo, dicionarioEquipes } = require('../db/poReparoQueries');
 
   const t0 = Date.now();
   let ok = 0, falha = 0;
@@ -693,6 +693,13 @@ async function runCacheNotaDetails(teams) {
           try {
             const poExec = await getNotePoExecution(raw.Id);
             const linha  = montarLinhaReparo(poExec, processed.checkpoints);
+            // A sigla da equipe é CONSOLIDADA aqui, junto com o resto. A EDP só
+            // manda o UUID; resolver isso na leitura obrigava a expandir os
+            // snapshots a cada consulta (~25s). Equipe ainda não conhecida fica
+            // null e o backfill preenche depois — nunca apaga o que já existe.
+            const dic = await dicionarioEquipes();
+            const eq  = linha.team_id ? dic.get(String(linha.team_id)) : null;
+            if (eq) { linha.team_name = eq.team_name; linha.regional = eq.regional; }
             await upsertPoReparo(raw.Id, { numero: raw.Number, sector_id: c.sectorId }, linha);
           } catch (errPo) {
             log.warn('po_reparo_falhou', { note: raw.Number, msg: errPo.message });
