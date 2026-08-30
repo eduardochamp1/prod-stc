@@ -1,6 +1,6 @@
 # SPEC — Sub-aba "TMA (PO)": reparo apontado × fim do trabalho
 
-> Data: 2026-08-30 · Status: **desenhado e aprovado, não implementado**.
+> Data: 2026-08-30 · Status: **Fase 1 no ar** (`85fab65`); Fases 2 e 3 pendentes.
 >
 > Segunda sub-aba da aba Deslocamentos. A primeira ("Deslocamento Elevado") está
 > no ar em `83d5217`; o lugar desta já existe, dizendo "Em construção".
@@ -20,56 +20,66 @@ de ser de **no mínimo 10 minutos**; abaixo disso indica problema no método de
 preenchimento e apontamento da equipe — e esses minutos entram no **CHI** do CSD
 que as equipes atendem.
 
-## 2. O que a medição já mostrou
+## 2. O que a medição mostrou — base completa
 
-Amostra de **1.000 notas PO** mais recentes, medidas contra a API em 30/08/2026
-(`scripts/diag-po-reparo-amostra.js`):
+**Base completa.** O backfill de 30/08/2026 mediu as **8.402 notas PO** em cache
+(94min, **zero erros**). Não é amostra — é o universo:
 
 ```
-Cobertura: 744 de 1.000 mensuráveis (74,4%)
-  sem RepairTime ~25%    sem evento 4  0    sem RegisteredAt2  0    erros  0
+Total 8.405 · MEDIDAS 6.034 (71,8% de cobertura)
+  sem RepairTime  2.367 (28,2%)    HasRepair=false  137
+  sem evento 4  4 em 8.402         erros  0
 
-mínimo -293,1   p10 0,0   mediana 7,1   p90 15,2   máximo 89,4
+mínimo -293,1   p10 0,0   mediana 6,0   p90 15,8   máximo 293,5
 
-negativo (reparo DEPOIS)    50    6,7%
-0 a 2 min                  157   21,1%
-2 a 5 min                   85   11,4%
-5 a 10 min                 162   21,8%
-10 a 30 min                274   36,8%
-30 a 60 min                 11    1,5%
-60 min ou mais               5    0,7%
+                         notas    % das medidas
+negativo (reparo DEPOIS)   422        7,0%
+0 a 2 min                1.733       28,7%
+2 a 5 min                  655       10,9%
+5 a 10 min               1.207       20,0%
+10 a 30 min              1.883       31,2%
+30 a 60 min                 95        1,6%
+60 min ou mais              39        0,6%
 
-ABAIXO de 10 min: 454 de 744 (61,0%)
+ABAIXO de 10 min: 4.017 de 6.034 — 66,6%
 ```
 
-**Isso define o desenho.** A mediana é 7,1 — a distribuição está centrada abaixo
-do critério. Não é "a maioria cumpre e alguns violam": é a operação inteira
-apontando em torno de 7 minutos. Uma lista de exceções listaria dois terços da
-base e não serviria pra nada — por isso a tela é **distribuição + tendência**,
-não semáforo.
+**Isso define o desenho.** A mediana é 6,0 — a distribuição está centrada bem
+abaixo do critério. Não é "a maioria cumpre e alguns violam": é a operação
+inteira apontando em torno de 6 minutos. Uma lista de exceções listaria **dois
+terços** da base e não serviria pra nada — por isso a tela é **distribuição +
+tendência**, não semáforo.
 
-**O p10 é 0,0.** Um décimo das notas tem intervalo essencialmente nulo; somando a
-faixa 0–2 min são **21%** com o reparo apontado junto com o fim do trabalho. É o
-sintoma mais forte de preenchimento sem critério.
+**O p10 é 0,0 e a faixa 0–2 min sozinha é 28,7%** — quase um terço das notas
+medidas tem o reparo apontado praticamente junto com o fim do trabalho. É o
+sintoma mais forte de preenchimento sem critério, e é o grupo qualitativamente
+distinto dentro do "abaixo de 10".
 
-Os **50 negativos** são a evidência mais forte: reparo apontado *depois* de
-encerrar o trabalho é fisicamente impossível. O pior chega a **−293 minutos** —
+Os **422 negativos** são a evidência indefensável: reparo apontado *depois* de
+encerrar o trabalho é fisicamente impossível. O pior chega a **−293 minutos**,
 quase cinco horas.
 
-### 2.1 Uma pista de tendência (hipótese, não conclusão)
+**A cobertura de 71,8% é ela mesma um achado.** 2.367 notas PO sem `RepairTime`
+preenchido — se o campo alimenta o CHI, faltar é tão grave quanto estar errado.
+Fica fora do indicador (D5) mas fixa na tela (§7.1).
 
-A amostra de **200** mais recentes deu mediana **9,0** e 58,2% abaixo; a de
-**1.000** — que alcança notas mais antigas — deu **7,1** e 61,0%. Ou seja, quanto
-mais para trás, pior.
+### 2.1 O apontamento vem melhorando — três amostras encaixadas dizem o mesmo
 
-Isso *sugere* que o apontamento vem melhorando. Mas são duas amostras
-sobrepostas, não uma série temporal, e não sustentam a afirmação. **É exatamente
-o que o gráfico de tendência da §7.2 existe para responder** — e é um bom sinal
-de que o indicador terá o que mostrar.
+| recorte | mediana | abaixo de 10 min | cobertura |
+|---|---|---|---|
+| 200 mais recentes | 9,0 | 58,2% | 79,0% |
+| 1.000 mais recentes | 7,1 | 61,0% | 74,4% |
+| **base completa (8.402)** | **6,0** | **66,6%** | **71,8%** |
 
-> Os números acima serão substituídos pelos da base completa quando o backfill
-> das 8.402 notas terminar (`scripts/migrar-po-reparo.js`, ~2,5h). Aí deixam de
-> ser amostra.
+Três recortes encaixados, e os três indicadores caminham **monotonicamente** na
+mesma direção: quanto mais para trás no tempo, pior o apontamento *e* pior o
+preenchimento do campo.
+
+Não é prova — são amostras sobrepostas, não série temporal, e o efeito pode vir
+de outra coisa que mudou junto. Mas é forte o bastante para uma expectativa
+concreta: **o gráfico de tendência da §7.2 deve mostrar uma curva subindo**. Se
+mostrar uma reta, é sinal de que a leitura aqui está errada e vale investigar
+antes de apresentar o indicador a alguém.
 
 ## 3. As duas fontes
 
@@ -155,7 +165,7 @@ e o cálculo depende da regra de fuso da §3.1. Gravar garante que uma consulta
 futura não refaça a conta errado.
 
 **Por que o eixo é `finalizando_em` e não a conclusão da nota (D8):** é o evento
-que está sendo medido, e esteve presente em **100%** da amostra. A `conclusao`
+que está sendo medido, e faltou em apenas **4 de 8.402** notas. A `conclusao`
 seria consistente com o resto do painel, mas some quando a nota não fecha — e aí
 o caso justamente mais suspeito sairia do gráfico.
 
@@ -203,8 +213,8 @@ sub-aba vizinha.
 
 **Mediana (min)** · **% abaixo de 10 min** · **Negativos** · **Cobertura**.
 
-A cobertura vai **fixa nos cartões**, não escondida: com ~25% sem `RepairTime`,
-mostrar "61% abaixo" sem dizer que fala de 74% da base seria apresentar um recorte
+A cobertura vai **fixa nos cartões**, não escondida: com **28,2%** sem `RepairTime`,
+mostrar "67% abaixo" sem dizer que fala de 72% da base seria apresentar um recorte
 como se fosse o total — o mesmo erro que o painel já cometeu duas vezes.
 
 ### 7.2 Histograma e tendência
@@ -263,11 +273,12 @@ manual.
   throttle e em background, sem risco de bloqueio (a conta trava por falha de
   **login**, não por volume de leitura) — mas roda uma vez só, com acompanhamento.
 - **Toca o write path do cron.** Mitigado pelo `try/catch` da §5.4.
-- **Número novo e desconfortável.** 61% abaixo do critério vai gerar discussão.
+- **Número novo e desconfortável.** 67% abaixo do critério vai gerar discussão.
   A cobertura fixa (§7.1) e a legenda (§7.4) existem pra que a conversa seja
   sobre a operação, não sobre a credibilidade do painel.
-- **A amostra não é aleatória** — são as PO mais recentes. Se o método mudou no
-  tempo, o número reflete o comportamento atual.
+- **Os números da §2 são da base completa**, não de amostra — mas descrevem o
+  passado. A §2.1 sugere melhora no tempo, então o recorte que a tela exibir
+  (últimos 30 dias, por exemplo) tende a ser melhor que o histórico.
 
 ## 11. Rollback
 
