@@ -289,15 +289,73 @@ Contém, entre muitos outros:
 | `Comments` | observações |
 | `Activities[]` | atividades, com `Amount` — é daqui que sai a **quantidade** de CS e de metros de ramal |
 
-**Eventos do checkpoint** (descobertos por SQL, `db/deslocamentosQueries.js:7-12`):
+**Eventos do checkpoint** — conferidos contra o portal em 30/08/2026 (nota
+104875481, `scripts/diag-po-reparo.js`):
 
 ```
 0 → Início do Deslocamento     3 → Fim do Trabalho
-1 → Fim do Deslocamento        4 → Interrupção/pausa
+1 → Fim do Deslocamento        4 → Finalizando Trabalho
 2 → Início do Trabalho
 ```
 
 O par `0→1` é um deslocamento. Cada novo `event=0` começa uma tentativa.
+
+⚠️ **O evento 4 NÃO é "Interrupção/pausa".** Esta doc e o comentário de
+`db/deslocamentosQueries.js:7-12` afirmavam isso; a conferência linha a linha com
+o portal mostrou que é **"Finalizando Trabalho"**, e que ele fica ENTRE o início
+e o fim do trabalho. Interrupção é outra coisa e vem de outro endpoint
+(`completeInterruptions`, §6.4). O `CP_LABELS` de `public/index.html` está errado
+de um terceiro jeito ainda — 2='Serviço concluído', 3='Saída do cliente',
+4='Retorno/fim'. **Nenhuma das três listas concordava.**
+
+### ⚠️ `TimeStamp` × `RegisteredAt` — use `RegisteredAt`
+
+Medido na nota 104875481 (30/08/2026). O portal da EDP exibe `RegisteredAt`:
+
+| evento | `TimeStamp` | `RegisteredAt` (portal) | erro |
+|---|---|---|---|
+| 2 Início do Trabalho | 16:53:45 | 16:53:17 | 28s |
+| 4 Finalizando Trabalho | 17:26:02 | 17:25:47 | 15s |
+| 3 Fim do Trabalho | 17:35:28 | 17:35:06 | 22s |
+| 0 Início do Deslocamento | 17:35:43 | 16:40:53 | **55 min** |
+| 1 Fim do Deslocamento | 17:35:43 | 16:51:24 | **44 min** |
+
+`TimeStamp` é o relógio do aparelho **no envio**: os eventos 0 e 1 saem os dois
+carimbados no instante da sincronização. `RegisteredAt` é quando o evento
+aconteceu.
+
+**Consequência em produção:** `services/notaProcessor.js` (`_cpTs`) prefere
+`TimeStamp` e só cai pro `RegisteredAt2` quando aquele falta — e aqui ele vem
+preenchido e errado, então o fallback nunca dispara. O deslocamento desta nota é
+calculado como **0 segundos** contra **10m31s** reais. É a explicação das linhas
+`REAL 0s` na aba Deslocamento.
+
+**Campos do checkpoint que ignoramos** e podem valer: `RegisteredAt`,
+`RegisteredAt2`, `ValidTime`, `DisplacementMinutes`,
+`DisplacementInTrafficMinutes`, `Accuracy`, `IsWifiOn`, `MobileDataStrength`.
+⚠️ `DisplacementMinutes` veio **5** onde o deslocamento real foi 10m31s — é
+estimativa da EDP, **concorrente** do nosso OSRM, não medição.
+
+### 6.2.1 Outros endpoints da mesma nota
+
+Capturados do próprio portal com o Interceptor do Postman em 30/08/2026 (nota
+104875481) e sondados um a um. Nenhum traz o **"Horário do Reparo"** da seção
+"Detalhes da Execução → Ocorrência" — ele continua sem origem conhecida.
+
+| Endpoint | O que devolve |
+|---|---|
+| `GET /api/Notes/{id}/completeInterruptions` | interrupções. Wrapper `getNoteInterruptions` (P1-33) existe e **não tem chamador** |
+| `GET /api/Notes/{id}/historic` | histórico de atribuição/desatribuição por equipe |
+| `GET /api/callback-information?noteId={id}` | seção "Callback Emergencial" do portal |
+| `GET /api/notesMEC/{id}` | vazio na nota testada |
+| `GET /api/notes/getFormattedEquipments/{id}` | vazio na nota testada |
+| `GET /api/notes/{id}/getnotebreakdisplacementtime` | vazio na nota testada |
+| `GET /api/listener-mode/logs?noteId={id}` | vazio na nota testada |
+| `GET /api/notes/clustering/getName/{id}` | vazio na nota testada |
+| `GET /api/Notes/{id}/details` | **idêntico** ao `/details/optimized` — mesmas 123 chaves |
+
+O portal (`edp-wpa-po`) consome o **mesmo** `edp-wpa-web-api` que nós. Não são
+sistemas separados.
 
 **Cache:** tabela `note_details`, com TTL de **90 dias**
 (`services/dataWriter.js:948-965`). ⚠️ Esse TTL apaga a **única** fonte de
