@@ -1,8 +1,54 @@
 # SPEC — Sub-aba TMA (Tempo Médio de Atendimento)
 
+> # ⛔ CANCELADA em 29/08/2026 — NÃO IMPLEMENTAR
+>
+> **Nunca saiu do papel.** Foi desenhada e aprovada no mesmo dia, e cancelada
+> horas depois pelo José, antes de qualquer linha de implementação.
+>
+> **Motivo:** mudança de prioridade do negócio. O indicador que a operação
+> precisa não é o TMA regulatório (`emissao → conclusao`, todas as notas), e sim
+> uma medição específica das notas **PO**: o intervalo entre o **"Horário do
+> Reparo"** e o checkpoint **"Finalizando Trabalho"**, que pelo critério da
+> operação tem de ser de **no mínimo 10 minutos**. Abaixo disso, indica problema
+> no método de preenchimento e apontamento da equipe — e esses minutos entram no
+> **CHI** do CSD que as equipes atendem.
+>
+> São indicadores diferentes: o TMA olha o ciclo inteiro da nota do ponto de
+> vista do cliente; o novo olha a coerência do apontamento dentro da execução.
+> Nenhuma decisão daqui se aproveita direto — nem o recorte, nem o agrupamento,
+> nem os KPIs.
+>
+> **O que continua valendo desta spec** (não repetir o levantamento):
+> - **§3 — a medição dos dados.** Cobertura de `emissao`/`conclusao` é 99,995%
+>   (78.649 de 78.653), e `sector_id` é **confiável** (DSSJ 31.021, DESC 23.795,
+>   DESG 23.735, DEPT 102) — o `sectorId: 'DESG'` literal do cron **não**
+>   contaminou a coluna, então regional sai de `note_details` sem join.
+> - **§4.1 — a armadilha do fuso.** ~8 mil notas anteriores a 08/06/2026 têm a
+>   conclusão **3h adiantada dentro do jsonb**; o conserto só existe na leitura
+>   em JS (`fixCachedPayloadTz`). Vale para QUALQUER consulta SQL nova sobre
+>   datas de nota, inclusive a do indicador novo.
+> - **§5.1 — a regra executada × rejeitada.** `_contaComoExecutada` tem de ser
+>   reusada, nunca reimplementada: rejeição *antes* da conclusão é nota
+>   reprogramada e refeita, e conta como executada.
+> - **§10 —** `snapshots[].conclusionDate` usa `ConclusionDate2 || ConclusionDate`,
+>   o campo que o `notaProcessor` proíbe. As duas fontes podem divergir em 3h.
+>
+> **O que NÃO foi desperdiçado:** a retenção ilimitada de `note_details`
+> (`8aa9928`, P2-18), levantada por causa desta spec, ficou **mais** necessária
+> com a mudança — o indicador novo depende de checkpoints, que era exatamente o
+> que o TTL de 90 dias apagava.
+>
+> **Sucessora:** levantamento em `scripts/diag-po-reparo.js` (`6a532a1`). Antes
+> de desenhar, dois fatos precisam de resposta: qual código de `Event` é
+> "Finalizando Trabalho" (o repo tem duas listas que discordam entre si, e
+> nenhuma prevê esse evento), e se o "Horário do Reparo" sequer vem na resposta
+> da EDP (não está no nosso payload hoje).
+
+---
+
 > Data: 2026-08-29 · Parte 2 de 2 das sub-abas da aba Deslocamentos. A parte 1
 > (estrutura + a tela de hoje virando "Deslocamento Elevado") já está no ar em
-> `83d5217`. Status: **desenhado e aprovado, não implementado**.
+> `83d5217`. Status: **cancelada — ver o bloco acima**.
 >
 > Depende de `8aa9928` (retenção ilimitada de `note_details`, P2-18) — sem ela
 > a matéria-prima do TMA some aos 90 dias.
