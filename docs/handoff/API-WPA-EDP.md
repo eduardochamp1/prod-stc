@@ -357,6 +357,56 @@ Capturados do próprio portal com o Interceptor do Postman em 30/08/2026 (nota
 O portal (`edp-wpa-po`) consome o **mesmo** `edp-wpa-web-api` que nós. Não são
 sistemas separados.
 
+### 6.2.2 `GET /api/notes/po?noteId={uuid}` — a execução das notas PO
+
+**Achado em 30/08/2026** depois de sondar 21 endpoints. É a seção "Detalhes da
+Execução" do portal, e a **única** fonte do **"Horário do Reparo"**. Não existe em
+lugar nenhum do `details/optimized`.
+
+```
+Execution.PowerOnExecution.RepairTime            "2026-08-29T20:18:45+00:00"
+Execution.PowerOnExecution.PredictionRepairDate  "2026-08-29T21:10:25+00:00"
+Execution.PowerOnExecution.ConfirmationDate      "2026-08-29T20:25:25+00:00"
+Execution.PowerOnExecution.HasRepair             true
+Execution.PowerOnExecution.IncidentDevice        "C 0000844791"
+Execution.PowerOnExecution.Class / Reason / Climate   "350" / "329" / "1"
+Execution.PowerOnExecution.TeamOnTargetResult    "confirmado"
+Execution.PowerOnExecution.ActionServices[]      { Action, Phases, Comments }
+Execution.Circuit / InstallationPlace / Observation / Try / SessionId
+POIncidents[].POIncidentHierarchies[]            dispositivos e clientes protegidos
+```
+
+Mapeamento com o que o portal exibe: `RepairTime` = **Horário do Reparo**,
+`PredictionRepairDate` = Tempo Estimado, `ConfirmationDate` = Data,
+`IncidentDevice` = Dispositivo, `Class`/`Reason`/`Climate` = o bloco **CCC**.
+
+#### ⚠️ Fusos DIFERENTES na mesma comparação
+
+Este é o ponto que mais facilmente vira erro de 3h:
+
+| campo | formato | exemplo | instante real |
+|---|---|---|---|
+| `RepairTime` | **UTC**, com `+00:00` | `2026-08-29T20:18:45+00:00` | 17:18:45 BRT |
+| checkpoint `RegisteredAt` | **local, SEM marcador** | `2026-08-29T17:25:47` | 17:25:47 BRT |
+| checkpoint `RegisteredAt2` | local, com `-03:00` | `2026-08-29T17:25:47-03:00` | 17:25:47 BRT |
+
+Comparar `RepairTime` com `RegisteredAt` **cru** dá 3h de erro — um vem em UTC e
+o outro sem fuso nenhum. **Use `RegisteredAt2`**, que traz o offset explícito;
+aí os dois viram instante absoluto e a subtração fecha:
+
+```
+20:25:47Z (evento 4) − 20:18:45Z (RepairTime) = 7m02s
+```
+
+`HasRepair` diz se houve reparo — nota com `false` não entra no indicador.
+
+#### Custo de ingestão
+
+**Uma requisição por nota PO.** São ~91 notas PO/dia (8.402 em 92 dias, medido em
+30/08/2026), então o custo corrente é baixo; o backfill das 8.402 já cacheadas é
+um one-off que precisa de throttle. Hoje **nenhum caminho do cron chama este
+endpoint** — nem existe wrapper em `wpaService`.
+
 **Cache:** tabela `note_details`, com TTL de **90 dias**
 (`services/dataWriter.js:948-965`). ⚠️ Esse TTL apaga a **única** fonte de
 checkpoints — a métrica de deslocamento não é reconstruível além de 90 dias, e
