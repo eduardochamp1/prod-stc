@@ -3164,7 +3164,13 @@ router.get('/po-reparo', async (req, res) => {
     // pelo applyScope, nunca da query string crua.
     const regionais = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length > 0)
       ? req.scope.regionals : null;
-    res.json(await _poReparoQ.resumoPoReparo(de, ate, { regionais }));
+    const _csv = v => (v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null);
+    // 'ALL' vindo do multi-select significa "todas" — vira null, não uma lista
+    // com a string literal 'ALL', que não casaria com equipe nenhuma.
+    const _semAll = a => (a && !a.includes('ALL') && a.length ? a : null);
+    const teams  = _semAll(_csv(req.query.team));
+    const faixas = _semAll(_csv(req.query.faixas));
+    res.json(await _poReparoQ.resumoPoReparo(de, ate, { regionais, teams, faixas }));
   } catch (err) {
     console.error('[po-reparo]', err.message);
     res.status(500).json({ error: err.message });

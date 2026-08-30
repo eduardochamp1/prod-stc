@@ -543,13 +543,35 @@
               <span class="filter-label">Até</span>
               <input type="date" class="month-input" id="tma-ate-input" onchange="loadTma()" style="width:130px" />
             </div>
+            <!-- Os três são MultiSelect (checkbox + busca) — mesmo componente
+                 das outras abas. O `onchange` não é usado: quem dispara é o
+                 onChange do MultiSelect, registrado em initTma(). -->
             <div class="filter-group">
               <span class="filter-label">Regional</span>
-              <select class="filter-select" id="tma-regional-select" onchange="loadTma()">
+              <select class="filter-select" id="tma-regional-select">
                 <option value="ALL">Todas</option>
                 <option value="GUA">Guarapari</option>
                 <option value="CAC">Cachoeiro</option>
                 <option value="SJC">São José dos Campos</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">Equipe</span>
+              <select class="filter-select" id="tma-equipe-select" style="min-width:160px">
+                <option value="ALL">Todas</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">Desvio</span>
+              <select class="filter-select" id="tma-faixa-select" style="min-width:170px">
+                <option value="ALL">Abaixo do critério</option>
+                <option value="negativo">negativo (reparo DEPOIS)</option>
+                <option value="0_2">0 a 2 min</option>
+                <option value="2_5">2 a 5 min</option>
+                <option value="5_10">5 a 10 min</option>
+                <option value="10_30">10 a 30 min</option>
+                <option value="30_60">30 a 60 min</option>
+                <option value="60_mais">60 min ou mais</option>
               </select>
             </div>
           </div>
@@ -4880,6 +4902,8 @@ ${matrizHTML}
        ═══════════════════════════════════════════════════════════════════════ */
     let _tmaCache = null;
 
+    let _tmaMultiInited = false;
+
     async function initTma() {
       const hoje = todayISO();
       const primeiroDoMes = hoje.slice(0, 8) + '01';
@@ -4888,13 +4912,55 @@ ${matrizHTML}
       if (deEl  && !deEl.value)  deEl.value  = primeiroDoMes;
       if (ateEl && !ateEl.value) ateEl.value = hoje;
 
-      const sess = getStoredSession();
-      const sel = document.getElementById('tma-regional-select');
-      if (sel && sess && sess.regional && sess.regional !== 'ALL') {
-        sel.value = sess.regional;
-        sel.disabled = true;
+      // Popula as equipes ANTES de inicializar o MultiSelect: ele lê as options
+      // do <select> no init, e um select vazio viraria um dropdown sem itens.
+      const selEq = document.getElementById('tma-equipe-select');
+      if (selEq && selEq.options.length <= 1) {
+        try {
+          const res = await fetch(`${API}/equipes`);
+          if (res.ok) {
+            const data = await res.json();
+            (data.equipes || []).filter(e => e.ativo)
+              .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla))
+              .forEach(e => {
+                const opt = document.createElement('option');
+                opt.value = e.sigla;
+                opt.textContent = `${e.sigla} (${e.regional})`;
+                selEq.appendChild(opt);
+              });
+          }
+        } catch {}
+      }
+
+      if (!_tmaMultiInited && typeof MultiSelect !== 'undefined') {
+        MultiSelect.init('tma-regional-select', { onChange: () => loadTma() });
+        MultiSelect.init('tma-equipe-select',   { onChange: () => loadTma() });
+        MultiSelect.init('tma-faixa-select',    { onChange: () => loadTma() });
+        const sess = getStoredSession();
+        if (sess && sess.regional && sess.regional !== 'ALL') {
+          MultiSelect.setValues('tma-regional-select', [sess.regional]);
+          MultiSelect.setDisabled('tma-regional-select', true);
+        }
+        _tmaMultiInited = true;
       }
       loadTma();
+    }
+
+    function _tmaFiltros() {
+      const de  = document.getElementById('tma-de-input').value;
+      const ate = document.getElementById('tma-ate-input').value;
+      const qs  = new URLSearchParams({ de, ate });
+      const mv = id => (typeof MultiSelect !== 'undefined' && MultiSelect.getValues)
+        ? MultiSelect.getValues(id) : [];
+      // Vazio = todas. O expandRegional/escopo do backend cuida do resto; aqui
+      // só não mandamos o parâmetro, que é diferente de mandar vazio.
+      const regs = mv('tma-regional-select');
+      if (regs.length) qs.set('regionals', regs.join(','));
+      const eqs = mv('tma-equipe-select');
+      if (eqs.length) qs.set('team', eqs.join(','));
+      const fxs = mv('tma-faixa-select');
+      if (fxs.length) qs.set('faixas', fxs.join(','));
+      return qs;
     }
 
     async function loadTma() {
@@ -4903,13 +4969,9 @@ ${matrizHTML}
       content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>'
         + 'Calculando… (a 1ª consulta do dia monta o mapa de equipes e pode demorar)</div>';
       try {
-        const de  = document.getElementById('tma-de-input').value;
-        const ate = document.getElementById('tma-ate-input').value;
-        const reg = document.getElementById('tma-regional-select')?.value || 'ALL';
-        const qs  = new URLSearchParams({ de, ate });
-        if (reg && reg !== 'ALL') qs.set('regionals', reg);
-        document.getElementById('tma-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
-
+        const qs = _tmaFiltros();
+        document.getElementById('tma-periodo-label').textContent =
+          `${fmtDateBR(qs.get('de'))} a ${fmtDateBR(qs.get('ate'))}`;
         _tmaCache = await fetch(`${API}/po-reparo?${qs}`).then(r => r.json());
         renderTma(_tmaCache);
       } catch (err) {
@@ -5051,12 +5113,29 @@ ${matrizHTML}
              (${totalGravesEq.toLocaleString('pt-BR')} casos no total).
            </div>` : '';
 
-      const casosHTML = (d.casos || []).slice(0, 300).map(x => `<tr>
+      // Detalhamento: a diferença sem os dois apontamentos não deixa conferir
+      // nada. Com eles, dá pra abrir a nota no portal e bater linha a linha.
+      const _hora = iso => {
+        if (!iso) return '—';
+        const dt = new Date(iso);
+        return Number.isNaN(dt.getTime()) ? '—'
+          : dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Sao_Paulo' });
+      };
+      const _dia = iso => (iso ? fmtDateBR(new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' })) : '—');
+      const casosHTML = (d.casos || []).slice(0, 500).map(x => `<tr>
+          <td>${_dia(x.finalizando_em)}</td>
+          <td><strong>${x.equipe || '—'}</strong> <span style="font-size:10px;opacity:.5">${x.regional || ''}</span></td>
           <td>${x.numero || ''}</td>
-          <td>${x.equipe || '—'} <span style="font-size:10px;opacity:.5">${x.regional || ''}</span></td>
-          <td>${x.finalizando_em ? fmtDateBR(String(x.finalizando_em).slice(0, 10)) : '—'}</td>
-          <td style="color:${x.delta_min < 0 ? '#c0392b' : '#e74c3c'};font-weight:600">${x.delta_min} min</td>
+          <td>${_hora(x.finalizando_em)}</td>
+          <td>${_hora(x.repair_time)}</td>
+          <td style="color:${x.delta_min < 0 ? '#c0392b' : (x.delta_min < 2 ? '#c0392b' : '#e67e22')};font-weight:600">${x.delta_min} min</td>
         </tr>`).join('');
+
+      const fxSel = (typeof MultiSelect !== 'undefined' && MultiSelect.getValues)
+        ? MultiSelect.getValues('tma-faixa-select') : [];
+      const rotuloFx = fxSel.length
+        ? fxSel.map(k => (d.faixas.find(f => f.chave === k) || {}).rotulo || k).join(' · ')
+        : `abaixo do critério de ${r.minimo_min} min`;
 
       content.innerHTML = `
         <div class="desloc-kpis">
@@ -5114,13 +5193,25 @@ ${matrizHTML}
         </div>
 
         <div class="desloc-panel" style="margin-top:18px">
-          <h3>Casos abaixo do critério <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">piores primeiro · ${(d.casos || []).length} listados</span></h3>
-          <div style="max-height:420px;overflow:auto">
+          <h3>Detalhamento dos apontamentos
+            <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">
+              ${rotuloFx} · piores primeiro ·
+              ${(d.casos || []).length.toLocaleString('pt-BR')} de ${(d.casos_total || 0).toLocaleString('pt-BR')}
+            </span></h3>
+          <div style="max-height:460px;overflow:auto">
             <table class="desloc-tbl">
-              <thead><tr><th>Nota</th><th>Equipe</th><th>Fim do trabalho</th><th>Diferença</th></tr></thead>
+              <thead><tr>
+                <th>Dia</th><th>Equipe</th><th>Nota</th>
+                <th>Finalizando Trabalho</th><th>Horário do Reparo</th><th>Diferença</th>
+              </tr></thead>
               <tbody>${casosHTML}</tbody>
             </table>
           </div>
+          ${(d.casos_total || 0) > (d.casos || []).length
+            ? `<div style="margin-top:8px;font-size:11px;color:var(--text2)">
+                 Mostrando os ${(d.casos || []).length.toLocaleString('pt-BR')} piores de
+                 <strong>${d.casos_total.toLocaleString('pt-BR')}</strong> — estreite o período,
+                 a equipe ou o desvio pra ver o resto.</div>` : ''}
         </div>`;
     }
 

@@ -308,3 +308,38 @@ test('o ranking por equipe ordena por CONTAGEM de graves', () => {
   assert.equal(ag.porEquipe.length, 2, 'ninguém é excluído do ranking por contagem');
   assert.equal(ag.porEquipePct.length, 1, 'no ranking por % o piso corta a pequena');
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Filtro de faixa (desvio) — 30/08
+// ═════════════════════════════════════════════════════════════════════════════
+
+const { faixaFinaDoDelta } = require('../db/poReparoQueries');
+
+test('a faixa fina classifica nas mesmas fronteiras do histograma', () => {
+  assert.equal(faixaFinaDoDelta(-1),   'negativo');
+  assert.equal(faixaFinaDoDelta(0),    '0_2');
+  assert.equal(faixaFinaDoDelta(119),  '0_2');
+  assert.equal(faixaFinaDoDelta(120),  '2_5');
+  assert.equal(faixaFinaDoDelta(599),  '5_10');
+  assert.equal(faixaFinaDoDelta(600),  '10_30');
+  assert.equal(faixaFinaDoDelta(3600), '60_mais');
+});
+
+test('nota não medida não pertence a faixa nenhuma', () => {
+  // Forçá-la numa faria a soma do histograma parar de fechar com as medidas.
+  assert.equal(faixaFinaDoDelta(null), null);
+  assert.equal(faixaFinaDoDelta(undefined), null);
+  assert.equal(faixaFinaDoDelta('abc'), null);
+});
+
+test('toda faixa do histograma tem chave classificável — sem órfã', () => {
+  // Se alguém acrescentar uma faixa em FAIXAS e esquecer de cobrir o intervalo,
+  // o filtro da tela ofereceria uma opção que nunca casa com nota nenhuma.
+  const amostras = [-1000, -1, 0, 60, 200, 450, 900, 2000, 5000];
+  const chaves = new Set(amostras.map(faixaFinaDoDelta));
+  for (const f of FAIXAS) {
+    assert.ok(chaves.has(f.chave) || f.chave === '30_60',
+      `nenhuma amostra cai na faixa ${f.chave}`);
+  }
+  assert.equal(faixaFinaDoDelta(2000), '30_60');
+});

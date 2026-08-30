@@ -157,6 +157,18 @@ const FAIXAS = [
   { chave: '60_mais',   rotulo: '60 min ou mais',           de: 3600,      ate: Infinity },
 ];
 
+/**
+ * Chave da faixa FINA (as sete da tela), pro filtro de desvio.
+ * Devolve null quando não é mensurável — nota sem delta não pertence a faixa
+ * nenhuma, e forçá-la numa faria a soma do histograma parar de fechar.
+ */
+function faixaFinaDoDelta(deltaSeg) {
+  if (deltaSeg == null || !Number.isFinite(Number(deltaSeg))) return null;
+  const d = Number(deltaSeg);
+  const f = FAIXAS.find(x => d >= x.de && d < x.ate);
+  return f ? f.chave : null;
+}
+
 /** Piso de notas medidas pra uma equipe entrar no ranking por PERCENTUAL. */
 const PISO_RANKING = 10;
 
@@ -391,7 +403,7 @@ async function resumoPoReparo(de, ate, opts = {}) {
     where += ` AND sector_id IN (${ph.join(', ')})`;
   }
 
-  const { rows } = await pool.query(
+  const { rows: brutas } = await pool.query(
     `SELECT note_id, numero, sector_id, repair_time, has_repair,
             finalizando_em, delta_seg
        FROM public.note_po_reparo
@@ -408,20 +420,47 @@ async function resumoPoReparo(de, ate, opts = {}) {
     console.warn('[po-reparo] mapa de equipe falhou — ranking sai vazio:', err.message);
   }
 
+  // ── Filtro de EQUIPE ──────────────────────────────────────────────────────
+  // Aplicado aqui, não no SQL: a tabela guarda o UUID da equipe (ExecutedById),
+  // e a sigla só existe no mapa de snapshots. Filtra ANTES de agregar, então
+  // cartões, distribuição, tendência e ranking passam a falar só das equipes
+  // escolhidas — que é o que "filtrar" tem de significar.
+  const equipeDe = id => ((mapaEquipe && mapaEquipe.get(id)) || {});
+  const teams = Array.isArray(opts.teams) && opts.teams.length ? new Set(opts.teams) : null;
+  const rows = teams
+    ? brutas.filter(r => teams.has(equipeDe(r.note_id).team_name))
+    : brutas;
+
   const agregado = agregarPoReparo(rows, mapaEquipe);
 
-  // Casos pra conferência no portal: os piores primeiro (negativos no topo).
-  agregado.casos = rows
-    .filter(r => r.delta_seg != null && Number(r.delta_seg) < MINIMO_SEG)
+  // ── Filtro de FAIXA — só na TABELA ────────────────────────────────────────
+  // De propósito: filtrar a distribuição pela própria faixa a tornaria 100%
+  // daquela faixa, e os cartões deixariam de descrever a operação. A faixa é
+  // drill-down — "me mostre os casos DESTE tipo" —, não recorte do indicador.
+  const faixas = Array.isArray(opts.faixas) && opts.faixas.length ? new Set(opts.faixas) : null;
+  const casos = rows.filter(r => {
+    const chave = faixaFinaDoDelta(r.delta_seg);
+    if (!chave) return false;
+    // Sem filtro, o padrão continua sendo o que precisa de ação: abaixo do critério.
+    return faixas ? faixas.has(chave) : Number(r.delta_seg) < MINIMO_SEG;
+  });
+
+  agregado.casos = casos
     .sort((a, b) => Number(a.delta_seg) - Number(b.delta_seg))
-    .slice(0, 500)
+    .slice(0, 1000)
     .map(r => ({
       numero: r.numero,
       delta_min: _min1(Number(r.delta_seg)),
+      delta_seg: Number(r.delta_seg),
+      faixa: faixaFinaDoDelta(r.delta_seg),
+      // Os DOIS apontamentos, pra tabela poder mostrar o que a equipe registrou
+      // em cada ponta — sem isso o usuário vê a diferença e não vê de onde veio.
       finalizando_em: r.finalizando_em,
-      equipe: (mapaEquipe && mapaEquipe.get(r.note_id) || {}).team_name || null,
-      regional: (mapaEquipe && mapaEquipe.get(r.note_id) || {}).regional || null,
+      repair_time: r.repair_time,
+      equipe: equipeDe(r.note_id).team_name || null,
+      regional: equipeDe(r.note_id).regional || null,
     }));
+  agregado.casos_total = casos.length;
 
   agregado.periodo = { de, ate };
   return agregado;
@@ -432,6 +471,10 @@ const _memo = require('../services/memoCache').create({ ttlMs: 5 * 60 * 1000, na
 const resumoPoReparoCached = _memo.wrap(resumoPoReparo, (de, ate, opts) => JSON.stringify({
   de, ate,
   regionais: Array.isArray(opts && opts.regionais) ? [...opts.regionais].sort() : null,
+  // teams e faixas ENTRAM na chave: sem isso o cache devolveria o resultado de
+  // um filtro pro outro, e o usuário veria número de outra equipe.
+  teams:     Array.isArray(opts && opts.teams)     ? [...opts.teams].sort()     : null,
+  faixas:    Array.isArray(opts && opts.faixas)    ? [...opts.faixas].sort()    : null,
 }));
 
 module.exports = {
@@ -442,6 +485,7 @@ module.exports = {
   finalizandoTrabalhoEm,
   montarLinhaReparo,
   faixaDoDelta,
+  faixaFinaDoDelta,
   agregarPoReparo,
   setoresDasRegionais,
   inicioDaSemana,

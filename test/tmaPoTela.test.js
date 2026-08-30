@@ -135,20 +135,67 @@ test('a TMA (PO) só busca na primeira abertura', () => {
 // Filtros
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('a TMA (PO) tem filtro próprio de data e regional — e NÃO de equipe', () => {
-  // Equipe entra como ranking, não como filtro de topo: a régua da tela é a
-  // distribuição, e filtrar por equipe antes de ver o todo inverte a leitura.
-  assert.ok(SRC.includes('id="tma-de-input"'));
-  assert.ok(SRC.includes('id="tma-ate-input"'));
-  assert.ok(SRC.includes('id="tma-regional-select"'));
-  assert.ok(!SRC.includes('id="tma-equipe-select"'));
+test('os cinco filtros existem: data, regional, equipe e desvio', () => {
+  for (const id of ['tma-de-input', 'tma-ate-input', 'tma-regional-select',
+                    'tma-equipe-select', 'tma-faixa-select']) {
+    assert.equal((SRC.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1,
+      `faltou (ou duplicou) o filtro ${id}`);
+  }
+});
+
+test('regional, equipe e desvio são MultiSelect — que já traz busca', () => {
+  // O componente do painel tem campo de busca embutido (.ms-search). Reusar em
+  // vez de escrever outro dropdown mantém as abas se comportando igual.
+  const corpo = corpoDe('async function initTma', 'function _tmaFiltros');
+  for (const id of ['tma-regional-select', 'tma-equipe-select', 'tma-faixa-select']) {
+    assert.ok(corpo.includes(`MultiSelect.init('${id}'`), `${id} não é MultiSelect`);
+  }
+  assert.match(SRC, /class="ms-search"/, 'o MultiSelect precisa ter o campo de busca');
+});
+
+test('as equipes são populadas ANTES do MultiSelect inicializar', () => {
+  // O componente lê as <option> no init; inicializar antes deixaria o dropdown
+  // vazio até um refresh que ninguém dispara.
+  const corpo = corpoDe('async function initTma', 'function _tmaFiltros');
+  const iPopula = corpo.indexOf('selEq.appendChild');
+  const iInit   = corpo.indexOf("MultiSelect.init('tma-equipe-select'");
+  assert.ok(iPopula > -1 && iPopula < iInit,
+    'popular as equipes tem de vir antes do init');
 });
 
 test('o filtro de regional respeita o perfil regional do usuário', () => {
-  const corpo = corpoDe('async function initTma', 'async function loadTma');
+  const corpo = corpoDe('async function initTma', 'function _tmaFiltros');
   assert.match(corpo, /getStoredSession/);
-  assert.match(corpo, /disabled = true/,
+  assert.match(corpo, /MultiSelect\.setDisabled\('tma-regional-select', true\)/,
     'usuário de uma regional não pode trocar o filtro pra ver outra');
+});
+
+test('filtro vazio NÃO vira parâmetro na querystring', () => {
+  // Mandar `team=` vazio faria o backend filtrar por lista vazia e a tela
+  // esvaziar. Ausência do parâmetro é o que significa "todas".
+  const corpo = corpoDe('function _tmaFiltros', 'async function loadTma');
+  assert.match(corpo, /if \(regs\.length\)/);
+  assert.match(corpo, /if \(eqs\.length\)/);
+  assert.match(corpo, /if \(fxs\.length\)/);
+});
+
+test('a tabela mostra os DOIS apontamentos, não só a diferença', () => {
+  // Sem os horários de origem não dá pra conferir nada no portal — a diferença
+  // sozinha é um número que o usuário tem de aceitar na fé.
+  const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
+  assert.match(corpo, /<th>Finalizando Trabalho<\/th><th>Horário do Reparo<\/th>/);
+  assert.match(corpo, /_hora\(x\.finalizando_em\)/);
+  assert.match(corpo, /_hora\(x\.repair_time\)/);
+  for (const col of ['<th>Dia</th>', '<th>Equipe</th>', '<th>Nota</th>', '<th>Diferença</th>']) {
+    assert.ok(corpo.includes(col), `faltou a coluna ${col}`);
+  }
+});
+
+test('as horas da tabela são renderizadas em BRT, não no fuso do navegador', () => {
+  // O banco guarda timestamptz e a VM roda em UTC: sem forçar o fuso, a mesma
+  // nota mostraria horas diferentes dependendo de quem abre a tela.
+  const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
+  assert.match(corpo, /timeZone: 'America\/Sao_Paulo'/);
 });
 
 test('o ranking é por CONTAGEM de casos graves, não por percentual', () => {
