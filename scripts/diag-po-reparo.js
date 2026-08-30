@@ -38,9 +38,10 @@
  * USO (na VM):
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --dump-chaves
+ *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --probe-endpoints
  *
- * ⚠️ Faz 1 (uma) requisição à API da WPA. Não faz login novo se o token estiver
- * válido. Não escreve no banco.
+ * ⚠️ Faz 1 requisição à API da WPA (ou 6, com --probe-endpoints). Todas GET.
+ * Não faz login novo se o token estiver válido. Não escreve no banco.
  */
 
 function arg(nome, padrao = null) {
@@ -169,6 +170,71 @@ async function main() {
   for (const [k, v] of Object.entries(raw)) {
     if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T|^\d{2}\/\d{2}\/\d{4}/.test(v)) {
       console.log(`    ${k} = ${v}`);
+    }
+  }
+
+  // ── 4b. Os checkpoints CRUS, campo a campo ────────────────────────────────
+  // Direto ao ponto da métrica: nosso cache marcou o evento 4 às 17:26:02 e o
+  // portal mostra 17:25:47 — 15s de diferença. Não muda um veredito de 7min, mas
+  // muda num caso de borda perto dos 10min. Precisamos saber QUAL campo o portal
+  // exibe pra medir a mesma coisa que a EDP mede.
+  //
+  // De quebra isto mostra `DisplacementMinutes` e `DisplacementInTrafficMinutes`,
+  // que a EDP manda e nós ignoramos — hoje estimamos deslocamento via OSRM.
+  console.log(`\n── CHECKPOINTS CRUS (qual campo de horário o portal usa?) ──`);
+  const cpsRaw = Array.isArray(raw.Checkpoints) ? raw.Checkpoints : [];
+  const ordenados = [...cpsRaw].sort((a, b) =>
+    String(a.RegisteredAt || a.TimeStamp || '').localeCompare(String(b.RegisteredAt || b.TimeStamp || '')));
+  for (const cp of ordenados) {
+    console.log(`  Event=${cp.Event}  Try=${cp.Try}`);
+    console.log(`      TimeStamp     = ${cp.TimeStamp}`);
+    console.log(`      RegisteredAt  = ${cp.RegisteredAt}`);
+    console.log(`      RegisteredAt2 = ${cp.RegisteredAt2}`);
+    console.log(`      ValidTime=${cp.ValidTime}  DisplacementMinutes=${cp.DisplacementMinutes}`
+      + `  DisplacementInTrafficMinutes=${cp.DisplacementInTrafficMinutes}`);
+  }
+  console.log('\n  Referência do portal pra esta nota (29/08/2026):');
+  console.log('    Início do Deslocamento 16:40:53 · Fim do Deslocamento 16:51:24');
+  console.log('    Início do Trabalho     16:53:17 · Finalizando Trabalho  17:25:47');
+  console.log('    Fim do Trabalho        17:35:06 · Horário do Reparo     17:18:45');
+
+  // ── 4c. Onde mora o "Horário do Reparo"? ──────────────────────────────────
+  // Só GETs, read-only. `optimized` no nome do endpoint que já usamos sugere que
+  // existe uma versão completa — é a primeira hipótese e a mais barata.
+  if (flag('probe-endpoints')) {
+    console.log(`\n── SONDANDO ENDPOINTS (somente GET, nada é gravado) ──`);
+    const { wpaFetch } = require('../services/wpaService');
+    const sid = encodeURIComponent(nd.sector_id || 'DESG');
+    const nid = encodeURIComponent(nd.note_id);
+    const candidatos = [
+      `/api/Notes/${nid}/details?sectorId=${sid}`,
+      `/api/Notes/${nid}?sectorId=${sid}`,
+      `/api/Notes/${nid}/execution?sectorId=${sid}`,
+      `/api/Notes/${nid}/occurrences?sectorId=${sid}`,
+      `/api/Notes/${nid}/serviceActions?sectorId=${sid}`,
+    ];
+    for (const path of candidatos) {
+      let r;
+      try {
+        r = await wpaFetch(path);
+      } catch (err) {
+        console.log(`  ${path}\n      erro de rede: ${err.message}`);
+        continue;
+      }
+      if (!r.ok) { console.log(`  ${path}\n      HTTP ${r.status}`); continue; }
+      let body;
+      try { body = await r.json(); } catch { console.log(`  ${path}\n      HTTP 200, corpo não-JSON`); continue; }
+      const d = body.Data || body;
+      const chaves = d && typeof d === 'object' ? Object.keys(d).length : 0;
+      const hits = caçar(d, /repair|reparo|occurr|ocorr/i);
+      console.log(`  ${path}\n      HTTP 200 · ${chaves} chaves · reparo/ocorrência: `
+        + (hits.length ? JSON.stringify(hits.slice(0, 8)) : 'nenhum'));
+      // 17:18:45 é o Horário do Reparo do print — procurar o horário cru acha o
+      // campo mesmo que o nome dele não tenha nada a ver com "reparo".
+      const txt = JSON.stringify(d);
+      for (const alvo of ['17:18:45', 'T17:18', '20:18:45']) {
+        if (txt.includes(alvo)) console.log(`      ⭐ contém "${alvo}" — provável origem do Horário do Reparo`);
+      }
     }
   }
 
