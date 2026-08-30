@@ -135,6 +135,44 @@ test('as sub-abas do Histórico seguem intactas', () => {
   assert.equal((SRC.match(/id="hist-subtab-sessoes"/g) || []).length, 1);
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Duas regressões que as sub-abas causaram — 30/08/2026
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('o CSS compartilhado vive no app.css, não injetado por um render', () => {
+  // O sintoma: abrir Deslocamentos e clicar em TMA (PO) ANTES de o Deslocamento
+  // Elevado terminar de carregar (~30s na 1ª vez do dia) mostrava a TMA sem
+  // estilo nenhum — cartões como texto solto. As classes .desloc-* eram
+  // injetadas num <style> dentro do innerHTML do OUTRO render, então só
+  // existiam depois que ele terminasse.
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
+  for (const cls of ['.desloc-kpis', '.desloc-panel', '.desloc-tbl', '.desloc-bar-row']) {
+    assert.ok(css.includes(cls + ' '), `${cls} tem de estar no app.css`);
+    assert.ok(!SRC.includes(cls + ' {'),
+      `${cls} não pode voltar pro <style> injetado do index.html`);
+  }
+});
+
+test('voltar pra aba Deslocamentos NÃO redispara o pipeline', () => {
+  // switchTab chama initDeslocamentos() a cada entrada. Antes ela sempre
+  // terminava em loadDeslocamentos(), então sair e voltar custava até ~30s
+  // quando o cache de 5min do backend já tinha expirado.
+  const ini = SRC.indexOf('async function initDeslocamentos');
+  const fim = SRC.indexOf('function deslocFiltersQuery');
+  assert.ok(ini > -1 && fim > ini, 'não achei initDeslocamentos');
+  const corpo = SRC.slice(ini, fim);
+  assert.match(corpo, /if \(!_deslocCache\) loadDeslocamentos\(\);/,
+    'a carga tem de ser condicional ao cache já existir');
+
+  // As chamadas dentro dos onChange do MultiSelect são legítimas — ali o
+  // usuário PEDIU dado novo. O que não pode voltar é uma chamada solta no nível
+  // da função (6 espaços de indentação), que dispararia a cada entrada na aba.
+  const soltas = corpo.split(/\r?\n/)
+    .filter(l => /^ {6}loadDeslocamentos\(\);\s*$/.test(l));
+  assert.equal(soltas.length, 0,
+    `chamada incondicional de volta em initDeslocamentos: ${JSON.stringify(soltas)}`);
+});
+
 test('a aba Deslocamentos continua registrada no balão de ações rápidas', () => {
   // O balão despacha o Atualizar por currentTab; a sub-aba não muda currentTab,
   // então o registro tem de continuar existindo e apontando pro mesmo loader.
