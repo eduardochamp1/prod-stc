@@ -64,6 +64,31 @@ function turnoCobreAgora(inicio, fim, agora, deOntem) {
   return deOntem ? (agora < fim) : (agora >= inicio);
 }
 
+/**
+ * Dia da linha como 'YYYY-MM-DD', aceitando string OU Date.
+ *
+ * ⚠️ 30/08/2026 — BUG QUE ISSO CONSERTA. O `pg` devolve coluna `date` como
+ * objeto Date, e o código fazia `String(l.data).slice(0, 10)`. Em Date isso dá
+ * `"Sat Aug 3"` (de "Sat Aug 30 2026 00:00:00 GMT+0000"), que nunca é igual a
+ * "2026-08-30" — então TODA linha era tratada como "de ontem", os turnos normais
+ * exigem `!deOntem`, e o KPI mostrava 0 esperadas com 49 equipes escaladas.
+ *
+ * A consulta passou a devolver `to_char(...)`, o que já resolve; isto fica como
+ * defesa em profundidade, e usa as partes LOCAIS do Date de propósito: o pg
+ * materializa `date` como meia-noite local, então `toISOString()` mudaria o dia
+ * em qualquer fuso a oeste de Greenwich.
+ */
+function diaISO(v) {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    const p = n => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  }
+  const s = String(v);
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+}
+
 /** 'YYYY-MM-DD' menos um dia, sem depender do fuso do processo. */
 function diaAnterior(iso) {
   const d = new Date(iso + 'T12:00:00Z');   // meio-dia evita borda de horário de verão
@@ -82,7 +107,10 @@ function diaAnterior(iso) {
 function equipesCobertas(linhas, agoraMin, hoje) {
   const out = new Map();
   for (const l of (linhas || [])) {
-    const deOntem = String(l.data).slice(0, 10) !== hoje;
+    const dia = diaISO(l.data);
+    // Linha sem dia legível não pode virar "de ontem" por acidente — descarta.
+    if (!dia) continue;
+    const deOntem = dia !== hoje;
     if (!turnoCobreAgora(minutosDoDia(l.inicio_escala), minutosDoDia(l.fim_escala), agoraMin, deOntem)) {
       continue;
     }
@@ -122,7 +150,7 @@ async function equipesEsperadasAgora(regionais, quando) {
   // Só HOJE e ONTEM: nenhum turno catalogado dura mais de 24h, então esses dois
   // dias cobrem qualquer janela que alcance o instante atual.
   const { rows } = await pool.query(
-    `SELECT ed.data, eo.sigla, eo.tipo, eo.regional,
+    `SELECT to_char(ed.data, 'YYYY-MM-DD') AS data, eo.sigla, eo.tipo, eo.regional,
             ec.inicio_escala, ec.fim_escala
        FROM public.escala_dia ed
        JOIN public.escalas_catalogo ec
@@ -153,5 +181,6 @@ module.exports = {
   turnoCobreAgora,
   minutosDoDia,
   diaAnterior,
+  diaISO,
   equipesCobertas,
 };

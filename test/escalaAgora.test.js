@@ -157,3 +157,45 @@ test('lista vazia não quebra', () => {
   assert.deepEqual(equipesCobertas([], min(12), '2026-08-30'), []);
   assert.deepEqual(equipesCobertas(null, min(12), '2026-08-30'), []);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// O bug de 30/08: pg devolve `date` como Date, e a comparação de string falhava
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { diaISO } = require('../db/escalaQueries');
+
+test('diaISO aceita o objeto Date que o pg devolve', () => {
+  // `String(new Date(...)).slice(0,10)` dava "Sat Aug 3" — nunca igual a
+  // "2026-08-30". Toda linha virava "de ontem", turno normal exige !deOntem, e
+  // o KPI mostrava 0 esperadas com 49 equipes escaladas.
+  assert.equal(diaISO(new Date(2026, 7, 30)), '2026-08-30');
+  assert.equal(diaISO(new Date(2026, 0, 1)),  '2026-01-01');
+  assert.equal(diaISO('2026-08-30'), '2026-08-30');
+  assert.equal(diaISO('2026-08-30T00:00:00Z'), '2026-08-30');
+});
+
+test('diaISO não inventa data quando não consegue ler', () => {
+  assert.equal(diaISO(null), null);
+  assert.equal(diaISO(''), null);
+  assert.equal(diaISO('Sat Aug 30 2026'), null);
+  assert.equal(diaISO(new Date('lixo')), null);
+});
+
+test('turno normal com data em Date do pg é contado — o caso do bug', () => {
+  const linhas = [
+    { sigla: 'EPMRT30', data: new Date(2026, 7, 30), tipo: 'PLANTAO', regional: 'GUA',
+      inicio_escala: '08:00:00', fim_escala: '17:00:00' },
+  ];
+  assert.equal(equipesCobertas(linhas, min(14, 4), '2026-08-30').length, 1,
+    'às 14:04 a equipe de 08:00-17:00 tem de contar');
+});
+
+test('linha com data ilegível é descartada, não tratada como de ontem', () => {
+  // Cair no ramo "de ontem" por acidente faria turno normal sumir e turno
+  // vira-noite aparecer na hora errada — erro silencioso nos dois sentidos.
+  const linhas = [
+    { sigla: 'X', data: 'sei lá', tipo: 'A', regional: 'GUA',
+      inicio_escala: '22:00:00', fim_escala: '06:00:00' },
+  ];
+  assert.equal(equipesCobertas(linhas, min(3), '2026-08-30').length, 0);
+});
