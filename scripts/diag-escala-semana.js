@@ -134,9 +134,19 @@ function tabela(linhas, colunas) {
     { rotulo: 'fds/útil',       get: r => `${(r.razao * 100).toFixed(0)}%` },
   ]);
   console.log('');
+  // PLANTÃO trabalhar todo fim de semana é o comportamento CORRETO — foi o que
+  // o limiar de 90% acusou na 1ª rodada (30/08/2026), e acusar o certo treina o
+  // leitor a ignorar o alerta. Só é achado quando o tipo NÃO é de plantão.
+  const ehPlantao = t => /PLANT/.test(t);
   for (const c of cmp) {
-    if (c.razao >= 0.9 && Number(c.util) > 2) {
-      bad(`${c.tipo}: o cadastro NÃO distingue fim de semana (${(c.razao * 100).toFixed(0)}% do dia útil).`);
+    if (Number(c.util) <= 2) continue;                 // amostra pequena demais
+    if (c.razao >= 0.9) {
+      if (ehPlantao(c.tipo)) ok(`${c.tipo}: ${(c.razao * 100).toFixed(0)}% do dia útil no fim de semana — esperado para plantão.`);
+      else bad(`${c.tipo}: o cadastro NÃO distingue fim de semana (${(c.razao * 100).toFixed(0)}% do dia útil).`);
+    } else if (c.razao === 0) {
+      ok(`${c.tipo}: zera no fim de semana — o cadastro distingue.`);
+    } else if (!ehPlantao(c.tipo)) {
+      warn(`${c.tipo}: ${(c.razao * 100).toFixed(0)}% do dia útil no fim de semana (${c.fds} de ${c.util}).`);
     }
   }
 
@@ -165,7 +175,10 @@ function tabela(linhas, colunas) {
            ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
         WHERE ed.data = $1::date
           AND upper(btrim(ed.equipe)) = ANY($2::text[])
-        GROUP BY 1,2 ORDER BY trabalham::int, 1`, [hoje, atual.equipes]);
+        GROUP BY 1,2 ORDER BY 4, 1`, [hoje, atual.equipes]);
+    // ORDER BY por POSIÇÃO, não por alias: o Postgres aceita `ORDER BY trabalham`
+    // mas não `ORDER BY trabalham::int` — com cast vira expressão e o alias de
+    // saída deixa de ser visível. Custou uma rodada em produção (30/08/2026).
 
     console.log('');
     tabela(detalhe, [
@@ -225,6 +238,74 @@ function tabela(linhas, colunas) {
     if (semFolga.length > 40) info(`(+${semFolga.length - 40} não listados)`);
     console.log('');
     info('São estes cadastros que sustentam equipe não-plantão no esperado de fim de semana.');
+  }
+
+  // ── 4. O confronto que o KPI faz na tela: esperada × em campo ─────────────
+  // Mesma regra do painel (public/index.html:7002): em campo = está em
+  // teams_current com sessionEnd nulo e isOnline verdadeiro. É aqui que se vê
+  // se as comerciais de domingo são equipe real que não logou, ou linha de
+  // cadastro que nunca vai a campo — nos dois casos o KPI acusa "faltam N",
+  // mas só um deles é desvio operacional.
+  H('4. CONFRONTO — esperadas agora × em campo agora');
+  const { rows: campo } = await pool.query(
+    `SELECT upper(btrim(tc.team_name)) AS sigla, tc.regional,
+            coalesce(upper(eo.tipo),'(fora da whitelist)') AS tipo,
+            (tc.data->>'sessionEnd') AS session_end,
+            (tc.data->>'isOnline')   AS is_online
+       FROM public.teams_current tc
+       LEFT JOIN public.equipes_oficiais eo
+         ON upper(btrim(eo.sigla)) = upper(btrim(tc.team_name)) AND eo.ativo`);
+
+  const emCampo = new Map();
+  for (const r of campo) {
+    if (r.session_end != null) continue;          // já deslogou
+    if (String(r.is_online) !== 'true') continue; // offline
+    emCampo.set(r.sigla, r);
+  }
+  const esperadas = new Set(atual.equipes);
+  // Tipo vindo da whitelist, não de teams_current: equipe escalada e ausente do
+  // campo não tem linha em teams_current e ficaria sem tipo — justamente a que
+  // mais interessa nomear.
+  const { rows: tiposWl } = await pool.query(
+    `SELECT upper(btrim(sigla)) AS sigla, coalesce(upper(tipo),'—') AS tipo
+       FROM public.equipes_oficiais WHERE ativo`);
+  const tipoWl = new Map(tiposWl.map(r => [r.sigla, r.tipo]));
+  const tipoCampo = new Map(campo.map(r => [r.sigla, r.tipo]));
+  const tipoDe = s => tipoWl.get(s) || tipoCampo.get(s) || '—';
+
+  const ambos    = [...esperadas].filter(s => emCampo.has(s)).sort();
+  const soEsper  = [...esperadas].filter(s => !emCampo.has(s)).sort();
+  const soCampo  = [...emCampo.keys()].filter(s => !esperadas.has(s)).sort();
+
+  info(`esperadas agora ... ${esperadas.size}`);
+  info(`em campo agora .... ${emCampo.size}  (whitelist + fora dela, regra !sessionEnd && isOnline)`);
+  console.log('');
+  ok(`escaladas E em campo: ${ambos.length}`);
+  if (ambos.length) console.log('     ' + ambos.join(', '));
+
+  console.log('');
+  if (soEsper.length) {
+    bad(`escaladas e NÃO em campo: ${soEsper.length}  ← é o "faltam N" que o KPI mostra`);
+    const porTipo = {};
+    for (const s of soEsper) (porTipo[tipoDe(s)] ||= []).push(s);
+    for (const [t, lista] of Object.entries(porTipo)) {
+      console.log(`     ${t} (${lista.length}): ${lista.join(', ')}`);
+    }
+  } else {
+    ok('nenhuma equipe escalada está fora de campo.');
+  }
+
+  console.log('');
+  if (soCampo.length) {
+    warn(`em campo e NÃO escaladas: ${soCampo.length}  ← trabalhando fora da escala cadastrada`);
+    const porTipo = {};
+    for (const s of soCampo) (porTipo[tipoDe(s)] ||= []).push(s);
+    for (const [t, lista] of Object.entries(porTipo)) {
+      console.log(`     ${t} (${lista.length}): ${lista.join(', ')}`);
+    }
+    info('As "(fora da whitelist)" são esperadas aqui — o KPI só conta equipe faturada.');
+  } else {
+    ok('ninguém em campo fora da escala.');
   }
 
   console.log('');
