@@ -532,7 +532,31 @@
            consulta novos. A matéria-prima passou a ser preservada em 28/08
            (P2-18) — antes disso o TTL de 90 dias apagava a data de emissão. -->
       <div id="desloc-sub-tma" style="display:none">
-        <div class="empty-state" style="font-size:12px">Em construção.</div>
+        <div class="filter-bar">
+          <div class="date-label">TMA (PO) — <strong id="tma-periodo-label"></strong></div>
+          <div class="filter-controls">
+            <div class="filter-group">
+              <span class="filter-label">De</span>
+              <input type="date" class="month-input" id="tma-de-input" onchange="loadTma()" style="width:130px" />
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">Até</span>
+              <input type="date" class="month-input" id="tma-ate-input" onchange="loadTma()" style="width:130px" />
+            </div>
+            <div class="filter-group">
+              <span class="filter-label">Regional</span>
+              <select class="filter-select" id="tma-regional-select" onchange="loadTma()">
+                <option value="ALL">Todas</option>
+                <option value="GUA">Guarapari</option>
+                <option value="CAC">Cachoeiro</option>
+                <option value="SJC">São José dos Campos</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div id="tma-content">
+          <div class="empty-state" style="font-size:12px">Carregando…</div>
+        </div>
       </div>
     </div>
 
@@ -4824,6 +4848,7 @@ ${matrizHTML}
        que na 1ª carga do dia é ~25s. Trocar de sub-aba tem de ser instantâneo.
        Quem recarrega é o botão Atualizar do balão, como em qualquer outra aba. */
     let _deslocSubAtiva = 'elevado';
+    let _tmaCarregada = false;
     function switchDeslocSubtab(name) {
       _deslocSubAtiva = name;
       document.querySelectorAll('.desloc-subtab-btn').forEach(b => b.classList.remove('active'));
@@ -4835,10 +4860,211 @@ ${matrizHTML}
       if (name === 'tma') {
         elevado.style.display = 'none';
         tma.style.display = '';
+        // Preguiçoso: só busca na PRIMEIRA vez que a aba é aberta. Depois disso
+        // o conteúdo fica montado e alternar volta a ser instantâneo — quem
+        // recarrega é o Atualizar do balão.
+        if (!_tmaCarregada) { _tmaCarregada = true; initTma(); }
       } else {
         tma.style.display = 'none';
         elevado.style.display = '';
       }
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+       TMA (PO) — reparo apontado × Finalizando Trabalho  (30/08/2026)
+       Implementa docs/handoff/SPEC-tma-po-reparo-2026-08-30.md, Fase 3.
+
+       ⚠️ NÃO é o TMA regulatório (emissão → conclusão). Mede a distância entre
+       o "Horário do Reparo" que a equipe apontou e o checkpoint "Finalizando
+       Trabalho". Critério da operação: mínimo de 10 minutos.
+       ═══════════════════════════════════════════════════════════════════════ */
+    let _tmaCache = null;
+
+    async function initTma() {
+      const hoje = todayISO();
+      const primeiroDoMes = hoje.slice(0, 8) + '01';
+      const deEl  = document.getElementById('tma-de-input');
+      const ateEl = document.getElementById('tma-ate-input');
+      if (deEl  && !deEl.value)  deEl.value  = primeiroDoMes;
+      if (ateEl && !ateEl.value) ateEl.value = hoje;
+
+      const sess = getStoredSession();
+      const sel = document.getElementById('tma-regional-select');
+      if (sel && sess && sess.regional && sess.regional !== 'ALL') {
+        sel.value = sess.regional;
+        sel.disabled = true;
+      }
+      loadTma();
+    }
+
+    async function loadTma() {
+      const content = document.getElementById('tma-content');
+      if (!content) return;
+      content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>'
+        + 'Calculando… (a 1ª consulta do dia monta o mapa de equipes e pode demorar)</div>';
+      try {
+        const de  = document.getElementById('tma-de-input').value;
+        const ate = document.getElementById('tma-ate-input').value;
+        const reg = document.getElementById('tma-regional-select')?.value || 'ALL';
+        const qs  = new URLSearchParams({ de, ate });
+        if (reg && reg !== 'ALL') qs.set('regionals', reg);
+        document.getElementById('tma-periodo-label').textContent = `${fmtDateBR(de)} a ${fmtDateBR(ate)}`;
+
+        _tmaCache = await fetch(`${API}/po-reparo?${qs}`).then(r => r.json());
+        renderTma(_tmaCache);
+      } catch (err) {
+        content.innerHTML = `<div class="empty-state">Erro: ${err.message}</div>`;
+      }
+    }
+
+    /** Tendência diária: mediana (linha) + % abaixo do critério (barras). */
+    function _renderTmaTendenciaSVG(porDia, minimoMin) {
+      if (!porDia || porDia.length === 0) return '<div class="empty-state">Sem dados no período.</div>';
+      const W = 720, H = 200, ML = 38, MR = 38, MT = 14, MB = 26;
+      const iw = W - ML - MR, ih = H - MT - MB;
+      const maxMed = Math.max(minimoMin * 1.6, ...porDia.map(d => d.mediana_min || 0));
+      const x = i => ML + (porDia.length === 1 ? iw / 2 : (i * iw / (porDia.length - 1)));
+      const yMed = v => MT + ih - (Math.max(0, v) / maxMed) * ih;
+      const yPct = v => MT + ih - (v / 100) * ih;
+
+      const barW = Math.max(2, iw / porDia.length * 0.55);
+      const barras = porDia.map((d, i) =>
+        `<rect x="${(x(i) - barW / 2).toFixed(1)}" y="${yPct(d.abaixo_pct).toFixed(1)}" `
+        + `width="${barW.toFixed(1)}" height="${(MT + ih - yPct(d.abaixo_pct)).toFixed(1)}" `
+        + `fill="#e74c3c" opacity=".16"><title>${d.data} — ${d.abaixo_pct}% abaixo (${d.total} notas)</title></rect>`
+      ).join('');
+
+      const pts = porDia.map((d, i) => `${x(i).toFixed(1)},${yMed(d.mediana_min || 0).toFixed(1)}`).join(' ');
+      // A linha do critério é a referência que dá sentido ao gráfico inteiro:
+      // sem ela o leitor não sabe se 6 min é bom ou ruim.
+      const yCrit = yMed(minimoMin);
+      const bolinhas = porDia.map((d, i) =>
+        `<circle cx="${x(i).toFixed(1)}" cy="${yMed(d.mediana_min || 0).toFixed(1)}" r="2.5" `
+        + `fill="${(d.mediana_min || 0) < minimoMin ? '#e74c3c' : '#27ae60'}">`
+        + `<title>${d.data} — mediana ${d.mediana_min} min (${d.total} notas)</title></circle>`
+      ).join('');
+
+      const rotulos = porDia.map((d, i) =>
+        (i === 0 || i === porDia.length - 1 || i === Math.floor(porDia.length / 2))
+          ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" font-size="10" fill="var(--text2)" text-anchor="middle">${d.data.slice(8)}/${d.data.slice(5, 7)}</text>`
+          : ''
+      ).join('');
+
+      return `<svg viewBox="0 0 ${W} ${H}" class="desloc-trend-svg" preserveAspectRatio="xMidYMid meet">
+        ${barras}
+        <line x1="${ML}" y1="${yCrit.toFixed(1)}" x2="${W - MR}" y2="${yCrit.toFixed(1)}"
+              stroke="#f39c12" stroke-width="1.5" stroke-dasharray="5 3"/>
+        <text x="${W - MR + 3}" y="${(yCrit + 3).toFixed(1)}" font-size="10" fill="#f39c12">${minimoMin}min</text>
+        <polyline points="${pts}" fill="none" stroke="#3498db" stroke-width="2"/>
+        ${bolinhas}
+        <text x="4" y="${MT + 8}" font-size="10" fill="var(--text2)">${maxMed.toFixed(0)}min</text>
+        <text x="4" y="${MT + ih}" font-size="10" fill="var(--text2)">0</text>
+        ${rotulos}
+      </svg>`;
+    }
+
+    function renderTma(d) {
+      const content = document.getElementById('tma-content');
+      if (!d || !d.cobertura) { content.innerHTML = '<div class="empty-state">Sem dados.</div>'; return; }
+      const c = d.cobertura, r = d.resumo;
+
+      if (c.medidas === 0) {
+        content.innerHTML = `<div class="empty-state">Nenhuma nota PO mensurável no período.<br>
+          <span style="font-size:11px">${c.total} nota(s) no intervalo, ${c.sem_repair_time} sem Horário do Reparo preenchido.</span></div>`;
+        return;
+      }
+
+      const corMediana = r.mediana_min < r.minimo_min ? '#e74c3c' : '#27ae60';
+      const maxFaixa = Math.max(...d.faixas.map(f => f.quantidade), 1);
+      const faixasHTML = d.faixas.map(f => {
+        const cor = f.chave === 'negativo' ? '#c0392b'
+          : (['0_2', '2_5', '5_10'].includes(f.chave) ? '#e74c3c' : '#27ae60');
+        return `<div class="desloc-bar-row" style="cursor:default">
+          <div class="desloc-bar-label">${f.rotulo}</div>
+          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * f.quantidade / maxFaixa).toFixed(1)}%;background:${cor}"></div></div>
+          <div class="desloc-bar-count">${f.quantidade.toLocaleString('pt-BR')} <span style="font-size:10px;opacity:.6">${f.pct}%</span></div>
+        </div>`;
+      }).join('');
+
+      const maxEq = Math.max(...(d.porEquipe || []).map(e => e.abaixo_pct), 1);
+      const equipesHTML = (d.porEquipe || []).slice(0, 20).map(e => `
+        <div class="desloc-bar-row" style="cursor:default">
+          <div class="desloc-bar-label">${e.equipe} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
+          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * e.abaixo_pct / maxEq).toFixed(1)}%;background:${e.abaixo_pct > 66 ? '#e74c3c' : (e.abaixo_pct > 33 ? '#f39c12' : '#27ae60')}"></div></div>
+          <div class="desloc-bar-count">${e.abaixo_pct}% <span style="font-size:10px;opacity:.6">(${e.abaixo}/${e.total})</span></div>
+        </div>`).join('') || '<div class="empty-state" style="font-size:12px">Sem equipe com notas suficientes no período.</div>';
+
+      const poucas = (d.poucasNotas || []).length
+        ? `<div style="margin-top:10px;font-size:11px;color:var(--text2);border-top:1px solid var(--cinza2);padding-top:8px">
+             <strong>${d.poucasNotas.length} equipe(s) com menos de ${d.piso_ranking} notas medidas</strong> — fora do ranking porque
+             poucas notas viram percentual instável: ${d.poucasNotas.slice(0, 12).map(e => `${e.equipe} (${e.abaixo}/${e.total})`).join(' · ')}
+           </div>` : '';
+
+      const casosHTML = (d.casos || []).slice(0, 300).map(x => `<tr>
+          <td>${x.numero || ''}</td>
+          <td>${x.equipe || '—'} <span style="font-size:10px;opacity:.5">${x.regional || ''}</span></td>
+          <td>${x.finalizando_em ? fmtDateBR(String(x.finalizando_em).slice(0, 10)) : '—'}</td>
+          <td style="color:${x.delta_min < 0 ? '#c0392b' : '#e74c3c'};font-weight:600">${x.delta_min} min</td>
+        </tr>`).join('');
+
+      content.innerHTML = `
+        <div class="desloc-kpis">
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Mediana</div>
+            <div class="desloc-kpi-value" style="color:${corMediana}">${r.mediana_min} min</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">critério: ${r.minimo_min} min</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Abaixo do critério</div>
+            <div class="desloc-kpi-value" style="color:#e74c3c">${r.abaixo_pct}%</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">${r.abaixo.toLocaleString('pt-BR')} de ${c.medidas.toLocaleString('pt-BR')} medidas</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Reparo após o fim</div>
+            <div class="desloc-kpi-value" style="color:#c0392b">${r.negativos.toLocaleString('pt-BR')}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">impossível — pior: ${r.min_min} min</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Cobertura</div>
+            <div class="desloc-kpi-value" style="color:${c.cobertura_pct < 80 ? '#f39c12' : '#27ae60'}">${c.cobertura_pct}%</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">${c.sem_repair_time.toLocaleString('pt-BR')} sem Horário do Reparo</div>
+          </div>
+        </div>
+
+        <div style="background:#fdf3d7;border:1px solid #e8c96a;border-left:4px solid #f39c12;border-radius:6px;
+                    padding:9px 13px;margin-bottom:16px;font-size:11.5px;color:#7a5b12;line-height:1.5">
+          Mede a distância entre o <strong>Horário do Reparo</strong> apontado pela equipe e o checkpoint
+          <strong>Finalizando Trabalho</strong>, em notas <strong>PO</strong>. <strong>Não é o TMA regulatório</strong>
+          (emissão → conclusão). As <strong>${c.sem_repair_time.toLocaleString('pt-BR')} notas sem Horário do Reparo</strong>
+          preenchido ficam fora do cálculo — os percentuais acima são sobre as ${c.medidas.toLocaleString('pt-BR')} medidas.
+        </div>
+
+        <div class="desloc-grid">
+          <div class="desloc-panel">
+            <h3>Distribuição</h3>
+            ${faixasHTML}
+          </div>
+          <div class="desloc-panel">
+            <h3>Tendência diária <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px"><span style="color:#3498db">━</span> mediana <span style="color:#e74c3c;margin-left:6px">▉</span> % abaixo</span></h3>
+            ${_renderTmaTendenciaSVG(d.porDia, r.minimo_min)}
+          </div>
+        </div>
+
+        <div class="desloc-panel" style="margin-top:18px">
+          <h3>Equipes — % abaixo do critério <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">mínimo de ${d.piso_ranking} notas medidas</span></h3>
+          ${equipesHTML}
+          ${poucas}
+        </div>
+
+        <div class="desloc-panel" style="margin-top:18px">
+          <h3>Casos abaixo do critério <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">piores primeiro · ${(d.casos || []).length} listados</span></h3>
+          <div style="max-height:420px;overflow:auto">
+            <table class="desloc-tbl">
+              <thead><tr><th>Nota</th><th>Equipe</th><th>Fim do trabalho</th><th>Diferença</th></tr></thead>
+              <tbody>${casosHTML}</tbody>
+            </table>
+          </div>
+        </div>`;
     }
 
     function switchHistSubtab(name) {
@@ -9746,6 +9972,14 @@ ${matrizHTML}
     /** O "Atualizar" do balão: despacha pro loader da aba ATIVA. */
     function fabRecarregar() {
       const tab = _fabTabAtual();
+      // 30/08/2026 — a aba Deslocamentos ganhou sub-abas, e `currentTab` não
+      // distingue as duas: sem isto, o Atualizar recarregaria o Deslocamento
+      // Elevado mesmo com a TMA (PO) na tela. Único caso do painel em que a aba
+      // não basta pra saber o que recarregar.
+      if (tab === 'desloc' && typeof _deslocSubAtiva !== 'undefined' && _deslocSubAtiva === 'tma') {
+        try { loadTma(); } catch (err) { console.warn('[fab] falha ao recarregar TMA (PO)', err && err.message); }
+        return;
+      }
       const entry = FAB_RECARREGAR[tab];
       if (!entry) {
         fabSyncAlvo();
