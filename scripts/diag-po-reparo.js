@@ -225,40 +225,56 @@ async function main() {
       `/api/Notes/${nid}/details?sectorId=${sid}`,
     ];
     for (const path of candidatos) {
-      let r;
+      // try/catch em volta do endpoint INTEIRO: em 30/08 o completeInterruptions
+      // devolveu 200 com corpo `null` e a leitura de `.Data` estourou, abortando
+      // os outros 8. Nenhum candidato pode derrubar a sonda.
       try {
-        r = await wpaFetch(path);
-      } catch (err) {
-        console.log(`  ${path}\n      erro de rede: ${err.message}`);
-        continue;
-      }
-      if (!r.ok) { console.log(`  ${path}\n      HTTP ${r.status}`); continue; }
-      let body;
-      try { body = await r.json(); } catch { console.log(`  ${path}\n      HTTP 200, corpo não-JSON`); continue; }
-      const d = body.Data || body;
-      const chaves = d && typeof d === 'object' ? Object.keys(d).length : 0;
-      const hits = caçar(d, /repair|reparo|occurr|ocorr/i);
-      console.log(`  ${path}\n      HTTP 200 · ${chaves} chaves · reparo/ocorrência: `
-        + (hits.length ? JSON.stringify(hits.slice(0, 8)) : 'nenhum'));
-      // 17:18:45 é o Horário do Reparo do print — procurar o horário cru acha o
-      // campo mesmo que o nome dele não tenha nada a ver com "reparo".
-      // 17:18:45 é o Horário do Reparo do print. Procurar o horário CRU acha o
-      // campo mesmo que o nome dele não tenha nada a ver com "reparo" — que é
-      // exatamente o caso se ele vier como "RestorationTime", "PowerOnDate" etc.
-      // 20:18:45 é o mesmo instante em UTC, que é como a EDP costuma mandar.
-      const txt = JSON.stringify(d);
-      const achou = ['17:18:45', 'T17:18', '20:18:45'].filter(a => txt.includes(a));
-      if (achou.length) {
-        console.log(`      ⭐⭐ ACHOU ${achou.join(', ')} — esta é a origem do Horário do Reparo`);
-        console.log(`      ── resposta completa ──`);
-        console.log(JSON.stringify(d, null, 2).split('\n').slice(0, 120).map(l => '      ' + l).join('\n'));
-      } else if (chaves > 0 || (Array.isArray(d) && d.length)) {
-        // Sem o horário-alvo, as CHAVES ainda dizem se vale insistir neste
-        // endpoint com outra nota (esta pode simplesmente não ter ocorrência).
-        const amostra = Array.isArray(d) ? d[0] : d;
-        if (amostra && typeof amostra === 'object') {
-          console.log(`      campos: ${Object.keys(amostra).slice(0, 30).join(', ')}`);
+        let r;
+        try {
+          r = await wpaFetch(path);
+        } catch (err) {
+          console.log(`  ${path}\n      erro de rede: ${err.message}`);
+          continue;
         }
+        if (!r.ok) { console.log(`  ${path}\n      HTTP ${r.status}`); continue; }
+
+        let body;
+        try { body = await r.json(); }
+        catch { console.log(`  ${path}\n      HTTP 200, corpo não-JSON`); continue; }
+
+        // `Data: null` é resposta VÁLIDA — significa "não há registro pra esta
+        // nota", não erro. Distinguir isso de "endpoint errado" importa: pode ser
+        // o endpoint certo e a nota é que não tem ocorrência.
+        const d = (body && typeof body === 'object' && 'Data' in body) ? body.Data : body;
+        if (d === null || d === undefined) {
+          console.log(`  ${path}\n      HTTP 200 · corpo VAZIO (null) — endpoint existe, nota sem registro`);
+          continue;
+        }
+
+        const chaves = (d && typeof d === 'object') ? Object.keys(d).length : 0;
+        const hits = caçar(d, /repair|reparo|occurr|ocorr/i);
+        console.log(`  ${path}\n      HTTP 200 · ${Array.isArray(d) ? `array[${d.length}]` : `${chaves} chaves`}`
+          + ` · reparo/ocorrência: ` + (hits.length ? JSON.stringify(hits.slice(0, 8)) : 'nenhum'));
+        // 17:18:45 é o Horário do Reparo do print. Procurar o horário CRU acha o
+        // campo mesmo que o nome dele não tenha nada a ver com "reparo" — que é
+        // o caso se vier como "RestorationTime", "PowerOnDate" e afins.
+        // 20:18:45 é o mesmo instante em UTC, que é como a EDP costuma mandar.
+        const txt = JSON.stringify(d);
+        const achou = ['17:18:45', 'T17:18', '20:18:45'].filter(a => txt.includes(a));
+        if (achou.length) {
+          console.log(`      ⭐⭐ ACHOU ${achou.join(', ')} — esta é a origem do Horário do Reparo`);
+          console.log(`      ── resposta completa ──`);
+          console.log(JSON.stringify(d, null, 2).split('\n').slice(0, 120).map(l => '      ' + l).join('\n'));
+        } else if (chaves > 0 || (Array.isArray(d) && d.length)) {
+          // Sem o horário-alvo, as CHAVES ainda dizem se vale insistir neste
+          // endpoint com outra nota (esta pode simplesmente não ter ocorrência).
+          const amostra = Array.isArray(d) ? d[0] : d;
+          if (amostra && typeof amostra === 'object') {
+            console.log(`      campos: ${Object.keys(amostra).slice(0, 30).join(', ')}`);
+          }
+        }
+      } catch (err) {
+        console.log(`      (candidato ignorado — ${err.message})`);
       }
     }
   }
