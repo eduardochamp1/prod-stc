@@ -22,35 +22,54 @@ que as equipes atendem.
 
 ## 2. O que a medição já mostrou
 
-Amostra de **200 notas PO** mais recentes, medidas contra a API em 30/08/2026
+Amostra de **1.000 notas PO** mais recentes, medidas contra a API em 30/08/2026
 (`scripts/diag-po-reparo-amostra.js`):
 
 ```
-Cobertura: 158 de 200 mensuráveis (79%)
-  sem RepairTime  39 (19,5%)    HasRepair=false  3
-  sem evento 4  0    sem RegisteredAt2  0    erros  0
+Cobertura: 744 de 1.000 mensuráveis (74,4%)
+  sem RepairTime ~25%    sem evento 4  0    sem RegisteredAt2  0    erros  0
 
-mínimo -42,4   p10 0,1   mediana 9,0   p90 15,8   máximo 89,4
+mínimo -293,1   p10 0,0   mediana 7,1   p90 15,2   máximo 89,4
 
-negativo (reparo DEPOIS)    6    3,8%
-0 a 2 min                  32   20,3%
-2 a 5 min                  15    9,5%
-5 a 10 min                 39   24,7%
-10 a 30 min                61   38,6%
-30 a 60 min                 4    2,5%
-60 min ou mais              1    0,6%
+negativo (reparo DEPOIS)    50    6,7%
+0 a 2 min                  157   21,1%
+2 a 5 min                   85   11,4%
+5 a 10 min                 162   21,8%
+10 a 30 min                274   36,8%
+30 a 60 min                 11    1,5%
+60 min ou mais               5    0,7%
 
-ABAIXO de 10 min: 92 de 158 (58,2%)
+ABAIXO de 10 min: 454 de 744 (61,0%)
 ```
 
-**Isso define o desenho.** A mediana é 9,0 — a distribuição está centrada em cima
+**Isso define o desenho.** A mediana é 7,1 — a distribuição está centrada abaixo
 do critério. Não é "a maioria cumpre e alguns violam": é a operação inteira
-apontando em torno de 9 minutos. Uma lista de exceções listaria metade da base e
-não serviria pra nada — por isso a tela é **distribuição + tendência**, não
-semáforo.
+apontando em torno de 7 minutos. Uma lista de exceções listaria dois terços da
+base e não serviria pra nada — por isso a tela é **distribuição + tendência**,
+não semáforo.
 
-Os **6 negativos** são a evidência mais forte: reparo apontado até 42 minutos
-*depois* de encerrar o trabalho é fisicamente impossível.
+**O p10 é 0,0.** Um décimo das notas tem intervalo essencialmente nulo; somando a
+faixa 0–2 min são **21%** com o reparo apontado junto com o fim do trabalho. É o
+sintoma mais forte de preenchimento sem critério.
+
+Os **50 negativos** são a evidência mais forte: reparo apontado *depois* de
+encerrar o trabalho é fisicamente impossível. O pior chega a **−293 minutos** —
+quase cinco horas.
+
+### 2.1 Uma pista de tendência (hipótese, não conclusão)
+
+A amostra de **200** mais recentes deu mediana **9,0** e 58,2% abaixo; a de
+**1.000** — que alcança notas mais antigas — deu **7,1** e 61,0%. Ou seja, quanto
+mais para trás, pior.
+
+Isso *sugere* que o apontamento vem melhorando. Mas são duas amostras
+sobrepostas, não uma série temporal, e não sustentam a afirmação. **É exatamente
+o que o gráfico de tendência da §7.2 existe para responder** — e é um bom sinal
+de que o indicador terá o que mostrar.
+
+> Os números acima serão substituídos pelos da base completa quando o backfill
+> das 8.402 notas terminar (`scripts/migrar-po-reparo.js`, ~2,5h). Aí deixam de
+> ser amostra.
 
 ## 3. As duas fontes
 
@@ -184,8 +203,8 @@ sub-aba vizinha.
 
 **Mediana (min)** · **% abaixo de 10 min** · **Negativos** · **Cobertura**.
 
-A cobertura vai **fixa nos cartões**, não escondida: com ~19,5% sem `RepairTime`,
-mostrar "58% abaixo" sem dizer que fala de 79% da base seria apresentar um recorte
+A cobertura vai **fixa nos cartões**, não escondida: com ~25% sem `RepairTime`,
+mostrar "61% abaixo" sem dizer que fala de 74% da base seria apresentar um recorte
 como se fosse o total — o mesmo erro que o painel já cometeu duas vezes.
 
 ### 7.2 Histograma e tendência
@@ -244,7 +263,7 @@ manual.
   throttle e em background, sem risco de bloqueio (a conta trava por falha de
   **login**, não por volume de leitura) — mas roda uma vez só, com acompanhamento.
 - **Toca o write path do cron.** Mitigado pelo `try/catch` da §5.4.
-- **Número novo e desconfortável.** 58% abaixo do critério vai gerar discussão.
+- **Número novo e desconfortável.** 61% abaixo do critério vai gerar discussão.
   A cobertura fixa (§7.1) e a legenda (§7.4) existem pra que a conversa seja
   sobre a operação, não sobre a credibilidade do painel.
 - **A amostra não é aleatória** — são as PO mais recentes. Se o método mudou no
