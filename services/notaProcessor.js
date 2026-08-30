@@ -74,6 +74,20 @@ function processarNota(nota, opts = {}) {
         // novo event=0". 0 é valor legítimo, então só ausência vira null.
         tentativa:   cp.Try === undefined || cp.Try === null ? null : cp.Try,
         timestamp:   _cpTs(cp),                 // P1-28 — UTC primeiro, BR só como fallback
+        // 30/08/2026 — `RegisteredAt2` é QUANDO O EVENTO ACONTECEU, com o fuso
+        // explícito (`-03:00`). O `timestamp` acima vem do `cp.TimeStamp`, que é
+        // o relógio do aparelho no ENVIO: conferido contra o portal na nota
+        // 104875481, ele erra 15-28s nos eventos 2/3/4 e **44 e 55 minutos** nos
+        // eventos 0 e 1, que saem os dois carimbados no instante da sincronização.
+        //
+        // ADITIVO de propósito: `_cpTs` e o `timestamp` NÃO mudam, então o
+        // cálculo de deslocamento segue idêntico ao de hoje. Trocar a fonte do
+        // deslocamento é conserto de outra aba, com seu próprio item de backlog.
+        //
+        // ⚠️ NUNCA usar `cp.RegisteredAt` (sem o 2): ele vem sem marcador de
+        // fuso, e em processo com TZ=UTC — que é o caso da VM — vira 3h de erro.
+        // Ver SPEC-tma-po-reparo-2026-08-30.md §3.1.
+        registradoEm: cp.RegisteredAt2 || null,
         mileage:     cp.Mileage,
         latitude:    cp.Latitude,
         longitude:   cp.Longitude,

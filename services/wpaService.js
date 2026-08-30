@@ -1015,6 +1015,54 @@ async function getNoteInterruptions(noteId) {
 }
 
 /**
+ * Execução das notas PO — a seção "Detalhes da Execução" do portal.
+ * GET /api/notes/po?noteId={uuid}
+ *
+ * Achado em 30/08/2026 depois de sondar 21 endpoints. É a ÚNICA fonte do
+ * "Horário do Reparo" (`RepairTime`): ele NÃO existe em lugar nenhum do
+ * `details/optimized`, que tem 123 chaves e nenhuma de reparo ou ocorrência.
+ * Ver `docs/handoff/API-WPA-EDP.md` §6.2.2 e
+ * `docs/handoff/SPEC-tma-po-reparo-2026-08-30.md`.
+ *
+ * ⚠️ Só faz sentido para tipo **PO**. Chamar para outro tipo gasta request à toa.
+ *
+ * ⚠️ FUSO: `RepairTime` vem em UTC com `+00:00` explícito, então `_instanteWpa`
+ * o preserva. NÃO confundir com o `RegisteredAt` do checkpoint, que vem SEM
+ * marcador — para aquele o `_normTzIso` anexaria `Z` e criaria 3h de erro. O par
+ * da conta é `RegisteredAt2`, que traz o `-03:00`.
+ */
+function _normalizePoExecution(payload) {
+  const d  = (payload && typeof payload === 'object' && 'Data' in payload) ? payload.Data : payload;
+  const ex = d && d.Execution;
+  const po = ex && ex.PowerOnExecution;
+  if (!po) return null;
+  return {
+    repairTime:        _instanteWpa(po.RepairTime),
+    // `false` é valor legítimo (houve atendimento sem reparo) e precisa
+    // sobreviver distinto de "não informado" — por isso não vira booleano cru.
+    hasRepair:         po.HasRepair === undefined || po.HasRepair === null ? null : Boolean(po.HasRepair),
+    predictionRepair:  _instanteWpa(po.PredictionRepairDate),
+    confirmationDate:  _instanteWpa(po.ConfirmationDate),
+    classe:            po.Class   || null,
+    causa:             po.Reason  || null,
+    clima:             po.Climate || null,
+    incidentDevice:    po.IncidentDevice || null,
+    teamOnTarget:      po.TeamOnTargetResult || null,
+    // Vêm do nível Execution, não do PowerOnExecution.
+    teamId:            ex.ExecutedById || null,
+    tentativa:         ex.Try === undefined || ex.Try === null ? null : ex.Try,
+    circuito:          ex.Circuit || null,
+  };
+}
+
+async function getNotePoExecution(noteId) {
+  if (!noteId) return null;
+  const res = await wpaFetch(`/api/notes/po?noteId=${encodeURIComponent(noteId)}`);
+  if (!res.ok) throw new Error(`WPA notes/po ${res.status}`);
+  return _normalizePoExecution(await res.json());
+}
+
+/**
  * P2-15 — intervalos e paradas da sessão.
  * GET /api/sessions/{sessionId}/break   (sessions MINÚSCULO nesta rota)
  *
@@ -2358,6 +2406,8 @@ module.exports = {
   getCollaboratorShifts,     // escala cadastrada do mês (P1-26 / P2-24)
   getNoteHistoric,           // P1-23 — janela de posse da nota por equipe
   getNoteInterruptions,      // P1-33 — interrupções + motivo de rejeição
+  getNotePoExecution,        // 30/08 — execução PO; ÚNICA fonte do Horário do Reparo
+  _normalizePoExecution,     // exportado p/ teste: a regra de fuso mora aqui
   getSessionBreaks,          // P2-15 — intervalos da sessão
   searchNoteByNumber,        // número humano da nota → UUID (entrada de auditoria)
   getNoteDetail,

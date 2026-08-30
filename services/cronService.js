@@ -647,9 +647,10 @@ async function runCacheNotaDetails(teams) {
   console.log(`[CRON] Cache OS: ${idsFaltando.length} pendentes — processando ${lote.length}`);
 
   // 4) Busca + processa + grava (concorrência 4 — evita saturar /details/optimized)
-  const { getNoteDetail } = require('./wpaService');
+  const { getNoteDetail, getNotePoExecution } = require('./wpaService');
   const { processarNota, classificarSubCategoria } = require('./notaProcessor');
   const { getSubcategoriasByIds } = require('../db/subcategoriasQueries');
+  const { montarLinhaReparo, upsertPoReparo } = require('../db/poReparoQueries');
 
   const t0 = Date.now();
   let ok = 0, falha = 0;
@@ -678,6 +679,25 @@ async function runCacheNotaDetails(teams) {
 
         const processed = processarNota(raw, { incluirFotos: false, subcat });
         await sq.setNoteDetailCache(raw.Id, raw.Number, raw.Type, c.sectorId, processed);
+
+        // 30/08/2026 — nota PO ganha uma 2ª chamada, pro "Horário do Reparo".
+        // Ele NÃO existe no details/optimized (123 chaves, nenhuma de reparo);
+        // a única fonte é /api/notes/po. Só PO: ~91 notas/dia, custo baixo.
+        // Ver SPEC-tma-po-reparo-2026-08-30.md.
+        //
+        // O try/catch é obrigatório: o payload acima é a fonte de verdade e já
+        // está gravado. Se a execução PO falhar, a nota NÃO pode ser marcada
+        // como falha — o backfill (migrar-po-reparo.js) pega depois, porque a
+        // retomada dele é por ausência de linha.
+        if (raw.Type === 'PO') {
+          try {
+            const poExec = await getNotePoExecution(raw.Id);
+            const linha  = montarLinhaReparo(poExec, processed.checkpoints);
+            await upsertPoReparo(raw.Id, { numero: raw.Number, sector_id: c.sectorId }, linha);
+          } catch (errPo) {
+            log.warn('po_reparo_falhou', { note: raw.Number, msg: errPo.message });
+          }
+        }
         return { ok: true, id: c.id };
       } catch (err) {
         return { ok: false, id: c.id, reason: err.message };
