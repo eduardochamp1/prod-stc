@@ -40,7 +40,7 @@
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --dump-chaves
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --probe-endpoints
  *
- * ⚠️ Faz 1 requisição à API da WPA (ou 10, com --probe-endpoints). Todas GET.
+ * ⚠️ Faz 1 requisição à API da WPA (ou 12, com --probe-endpoints). Todas GET.
  * Não faz login novo se o token estiver válido. Não escreve no banco.
  */
 
@@ -213,7 +213,22 @@ async function main() {
     // endpoint já tem wrapper nosso (getNoteInterruptions, P1-33) que nunca foi
     // ligado a nada — e o normalizador dele descarta campo desconhecido, então
     // só o cru responde.
+    // Rodada 2 (30/08/2026). Os 9 primeiros candidatos vieram do filtro por UUID
+    // e nenhum tinha o horário. Filtrar a MESMA captura pelo NÚMERO da nota
+    // revelou endpoints que o filtro anterior escondia — são os de cima aqui.
+    //
+    // `completeLastSurveysByNumber` é a aposta: "survey" é o formulário que o
+    // técnico preenche, e o details/optimized tem as chaves `Survey` e
+    // `StatusSurvey` (ambas nulas nesta nota). A seção "Detalhes da Execução →
+    // Ocorrência", com Ação/Dispositivo/CCC/Horário do Reparo, tem exatamente a
+    // cara de um formulário de execução.
+    const num = encodeURIComponent(NUMERO);
     const candidatos = [
+      `/api/Notes/${num}/completeLastSurveysByNumber`,
+      `/api/notes/dd/logs?noteId=${nid}`,
+      `/api/search/SearchNotesByNumber?noteNumber=${num}`,
+      // Rodada 1 — já sondados em 30/08, nenhum tinha o horário. Mantidos porque
+      // esta nota pode não ter registro e outra nota pode ter.
       `/api/Notes/${nid}/completeInterruptions`,
       `/api/notesMEC/${nid}`,
       `/api/Notes/${nid}/historic`,
@@ -222,7 +237,6 @@ async function main() {
       `/api/notes/${nid}/getnotebreakdisplacementtime`,
       `/api/listener-mode/logs?noteId=${nid}`,
       `/api/notes/clustering/getName/${nid}`,
-      `/api/Notes/${nid}/details?sectorId=${sid}`,
     ];
     for (const path of candidatos) {
       // try/catch em volta do endpoint INTEIRO: em 30/08 o completeInterruptions
