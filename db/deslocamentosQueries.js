@@ -746,6 +746,12 @@ module.exports = {
   // cache por dia que pode mudar a equipe de um deslocamento.
   _mergeMapasDia,
   _keyDia,
+  // 30/08 — reusado por db/poReparoQueries.js. A aba "TMA (PO)" precisa da
+  // equipe de cada nota, e a resposta da EDP só traz o UUID (ExecutedById) —
+  // nem teams_current nem equipes_oficiais mapeiam UUID→sigla. Reusar ESTE mapa
+  // (em vez de inventar outro) garante que a mesma nota não seja atribuída a
+  // equipes diferentes em duas abas do mesmo painel.
+  _mapaEquipeDoPeriodo,
   // exportado p/ teste: o front manda `limit` na querystring e o backend corta
   // por este teto. Se os dois divergirem, a tela trunca de novo — em silêncio.
   MAX_NOTAS_PERIODO,

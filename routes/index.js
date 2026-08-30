@@ -3148,6 +3148,29 @@ function _parseDeslocFilters(req) {
   };
 }
 
+// ── TMA (PO) — reparo apontado × fim do trabalho ─────────────────────────────
+// Distância entre o "Horário do Reparo" e o checkpoint "Finalizando Trabalho"
+// nas notas PO. Critério da operação: mínimo de 10 minutos.
+// ⚠️ NÃO é o TMA regulatório (emissão → conclusão) — ver
+// docs/handoff/SPEC-tma-po-reparo-2026-08-30.md.
+const _poReparoQ = require('../db/poReparoQueries');
+
+// GET /api/po-reparo?de=&ate=&regionals=
+router.get('/po-reparo', async (req, res) => {
+  try {
+    const de  = req.query.de  || dateBRT();
+    const ate = req.query.ate || de;
+    // Mesma regra das outras rotas: a regional vem do escopo já intersectado
+    // pelo applyScope, nunca da query string crua.
+    const regionais = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length > 0)
+      ? req.scope.regionals : null;
+    res.json(await _poReparoQ.resumoPoReparo(de, ate, { regionais }));
+  } catch (err) {
+    console.error('[po-reparo]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/deslocamentos/lista?de=&ate=&regional=&team=&tipo=&limit=
 router.get('/deslocamentos/lista', async (req, res) => {
   try {
