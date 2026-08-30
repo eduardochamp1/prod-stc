@@ -64,11 +64,15 @@ test('cobertura é um dos cartões, não uma nota de rodapé', () => {
     'o cartão precisa dizer QUANTAS notas ficaram de fora');
 });
 
-test('os quatro cartões previstos na spec existem', () => {
+test('os quatro cartões existem, e o % abaixo não sumiu junto', () => {
   const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
-  for (const rotulo of ['Mediana', 'Abaixo do critério', 'Reparo após o fim', 'Cobertura']) {
-    assert.ok(corpo.includes(rotulo), `faltou o cartão "${rotulo}"`);
+  for (const rotulo of ['Casos graves', 'Reparo após o fim', 'Mediana', 'Cobertura']) {
+    assert.ok(corpo.includes(`desloc-kpi-label">${rotulo}`), `faltou o cartão "${rotulo}"`);
   }
+  // Os 66,6% deixaram de ser manchete, mas continuam na tela como contexto —
+  // tirar seria perder a régua que o José escolheu no enquadramento.
+  assert.match(corpo, /\$\{r\.abaixo_pct\}% abaixo/,
+    'o % abaixo do critério não pode desaparecer, só sair do destaque');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,11 +86,20 @@ test('a tendência desenha a linha do critério de 10 min', () => {
   assert.match(corpo, /stroke-dasharray/, 'a linha do critério é tracejada');
 });
 
-test('a tendência não quebra com período vazio', () => {
+test('a tendência não quebra com período vazio nem com uma semana só', () => {
   const corpo = corpoDe('function _renderTmaTendenciaSVG', 'function renderTma');
-  assert.match(corpo, /porDia\.length === 0/, 'precisa tratar série vazia');
-  assert.match(corpo, /porDia\.length === 1/,
-    'um único dia dividiria por zero no cálculo do x');
+  assert.match(corpo, /serie\.length === 0/, 'precisa tratar série vazia');
+  assert.match(corpo, /serie\.length === 1/,
+    'uma única semana dividiria por zero no cálculo do x');
+});
+
+test('a tendência diz a DIREÇÃO em texto, não só desenha a linha', () => {
+  // A versão diária desenhava a curva e deixava a leitura implícita — ninguém
+  // extraía dali se melhorou ou piorou. Agora a variação da 1ª à última semana
+  // vem escrita, com seta.
+  const corpo = corpoDe('function _renderTmaTendenciaSVG', 'function renderTma');
+  assert.match(corpo, /Da 1ª à última semana/);
+  assert.match(corpo, /'↑'|'↓'/, 'precisa indicar a direção');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,10 +151,47 @@ test('o filtro de regional respeita o perfil regional do usuário', () => {
     'usuário de uma regional não pode trocar o filtro pra ver outra');
 });
 
-test('o ranking mostra a contagem junto do percentual', () => {
-  // 100% de 3 notas e 100% de 300 notas não são a mesma informação.
+test('o ranking é por CONTAGEM de casos graves, não por percentual', () => {
+  // 30/08/2026 — a 1ª versão ranqueava por % e empatava todas as equipes entre
+  // 62% e 98%: uma parede vermelha que não priorizava nada. "54 casos" é uma
+  // tarefa; "98,2%" não é. O percentual continua visível, mas ao lado.
   const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
-  assert.match(corpo, /\$\{e\.abaixo\}\/\$\{e\.total\}/);
-  assert.match(corpo, /piso_ranking/, 'a tela precisa dizer qual é o piso');
-  assert.match(corpo, /poucasNotas/, 'quem fica fora do ranking não pode sumir');
+  assert.match(corpo, /e\.graves \/ maxG/, 'a barra tem de ser proporcional à CONTAGEM');
+  assert.match(corpo, /\$\{e\.graves_pct\}%/, 'o percentual continua visível, como contexto');
+  assert.match(corpo, /de \$\{e\.total\}/, 'sem o denominador, 54 casos não se lê');
+});
+
+test('os cartões lideram pelo acionável, não pelos 66%', () => {
+  // "66,6% abaixo" descreve, mas não prioriza: com dois terços violando, a tela
+  // dizia "está tudo errado". O 1º cartão passou a ser o subconjunto
+  // indefensável (negativos + menos de 2 min).
+  const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
+  // Busca pelo RÓTULO renderizado, não pelo texto solto: 'Mediana' também
+  // aparece dentro da variável corMediana, bem antes dos cartões.
+  const iGraves  = corpo.indexOf('desloc-kpi-label\">Casos graves');
+  const iMediana = corpo.indexOf('desloc-kpi-label\">Mediana');
+  assert.ok(iGraves > -1 && iGraves < iMediana,
+    'o cartão de casos graves tem de vir antes do de mediana');
+  assert.match(corpo, /r\.grave_min/, 'o cartão precisa dizer qual é o corte');
+});
+
+test('a distribuição tem uma barra empilhada que faz o olho somar', () => {
+  // Sete faixas soltas quebravam as ruins em quatro barras e as boas em três —
+  // a maior barra da tela era verde e a primeira leitura saía invertida.
+  const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
+  assert.match(corpo, /_renderTmaGruposSVG\(d\.grupos/);
+  const grupos = corpoDe('function _renderTmaGruposSVG', 'function renderTma');
+  assert.match(grupos, /position:absolute/, 'os segmentos ficam lado a lado numa barra só');
+});
+
+test('a tendência é SEMANAL na TMA e continua DIÁRIA na aba vizinha', () => {
+  // Em 30/08 um replace de string trocou o título da aba errada: "Tendência
+  // diária" existe nas duas, e String.replace pega só a primeira ocorrência.
+  const tma = corpoDe('function renderTma', 'function switchHistSubtab');
+  assert.match(tma, /Tendência semanal/);
+  assert.match(tma, /_renderTmaTendenciaSVG\(d\.porSemana/);
+  assert.ok(!/Tendência diária/.test(tma), 'a TMA não pode dizer "diária"');
+
+  const elevado = corpoDe('function renderDeslocamentos', 'function _renderDeslocTendenciaSVG');
+  assert.match(elevado, /Tendência diária/, 'a aba Elevado continua diária — não renomear');
 });

@@ -131,7 +131,9 @@ test('a série diária agrupa por dia do Finalizando Trabalho', () => {
 // Ranking e piso
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('equipe abaixo do piso NÃO entra no ranking — mas também não some', () => {
+test('no ranking por PERCENTUAL o piso vale — e quem fica fora não some', () => {
+  // 30/08 — o piso migrou pro `porEquipePct`. O ranking principal virou por
+  // CONTAGEM, e lá o piso não faz falta: equipe com 3 notas não tem 12 casos.
   const rows = [
     ...Array.from({ length: PISO_RANKING }, (_, i) => linha('g' + i, 300)),
     linha('p0', 60), linha('p1', 60), linha('p2', 60),
@@ -142,14 +144,14 @@ test('equipe abaixo do piso NÃO entra no ranking — mas também não some', ()
   ]);
   const ag = agregarPoReparo(rows, mapa);
 
-  assert.deepEqual(ag.porEquipe.map(e => e.equipe), ['EQ-GRANDE']);
+  assert.deepEqual(ag.porEquipePct.map(e => e.equipe), ['EQ-GRANDE']);
   assert.deepEqual(ag.poucasNotas.map(e => e.equipe), ['EQ-PEQUENA'],
     'sumir em silêncio seria pior que aparecer com ressalva');
   assert.equal(ag.poucasNotas[0].total, 3, 'a contagem aparece junto');
   assert.equal(ag.piso_ranking, PISO_RANKING);
 });
 
-test('o ranking ordena por % abaixo, não por mediana', () => {
+test('o ranking por percentual ordena por % abaixo, não por mediana', () => {
   const rows = [
     ...Array.from({ length: 10 }, (_, i) => linha('a' + i, i < 5 ? 60 : 3000)),  // 50%
     ...Array.from({ length: 10 }, (_, i) => linha('b' + i, 599)),                // 100%
@@ -159,9 +161,9 @@ test('o ranking ordena por % abaixo, não por mediana', () => {
     ...Array.from({ length: 10 }, (_, i) => ['b' + i, 'EQ-B']),
   ]);
   const ag = agregarPoReparo(rows, mapa);
-  assert.equal(ag.porEquipe[0].equipe, 'EQ-B', '100% abaixo lidera, mesmo com mediana maior');
-  assert.equal(ag.porEquipe[0].abaixo_pct, 100);
-  assert.equal(ag.porEquipe[1].abaixo_pct, 50);
+  assert.equal(ag.porEquipePct[0].equipe, 'EQ-B', '100% abaixo lidera, mesmo com mediana maior');
+  assert.equal(ag.porEquipePct[0].abaixo_pct, 100);
+  assert.equal(ag.porEquipePct[1].abaixo_pct, 50);
 });
 
 test('sem mapa de equipe o indicador continua saindo — só o ranking fica vazio', () => {
@@ -177,7 +179,8 @@ test('nota sem equipe no mapa conta no indicador, mas não vira equipe fantasma'
   const ag = agregarPoReparo(
     [linha('a', 300), linha('semequipe', 900)], mapaCom([['a', 'EQ-A']]));
   assert.equal(ag.cobertura.medidas, 2, 'as duas contam no indicador');
-  assert.equal(ag.porEquipe.length + ag.poucasNotas.length, 1);
+  assert.equal(ag.porEquipe.length, 1, 'só a equipe conhecida aparece');
+  assert.equal(ag.porEquipe[0].equipe, 'EQ-A');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,4 +235,76 @@ test('os números da base completa reproduzem o veredito de 30/08', () => {
   assert.equal(ag.resumo.abaixo, 4017);
   assert.equal(ag.resumo.abaixo_pct, 66.6);
   assert.equal(ag.resumo.negativos, 422);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Redesenho de 30/08 — casos graves, grupos e série semanal
+// ═════════════════════════════════════════════════════════════════════════════
+
+const { GRAVE_SEG, inicioDaSemana } = require('../db/poReparoQueries');
+
+test('"grave" é reparo a menos de 2 min do fim, ou depois dele', () => {
+  const ag = agregarPoReparo([
+    linha('neg', -60), linha('zero', 0), linha('quase', 119),
+    linha('limite', 120), linha('cinza', 400), linha('ok', 900),
+  ], null);
+  assert.equal(GRAVE_SEG, 120);
+  assert.equal(ag.resumo.graves, 3, '-60, 0 e 119 — o 120 já sai');
+  assert.equal(ag.resumo.negativos, 1, 'negativo é subconjunto de grave, não outra coisa');
+  assert.equal(ag.resumo.abaixo, 5, 'grave continua contando como abaixo do critério');
+});
+
+test('os três grupos somam as medidas e não se sobrepõem', () => {
+  const ag = agregarPoReparo([
+    linha('a', -60), linha('b', 60), linha('c', 400), linha('d', 900), linha('e', 3000),
+  ], null);
+  const soma = ag.grupos.reduce((s, g) => s + g.quantidade, 0);
+  assert.equal(soma, ag.cobertura.medidas);
+  const q = Object.fromEntries(ag.grupos.map(g => [g.chave, g.quantidade]));
+  assert.equal(q.graves, 2);
+  assert.equal(q.cinzenta, 1, 'entre 2 e 10 min');
+  assert.equal(q.ok, 2);
+});
+
+test('a semana começa na segunda-feira', () => {
+  assert.equal(inicioDaSemana('2026-08-03T12:00:00Z'), '2026-08-03', 'segunda');
+  assert.equal(inicioDaSemana('2026-08-09T12:00:00Z'), '2026-08-03', 'domingo cai na semana anterior');
+  assert.equal(inicioDaSemana('2026-08-10T00:00:00Z'), '2026-08-10', 'segunda seguinte');
+  assert.equal(inicioDaSemana('lixo'), null);
+});
+
+test('a série semanal agrupa e não inventa semana vazia', () => {
+  // Preencher semana sem nota com zero puxaria a curva pra baixo como se o
+  // apontamento tivesse piorado — num indicador que é razão, zero é mentira.
+  const ag = agregarPoReparo([
+    linha('a', 60,  { finalizando_em: '2026-08-03T12:00:00Z' }),
+    linha('b', 900, { finalizando_em: '2026-08-05T12:00:00Z' }),
+    linha('c', 300, { finalizando_em: '2026-08-17T12:00:00Z' }),   // pula a semana do 10
+  ], null);
+  assert.equal(ag.porSemana.length, 2, 'a semana sem nota não aparece');
+  assert.deepEqual(ag.porSemana.map(s => s.semana), ['2026-08-03', '2026-08-17']);
+  assert.equal(ag.porSemana[0].total, 2);
+  assert.equal(ag.porSemana[0].graves_pct, 50);
+});
+
+test('o ranking por equipe ordena por CONTAGEM de graves', () => {
+  // Equipe grande com muitos casos vem antes de equipe pequena com 100%.
+  const rows = [
+    ...Array.from({ length: 40 }, (_, i) => linha('g' + i, i < 12 ? 30 : 900)),  // 12 graves
+    ...Array.from({ length: 4 },  (_, i) => linha('p' + i, 30)),                 // 4 graves, 100%
+  ];
+  const mapa = new Map([
+    ...Array.from({ length: 40 }, (_, i) => ['g' + i, { team_name: 'EQ-GRANDE', regional: 'GUA' }]),
+    ...Array.from({ length: 4 },  (_, i) => ['p' + i, { team_name: 'EQ-PEQUENA', regional: 'GUA' }]),
+  ]);
+  const ag = agregarPoReparo(rows, mapa);
+  assert.equal(ag.porEquipe[0].equipe, 'EQ-GRANDE');
+  assert.equal(ag.porEquipe[0].graves, 12);
+  assert.equal(ag.porEquipe[1].equipe, 'EQ-PEQUENA');
+  assert.equal(ag.porEquipe[1].graves_pct, 100,
+    'a pequena tem 100% mas 4 casos — vem depois, e o % continua visível');
+  // O ranking por CONTAGEM não precisa de piso: equipe com 4 notas não consegue
+  // ter 12 casos. O piso segue valendo pro ranking por percentual.
+  assert.equal(ag.porEquipe.length, 2, 'ninguém é excluído do ranking por contagem');
+  assert.equal(ag.porEquipePct.length, 1, 'no ranking por % o piso corta a pequena');
 });

@@ -157,8 +157,37 @@ const FAIXAS = [
   { chave: '60_mais',   rotulo: '60 min ou mais',           de: 3600,      ate: Infinity },
 ];
 
-/** Piso de notas medidas pra uma equipe entrar no ranking (§7.3 da spec). */
+/** Piso de notas medidas pra uma equipe entrar no ranking por PERCENTUAL. */
 const PISO_RANKING = 10;
+
+/**
+ * Limite do "caso grave", em segundos.
+ *
+ * 30/08/2026 — a primeira versão da tela destacava os 66,6% abaixo do critério,
+ * e isso não priorizava nada: com dois terços da base violando, a tela dizia
+ * "está tudo errado" e não "comece por estes".
+ *
+ * O corte em 2 minutos separa dois problemas que são qualitativamente
+ * diferentes e estavam somados no mesmo número:
+ *
+ *   - nota com 8 min → apontamento impreciso, discutível, zona cinzenta;
+ *   - nota com 30 segundos, ou com o reparo DEPOIS do fim do trabalho → o
+ *     horário não descreve nada do que aconteceu. Indefensável.
+ *
+ * Negativo entra aqui por construção (todo negativo é < 120). Medido na base
+ * completa de agosto: 620 de 1.808 medidas, 34,3%.
+ */
+const GRAVE_SEG = 120;
+
+/** Segunda-feira da semana de um instante ISO — chave da série semanal. */
+function inicioDaSemana(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const dia = d.getUTCDay();                 // 0=dom
+  const recuo = (dia === 0 ? 6 : dia - 1);   // segunda = início
+  const seg = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - recuo));
+  return seg.toISOString().slice(0, 10);
+}
 
 function _percentil(ordenado, p) {
   if (!ordenado.length) return null;
@@ -194,6 +223,7 @@ function agregarPoReparo(linhas, mapaEquipe) {
   };
 
   const abaixo = deltas.filter(d => d < MINIMO_SEG).length;
+  const graves = deltas.filter(d => d < GRAVE_SEG).length;
   const resumo = {
     mediana_min:    _min1(_percentil(deltas, 50)),
     p10_min:        _min1(_percentil(deltas, 10)),
@@ -202,9 +232,25 @@ function agregarPoReparo(linhas, mapaEquipe) {
     max_min:        _min1(deltas[deltas.length - 1] ?? null),
     abaixo:         abaixo,
     abaixo_pct:     medidas.length ? +(100 * abaixo / medidas.length).toFixed(1) : 0,
+    // O número que a tela destaca: o subconjunto indefensável. Ver GRAVE_SEG.
+    graves:         graves,
+    graves_pct:     medidas.length ? +(100 * graves / medidas.length).toFixed(1) : 0,
     negativos:      deltas.filter(d => d < 0).length,
     minimo_min:     MINIMO_SEG / 60,
+    grave_min:      GRAVE_SEG / 60,
   };
+
+  // Três grupos pra barra empilhada. Sete faixas soltas faziam o olho não somar:
+  // as ruins ficavam quebradas em quatro barras e as boas em três, e a maior
+  // barra da tela era verde — a primeira leitura saía invertida.
+  const grupos = [
+    { chave: 'graves',   rotulo: `Graves (< ${GRAVE_SEG / 60} min ou negativo)`,
+      quantidade: graves, cor: '#c0392b' },
+    { chave: 'cinzenta', rotulo: `${GRAVE_SEG / 60} a ${MINIMO_SEG / 60} min`,
+      quantidade: abaixo - graves, cor: '#e67e22' },
+    { chave: 'ok',       rotulo: `${MINIMO_SEG / 60} min ou mais`,
+      quantidade: medidas.length - abaixo, cor: '#27ae60' },
+  ].map(g => ({ ...g, pct: medidas.length ? +(100 * g.quantidade / medidas.length).toFixed(1) : 0 }));
 
   const faixas = FAIXAS.map(f => {
     const q = deltas.filter(d => d >= f.de && d < f.ate).length;
@@ -249,25 +295,74 @@ function agregarPoReparo(linhas, mapaEquipe) {
   const equipes = [...porEquipeMap.values()].map(e => {
     const ord = [...e.deltas].sort((a, b) => a - b);
     const ab = ord.filter(d => d < MINIMO_SEG).length;
+    const gr = ord.filter(d => d < GRAVE_SEG).length;
     return {
       equipe: e.equipe, regional: e.regional, total: ord.length,
       mediana_min: _min1(_percentil(ord, 50)),
       abaixo: ab,
       abaixo_pct: +(100 * ab / ord.length).toFixed(1),
+      graves: gr,
+      graves_pct: +(100 * gr / ord.length).toFixed(1),
     };
   });
-  // Ordena por % abaixo — é a régua do D2, não a mediana.
-  const cmp = (a, b) => b.abaixo_pct - a.abaixo_pct || b.total - a.total;
+  // 30/08/2026 — ordena por CONTAGEM de casos graves, não por percentual.
+  // O ranking por % empatava todo mundo entre 62% e 98% e não priorizava nada:
+  // "98,2%" não é uma tarefa, "54 casos" é. E contagem se auto-regula — equipe
+  // com 3 notas não consegue ter 54 casos, então não precisa de piso pra não
+  // liderar indevidamente (o piso continua valendo pro ranking por %).
+  const cmpGraves = (a, b) => b.graves - a.graves || b.graves_pct - a.graves_pct;
+  const cmpPct    = (a, b) => b.abaixo_pct - a.abaixo_pct || b.total - a.total;
 
   return {
     cobertura,
     resumo,
+    grupos,
     faixas,
     porDia,
-    porEquipe:   equipes.filter(e => e.total >= PISO_RANKING).sort(cmp),
-    poucasNotas: equipes.filter(e => e.total <  PISO_RANKING).sort(cmp),
+    porSemana:   _agruparPorSemana(medidas),
+    // Ordem principal: quem tem mais casos graves pra tratar.
+    porEquipe:   [...equipes].sort(cmpGraves),
+    // Mantido pra quem quiser a leitura por proporção — aí o piso importa.
+    porEquipePct: equipes.filter(e => e.total >= PISO_RANKING).sort(cmpPct),
+    poucasNotas: equipes.filter(e => e.total <  PISO_RANKING).sort(cmpPct),
     piso_ranking: PISO_RANKING,
   };
+}
+
+/**
+ * Série SEMANAL. A diária tinha ruído demais pra responder "a cobrança
+ * adiantou?": a mediana pulava de dia pra dia e o último ponto era sempre um
+ * dia parcial, que despencava ou disparava sozinho.
+ *
+ * Semana começa na segunda. Semanas sem nota simplesmente não aparecem — não há
+ * o que preencher com zero num indicador que é razão, e um zero falso puxaria a
+ * curva pra baixo como se o apontamento tivesse piorado.
+ */
+function _agruparPorSemana(medidas) {
+  const mapa = new Map();
+  for (const r of medidas) {
+    if (!r.finalizando_em) continue;
+    const semana = inicioDaSemana(r.finalizando_em);
+    if (!semana) continue;
+    if (!mapa.has(semana)) mapa.set(semana, []);
+    mapa.get(semana).push(Number(r.delta_seg));
+  }
+  return [...mapa.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([semana, ds]) => {
+    const ord = [...ds].sort((a, b) => a - b);
+    const ab = ord.filter(d => d < MINIMO_SEG).length;
+    const gr = ord.filter(d => d < GRAVE_SEG).length;
+    const fim = new Date(semana);
+    fim.setUTCDate(fim.getUTCDate() + 6);
+    return {
+      semana,
+      rotulo: `${semana.slice(8)}/${semana.slice(5, 7)}`,
+      ate: fim.toISOString().slice(0, 10),
+      total: ord.length,
+      mediana_min: _min1(_percentil(ord, 50)),
+      abaixo_pct: +(100 * ab / ord.length).toFixed(1),
+      graves_pct: +(100 * gr / ord.length).toFixed(1),
+    };
+  });
 }
 
 /** Traduz regionais (GUA/CAC/SJC) nos setores que a tabela guarda. */
@@ -349,8 +444,10 @@ module.exports = {
   faixaDoDelta,
   agregarPoReparo,
   setoresDasRegionais,
+  inicioDaSemana,
   FAIXAS,
   PISO_RANKING,
+  GRAVE_SEG,
   EVENT_FINALIZANDO,
   MINIMO_SEG,
 };

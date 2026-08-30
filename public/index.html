@@ -4917,50 +4917,96 @@ ${matrizHTML}
       }
     }
 
-    /** Tendência diária: mediana (linha) + % abaixo do critério (barras). */
-    function _renderTmaTendenciaSVG(porDia, minimoMin) {
-      if (!porDia || porDia.length === 0) return '<div class="empty-state">Sem dados no período.</div>';
-      const W = 720, H = 200, ML = 38, MR = 38, MT = 14, MB = 26;
+    /**
+     * Tendência SEMANAL: mediana (linha) + % de casos graves (barras).
+     *
+     * 30/08/2026 — era diária e não respondia nada. A mediana pulava de dia pra
+     * dia, as barras viravam um pente ilegível, e o último ponto era sempre um
+     * dia parcial que disparava sozinho. Semanal tira o ruído e deixa o gráfico
+     * responder a única pergunta que ele existe pra responder: a cobrança
+     * adiantou?
+     *
+     * As barras passaram a ser o % de GRAVES (não o % abaixo): é o número que a
+     * tela prioriza, e é o que deveria cair primeiro se a cobrança funcionar.
+     */
+    function _renderTmaTendenciaSVG(serie, minimoMin) {
+      if (!serie || serie.length === 0) return '<div class="empty-state">Sem dados no período.</div>';
+      if (serie.length === 1) {
+        const s = serie[0];
+        return `<div class="empty-state" style="font-size:12px">Só uma semana no período —
+          mediana <strong>${s.mediana_min} min</strong>, <strong>${s.graves_pct}%</strong> graves
+          (${s.total} notas).<br>Amplie o intervalo pra ver tendência.</div>`;
+      }
+      const W = 720, H = 210, ML = 40, MR = 44, MT = 16, MB = 30;
       const iw = W - ML - MR, ih = H - MT - MB;
-      const maxMed = Math.max(minimoMin * 1.6, ...porDia.map(d => d.mediana_min || 0));
-      const x = i => ML + (porDia.length === 1 ? iw / 2 : (i * iw / (porDia.length - 1)));
+      const maxMed = Math.max(minimoMin * 1.5, ...serie.map(d => d.mediana_min || 0));
+      const x = i => ML + (i * iw / (serie.length - 1));
       const yMed = v => MT + ih - (Math.max(0, v) / maxMed) * ih;
       const yPct = v => MT + ih - (v / 100) * ih;
 
-      const barW = Math.max(2, iw / porDia.length * 0.55);
-      const barras = porDia.map((d, i) =>
-        `<rect x="${(x(i) - barW / 2).toFixed(1)}" y="${yPct(d.abaixo_pct).toFixed(1)}" `
-        + `width="${barW.toFixed(1)}" height="${(MT + ih - yPct(d.abaixo_pct)).toFixed(1)}" `
-        + `fill="#e74c3c" opacity=".16"><title>${d.data} — ${d.abaixo_pct}% abaixo (${d.total} notas)</title></rect>`
+      const barW = Math.max(6, iw / serie.length * 0.5);
+      const barras = serie.map((d, i) =>
+        `<rect x="${(x(i) - barW / 2).toFixed(1)}" y="${yPct(d.graves_pct).toFixed(1)}" `
+        + `width="${barW.toFixed(1)}" height="${(MT + ih - yPct(d.graves_pct)).toFixed(1)}" `
+        + `fill="#c0392b" opacity=".18" rx="2">`
+        + `<title>Semana de ${d.rotulo} — ${d.graves_pct}% graves · mediana ${d.mediana_min} min · ${d.total} notas</title></rect>`
       ).join('');
 
-      const pts = porDia.map((d, i) => `${x(i).toFixed(1)},${yMed(d.mediana_min || 0).toFixed(1)}`).join(' ');
-      // A linha do critério é a referência que dá sentido ao gráfico inteiro:
-      // sem ela o leitor não sabe se 6 min é bom ou ruim.
+      const pts = serie.map((d, i) => `${x(i).toFixed(1)},${yMed(d.mediana_min || 0).toFixed(1)}`).join(' ');
+      // A linha do critério dá sentido ao gráfico: sem ela, "6 min" não diz nada
+      // pra quem abre a tela pela primeira vez.
       const yCrit = yMed(minimoMin);
-      const bolinhas = porDia.map((d, i) =>
-        `<circle cx="${x(i).toFixed(1)}" cy="${yMed(d.mediana_min || 0).toFixed(1)}" r="2.5" `
-        + `fill="${(d.mediana_min || 0) < minimoMin ? '#e74c3c' : '#27ae60'}">`
-        + `<title>${d.data} — mediana ${d.mediana_min} min (${d.total} notas)</title></circle>`
+      const bolinhas = serie.map((d, i) =>
+        `<circle cx="${x(i).toFixed(1)}" cy="${yMed(d.mediana_min || 0).toFixed(1)}" r="3.5" `
+        + `fill="${(d.mediana_min || 0) < minimoMin ? '#e74c3c' : '#27ae60'}" stroke="var(--branco)" stroke-width="1">`
+        + `<title>Semana de ${d.rotulo} — mediana ${d.mediana_min} min (${d.total} notas)</title></circle>`
       ).join('');
 
-      const rotulos = porDia.map((d, i) =>
-        (i === 0 || i === porDia.length - 1 || i === Math.floor(porDia.length / 2))
-          ? `<text x="${x(i).toFixed(1)}" y="${H - 8}" font-size="10" fill="var(--text2)" text-anchor="middle">${d.data.slice(8)}/${d.data.slice(5, 7)}</text>`
-          : ''
+      const rotulos = serie.map((d, i) =>
+        `<text x="${x(i).toFixed(1)}" y="${H - 10}" font-size="10" fill="var(--text2)" text-anchor="middle">${d.rotulo}</text>`
       ).join('');
+
+      // Direção entre a primeira e a última semana — é a leitura que interessa,
+      // e deixá-la implícita fez o gráfico anterior não comunicar nada.
+      const a = serie[0].mediana_min || 0, z = serie[serie.length - 1].mediana_min || 0;
+      const dif = +(z - a).toFixed(1);
+      const seta = dif > 0.5 ? '↑' : (dif < -0.5 ? '↓' : '→');
+      const corSeta = dif > 0.5 ? '#27ae60' : (dif < -0.5 ? '#e74c3c' : 'var(--text2)');
 
       return `<svg viewBox="0 0 ${W} ${H}" class="desloc-trend-svg" preserveAspectRatio="xMidYMid meet">
         ${barras}
         <line x1="${ML}" y1="${yCrit.toFixed(1)}" x2="${W - MR}" y2="${yCrit.toFixed(1)}"
               stroke="#f39c12" stroke-width="1.5" stroke-dasharray="5 3"/>
-        <text x="${W - MR + 3}" y="${(yCrit + 3).toFixed(1)}" font-size="10" fill="#f39c12">${minimoMin}min</text>
-        <polyline points="${pts}" fill="none" stroke="#3498db" stroke-width="2"/>
+        <text x="${W - MR + 4}" y="${(yCrit + 3).toFixed(1)}" font-size="10" fill="#f39c12">${minimoMin}min</text>
+        <polyline points="${pts}" fill="none" stroke="#3498db" stroke-width="2.5"/>
         ${bolinhas}
         <text x="4" y="${MT + 8}" font-size="10" fill="var(--text2)">${maxMed.toFixed(0)}min</text>
         <text x="4" y="${MT + ih}" font-size="10" fill="var(--text2)">0</text>
         ${rotulos}
-      </svg>`;
+      </svg>
+      <div style="text-align:center;font-size:12px;margin-top:4px;color:var(--text2)">
+        Da 1ª à última semana: <strong style="color:${corSeta}">${seta} ${dif > 0 ? '+' : ''}${dif} min</strong>
+        na mediana (${a} → ${z})
+      </div>`;
+    }
+
+    /** Barra empilhada única: graves / zona cinzenta / dentro do critério. */
+    function _renderTmaGruposSVG(grupos, medidas) {
+      if (!medidas) return '';
+      let acc = 0;
+      const seg = grupos.map(g => {
+        const w = 100 * g.quantidade / medidas;
+        const x = acc; acc += w;
+        return `<div style="position:absolute;left:${x}%;width:${w}%;top:0;bottom:0;background:${g.cor}"
+                     title="${g.rotulo}: ${g.quantidade} (${g.pct}%)"></div>`;
+      }).join('');
+      const legenda = grupos.map(g =>
+        `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11.5px">
+           <span style="width:10px;height:10px;border-radius:2px;background:${g.cor};display:inline-block"></span>
+           ${g.rotulo} — <strong>${g.quantidade.toLocaleString('pt-BR')}</strong> (${g.pct}%)
+         </span>`).join('');
+      return `<div style="position:relative;height:26px;border-radius:5px;overflow:hidden;margin-bottom:10px">${seg}</div>
+              <div style="line-height:1.9">${legenda}</div>`;
     }
 
     function renderTma(d) {
@@ -4978,7 +5024,8 @@ ${matrizHTML}
       const maxFaixa = Math.max(...d.faixas.map(f => f.quantidade), 1);
       const faixasHTML = d.faixas.map(f => {
         const cor = f.chave === 'negativo' ? '#c0392b'
-          : (['0_2', '2_5', '5_10'].includes(f.chave) ? '#e74c3c' : '#27ae60');
+          : (['0_2'].includes(f.chave) ? '#c0392b'
+          : (['2_5', '5_10'].includes(f.chave) ? '#e67e22' : '#27ae60'));
         return `<div class="desloc-bar-row" style="cursor:default">
           <div class="desloc-bar-label">${f.rotulo}</div>
           <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * f.quantidade / maxFaixa).toFixed(1)}%;background:${cor}"></div></div>
@@ -4986,18 +5033,22 @@ ${matrizHTML}
         </div>`;
       }).join('');
 
-      const maxEq = Math.max(...(d.porEquipe || []).map(e => e.abaixo_pct), 1);
-      const equipesHTML = (d.porEquipe || []).slice(0, 20).map(e => `
+      // Ranking por CONTAGEM de casos graves. "54 casos" é uma tarefa;
+      // "98,2%" empatava todo mundo em vermelho e não priorizava nada.
+      const comGraves = (d.porEquipe || []).filter(e => e.graves > 0);
+      const maxG = Math.max(...comGraves.map(e => e.graves), 1);
+      const equipesHTML = comGraves.slice(0, 20).map(e => `
         <div class="desloc-bar-row" style="cursor:default">
           <div class="desloc-bar-label">${e.equipe} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
-          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * e.abaixo_pct / maxEq).toFixed(1)}%;background:${e.abaixo_pct > 66 ? '#e74c3c' : (e.abaixo_pct > 33 ? '#f39c12' : '#27ae60')}"></div></div>
-          <div class="desloc-bar-count">${e.abaixo_pct}% <span style="font-size:10px;opacity:.6">(${e.abaixo}/${e.total})</span></div>
-        </div>`).join('') || '<div class="empty-state" style="font-size:12px">Sem equipe com notas suficientes no período.</div>';
+          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * e.graves / maxG).toFixed(1)}%;background:#c0392b"></div></div>
+          <div class="desloc-bar-count">${e.graves} <span style="font-size:10px;opacity:.6">de ${e.total} (${e.graves_pct}%)</span></div>
+        </div>`).join('') || '<div class="empty-state" style="font-size:12px">Nenhum caso grave no período.</div>';
 
-      const poucas = (d.poucasNotas || []).length
+      const totalGravesEq = comGraves.reduce((s, e) => s + e.graves, 0);
+      const poucas = comGraves.length > 20
         ? `<div style="margin-top:10px;font-size:11px;color:var(--text2);border-top:1px solid var(--cinza2);padding-top:8px">
-             <strong>${d.poucasNotas.length} equipe(s) com menos de ${d.piso_ranking} notas medidas</strong> — fora do ranking porque
-             poucas notas viram percentual instável: ${d.poucasNotas.slice(0, 12).map(e => `${e.equipe} (${e.abaixo}/${e.total})`).join(' · ')}
+             Mostrando as 20 primeiras de <strong>${comGraves.length} equipes</strong> com caso grave no período
+             (${totalGravesEq.toLocaleString('pt-BR')} casos no total).
            </div>` : '';
 
       const casosHTML = (d.casos || []).slice(0, 300).map(x => `<tr>
@@ -5009,15 +5060,11 @@ ${matrizHTML}
 
       content.innerHTML = `
         <div class="desloc-kpis">
-          <div class="desloc-kpi">
-            <div class="desloc-kpi-label">Mediana</div>
-            <div class="desloc-kpi-value" style="color:${corMediana}">${r.mediana_min} min</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">critério: ${r.minimo_min} min</div>
-          </div>
-          <div class="desloc-kpi">
-            <div class="desloc-kpi-label">Abaixo do critério</div>
-            <div class="desloc-kpi-value" style="color:#e74c3c">${r.abaixo_pct}%</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">${r.abaixo.toLocaleString('pt-BR')} de ${c.medidas.toLocaleString('pt-BR')} medidas</div>
+          <div class="desloc-kpi" style="border-color:#c0392b;border-width:2px">
+            <div class="desloc-kpi-label">Casos graves</div>
+            <div class="desloc-kpi-value" style="color:#c0392b">${r.graves.toLocaleString('pt-BR')}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">
+              reparo &lt; ${r.grave_min} min do fim, ou depois dele — <strong>${r.graves_pct}%</strong></div>
           </div>
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Reparo após o fim</div>
@@ -5025,10 +5072,20 @@ ${matrizHTML}
             <div style="font-size:11px;color:var(--text2);margin-top:2px">impossível — pior: ${r.min_min} min</div>
           </div>
           <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Mediana</div>
+            <div class="desloc-kpi-value" style="color:${corMediana}">${r.mediana_min} min</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">critério ${r.minimo_min} min · ${r.abaixo_pct}% abaixo</div>
+          </div>
+          <div class="desloc-kpi">
             <div class="desloc-kpi-label">Cobertura</div>
             <div class="desloc-kpi-value" style="color:${c.cobertura_pct < 80 ? '#f39c12' : '#27ae60'}">${c.cobertura_pct}%</div>
             <div style="font-size:11px;color:var(--text2);margin-top:2px">${c.sem_repair_time.toLocaleString('pt-BR')} sem Horário do Reparo</div>
           </div>
+        </div>
+
+        <div class="desloc-panel" style="margin-bottom:16px">
+          <h3>Onde estão as ${c.medidas.toLocaleString('pt-BR')} notas medidas</h3>
+          ${_renderTmaGruposSVG(d.grupos || [], c.medidas)}
         </div>
 
         <div style="background:#fdf3d7;border:1px solid #e8c96a;border-left:4px solid #f39c12;border-radius:6px;
@@ -5041,17 +5098,17 @@ ${matrizHTML}
 
         <div class="desloc-grid">
           <div class="desloc-panel">
-            <h3>Distribuição</h3>
+            <h3>Distribuição detalhada</h3>
             ${faixasHTML}
           </div>
           <div class="desloc-panel">
-            <h3>Tendência diária <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px"><span style="color:#3498db">━</span> mediana <span style="color:#e74c3c;margin-left:6px">▉</span> % abaixo</span></h3>
-            ${_renderTmaTendenciaSVG(d.porDia, r.minimo_min)}
+            <h3>Tendência semanal <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px"><span style="color:#3498db">━</span> mediana <span style="color:#c0392b;margin-left:6px">▉</span> % graves</span></h3>
+            ${_renderTmaTendenciaSVG(d.porSemana, r.minimo_min)}
           </div>
         </div>
 
         <div class="desloc-panel" style="margin-top:18px">
-          <h3>Equipes — % abaixo do critério <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">mínimo de ${d.piso_ranking} notas medidas</span></h3>
+          <h3>Equipes — casos graves <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
           ${equipesHTML}
           ${poucas}
         </div>
