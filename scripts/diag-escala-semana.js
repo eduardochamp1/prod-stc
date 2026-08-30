@@ -209,32 +209,37 @@ function tabela(linhas, colunas) {
   // seja, ninguém trabalha todo fim de semana — é revezamento. Denominador
   // errado produz o oposto da verdade, e aqui não se maquia número.
   H('3. QUEM MAIS TRABALHA NO FIM DE SEMANA (sobre os dias de fds do mês)');
+  // Duas queries simples em vez de um CTE de três níveis. A versão anterior
+  // fazia `FROM porcol, tot JOIN equipes_oficiais ON ...porcol...` e morria com
+  // "invalid reference to FROM-clause entry": o JOIN liga-se ao ÚLTIMO item da
+  // lista separada por vírgula (tot), e porcol sai do escopo do ON. Misturar
+  // vírgula com JOIN explícito é a armadilha — aqui não precisa de nenhum dos
+  // dois (30/08/2026).
+  const { rows: [{ n: totalFdsRaw }] } = await pool.query(
+    `SELECT count(DISTINCT data)::int AS n FROM public.escala_dia
+      WHERE data BETWEEN $1::date AND $2::date AND extract(dow from data) IN (0,6)`,
+    [ini, fim]);
+  const totalFds = Number(totalFdsRaw) || 0;
+
   const { rows: semFolga } = await pool.query(
-    `WITH dias_fds AS (
-       SELECT DISTINCT data FROM public.escala_dia
-        WHERE data BETWEEN $1::date AND $2::date AND extract(dow from data) IN (0,6)),
-     tot AS (SELECT count(*)::int AS n FROM dias_fds),
-     porcol AS (
-       SELECT ed.equipe, ed.colaborador_codigo, ed.colaborador_nome,
-              count(DISTINCT ed.data) FILTER (WHERE ec.inicio_escala IS NOT NULL
-                                                AND ec.fim_escala    IS NOT NULL) AS fds_trab
-         FROM public.escala_dia ed
-         LEFT JOIN public.escalas_catalogo ec
-           ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
-        WHERE ed.data BETWEEN $1::date AND $2::date
-          AND extract(dow from ed.data) IN (0,6)
-        GROUP BY 1,2,3)
-     SELECT upper(btrim(eo.sigla)) AS sigla, coalesce(upper(eo.tipo),'—') AS tipo,
-            porcol.colaborador_nome, porcol.fds_trab, tot.n AS fds_no_mes
-       FROM porcol, tot
+    `SELECT upper(btrim(eo.sigla)) AS sigla, coalesce(upper(eo.tipo),'—') AS tipo,
+            ed.colaborador_nome,
+            count(DISTINCT ed.data) FILTER (WHERE ec.inicio_escala IS NOT NULL
+                                              AND ec.fim_escala    IS NOT NULL) AS fds_trab
+       FROM public.escala_dia ed
        JOIN public.equipes_oficiais eo
-         ON upper(btrim(eo.sigla)) = upper(btrim(porcol.equipe)) AND eo.ativo
-      WHERE tot.n > 0 AND porcol.fds_trab > 0
+         ON upper(btrim(eo.sigla)) = upper(btrim(ed.equipe)) AND eo.ativo
+       LEFT JOIN public.escalas_catalogo ec
+         ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
+      WHERE ed.data BETWEEN $1::date AND $2::date
+        AND extract(dow from ed.data) IN (0,6)
         AND coalesce(upper(eo.tipo),'—') NOT LIKE 'PLANT%'
-      ORDER BY porcol.fds_trab DESC, 1, 3
+      GROUP BY 1,2,3
+     HAVING count(DISTINCT ed.data) FILTER (WHERE ec.inicio_escala IS NOT NULL
+                                              AND ec.fim_escala    IS NOT NULL) > 0
+      ORDER BY 4 DESC, 1, 3
       LIMIT 25`, [ini, fim]);
 
-  const totalFds = semFolga.length ? Number(semFolga[0].fds_no_mes) : 0;
   info(`dias de fim de semana no mês: ${totalFds}`);
   if (semFolga.length === 0) {
     ok('nenhum colaborador não-plantão com turno em fim de semana.');
@@ -245,8 +250,8 @@ function tabela(linhas, colunas) {
       { rotulo: 'equipe',       get: r => r.sigla },
       { rotulo: 'tipo',         get: r => r.tipo },
       { rotulo: 'colaborador',  get: r => (r.colaborador_nome || '?').slice(0, 38) },
-      { rotulo: 'fds trab/mês', get: r => `${r.fds_trab}/${r.fds_no_mes}` },
-      { rotulo: '%',            get: r => `${Math.round((r.fds_trab / r.fds_no_mes) * 100)}%` },
+      { rotulo: 'fds trab/mês', get: r => `${r.fds_trab}/${totalFds}` },
+      { rotulo: '%',            get: r => `${Math.round((r.fds_trab / totalFds) * 100)}%` },
     ]);
     console.log('');
     if (sempre.length) {
