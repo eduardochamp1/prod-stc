@@ -40,7 +40,7 @@
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --dump-chaves
  *   node -r dotenv/config scripts/diag-po-reparo.js --numero 104875481 --probe-endpoints
  *
- * ⚠️ Faz 1 requisição à API da WPA (ou 6, com --probe-endpoints). Todas GET.
+ * ⚠️ Faz 1 requisição à API da WPA (ou 10, com --probe-endpoints). Todas GET.
  * Não faz login novo se o token estiver válido. Não escreve no banco.
  */
 
@@ -206,12 +206,23 @@ async function main() {
     const { wpaFetch } = require('../services/wpaService');
     const sid = encodeURIComponent(nd.sector_id || 'DESG');
     const nid = encodeURIComponent(nd.note_id);
+    // Não são chutes: são os endpoints que o PRÓPRIO PORTAL chama ao abrir a
+    // nota, capturados com o Interceptor do Postman em 30/08/2026. A ordem é a
+    // da minha aposta — `completeInterruptions` primeiro porque, numa nota de
+    // emergência, "Horário do Reparo" é quando a interrupção foi sanada. Esse
+    // endpoint já tem wrapper nosso (getNoteInterruptions, P1-33) que nunca foi
+    // ligado a nada — e o normalizador dele descarta campo desconhecido, então
+    // só o cru responde.
     const candidatos = [
+      `/api/Notes/${nid}/completeInterruptions`,
+      `/api/notesMEC/${nid}`,
+      `/api/Notes/${nid}/historic`,
+      `/api/notes/getFormattedEquipments/${nid}`,
+      `/api/callback-information?noteId=${nid}`,
+      `/api/notes/${nid}/getnotebreakdisplacementtime`,
+      `/api/listener-mode/logs?noteId=${nid}`,
+      `/api/notes/clustering/getName/${nid}`,
       `/api/Notes/${nid}/details?sectorId=${sid}`,
-      `/api/Notes/${nid}?sectorId=${sid}`,
-      `/api/Notes/${nid}/execution?sectorId=${sid}`,
-      `/api/Notes/${nid}/occurrences?sectorId=${sid}`,
-      `/api/Notes/${nid}/serviceActions?sectorId=${sid}`,
     ];
     for (const path of candidatos) {
       let r;
@@ -231,9 +242,23 @@ async function main() {
         + (hits.length ? JSON.stringify(hits.slice(0, 8)) : 'nenhum'));
       // 17:18:45 é o Horário do Reparo do print — procurar o horário cru acha o
       // campo mesmo que o nome dele não tenha nada a ver com "reparo".
+      // 17:18:45 é o Horário do Reparo do print. Procurar o horário CRU acha o
+      // campo mesmo que o nome dele não tenha nada a ver com "reparo" — que é
+      // exatamente o caso se ele vier como "RestorationTime", "PowerOnDate" etc.
+      // 20:18:45 é o mesmo instante em UTC, que é como a EDP costuma mandar.
       const txt = JSON.stringify(d);
-      for (const alvo of ['17:18:45', 'T17:18', '20:18:45']) {
-        if (txt.includes(alvo)) console.log(`      ⭐ contém "${alvo}" — provável origem do Horário do Reparo`);
+      const achou = ['17:18:45', 'T17:18', '20:18:45'].filter(a => txt.includes(a));
+      if (achou.length) {
+        console.log(`      ⭐⭐ ACHOU ${achou.join(', ')} — esta é a origem do Horário do Reparo`);
+        console.log(`      ── resposta completa ──`);
+        console.log(JSON.stringify(d, null, 2).split('\n').slice(0, 120).map(l => '      ' + l).join('\n'));
+      } else if (chaves > 0 || (Array.isArray(d) && d.length)) {
+        // Sem o horário-alvo, as CHAVES ainda dizem se vale insistir neste
+        // endpoint com outra nota (esta pode simplesmente não ter ocorrência).
+        const amostra = Array.isArray(d) ? d[0] : d;
+        if (amostra && typeof amostra === 'object') {
+          console.log(`      campos: ${Object.keys(amostra).slice(0, 30).join(', ')}`);
+        }
       }
     }
   }
