@@ -169,20 +169,23 @@ function regraCSS(seletor) {
   return CSS.slice(i, CSS.indexOf('}', i));
 }
 
-test('a coluna do rótulo encolhe até o conteúdo — a sobra vai pra barra', () => {
-  // Era `1.2fr 2fr 110px`, calibrado pro painel estreito da distribuição. No
-  // painel de largura cheia do ranking isso virava ~500px de vazio antes da
-  // barra começar.
-  //
-  // `minmax(140px, 230px)` foi a 1ª tentativa e NÃO resolveu: minmax ocupa a
-  // faixa inteira quando há espaço sobrando, então a coluna ia pros 230px de
-  // qualquer jeito. Só `fit-content()` encolhe até o rótulo mais largo.
+test('todas as barras da tela partem da MESMA origem', () => {
+  // Barra só se compara a partir de uma origem comum. Duas tentativas erradas,
+  // nesta ordem:
+  //   `1.2fr 2fr 110px`  — calibrado pro painel estreito; no painel de largura
+  //                        cheia virava ~500px de vazio antes da barra.
+  //   `minmax(140,230)`  — reserva o teto inteiro quando há espaço sobrando.
+  //   `fit-content(230)` — resolvia o vazio, mas media o rótulo mais largo de
+  //                        CADA lista: a distribuição ("negativo (reparo
+  //                        DEPOIS)") e o ranking ("EPMRT32 GUA") ganhavam
+  //                        eixos diferentes e paravam de ser comparáveis.
+  // Largura FIXA é o que garante a origem única entre painéis.
   const r = regraCSS('.desloc-bar-row');
-  assert.match(r, /grid-template-columns:\s*fit-content\(\s*\d+px\s*\)\s+1fr\s+\d+px/,
-    'a 1ª coluna tem de encolher ao conteúdo e a do meio absorver a sobra');
-  assert.doesNotMatch(r, /1\.2fr\s+2fr/);
-  assert.doesNotMatch(r, /grid-template-columns:\s*minmax/,
-    'minmax reserva o teto inteiro — foi exatamente o que não funcionou');
+  assert.match(r, /grid-template-columns:\s*\d+px\s+1fr\s+\d+px/,
+    'a 1ª coluna tem de ser fixa — é o eixo comum de todas as listas');
+  for (const proibido of [/1\.2fr\s+2fr/, /minmax/, /fit-content/]) {
+    assert.doesNotMatch(r, proibido, 'coluna elástica dá um eixo por painel');
+  }
 });
 
 test('o trilho e o hover não são brancos sobre fundo claro', () => {

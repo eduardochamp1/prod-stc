@@ -5135,6 +5135,40 @@ ${matrizHTML}
              (${totalGravesEq.toLocaleString('pt-BR')} casos no total).
            </div>` : '';
 
+      // Quem não preenche o Horário do Reparo. Estas notas não têm delta, então
+      // não aparecem em NENHUMA barra do ranking ao lado — a equipe que nunca
+      // preenche fica invisível na tela inteira. Ver semReparoPorEquipe.
+      const semRep = d.semReparoPorEquipe || [];
+      const TOP_SEM_REP = 15;
+      const semRepHTML = semRep.slice(0, TOP_SEM_REP).map(e => `<tr>
+          <td><strong>${e.equipe}</strong> <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></td>
+          <td style="text-align:right;font-weight:600;color:#e67e22">${e.sem.toLocaleString('pt-BR')}</td>
+          <td style="text-align:right;color:var(--text2)">de ${e.total.toLocaleString('pt-BR')}</td>
+          <td style="text-align:right;font-weight:600;color:${e.pct >= 50 ? '#c0392b' : 'var(--text2)'}">${e.pct}%</td>
+        </tr>`).join('');
+      const semRepTotal = semRep.reduce((s, e) => s + e.sem, 0);
+      const semRepPainel = semRep.length === 0
+        ? `<div class="empty-state" style="font-size:12px">Todas as notas do período têm
+             Horário do Reparo preenchido.</div>`
+        : `<div style="max-height:${TOP_SEM_REP * 27 + 30}px;overflow:auto">
+             <table class="desloc-tbl">
+               <thead><tr>
+                 <th>Equipe</th><th style="text-align:right">Sem horário</th>
+                 <th style="text-align:right">Notas</th><th style="text-align:right">%</th>
+               </tr></thead>
+               <tbody>${semRepHTML}</tbody>
+             </table>
+           </div>
+           <div style="margin-top:10px;font-size:11px;color:var(--text2);border-top:1px solid var(--cinza2);padding-top:8px">
+             ${semRep.length > TOP_SEM_REP
+               ? `Mostrando as ${TOP_SEM_REP} primeiras de <strong>${semRep.length} equipes</strong>. `
+               : `<strong>${semRep.length} equipe${semRep.length !== 1 ? 's' : ''}</strong>. `}
+             ${semRepTotal.toLocaleString('pt-BR')} nota(s) sem o campo${
+               (d.semReparoSemEquipe || 0) > 0
+                 ? ` — mais ${d.semReparoSemEquipe.toLocaleString('pt-BR')} sem equipe identificada`
+                 : ''}.
+           </div>`;
+
       // Detalhamento: a diferença sem os dois apontamentos não deixa conferir
       // nada. Com eles, dá pra abrir a nota no portal e bater linha a linha.
       const _hora = iso => {
@@ -5208,10 +5242,16 @@ ${matrizHTML}
           </div>
         </div>
 
-        <div class="desloc-panel" style="margin-top:18px">
-          <h3>Equipes — ${rkNome} <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
-          ${equipesHTML}
-          ${poucas}
+        <div class="desloc-grid desloc-grid-larga" style="margin-top:18px">
+          <div class="desloc-panel">
+            <h3>Equipes — ${rkNome} <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
+            ${equipesHTML}
+            ${poucas}
+          </div>
+          <div class="desloc-panel">
+            <h3>Sem Horário do Reparo <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">não entram em nenhuma barra ao lado</span></h3>
+            ${semRepPainel}
+          </div>
         </div>
 
         <div class="desloc-panel" style="margin-top:18px">

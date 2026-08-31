@@ -319,6 +319,45 @@ function agregarPoReparo(linhas, mapaEquipe) {
     has_repair_false: rows.filter(r => r.has_repair === false).length,
   };
 
+  // ── Notas SEM Horário do Reparo, por equipe ───────────────────────────────
+  // Pedido do José em 31/08/2026. Estas notas não têm delta, então não entram
+  // em `medidas` — e `porEquipe` é montado só a partir de `medidas`. Ou seja:
+  // a equipe que NUNCA preenche o campo não aparece no ranking nem como boa
+  // nem como ruim, ela simplesmente não existe na tela. O contador de
+  // cobertura dizia quantas notas eram, mas não de quem.
+  //
+  // ⚠️ Sem filtro de faixa, de propósito: nota sem horário não tem delta, logo
+  // não pertence a faixa nenhuma. Recortar por faixa esvaziaria a tabela.
+  //
+  // A soma fecha por construção: sem_por_equipe + sem_sem_equipe ===
+  // cobertura.sem_repair_time. Ver teste.
+  const _equipeDaLinha = r => {
+    const info = mapaEquipe && mapaEquipe.get ? mapaEquipe.get(r.note_id) : null;
+    return {
+      equipe:   (info && info.team_name) || r.team_name || null,
+      regional: (info && info.regional)  || r.regional  || null,
+    };
+  };
+  const semMap = new Map();
+  let semReparoSemEquipe = 0;
+  for (const r of rows) {
+    const { equipe, regional } = _equipeDaLinha(r);
+    if (!equipe) {
+      if (!r.repair_time) semReparoSemEquipe++;
+      continue;
+    }
+    if (!semMap.has(equipe)) semMap.set(equipe, { equipe, regional, sem: 0, total: 0 });
+    const e = semMap.get(equipe);
+    e.total++;
+    if (!r.repair_time) e.sem++;
+  }
+  const semReparoPorEquipe = [...semMap.values()]
+    .filter(e => e.sem > 0)
+    .map(e => ({ ...e, pct: e.total ? +(100 * e.sem / e.total).toFixed(1) : 0 }))
+    // Contagem primeiro (é a fila de cobrança); % desempata, porque 8 de 8 é
+    // pior que 8 de 200.
+    .sort((a, b) => b.sem - a.sem || b.pct - a.pct);
+
   const abaixo = deltas.filter(d => d < MINIMO_SEG).length;
   const graves = deltas.filter(d => d < GRAVE_SEG).length;
   const resumo = {
@@ -423,6 +462,9 @@ function agregarPoReparo(linhas, mapaEquipe) {
     porEquipePct: equipes.filter(e => e.total >= PISO_RANKING).sort(cmpPct),
     poucasNotas: equipes.filter(e => e.total <  PISO_RANKING).sort(cmpPct),
     piso_ranking: PISO_RANKING,
+    // Quem não preenche o Horário do Reparo — invisível no ranking acima.
+    semReparoPorEquipe,
+    semReparoSemEquipe,
   };
 }
 
