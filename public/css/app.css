@@ -4644,19 +4644,29 @@
   color: var(--text2);
 }
 
+/* 31/08/2026 — "na tabela, as barras estão desconfiguradas".
+   Era `1.2fr 2fr 110px`, calibrado para o painel ESTREITO da distribuição
+   (metade da largura, dentro do .desloc-grid). O ranking de equipes é painel
+   de largura CHEIA: 1.2fr virava ~500px de vazio para um rótulo de ~120px
+   ("EPMRT32 GUA"), e as barras começavam no meio da tela.
+   Com minmax, o rótulo para de crescer e a sobra vai toda para a barra —
+   no painel estreito o resultado é praticamente igual ao de antes. */
 .desloc-bar-row {
   display: grid;
-  grid-template-columns: 1.2fr 2fr 110px;
+  grid-template-columns: minmax(140px, 230px) 1fr 110px;
   gap: 8px;
   align-items: center;
   padding: 5px 6px;
   border-radius: 4px;
   cursor: pointer;
 }
-.desloc-bar-row:hover { background: rgba(255, 255, 255, .04); }
+/* Estes dois eram BRANCO sobre fundo claro — invisíveis. Sobra de uma paleta
+   escura anterior: o painel é `--cinza1` (#f5f5f3), então `rgba(255,255,255,.06)`
+   não pintava nada e a barra ficava boiando sem trilho. */
+.desloc-bar-row:hover { background: rgba(0, 0, 0, .035); }
 .desloc-bar-label { font-size: 12px; }
 .desloc-bar-track {
-  background: rgba(255, 255, 255, .06);
+  background: var(--cinza2);
   height: 14px;
   border-radius: 3px;
   overflow: hidden;

@@ -157,6 +157,35 @@ test('a barra e o número usam a métrica do ranking, não graves fixo', () => {
     'quem decide é o backend — ele conta sobre a base inteira, não sobre as 1.000 da tabela');
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Layout da barra — reportado em 31/08 como "as barras estão desconfiguradas"
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
+
+function regraCSS(seletor) {
+  const i = CSS.indexOf(seletor + ' {');
+  assert.ok(i > -1, `não achei a regra ${seletor}`);
+  return CSS.slice(i, CSS.indexOf('}', i));
+}
+
+test('o rótulo para de crescer — a sobra vai pra barra', () => {
+  // Era `1.2fr 2fr 110px`, calibrado pro painel estreito da distribuição. No
+  // painel de largura cheia do ranking isso virava ~500px de vazio antes da
+  // barra começar.
+  const r = regraCSS('.desloc-bar-row');
+  assert.match(r, /grid-template-columns:\s*minmax\(\s*\d+px\s*,\s*\d+px\s*\)\s+1fr\s+\d+px/,
+    'a 1ª coluna precisa de teto e a do meio tem de absorver a sobra');
+  assert.doesNotMatch(r, /1\.2fr\s+2fr/);
+});
+
+test('o trilho e o hover não são brancos sobre fundo claro', () => {
+  // O painel é --cinza1 (#f5f5f3). `rgba(255,255,255,.06)` não pintava nada e
+  // a barra ficava boiando sem trilho — parte do "desconfiguradas".
+  assert.doesNotMatch(regraCSS('.desloc-bar-track'), /rgba\(\s*255\s*,\s*255\s*,\s*255/);
+  assert.doesNotMatch(regraCSS('.desloc-bar-row:hover'), /rgba\(\s*255\s*,\s*255\s*,\s*255/);
+});
+
 test('o título acompanha a métrica', () => {
   assert.match(SRC, /<h3>Equipes — \$\{rkNome\}/,
     'título fixo "casos graves" mentiria quando o ranking segue a faixa');
