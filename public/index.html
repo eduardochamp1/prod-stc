@@ -5104,21 +5104,34 @@ ${matrizHTML}
         </div>`;
       }).join('');
 
-      // Ranking por CONTAGEM de casos graves. "54 casos" é uma tarefa;
-      // "98,2%" empatava todo mundo em vermelho e não priorizava nada.
-      const comGraves = (d.porEquipe || []).filter(e => e.graves > 0);
-      const maxG = Math.max(...comGraves.map(e => e.graves), 1);
-      const equipesHTML = comGraves.slice(0, 20).map(e => `
+      // Ranking por CONTAGEM. "54 casos" é uma tarefa; "98,2%" empatava todo
+      // mundo em vermelho e não priorizava nada.
+      //
+      // 31/08/2026 — o ranking passou a SEGUIR a faixa selecionada. Antes ele
+      // contava casos graves mesmo com a tela inteira filtrada por outra faixa,
+      // e respondia uma pergunta que ninguém tinha feito. Sem faixa marcada
+      // nada muda. Quem decide é o backend (`d.ranking`), pra contagem sair
+      // sobre a base inteira e não sobre as 1.000 linhas da tabela.
+      const rkFaixa  = !!(d.ranking && d.ranking.por === 'faixa');
+      const rkVal    = e => (rkFaixa ? (e.na_faixa || 0) : e.graves);
+      const rkPct    = e => (rkFaixa ? (e.na_faixa_pct || 0) : e.graves_pct);
+      const rkNome   = rkFaixa ? `casos ${d.ranking.rotulo}` : 'casos graves';
+      const TOP_EQUIPES = 15;
+
+      const comGraves = (d.porEquipe || []).filter(e => rkVal(e) > 0);
+      const maxG = Math.max(...comGraves.map(rkVal), 1);
+      const equipesHTML = comGraves.slice(0, TOP_EQUIPES).map(e => `
         <div class="desloc-bar-row" style="cursor:default">
           <div class="desloc-bar-label">${e.equipe} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
-          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * e.graves / maxG).toFixed(1)}%;background:#c0392b"></div></div>
-          <div class="desloc-bar-count">${e.graves} <span style="font-size:10px;opacity:.6">de ${e.total} (${e.graves_pct}%)</span></div>
-        </div>`).join('') || '<div class="empty-state" style="font-size:12px">Nenhum caso grave no período.</div>';
+          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * rkVal(e) / maxG).toFixed(1)}%;background:#c0392b"></div></div>
+          <div class="desloc-bar-count">${rkVal(e)} <span style="font-size:10px;opacity:.6">de ${e.total} (${rkPct(e)}%)</span></div>
+        </div>`).join('') || `<div class="empty-state" style="font-size:12px">Nenhum ${rkFaixa ? 'caso na faixa selecionada' : 'caso grave'} no período.</div>`;
 
-      const totalGravesEq = comGraves.reduce((s, e) => s + e.graves, 0);
-      const poucas = comGraves.length > 20
+      const totalGravesEq = comGraves.reduce((s, e) => s + rkVal(e), 0);
+      const poucas = comGraves.length > TOP_EQUIPES
         ? `<div style="margin-top:10px;font-size:11px;color:var(--text2);border-top:1px solid var(--cinza2);padding-top:8px">
-             Mostrando as 20 primeiras de <strong>${comGraves.length} equipes</strong> com caso grave no período
+             Mostrando as ${TOP_EQUIPES} primeiras de <strong>${comGraves.length} equipes</strong>
+             com ${rkFaixa ? 'caso na faixa' : 'caso grave'} no período
              (${totalGravesEq.toLocaleString('pt-BR')} casos no total).
            </div>` : '';
 
@@ -5196,7 +5209,7 @@ ${matrizHTML}
         </div>
 
         <div class="desloc-panel" style="margin-top:18px">
-          <h3>Equipes — casos graves <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
+          <h3>Equipes — ${rkNome} <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
           ${equipesHTML}
           ${poucas}
         </div>

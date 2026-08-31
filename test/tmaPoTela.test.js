@@ -198,14 +198,21 @@ test('as horas da tabela são renderizadas em BRT, não no fuso do navegador', (
   assert.match(corpo, /timeZone: 'America\/Sao_Paulo'/);
 });
 
-test('o ranking é por CONTAGEM de casos graves, não por percentual', () => {
+test('o ranking é por CONTAGEM, não por percentual', () => {
   // 30/08/2026 — a 1ª versão ranqueava por % e empatava todas as equipes entre
   // 62% e 98%: uma parede vermelha que não priorizava nada. "54 casos" é uma
   // tarefa; "98,2%" não é. O percentual continua visível, mas ao lado.
+  //
+  // 31/08/2026 — a métrica deixou de ser `e.graves` fixo e passou a seguir a
+  // faixa selecionada (`rkVal`/`rkPct`, ver tmaRankingFaixa.test.js). O que
+  // este teste protege é o mesmo de sempre: a barra é proporcional à CONTAGEM,
+  // o percentual é contexto ao lado, e o denominador não some.
   const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
-  assert.match(corpo, /e\.graves \/ maxG/, 'a barra tem de ser proporcional à CONTAGEM');
-  assert.match(corpo, /\$\{e\.graves_pct\}%/, 'o percentual continua visível, como contexto');
+  assert.match(corpo, /rkVal\(e\) \/ maxG/, 'a barra tem de ser proporcional à CONTAGEM');
+  assert.match(corpo, /\$\{rkPct\(e\)\}%/, 'o percentual continua visível, como contexto');
   assert.match(corpo, /de \$\{e\.total\}/, 'sem o denominador, 54 casos não se lê');
+  assert.match(corpo, /rkFaixa \? \(e\.na_faixa \|\| 0\) : e\.graves/,
+    'sem faixa marcada, a métrica continua sendo casos graves');
 });
 
 test('os cartões lideram pelo acionável, não pelos 66%', () => {

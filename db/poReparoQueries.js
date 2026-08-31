@@ -198,6 +198,51 @@ const FAIXAS = [
 ];
 
 /**
+ * FUNÇÃO PURA (testável): re-ordena o ranking pela contagem de casos na faixa
+ * selecionada, em vez de por casos graves.
+ *
+ * Equipe SEM caso na faixa recebe `na_faixa: 0` e continua na lista — quem
+ * decide se ela aparece é o front (que corta em > 0). Sumir aqui esconderia a
+ * equipe do denominador "de N equipes" e a contagem pararia de fechar.
+ *
+ * `total` é preservado de propósito: é o total MEDIDO da equipe no período,
+ * todas as faixas. É ele que dá sentido ao "12 de 48 (25%)" — trocar por
+ * "12 de 12" transformaria toda linha em 100%.
+ *
+ * @param {Array}    porEquipe    ranking já agregado (de `agregarPoReparo`)
+ * @param {Array}    casos        casos JÁ filtrados pela faixa, sem corte
+ * @param {Function} nomeDaNota   (caso) → sigla da equipe, ou null
+ */
+function rankingNaFaixa(porEquipe, casos, nomeDaNota) {
+  const contagem = new Map();
+  for (const r of (casos || [])) {
+    const nome = nomeDaNota ? nomeDaNota(r) : null;
+    if (!nome) continue;
+    contagem.set(nome, (contagem.get(nome) || 0) + 1);
+  }
+  return (porEquipe || [])
+    .map(e => {
+      const n = contagem.get(e.equipe) || 0;
+      return { ...e, na_faixa: n, na_faixa_pct: e.total ? +(100 * n / e.total).toFixed(1) : 0 };
+    })
+    .sort((a, b) => b.na_faixa - a.na_faixa || b.na_faixa_pct - a.na_faixa_pct);
+}
+
+/**
+ * Rótulo humano das faixas escolhidas, pro título do ranking dizer o que a
+ * barra está medindo. Chave desconhecida entra como veio em vez de sumir — um
+ * título estranho é problema menor que um título que omite parte do recorte.
+ */
+function rotuloDasFaixas(chaves) {
+  const lista = (chaves || []).map(c => {
+    const f = FAIXAS.find(x => x.chave === c);
+    return f ? f.rotulo : String(c);
+  });
+  if (!lista.length) return null;
+  return (lista.length === 1 ? 'na faixa ' : 'nas faixas ') + lista.join(' + ');
+}
+
+/**
  * Chave da faixa FINA (as sete da tela), pro filtro de desvio.
  * Devolve null quando não é mensurável — nota sem delta não pertence a faixa
  * nenhuma, e forçá-la numa faria a soma do histograma parar de fechar.
@@ -503,6 +548,27 @@ async function resumoPoReparo(de, ate, opts = {}) {
     }));
   agregado.casos_total = casos.length;
 
+  // ── Ranking de equipes SEGUE a faixa selecionada ──────────────────────────
+  // Decisão do José em 31/08/2026, ao pedir "top 15 respeitando os filtros da
+  // página". Sem faixa marcada nada muda: continua sendo casos graves, que é o
+  // que precisa de ação. Com faixa marcada, perguntar "quem tem mais casos
+  // graves?" enquanto a tela toda fala de outra faixa é responder outra
+  // pergunta — o ranking passa a contar os casos DAQUELA faixa.
+  //
+  // ⚠️ Conta sobre `casos` ANTES do corte de 1.000 da tabela: o ranking mede a
+  // operação inteira, não a primeira página do detalhamento.
+  //
+  // `total` continua sendo o total MEDIDO da equipe no período (todas as
+  // faixas), de propósito — é o denominador que dá sentido ao "12 de 48".
+  if (faixas) {
+    agregado.porEquipe = rankingNaFaixa(
+      agregado.porEquipe, casos, r => equipeDe(r.note_id).team_name);
+  }
+  agregado.ranking = {
+    por: faixas ? 'faixa' : 'graves',
+    rotulo: faixas ? rotuloDasFaixas([...faixas]) : null,
+  };
+
   agregado.periodo = { de, ate };
   return agregado;
 }
@@ -529,6 +595,8 @@ module.exports = {
   montarLinhaReparo,
   faixaDoDelta,
   faixaFinaDoDelta,
+  rotuloDasFaixas,
+  rankingNaFaixa,
   agregarPoReparo,
   setoresDasRegionais,
   inicioDaSemana,
