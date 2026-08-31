@@ -6649,6 +6649,60 @@ ${matrizHTML}
       return r.regional || _SETOR_REGIONAL[r.setor] || _SETOR_REGIONAL[r.sectorId] || null;
     }
 
+    /**
+     * Caixa-preta do funil de exibição do Monitor. Guarda as últimas 20 passadas
+     * em `window.__monDiag` e grita no console quando o funil zera.
+     *
+     * bug reportado em 30/08/2026: "no portal da EDP tem 21 equipes do DSSJ
+     * trabalhando e o painel filtrado em São José mostra 0". Confirmado depois
+     * no banco: às 14:13 daquele dia, 8 das 10 equipes de SJC tinham sessão
+     * ABERTA gravada em `snapshots`, o backend as devolvia (`/api/teams?
+     * regionals=SJC` → 12 equipes, coleta "ok") e a tela renderizou zero.
+     *
+     * O funil foi lido inteiro e está correto para todo estado reproduzível —
+     * em 31/08 as mesmas chamadas entregaram 127 de 127 sem descartar nada, e
+     * SJC sozinha voltou com 49. Ou seja: é INTERMITENTE, e quatro hipóteses
+     * (rótulo `regional` errado, filtro de equipes preso no escopo anterior,
+     * falha transitória de coleta, toggle "Ativas") foram levantadas e
+     * refutadas uma a uma. Sem contagem por etapa, cada nova ocorrência vira
+     * arqueologia — daí a caixa-preta.
+     *
+     * NÃO altera o resultado do filtro: só conta.
+     */
+    function _monDiagRegistrar(cortes, recebidas, visiveis, equipesSel) {
+      try {
+        const reg = {
+          hora: new Date().toTimeString().slice(0, 8),
+          recebidas, visiveis, cortes,
+          selectedRegionals: [...selectedRegionals],
+          filtroEquipes: equipesSel ? equipesSel.size : null,
+          busca: currentFilter || null,
+          escopo: _monitorScope,
+          coleta: _lastColeta ? {
+            degradado: !!_lastColeta.degradado,
+            regionais: Object.fromEntries(
+              Object.entries(_lastColeta.regionais || {}).map(([k, v]) => [k, v && v.status])),
+          } : null,
+        };
+        const buf = (window.__monDiag = window.__monDiag || []);
+        buf.push(reg);
+        if (buf.length > 20) buf.shift();
+        // As duas assinaturas de falha, separadas de propósito: "chegou gente e
+        // não sobrou ninguém" (funil) é um bug diferente de "não chegou
+        // ninguém" (coleta/fetch), e confundir os dois foi o que me custou o
+        // dia 31/08.
+        if (recebidas > 0 && visiveis === 0) {
+          console.warn('[monitor] funil zerou — chegaram', recebidas, 'equipes e nenhuma passou:', reg);
+        } else if (recebidas === 0 && !_teamsLoading) {
+          console.warn('[monitor] nenhuma equipe recebida do backend:', reg);
+        }
+      } catch (e) {
+        // Diagnóstico NUNCA pode derrubar o render (mesma regra do filtro de
+        // equipes, incidente 30/07/2026).
+        try { console.warn('[monitor] diag falhou:', e && e.message); } catch (_) {}
+      }
+    }
+
     function getVisible() {
       // No escopo 'todas' (ao-vivo), soma as deslogadas (última sessão) ao pool.
       // O dedup contra as equipes REALMENTE ativas hoje é feito em renderAll
@@ -6658,14 +6712,21 @@ ${matrizHTML}
         : allTeams;
       // Filtro de equipes (multi-select). null = todas.
       const equipesSel = _monEquipesSelecionadas();
-      return pool.filter(t => {
-        const regionalOk = _regionalMatch(t.regional);
-        const equipeOk = !equipesSel || equipesSel.has(t.sigla || t.teamName);
+      // Contagem por etapa (ver _monDiagRegistrar). O curto-circuito não muda o
+      // resultado — os três predicados são puros — mas faz cada equipe ser
+      // debitada do PRIMEIRO filtro que a barrou, que é o que se quer saber.
+      const cortes = { regional: 0, equipe: 0, busca: 0 };
+      const out = pool.filter(t => {
+        if (!_regionalMatch(t.regional)) { cortes.regional++; return false; }
+        if (equipesSel && !equipesSel.has(t.sigla || t.teamName)) { cortes.equipe++; return false; }
         const filterOk = !currentFilter ||
           (t.sigla || t.teamName || '').toLowerCase().includes(currentFilter) ||
           (t.collaborators || []).some(c => c.nome.toLowerCase().includes(currentFilter));
-        return regionalOk && equipeOk && filterOk;
+        if (!filterOk) { cortes.busca++; return false; }
+        return true;
       });
+      _monDiagRegistrar(cortes, pool.length, out.length, equipesSel);
+      return out;
     }
 
     // ── RENDER MÉTRICAS ───────────────────────────────────────────────────

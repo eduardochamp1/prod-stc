@@ -142,6 +142,7 @@
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
+| P1-46 | Monitor zerou a lista de SJC em 30/08 com 8 equipes em campo e backend devolvendo 12; não reproduz | Frontend/Dados | **instrumentado** (31/08) — caixa-preta `window.__monDiag`; causa NÃO encontrada, 4 hipóteses refutadas |
 
 ---
 
@@ -4785,3 +4786,74 @@ mesmo ponto cego, o que reforça o item.
 - **Relacionado:** P1-26 e P2-24 (que criaram `escala_dia`), P2-33 (catálogo).
 - **Fonte:** conferência do KPI EM CAMPO × ESPERADAS, 30/08/2026 —
   `scripts/diag-escala-agora.js` e `scripts/diag-escala-semana.js`.
+
+---
+
+## P1-46 — Monitor zerou a lista de SJC com 8 equipes em campo, e não reproduz
+
+- **Categoria:** Frontend/Dados
+- **Status:** **instrumentado** (31/08/2026) — causa NÃO encontrada
+- **Evidência:** reportado em 30/08/2026: *"no portal da EDP tem 21 equipes do
+  DSSJ trabalhando e o painel filtrado em São José mostra 0"*. Print às 14:13
+  mostrando `0 EM CAMPO`, `9 ESPERADAS` e "Nenhuma equipe encontrada".
+  Confirmado depois no banco que o painel estava ERRADO — das 10 equipes de SJC
+  no snapshot daquele dia, **8 tinham sessão aberta às 14:13**:
+
+  | equipe | `sessionEnd` | às 14:13 |
+  |---|---|---|
+  | ECMJA70 | 17:01 | aberta |
+  | ECMSJ80 | 14:40 | aberta |
+  | ECMSJ81 | — | aberta |
+  | EPAVP38 | 06:58 | fechada |
+  | EPGUE80 | 16:13 | aberta |
+  | EPGUE81 | 16:08 | aberta |
+  | EPJAC31 | — | aberta |
+  | EPJAC34 | — | aberta |
+  | EPMOL30 | — | aberta |
+  | EPPTE04 | 06:31 | fechada |
+
+  No mesmo instante, `GET /api/teams?regionals=SJC` devolvia **12 equipes** com
+  `coleta.SJC.status: "ok"` e `degradado: false`. Backend certo, tela zerada.
+- **NÃO reproduz.** Em 31/08 o mesmo caminho entregou `recebidas: 127 →
+  visiveis: 127` com `filtroEquipes: null` e `busca: ''`, e SJC sozinha voltou
+  com 49 equipes (66 no total — a maior das três regionais no dia).
+- **Hipóteses levantadas e REFUTADAS** (registradas para não serem re-perseguidas):
+  1. *Rótulo `regional` errado pelo fallback `REGIONAL_MAP[teamSectorId] || 'GUA'`*
+     (`services/wpaService.js:1634` e `:2264`) — refutada duas vezes: o
+     `snapshots` do dia tinha split correto CAC 13 / GUA 13 / SJC 10, e esse
+     campo é o mesmo `t.regional` (`services/dataWriter.js:486`); depois medido
+     no navegador, `rotulos: ["GUA","CAC","SJC"]`.
+  2. *Filtro de equipes preso no escopo da regional anterior* — refutada:
+     `getValues` devolve `[]` quando tudo está marcado (`public/index.html:1711`),
+     `[]` vira `null` em `_monEquipesSelecionadas`, e `refresh` tem ramo
+     explícito para "seleção saiu do escopo → cai pra todas".
+  3. *Falha transitória de coleta da conta do DSSJ* — refutada: coleta que falha
+     não responde 12 equipes e `status: "ok"` no mesmo instante. (Os 47 timeouts
+     de DSSJ no `err.log` são todos de 29/08, último às 16:05.)
+  4. *Toggle "Ativas" com todas as sessões já encerradas* — refutada pela tabela
+     acima: 8 das 10 estavam abertas.
+- **Impacto:** "0 equipes em campo" é indistinguível de "não consegui buscar" e
+  de "ninguém escalado". Enquanto durar, a gestão operacional de uma regional
+  inteira fica cega, e não há sinal nenhum de que o número é falso.
+- **Ação:** ✅ caixa-preta do funil (`_monDiagRegistrar`, `public/index.html`):
+  conta quantas equipes cada um dos três filtros de `getVisible` descartou,
+  guarda as últimas 20 passadas em `window.__monDiag` e emite `console.warn`
+  em duas assinaturas separadas — "funil zerou" (chegou gente, nada passou) e
+  "nenhuma equipe recebida" (não chegou ninguém). 16 testes.
+  ⬜ Na próxima ocorrência: abrir o console, ler `window.__monDiag` e anexar
+  aqui. `cortes` aponta o filtro culpado; `recebidas: 0` joga a investigação
+  pro backend/fetch em vez do funil.
+  ⬜ Só então corrigir. Enquanto não houver captura, **não** propor conserto:
+  quatro hipóteses plausíveis já morreram contra evidência.
+- **Critério de aceite:**
+  - [x] Instrumentação no ar, sem alterar o resultado do filtro.
+  - [ ] Uma ocorrência capturada com `window.__monDiag` preenchido.
+  - [ ] Causa identificada com `file:line`.
+  - [ ] Correção + teste que falha sem ela.
+- **Esforço:** instrumentação 1h (feita). Correção desconhecida até capturar.
+- **Rollback:** `git revert` do commit da instrumentação. Ela é puramente
+  aditiva — `getVisible` devolve exatamente a mesma lista com ou sem ela, o que
+  está pinado em `test/monitorFunilDiag.test.js`.
+- **Relacionado:** P1-39 (coleta degradada exibida como número real) — é a mesma
+  família de problema: número falso indistinguível de número verdadeiro.
+- **Fonte:** investigação de 30–31/08/2026.
