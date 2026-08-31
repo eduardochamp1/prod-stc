@@ -142,7 +142,7 @@
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
-| P1-46 | Monitor zerou a lista de SJC em 30/08 com 8 equipes em campo e backend devolvendo 12; não reproduz | Frontend/Dados | **instrumentado** (31/08) — caixa-preta `window.__monDiag`; causa NÃO encontrada, 4 hipóteses refutadas |
+| P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 
 ---
 
@@ -4792,7 +4792,8 @@ mesmo ponto cego, o que reforça o item.
 ## P1-46 — Monitor zerou a lista de SJC com 8 equipes em campo, e não reproduz
 
 - **Categoria:** Frontend/Dados
-- **Status:** **instrumentado** (31/08/2026) — causa NÃO encontrada
+- **Status:** **done** (31/08/2026) — causa encontrada e corrigida; a caixa-preta
+  do funil ficou no código de propósito
 - **Evidência:** reportado em 30/08/2026: *"no portal da EDP tem 21 equipes do
   DSSJ trabalhando e o painel filtrado em São José mostra 0"*. Print às 14:13
   mostrando `0 EM CAMPO`, `9 ESPERADAS` e "Nenhuma equipe encontrada".
@@ -4814,9 +4815,37 @@ mesmo ponto cego, o que reforça o item.
 
   No mesmo instante, `GET /api/teams?regionals=SJC` devolvia **12 equipes** com
   `coleta.SJC.status: "ok"` e `degradado: false`. Backend certo, tela zerada.
-- **NÃO reproduz.** Em 31/08 o mesmo caminho entregou `recebidas: 127 →
-  visiveis: 127` com `filtroEquipes: null` e `busca: ''`, e SJC sozinha voltou
-  com 49 equipes (66 no total — a maior das três regionais no dia).
+- **Não reproduzia por medição direta** — em 31/08 o mesmo caminho entregou
+  `recebidas: 127 → visiveis: 127` e SJC sozinha voltou com 49 equipes. A receita
+  determinística só apareceu depois (ver CAUSA): é preciso que a busca ANTERIOR
+  tenha sido de outra regional, e todo teste manual começava de "Todas".
+
+- **CAUSA (31/08/2026), achada por um segundo sintoma.** O usuário reportou:
+  *"sempre que eu recarrego a página ou relogo, as informações não respeitam os
+  filtros e vêm pré-carregadas com alguma regional filtrada, e para consertar eu
+  preciso acordar o wpa, atualizar, ou desmarcar e marcar os filtros de novo"*.
+  O print mostrava as **três regionais marcadas** no dropdown e o cabeçalho
+  dizendo **"PRODUTIVIDADE DO DIA — SÃO JOSÉ DOS CAMPOS"**. Se filtro exibido e
+  filtro aplicado divergem, divergem nos dois sentidos — e o zero é o outro.
+
+  São **dois defeitos independentes**:
+
+  **(1) `selectRegional` trocava o filtro sem rebuscar** (`public/index.html`).
+  Terminava em `renderAll()` seco. Mas `allTeams` vem do backend JÁ FILTRADO
+  (`/api/teams?regionals=…`), então **não é superconjunto**: contém exatamente a
+  seleção anterior. Trocar Guarapari → São José mandava `_regionalMatch` filtrar
+  dados de GUA por `'SJC'` — todos caíam, "Nenhuma equipe encontrada" — e só o
+  auto-refresh de 5min (ou o botão Atualizar) consertava. É exatamente o contorno
+  relatado pelo usuário, e explica por que `GET /api/teams?regionals=SJC` na mão
+  devolvia 12 equipes enquanto a tela mostrava 0: **eram listas diferentes**.
+
+  **(2) `MultiSelect.init` ignora o estado restaurado.** Ele sempre começa com
+  tudo marcado ("Considera todos como selecionados no estado inicial", comentário
+  do próprio componente) e ignora o `<select>` original, que é só compat. Mas
+  `applySavedFilters()` roda ANTES no `init()` e pode ter deixado
+  `selectedRegionals` num subconjunto — e ele só ajustava `regSel.value`, que o
+  MultiSelect não lê. Daí o balão com três marcadas e os dados de uma só.
+  O `mapa-regional-select` já fazia certo desde sempre; era o modelo a copiar.
 - **Hipóteses levantadas e REFUTADAS** (registradas para não serem re-perseguidas):
   1. *Rótulo `regional` errado pelo fallback `REGIONAL_MAP[teamSectorId] || 'GUA'`*
      (`services/wpaService.js:1634` e `:2264`) — refutada duas vezes: o
@@ -4840,17 +4869,28 @@ mesmo ponto cego, o que reforça o item.
   guarda as últimas 20 passadas em `window.__monDiag` e emite `console.warn`
   em duas assinaturas separadas — "funil zerou" (chegou gente, nada passou) e
   "nenhuma equipe recebida" (não chegou ninguém). 16 testes.
-  ⬜ Na próxima ocorrência: abrir o console, ler `window.__monDiag` e anexar
-  aqui. `cortes` aponta o filtro culpado; `recebidas: 0` joga a investigação
-  pro backend/fetch em vez do funil.
-  ⬜ Só então corrigir. Enquanto não houver captura, **não** propor conserto:
-  quatro hipóteses plausíveis já morreram contra evidência.
+  ✅ `_cobrePeloCache(selecionadas, buscadas)` + `_teamsFetchedFor`: `selectRegional`
+  agora só usa filtro local quando a seleção está CONTIDA na última busca.
+  Estreitar continua sem ida à rede (caso comum, mantém o dropdown fluido);
+  alargar ou trocar rebusca.
+  ✅ `MultiSelect.setValues('regional-select', [...selectedRegionals])` logo após
+  o init do Monitor. `setValues` não dispara `onChange`, então alinha a UI sem
+  provocar busca extra.
+  ⬜ **Sobra latente, NÃO corrigida:** as outras abas repetem o padrão (2) com
+  qualidade desigual — Notas (`notas-regional-select`) não sincroniza nada;
+  Ranking só sincroniza quando `currentRegional` é sigla única, pulando CSV;
+  Rejeições/Deslocamentos/Gráficos sincronizam de `sess.regional` (permissão),
+  não do filtro corrente. Histórico diverge **de propósito**, e o comentário no
+  código explica por quê — não mexer. Não foi tocado nesta passagem porque o
+  sintoma reportado era do Monitor e cada aba tem semântica própria.
 - **Critério de aceite:**
   - [x] Instrumentação no ar, sem alterar o resultado do filtro.
-  - [ ] Uma ocorrência capturada com `window.__monDiag` preenchido.
-  - [ ] Causa identificada com `file:line`.
-  - [ ] Correção + teste que falha sem ela.
-- **Esforço:** instrumentação 1h (feita). Correção desconhecida até capturar.
+  - [x] Causa identificada com `file:line` — as duas.
+  - [x] Correção + testes que falham sem ela (11 novos, `monitorFiltroRegional`).
+  - [ ] Confirmação em produção: recarregar com filtro salvo numa regional e
+        conferir que dropdown e cabeçalho concordam; depois trocar de regional
+        e conferir que a lista não zera.
+- **Esforço:** instrumentação 1h + correção 1h.
 - **Rollback:** `git revert` do commit da instrumentação. Ela é puramente
   aditiva — `getVisible` devolve exatamente a mesma lista com ou sem ela, o que
   está pinado em `test/monitorFunilDiag.test.js`.

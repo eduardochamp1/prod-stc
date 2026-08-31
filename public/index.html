@@ -1877,6 +1877,10 @@
     // null = desconhecido (backend antigo ou modo histórico) — nesse caso o
     // painel se comporta como antes, sem inventar aviso nem esconder número.
     let _lastColeta = null;
+    // Regionais que a ÚLTIMA busca de equipes cobriu. `allTeams` vem filtrado
+    // do backend (`/api/teams?regionals=…`), então NÃO é superconjunto: é
+    // exatamente esta lista. Ver `_cobrePeloCache`.
+    let _teamsFetchedFor = null;
     // ── Permissões: modelo unificado (Task 9) ──────────────────────────────
     // userRegionals  : imutável, populado em applyUserPermissions a partir do JWT.regionals[]
     // selectedRegionals: mutável, reflete o estado do dropdown (subset de userRegionals).
@@ -6112,6 +6116,7 @@ ${matrizHTML}
         // Histórico: manda regionals=CSV (Task 10 — backend aceita IN nativamente).
         // Live (/teams): scope é derivado do JWT, mas mandamos regionals explícito
         // pra refletir selectedRegionals (subset do user). Backend revalida.
+        const _pedidoPara = [...selectedRegionals];
         const _regionalsCsv = encodeURIComponent(selectedRegionals.join(','));
         const url = hist
           ? `${API}/teams/historico?de=${de}&ate=${ate}&regionals=${_regionalsCsv}`
@@ -6126,6 +6131,10 @@ ${matrizHTML}
         if (res.error) throw new Error(res.error);
 
         allTeams = res.teams || [];
+        // Registra o que ESTA resposta cobre, lido de `selectedRegionals` no
+        // momento em que a URL foi montada — se o usuário mexer no filtro
+        // durante o fetch, gravar o valor de agora mentiria sobre o payload.
+        _teamsFetchedFor = _pedidoPara;
         _lastTeamsSummary = res.summary || null;
         // Modo histórico lê de snapshots já gravados — o estado da coleta AO VIVO
         // não diz nada sobre ele; por isso só vale no live (P1-39).
@@ -6443,7 +6452,33 @@ ${matrizHTML}
       // quebrar a troca de regional nem o render (incidente 30/07/2026).
       try { _monRefiltrarEquipes(); } catch (e) { console.warn('[monitor] refiltro de equipes:', e && e.message); }
       saveFilters();
-      renderAll();
+      // ⚠️ Estreitar a seleção é filtro local; ALARGAR ou TROCAR exige rebuscar.
+      // Ver `_cobrePeloCache` — até 31/08/2026 isto era um `renderAll()` seco e
+      // era a causa do painel zerar.
+      if (_cobrePeloCache(selectedRegionals, _teamsFetchedFor)) renderAll();
+      else loadData();
+    }
+
+    /**
+     * A seleção atual está contida no que a última busca trouxe?
+     *
+     * bug reportado em 30/08/2026: "no portal da EDP tem 21 equipes do DSSJ
+     * trabalhando e o painel filtrado em São José mostra 0". Causa: `allTeams`
+     * vem do backend JÁ FILTRADO por regional, então NÃO é superconjunto —
+     * contém exatamente a seleção anterior. `selectRegional` terminava em
+     * `renderAll()` sem rebuscar, então trocar de Guarapari para São José
+     * mandava `_regionalMatch` filtrar dados de GUA por 'SJC': tudo caía, a
+     * tela mostrava "Nenhuma equipe encontrada", e só o auto-refresh de 5min
+     * (ou o botão Atualizar) consertava. Era por isso que o contorno relatado
+     * — "acordar o wpa, atualizar, ou desmarcar e marcar de novo" — funcionava.
+     *
+     * Estreitar (subconjunto) segue sendo filtro local, sem ida à rede: é o
+     * caso comum e o que torna o dropdown fluido.
+     */
+    function _cobrePeloCache(selecionadas, buscadas) {
+      if (!Array.isArray(buscadas) || !buscadas.length) return false;
+      if (!Array.isArray(selecionadas) || !selecionadas.length) return false;
+      return selecionadas.every(r => buscadas.includes(r));
     }
 
     function filterCards(val) { currentFilter = val.toLowerCase(); renderAll(); }
@@ -8255,6 +8290,21 @@ ${matrizHTML}
           },
           allLabel: 'Todas as Regionais',
         });
+        // ⚠️ `MultiSelect.init` SEMPRE começa com tudo marcado (ver o comentário
+        // dentro dele: "Considera todos como selecionados no estado inicial") e
+        // IGNORA o <select> original, que é só compat. Mas `applySavedFilters()`
+        // já rodou acima e pode ter deixado `selectedRegionals` num subconjunto.
+        //
+        // bug reportado em 31/08/2026: "sempre que eu recarrego a página ou
+        // relogo, as informações não respeitam os filtros e vêm pré-carregadas
+        // com alguma regional filtrada". Era isto: o balão mostrava as três
+        // marcadas e o cabeçalho dizia "PRODUTIVIDADE DO DIA — SÃO JOSÉ DOS
+        // CAMPOS", porque `loadData()` busca por `selectedRegionals`.
+        //
+        // `setValues` não dispara onChange, então isto alinha a UI sem provocar
+        // busca extra. O Mapa já fazia assim (`mapa-regional-select`).
+        try { MultiSelect.setValues('regional-select', [...selectedRegionals]); }
+        catch (e) { console.warn('[monitor] sync do filtro regional:', e && e.message); }
       }
 
       // Inicializa campos De/Até com hoje (sem permitir datas futuras)
