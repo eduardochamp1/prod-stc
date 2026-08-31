@@ -581,6 +581,10 @@
                 <option value="10_30">10 a 30 min</option>
                 <option value="30_60">30 a 60 min</option>
                 <option value="60_mais">60 min ou mais</option>
+                <!-- Não é faixa de desvio: é a ausência do apontamento. Estas
+                     notas não têm diferença pra medir, então só aparecem no
+                     detalhamento quando pedidas aqui. -->
+                <option value="sem_horario">sem Horário do Reparo</option>
               </select>
             </div>
           </div>
@@ -5184,13 +5188,23 @@ ${matrizHTML}
           <td>${x.numero || ''}</td>
           <td>${_hora(x.finalizando_em)}</td>
           <td>${_hora(x.repair_time)}</td>
-          <td style="color:${x.delta_min < 0 ? '#c0392b' : (x.delta_min < 2 ? '#c0392b' : '#e67e22')};font-weight:600">${x.delta_min} min</td>
+          <td style="color:${x.delta_min == null ? 'var(--text2)'
+                          : (x.delta_min < 2 ? '#c0392b' : '#e67e22')};font-weight:600">${
+            // Sem Horário do Reparo não há diferença a mostrar. "0 min" seria
+            // número inventado; "—" diz o que é: desconhecido.
+            x.delta_min == null ? '—' : `${x.delta_min} min`}</td>
         </tr>`).join('');
 
       const fxSel = (typeof MultiSelect !== 'undefined' && MultiSelect.getValues)
         ? MultiSelect.getValues('tma-faixa-select') : [];
+      // `sem_horario` não está em d.faixas de propósito (não é faixa do
+      // histograma — ver FAIXA_SEM_HORARIO), então sem este caso o cabeçalho
+      // mostraria a chave crua.
+      const _rotuloDaChave = k => (k === 'sem_horario'
+        ? 'sem Horário do Reparo'
+        : ((d.faixas.find(f => f.chave === k) || {}).rotulo || k));
       const rotuloFx = fxSel.length
-        ? fxSel.map(k => (d.faixas.find(f => f.chave === k) || {}).rotulo || k).join(' · ')
+        ? fxSel.map(_rotuloDaChave).join(' · ')
         : `abaixo do critério de ${r.minimo_min} min`;
 
       content.innerHTML = `

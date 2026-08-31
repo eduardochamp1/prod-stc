@@ -198,6 +198,51 @@ const FAIXAS = [
 ];
 
 /**
+ * Chave especial do filtro de desvio: as notas SEM Horário do Reparo.
+ *
+ * Pedido do José em 31/08/2026, pra conferir nota/equipe/dia dessas no
+ * detalhamento. Não entra em `FAIXAS` de propósito: aquele array define o
+ * histograma da distribuição, calculado por `de`/`ate` sobre o delta — e estas
+ * notas não TÊM delta. Metê-las lá faria a soma do histograma parar de fechar.
+ */
+const FAIXA_SEM_HORARIO = { chave: 'sem_horario', rotulo: 'sem Horário do Reparo' };
+
+/**
+ * FUNÇÃO PURA (testável): a linha entra na tabela de detalhamento?
+ *
+ * @param {object}   r       linha de `note_po_reparo`
+ * @param {Set|null} faixas  chaves marcadas no filtro; null = nenhuma
+ *
+ * Sem filtro, o padrão é o que precisa de ação: abaixo do critério.
+ *
+ * Nota SEM Horário do Reparo não tem delta, logo não cai em faixa nenhuma. Ela
+ * só entra quando pedida explicitamente: incluí-la no padrão poluiria a tabela
+ * de "piores" com linhas cuja diferença é DESCONHECIDA, não pequena — e o
+ * usuário leria ausência de apontamento como desvio grave.
+ */
+function casoVisivel(r, faixas) {
+  if (!r || !r.repair_time) return !!(faixas && faixas.has(FAIXA_SEM_HORARIO.chave));
+  const chave = faixaFinaDoDelta(r.delta_seg);
+  if (!chave) return false;
+  return faixas ? faixas.has(chave) : Number(r.delta_seg) < MINIMO_SEG;
+}
+
+/**
+ * FUNÇÃO PURA (testável): ordem da tabela de detalhamento.
+ *
+ * Medidas primeiro, da pior diferença pra melhor. As sem Horário do Reparo vão
+ * pro fim — não têm diferença pra comparar, e intercalá-las pelo `Number(null)`
+ * = 0 as jogaria no meio da lista como se fossem desvio zero. Entre si saem da
+ * mais recente pra mais antiga, que é a ordem em que se confere no portal.
+ */
+function cmpCasos(a, b) {
+  const na = a.delta_seg == null, nb = b.delta_seg == null;
+  if (na !== nb) return na ? 1 : -1;
+  if (na) return String(b.finalizando_em || '').localeCompare(String(a.finalizando_em || ''));
+  return Number(a.delta_seg) - Number(b.delta_seg);
+}
+
+/**
  * FUNÇÃO PURA (testável): re-ordena o ranking pela contagem de casos na faixa
  * selecionada, em vez de por casos graves.
  *
@@ -235,10 +280,15 @@ function rankingNaFaixa(porEquipe, casos, nomeDaNota) {
  */
 function rotuloDasFaixas(chaves) {
   const lista = (chaves || []).map(c => {
+    if (c === FAIXA_SEM_HORARIO.chave) return FAIXA_SEM_HORARIO.rotulo;
     const f = FAIXAS.find(x => x.chave === c);
     return f ? f.rotulo : String(c);
   });
   if (!lista.length) return null;
+  // "na faixa sem Horário do Reparo" não se lê — ausência de apontamento não é
+  // faixa. Sozinha, ela dispensa o prefixo; misturada com faixas de verdade,
+  // entra na enumeração normalmente.
+  if (lista.length === 1 && chaves[0] === FAIXA_SEM_HORARIO.chave) return FAIXA_SEM_HORARIO.rotulo;
   return (lista.length === 1 ? 'na faixa ' : 'nas faixas ') + lista.join(' + ');
 }
 
@@ -566,21 +616,19 @@ async function resumoPoReparo(de, ate, opts = {}) {
   // daquela faixa, e os cartões deixariam de descrever a operação. A faixa é
   // drill-down — "me mostre os casos DESTE tipo" —, não recorte do indicador.
   const faixas = Array.isArray(opts.faixas) && opts.faixas.length ? new Set(opts.faixas) : null;
-  const casos = rows.filter(r => {
-    const chave = faixaFinaDoDelta(r.delta_seg);
-    if (!chave) return false;
-    // Sem filtro, o padrão continua sendo o que precisa de ação: abaixo do critério.
-    return faixas ? faixas.has(chave) : Number(r.delta_seg) < MINIMO_SEG;
-  });
+  const casos = rows.filter(r => casoVisivel(r, faixas));
 
   agregado.casos = casos
-    .sort((a, b) => Number(a.delta_seg) - Number(b.delta_seg))
+    .sort(cmpCasos)
     .slice(0, 1000)
     .map(r => ({
       numero: r.numero,
-      delta_min: _min1(Number(r.delta_seg)),
-      delta_seg: Number(r.delta_seg),
-      faixa: faixaFinaDoDelta(r.delta_seg),
+      // ⚠️ null, NUNCA 0. `Number(null)` é 0, e "0 min" na coluna Diferença
+      // seria um número inventado: a diferença dessas notas é DESCONHECIDA,
+      // não nula. O front mostra "—".
+      delta_min: r.delta_seg == null ? null : _min1(Number(r.delta_seg)),
+      delta_seg: r.delta_seg == null ? null : Number(r.delta_seg),
+      faixa: r.repair_time ? faixaFinaDoDelta(r.delta_seg) : FAIXA_SEM_HORARIO.chave,
       // Os DOIS apontamentos, pra tabela poder mostrar o que a equipe registrou
       // em cada ponta — sem isso o usuário vê a diferença e não vê de onde veio.
       finalizando_em: r.finalizando_em,
@@ -639,6 +687,9 @@ module.exports = {
   faixaFinaDoDelta,
   rotuloDasFaixas,
   rankingNaFaixa,
+  FAIXA_SEM_HORARIO,
+  casoVisivel,
+  cmpCasos,
   agregarPoReparo,
   setoresDasRegionais,
   inicioDaSemana,

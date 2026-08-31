@@ -149,3 +149,84 @@ test('as notas sem equipe aparecem no rodapé — não somem da conta', () => {
   assert.match(SRC, /semReparoSemEquipe/);
   assert.match(SRC, /sem equipe identificada/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filtro "sem Horário do Reparo" no detalhamento (31/08/2026)
+//
+// Pedido: "colocar um filtro para filtrarmos somente as notas sem apontamento
+// de horário de reparo, para conferir as notas, equipe e dias na tabela".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const {
+  casoVisivel, cmpCasos, FAIXA_SEM_HORARIO, rotuloDasFaixas,
+} = require('../db/poReparoQueries');
+
+const SEM = FAIXA_SEM_HORARIO.chave;
+const semHorario = { repair_time: null, delta_seg: null };
+const medida = seg => ({ repair_time: '2026-08-31T10:00:00Z', delta_seg: seg });
+
+test('sem filtro, a nota sem horário NÃO entra na tabela', () => {
+  // Ela não tem diferença: apareceria entre os "piores" como se fosse desvio.
+  assert.equal(casoVisivel(semHorario, null), false);
+});
+
+test('marcando o filtro, ela entra — é o pedido inteiro', () => {
+  assert.equal(casoVisivel(semHorario, new Set([SEM])), true);
+});
+
+test('marcando OUTRA faixa, ela não entra de carona', () => {
+  assert.equal(casoVisivel(semHorario, new Set(['0_2'])), false);
+});
+
+test('o filtro combina com faixas de verdade', () => {
+  const f = new Set([SEM, '0_2']);
+  assert.equal(casoVisivel(semHorario, f), true);
+  assert.equal(casoVisivel(medida(60), f), true, '60s cai em 0 a 2 min');
+  assert.equal(casoVisivel(medida(1200), f), false, '20 min não foi pedido');
+});
+
+test('o padrão continua sendo "abaixo do critério"', () => {
+  assert.equal(casoVisivel(medida(300), null), true, '5 min está abaixo de 10');
+  assert.equal(casoVisivel(medida(900), null), false, '15 min não');
+  assert.equal(casoVisivel(medida(-60), null), true, 'negativo é o pior caso');
+});
+
+test('nota com horário mas sem delta continua fora', () => {
+  // Ex.: sem o checkpoint Finalizando Trabalho. Não é o caso deste filtro.
+  assert.equal(casoVisivel({ repair_time: '2026-08-31T10:00:00Z', delta_seg: null }, new Set([SEM])), false);
+});
+
+test('as sem horário vão pro FIM, não pro meio como desvio zero', () => {
+  // `Number(null)` é 0: sem tratar, elas cairiam entre -1min e +1min, no meio
+  // exato da lista de piores.
+  const ordenado = [medida(600), semHorario, medida(-120), medida(60)].sort(cmpCasos);
+  assert.deepEqual(ordenado.map(x => x.delta_seg), [-120, 60, 600, null]);
+});
+
+test('entre as sem horário, a mais recente primeiro', () => {
+  const a = { repair_time: null, delta_seg: null, finalizando_em: '2026-08-10T08:00:00Z' };
+  const b = { repair_time: null, delta_seg: null, finalizando_em: '2026-08-29T08:00:00Z' };
+  assert.deepEqual([a, b].sort(cmpCasos).map(x => x.finalizando_em),
+    ['2026-08-29T08:00:00Z', '2026-08-10T08:00:00Z']);
+});
+
+test('o rótulo não diz "na faixa sem Horário do Reparo"', () => {
+  // Ausência de apontamento não é faixa — sozinha, dispensa o prefixo.
+  assert.equal(rotuloDasFaixas([SEM]), 'sem Horário do Reparo');
+  // Misturada, entra na enumeração normalmente.
+  assert.equal(rotuloDasFaixas(['0_2', SEM]), 'nas faixas 0 a 2 min + sem Horário do Reparo');
+});
+
+test('a opção existe no filtro da tela', () => {
+  assert.match(SRC, /<option value="sem_horario">sem Horário do Reparo<\/option>/);
+});
+
+test('a coluna Diferença mostra "—", nunca "0 min"', () => {
+  // "0 min" seria número inventado: a diferença é desconhecida, não nula.
+  assert.match(SRC, /x\.delta_min == null \? '—' : `\$\{x\.delta_min\} min`/);
+});
+
+test('o cabeçalho do detalhamento traduz a chave nova', () => {
+  // Sem isto o título mostraria a chave crua "sem_horario".
+  assert.match(SRC, /k === 'sem_horario'\s*\n?\s*\? 'sem Horário do Reparo'/);
+});
