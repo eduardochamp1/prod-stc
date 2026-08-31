@@ -183,9 +183,14 @@ test('a tabela mostra os DOIS apontamentos, não só a diferença', () => {
   // Sem os horários de origem não dá pra conferir nada no portal — a diferença
   // sozinha é um número que o usuário tem de aceitar na fé.
   const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
-  assert.match(corpo, /<th>Finalizando Trabalho<\/th><th>Horário do Reparo<\/th>/);
-  assert.match(corpo, /_hora\(x\.finalizando_em\)/);
-  assert.match(corpo, /_hora\(x\.repair_time\)/);
+  // 31/08/2026 — Reparo ANTES de Finalizando: é a ordem em que os dois
+  // acontecem, e a coluna Diferença logo ao lado é (Finalizando − Reparo).
+  // Na ordem anterior, o minuendo ficava à direita do subtraendo.
+  assert.match(corpo, /<th>Horário do Reparo<\/th><th>Finalizando Trabalho<\/th>/);
+  const iReparo = corpo.indexOf('_hora(x.repair_time)');
+  const iFim    = corpo.indexOf('_hora(x.finalizando_em)');
+  assert.ok(iReparo > -1 && iFim > -1, 'os dois apontamentos têm de estar na linha');
+  assert.ok(iReparo < iFim, 'as células têm de seguir a ordem do cabeçalho');
   for (const col of ['<th>Dia</th>', '<th>Equipe</th>', '<th>Nota</th>', '<th>Diferença</th>']) {
     assert.ok(corpo.includes(col), `faltou a coluna ${col}`);
   }
@@ -198,21 +203,19 @@ test('as horas da tabela são renderizadas em BRT, não no fuso do navegador', (
   assert.match(corpo, /timeZone: 'America\/Sao_Paulo'/);
 });
 
-test('o ranking é por CONTAGEM, não por percentual', () => {
-  // 30/08/2026 — a 1ª versão ranqueava por % e empatava todas as equipes entre
-  // 62% e 98%: uma parede vermelha que não priorizava nada. "54 casos" é uma
-  // tarefa; "98,2%" não é. O percentual continua visível, mas ao lado.
-  //
-  // 31/08/2026 — a métrica deixou de ser `e.graves` fixo e passou a seguir a
-  // faixa selecionada (`rkVal`/`rkPct`, ver tmaRankingFaixa.test.js). O que
-  // este teste protege é o mesmo de sempre: a barra é proporcional à CONTAGEM,
-  // o percentual é contexto ao lado, e o denominador não some.
+// O teste do ranking por CONTAGEM (30/08) mudou de casa em 31/08: a métrica
+// passou por três formas no mesmo dia — graves fixo → segue a faixa → abaixo
+// do critério fixo — e manter a asserção em dois arquivos garantia que um dos
+// dois ficasse desatualizado. Vive inteiro, com a cronologia, em
+// test/tmaRankingEquipes.test.js.
+
+test('o percentual continua visível ao lado da contagem', () => {
+  // Isto é do layout da linha, não da métrica: a barra mostra a CONTAGEM e o
+  // percentual entra como contexto, junto do denominador. Sem o "de N",
+  // "54 casos" não se lê.
   const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
-  assert.match(corpo, /rkVal\(e\) \/ maxG/, 'a barra tem de ser proporcional à CONTAGEM');
-  assert.match(corpo, /\$\{rkPct\(e\)\}%/, 'o percentual continua visível, como contexto');
-  assert.match(corpo, /de \$\{e\.total\}/, 'sem o denominador, 54 casos não se lê');
-  assert.match(corpo, /rkFaixa \? \(e\.na_faixa \|\| 0\) : e\.graves/,
-    'sem faixa marcada, a métrica continua sendo casos graves');
+  assert.match(corpo, /de \$\{e\.total\}/);
+  assert.match(corpo, /\$\{e\.abaixo_pct\}%/);
 });
 
 test('os cartões lideram pelo acionável, não pelos 66%', () => {

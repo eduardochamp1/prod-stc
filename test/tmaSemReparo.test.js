@@ -130,7 +130,7 @@ test('o quadro fica ao LADO do ranking, não embaixo', () => {
   const i = SRC.indexOf('desloc-grid-larga');
   assert.ok(i > -1, 'não achei o grid de duas colunas do ranking');
   const bloco = SRC.slice(i, i + 1400);
-  assert.match(bloco, /Equipes — \$\{rkNome\}/);
+  assert.match(bloco, /Equipes — casos abaixo de/);
   assert.match(bloco, /Sem Horário do Reparo/);
   const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
   assert.match(CSS, /\.desloc-grid-larga\s*\{\s*grid-template-columns:\s*[\d.]+fr\s+[\d.]+fr/,
@@ -157,9 +157,7 @@ test('as notas sem equipe aparecem no rodapé — não somem da conta', () => {
 // de horário de reparo, para conferir as notas, equipe e dias na tabela".
 // ─────────────────────────────────────────────────────────────────────────────
 
-const {
-  casoVisivel, cmpCasos, FAIXA_SEM_HORARIO, rotuloDasFaixas,
-} = require('../db/poReparoQueries');
+const { casoVisivel, cmpCasos, FAIXA_SEM_HORARIO } = require('../db/poReparoQueries');
 
 const SEM = FAIXA_SEM_HORARIO.chave;
 const semHorario = { repair_time: null, delta_seg: null };
@@ -208,13 +206,6 @@ test('entre as sem horário, a mais recente primeiro', () => {
   const b = { repair_time: null, delta_seg: null, finalizando_em: '2026-08-29T08:00:00Z' };
   assert.deepEqual([a, b].sort(cmpCasos).map(x => x.finalizando_em),
     ['2026-08-29T08:00:00Z', '2026-08-10T08:00:00Z']);
-});
-
-test('o rótulo não diz "na faixa sem Horário do Reparo"', () => {
-  // Ausência de apontamento não é faixa — sozinha, dispensa o prefixo.
-  assert.equal(rotuloDasFaixas([SEM]), 'sem Horário do Reparo');
-  // Misturada, entra na enumeração normalmente.
-  assert.equal(rotuloDasFaixas(['0_2', SEM]), 'nas faixas 0 a 2 min + sem Horário do Reparo');
 });
 
 test('a opção existe no filtro da tela', () => {

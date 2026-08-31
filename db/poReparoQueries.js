@@ -243,56 +243,6 @@ function cmpCasos(a, b) {
 }
 
 /**
- * FUNÇÃO PURA (testável): re-ordena o ranking pela contagem de casos na faixa
- * selecionada, em vez de por casos graves.
- *
- * Equipe SEM caso na faixa recebe `na_faixa: 0` e continua na lista — quem
- * decide se ela aparece é o front (que corta em > 0). Sumir aqui esconderia a
- * equipe do denominador "de N equipes" e a contagem pararia de fechar.
- *
- * `total` é preservado de propósito: é o total MEDIDO da equipe no período,
- * todas as faixas. É ele que dá sentido ao "12 de 48 (25%)" — trocar por
- * "12 de 12" transformaria toda linha em 100%.
- *
- * @param {Array}    porEquipe    ranking já agregado (de `agregarPoReparo`)
- * @param {Array}    casos        casos JÁ filtrados pela faixa, sem corte
- * @param {Function} nomeDaNota   (caso) → sigla da equipe, ou null
- */
-function rankingNaFaixa(porEquipe, casos, nomeDaNota) {
-  const contagem = new Map();
-  for (const r of (casos || [])) {
-    const nome = nomeDaNota ? nomeDaNota(r) : null;
-    if (!nome) continue;
-    contagem.set(nome, (contagem.get(nome) || 0) + 1);
-  }
-  return (porEquipe || [])
-    .map(e => {
-      const n = contagem.get(e.equipe) || 0;
-      return { ...e, na_faixa: n, na_faixa_pct: e.total ? +(100 * n / e.total).toFixed(1) : 0 };
-    })
-    .sort((a, b) => b.na_faixa - a.na_faixa || b.na_faixa_pct - a.na_faixa_pct);
-}
-
-/**
- * Rótulo humano das faixas escolhidas, pro título do ranking dizer o que a
- * barra está medindo. Chave desconhecida entra como veio em vez de sumir — um
- * título estranho é problema menor que um título que omite parte do recorte.
- */
-function rotuloDasFaixas(chaves) {
-  const lista = (chaves || []).map(c => {
-    if (c === FAIXA_SEM_HORARIO.chave) return FAIXA_SEM_HORARIO.rotulo;
-    const f = FAIXAS.find(x => x.chave === c);
-    return f ? f.rotulo : String(c);
-  });
-  if (!lista.length) return null;
-  // "na faixa sem Horário do Reparo" não se lê — ausência de apontamento não é
-  // faixa. Sozinha, ela dispensa o prefixo; misturada com faixas de verdade,
-  // entra na enumeração normalmente.
-  if (lista.length === 1 && chaves[0] === FAIXA_SEM_HORARIO.chave) return FAIXA_SEM_HORARIO.rotulo;
-  return (lista.length === 1 ? 'na faixa ' : 'nas faixas ') + lista.join(' + ');
-}
-
-/**
  * Chave da faixa FINA (as sete da tela), pro filtro de desvio.
  * Devolve null quando não é mensurável — nota sem delta não pertence a faixa
  * nenhuma, e forçá-la numa faria a soma do histograma parar de fechar.
@@ -491,12 +441,18 @@ function agregarPoReparo(linhas, mapaEquipe) {
       graves_pct: +(100 * gr / ord.length).toFixed(1),
     };
   });
-  // 30/08/2026 — ordena por CONTAGEM de casos graves, não por percentual.
-  // O ranking por % empatava todo mundo entre 62% e 98% e não priorizava nada:
-  // "98,2%" não é uma tarefa, "54 casos" é. E contagem se auto-regula — equipe
-  // com 3 notas não consegue ter 54 casos, então não precisa de piso pra não
-  // liderar indevidamente (o piso continua valendo pro ranking por %).
-  const cmpGraves = (a, b) => b.graves - a.graves || b.graves_pct - a.graves_pct;
+  // 30/08/2026 — ordena por CONTAGEM, não por percentual. O ranking por %
+  // empatava todo mundo entre 62% e 98% e não priorizava nada: "98,2%" não é
+  // uma tarefa, "54 casos" é. E contagem se auto-regula — equipe com 3 notas
+  // não consegue ter 54 casos, então não precisa de piso pra não liderar
+  // indevidamente (o piso continua valendo pro ranking por %).
+  //
+  // 31/08/2026 — a contagem passou de GRAVES (< 2 min) pra ABAIXO DO CRITÉRIO
+  // (< 10 min), a pedido do José. O critério da operação sempre foi 10 minutos;
+  // os 2 minutos eram um recorte meu pra separar o indefensável, e viravam um
+  // ranking que ignorava a maior parte do problema. Os graves seguem no cartão
+  // do topo e na barra empilhada.
+  const cmpAbaixo = (a, b) => b.abaixo - a.abaixo || b.abaixo_pct - a.abaixo_pct;
   const cmpPct    = (a, b) => b.abaixo_pct - a.abaixo_pct || b.total - a.total;
 
   return {
@@ -506,8 +462,8 @@ function agregarPoReparo(linhas, mapaEquipe) {
     faixas,
     porDia,
     porSemana:   _agruparPorSemana(medidas),
-    // Ordem principal: quem tem mais casos graves pra tratar.
-    porEquipe:   [...equipes].sort(cmpGraves),
+    // Ordem principal: quem tem mais casos abaixo do critério pra tratar.
+    porEquipe:   [...equipes].sort(cmpAbaixo),
     // Mantido pra quem quiser a leitura por proporção — aí o piso importa.
     porEquipePct: equipes.filter(e => e.total >= PISO_RANKING).sort(cmpPct),
     poucasNotas: equipes.filter(e => e.total <  PISO_RANKING).sort(cmpPct),
@@ -638,27 +594,6 @@ async function resumoPoReparo(de, ate, opts = {}) {
     }));
   agregado.casos_total = casos.length;
 
-  // ── Ranking de equipes SEGUE a faixa selecionada ──────────────────────────
-  // Decisão do José em 31/08/2026, ao pedir "top 15 respeitando os filtros da
-  // página". Sem faixa marcada nada muda: continua sendo casos graves, que é o
-  // que precisa de ação. Com faixa marcada, perguntar "quem tem mais casos
-  // graves?" enquanto a tela toda fala de outra faixa é responder outra
-  // pergunta — o ranking passa a contar os casos DAQUELA faixa.
-  //
-  // ⚠️ Conta sobre `casos` ANTES do corte de 1.000 da tabela: o ranking mede a
-  // operação inteira, não a primeira página do detalhamento.
-  //
-  // `total` continua sendo o total MEDIDO da equipe no período (todas as
-  // faixas), de propósito — é o denominador que dá sentido ao "12 de 48".
-  if (faixas) {
-    agregado.porEquipe = rankingNaFaixa(
-      agregado.porEquipe, casos, r => equipeDe(r.note_id).team_name);
-  }
-  agregado.ranking = {
-    por: faixas ? 'faixa' : 'graves',
-    rotulo: faixas ? rotuloDasFaixas([...faixas]) : null,
-  };
-
   agregado.periodo = { de, ate };
   return agregado;
 }
@@ -685,8 +620,6 @@ module.exports = {
   montarLinhaReparo,
   faixaDoDelta,
   faixaFinaDoDelta,
-  rotuloDasFaixas,
-  rankingNaFaixa,
   FAIXA_SEM_HORARIO,
   casoVisivel,
   cmpCasos,
