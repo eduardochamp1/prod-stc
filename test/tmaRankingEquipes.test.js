@@ -1,23 +1,23 @@
 /**
  * test/tmaRankingEquipes.test.js
  *
- * O ranking "Equipes — casos abaixo de 10 min" da aba TMA (PO), e o layout das
- * barras que ele compartilha com a distribuição.
+ * O ranking de equipes da aba TMA (PO), e o layout das barras que ele
+ * compartilha com a distribuição.
  *
- * ── COMO A REGRA CHEGOU AQUI (31/08/2026, na ordem) ─────────────────────────
- * 1. Ranking contava GRAVES (< 2 min) e não seguia filtro de faixa nenhum.
- * 2. Pedido "top 15 respeitando os filtros da página" → passou a seguir a
- *    faixa marcada.
- * 3. Com "10 a 30 min" marcada, ele passou a ranquear as equipes pelos casos
- *    CERTOS delas — 10 a 30 min está ACIMA do critério. Ranquear acerto não
- *    prioriza nada.
- * 4. Decisão final: o ranking NÃO segue a faixa. Conta sempre os casos abaixo
- *    do critério (< 10 min), que é a regra da operação desde o primeiro dia.
- *    Os 2 minutos eram recorte interno e deixavam a maior parte do problema
- *    fora do ranking. A faixa voltou a ser drill-down só da tabela.
+ * ── COMO A REGRA CHEGOU AQUI (31/08/2026, tudo no mesmo dia) ────────────────
+ * 1. Contava GRAVES (< 2 min) e não seguia filtro de faixa nenhum.
+ * 2. "top 15 respeitando os filtros da página" → passou a seguir a faixa.
+ * 3. Com "10 a 30 min" marcada, ranqueava as equipes pelos casos CERTOS delas,
+ *    em barra VERMELHA. Ranquear acerto como se fosse problema → desfeito.
+ * 4. Voltou a ser fixo, agora em ABAIXO DO CRITÉRIO (< 10 min): os 10 minutos
+ *    são a regra da operação desde o primeiro dia, e os 2 minutos eram recorte
+ *    interno que deixava a maior parte do problema fora da lista.
+ * 5. "mostrar as equipes que mais acertam também" → voltou a seguir a faixa,
+ *    AGORA com a cor acompanhando o sentido. É o que valia no passo 3 e
+ *    faltava: a lista de quem acerta é útil, vermelha é que não podia ser.
  *
- * Este arquivo existe pra que o passo 2 não seja reintroduzido por parecer
- * "mais coerente com os filtros" — ele foi tentado e desfeito com motivo.
+ * O passo 4 continua sendo o PADRÃO (sem faixa marcada). O que mudou no 5 é o
+ * comportamento COM faixa. Ver `sentidoDasFaixas`.
  */
 
 'use strict';
@@ -27,7 +27,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { agregarPoReparo, MINIMO_SEG, GRAVE_SEG } = require('../db/poReparoQueries');
+const {
+  agregarPoReparo, MINIMO_SEG, GRAVE_SEG, rankingNaFaixa, sentidoDasFaixas,
+} = require('../db/poReparoQueries');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
@@ -89,31 +91,87 @@ test('o critério vem da constante, não de um 600 solto', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// O ranking NÃO pode voltar a seguir a faixa
+// Seguindo a faixa — inclusive pra ver quem mais ACERTA (3ª forma, 31/08)
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('o agregado não expõe mais métrica por faixa', () => {
-  const rows = [nota('A', 60)];
-  const ag = agregarPoReparo(rows, mapa(rows));
-  assert.equal(ag.ranking, undefined, '`ranking.por` era o interruptor do passo 2');
-  assert.equal(ag.porEquipe.length, 1);
-  assert.equal(ag.porEquipe[0].na_faixa, undefined);
+test('com faixa marcada, conta os casos DAQUELA faixa', () => {
+  const rows = [
+    ...Array.from({ length: 5 }, () => nota('A', 60)),      // 5 abaixo, 0 em 10-30
+    ...Array.from({ length: 3 }, () => nota('B', 1200)),    // 0 abaixo, 3 em 10-30
+  ];
+  const base = agregarPoReparo(rows, mapa(rows)).porEquipe;
+  const casos = rows.filter(r => r.delta_seg >= 600 && r.delta_seg < 1800);
+  const out = rankingNaFaixa(base, casos, r => r.team_name);
+  assert.equal(out[0].equipe, 'B', 'quem mais ACERTA lidera quando a faixa é boa');
+  assert.equal(out[0].na_faixa, 3);
+  assert.equal(out[1].na_faixa, 0, 'A não some — quem corta em > 0 é o front');
 });
 
-test('o front lê abaixo direto, sem indireção de faixa', () => {
-  const ini = SRC.indexOf('const TOP_EQUIPES');
-  assert.ok(ini > -1, 'não achei o bloco do ranking');
-  const bloco = SRC.slice(ini, SRC.indexOf('const totalAbaixoEq', ini));
-  assert.match(bloco, /e\.abaixo > 0/, 'a lista é de quem tem caso abaixo do critério');
-  assert.match(bloco, /e\.abaixo \/ maxG/, 'a barra é proporcional à contagem');
-  for (const morto of [/rkFaixa/, /rkVal/, /na_faixa/, /d\.ranking/]) {
-    assert.doesNotMatch(bloco, morto, 'sobra do ranking-segue-a-faixa, que foi desfeito');
+test('o denominador continua sendo o total medido, não o da faixa', () => {
+  // Trocar por "3 de 3" transformaria toda linha em 100%.
+  const rows = [nota('A', 1200), nota('A', 60), nota('A', 60)];
+  const base = agregarPoReparo(rows, mapa(rows)).porEquipe;
+  const out = rankingNaFaixa(base, [rows[0]], r => r.team_name);
+  assert.equal(out[0].na_faixa, 1);
+  assert.equal(out[0].total, 3);
+  assert.equal(out[0].na_faixa_pct, 33.3);
+});
+
+test('o agregado diz o que está contando e com que sentido', () => {
+  const rows = [nota('A', 60)];
+  const ag = agregarPoReparo(rows, mapa(rows));
+  // `agregarPoReparo` não conhece a faixa — quem preenche `ranking` é o
+  // `resumoPoReparo`. Aqui só garantimos que o campo base não sumiu.
+  assert.equal(ag.porEquipe[0].abaixo, 1);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A COR — ranquear acerto em vermelho mentiria pelo desenho
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('faixa abaixo do critério é "ruim"; acima é "bom"', () => {
+  for (const k of ['negativo', '0_2', '2_5', '5_10']) {
+    assert.equal(sentidoDasFaixas(new Set([k])), 'ruim', k);
+  }
+  for (const k of ['10_30', '30_60', '60_mais']) {
+    assert.equal(sentidoDasFaixas(new Set([k])), 'bom', k);
   }
 });
 
-test('o título diz o critério e sai da constante do backend', () => {
-  // Título fixo "casos graves" mentiria sobre o que a barra mede agora.
-  assert.match(SRC, /<h3>Equipes — casos abaixo de \$\{r\.minimo_min\} min/);
+test('sem faixa, o padrão é o problema', () => {
+  assert.equal(sentidoDasFaixas(null), 'ruim');
+  assert.equal(sentidoDasFaixas(new Set()), 'ruim');
+});
+
+test('mistura dos dois lados não ganha cor de nenhum', () => {
+  // Verde diria "isto é bom" sobre uma contagem que inclui violação.
+  assert.equal(sentidoDasFaixas(new Set(['0_2', '10_30'])), 'neutro');
+  assert.equal(sentidoDasFaixas(new Set(['10_30', '30_60'])), 'bom', 'ambas boas segue bom');
+});
+
+test('sem Horário do Reparo não é acerto nem erro', () => {
+  assert.equal(sentidoDasFaixas(new Set(['sem_horario'])), 'neutro');
+  assert.equal(sentidoDasFaixas(new Set(['sem_horario', '10_30'])), 'neutro');
+});
+
+test('chave desconhecida não chuta cor', () => {
+  assert.equal(sentidoDasFaixas(new Set(['xpto'])), 'neutro');
+});
+
+test('a barra do front tira a cor do sentido, sem vermelho fixo', () => {
+  const ini = SRC.indexOf('const TOP_EQUIPES');
+  assert.ok(ini > -1, 'não achei o bloco do ranking');
+  const bloco = SRC.slice(ini, SRC.indexOf('const totalCasoEq', ini));
+  assert.match(bloco, /rkCor\s*=\s*\{\s*bom:\s*'#27ae60'/, 'faixa boa pinta verde');
+  assert.match(bloco, /background:\$\{rkCor\}/, 'a barra usa a cor calculada');
+  assert.doesNotMatch(bloco, /background:#c0392b/, 'vermelho fixo era o que mentia');
+});
+
+test('o título acompanha o que está sendo contado', () => {
+  assert.match(SRC, /<h3>Equipes — \$\{rkNome\}/);
+  const ini = SRC.indexOf('const rkNome');
+  assert.match(SRC.slice(ini, ini + 200),
+    /rkFaixa \? `casos \$\{d\.ranking\.rotulo\}` : `casos abaixo de \$\{r\.minimo_min\} min`/);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,7 +185,7 @@ test('o corte é 20 e vem de uma constante só', () => {
   assert.match(bloco, /slice\(0,\s*TOP_EQUIPES\)/, 'sem número solto no slice');
   // O rodapé tem de usar a MESMA constante — "20 primeiras" mostrando 15 foi
   // um desencontro real desta tela.
-  assert.match(bloco, /comAbaixo\.length > TOP_EQUIPES/);
+  assert.match(bloco, /comCaso\.length > TOP_EQUIPES/);
   assert.match(bloco, /as \$\{TOP_EQUIPES\} primeiras/);
 });
 

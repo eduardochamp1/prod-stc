@@ -243,6 +243,79 @@ function cmpCasos(a, b) {
 }
 
 /**
+ * FUNÇÃO PURA (testável): re-ordena o ranking pela contagem de casos nas faixas
+ * selecionadas, em vez de por casos abaixo do critério.
+ *
+ * Equipe SEM caso na faixa recebe `na_faixa: 0` e continua na lista — quem
+ * decide se ela aparece é o front (que corta em > 0). Sumir aqui a tiraria do
+ * denominador "de N equipes" e a contagem pararia de fechar.
+ *
+ * `total` é preservado de propósito: é o total MEDIDO da equipe no período,
+ * todas as faixas. É ele que dá sentido ao "12 de 48 (25%)" — trocar pelo total
+ * da faixa transformaria toda linha em 100%.
+ *
+ * @param {Array}    porEquipe    ranking já agregado (de `agregarPoReparo`)
+ * @param {Array}    casos        casos JÁ filtrados pela faixa, sem corte
+ * @param {Function} nomeDaNota   (caso) → sigla da equipe, ou null
+ */
+function rankingNaFaixa(porEquipe, casos, nomeDaNota) {
+  const contagem = new Map();
+  for (const r of (casos || [])) {
+    const nome = nomeDaNota ? nomeDaNota(r) : null;
+    if (!nome) continue;
+    contagem.set(nome, (contagem.get(nome) || 0) + 1);
+  }
+  return (porEquipe || [])
+    .map(e => {
+      const n = contagem.get(e.equipe) || 0;
+      return { ...e, na_faixa: n, na_faixa_pct: e.total ? +(100 * n / e.total).toFixed(1) : 0 };
+    })
+    .sort((a, b) => b.na_faixa - a.na_faixa || b.na_faixa_pct - a.na_faixa_pct);
+}
+
+/**
+ * Rótulo humano das faixas escolhidas, pro título do ranking dizer o que a
+ * barra está medindo. Chave desconhecida entra como veio em vez de sumir — um
+ * título estranho é problema menor que um título que omite parte do recorte.
+ */
+function rotuloDasFaixas(chaves) {
+  const lista = (chaves || []).map(c => {
+    if (c === FAIXA_SEM_HORARIO.chave) return FAIXA_SEM_HORARIO.rotulo;
+    const f = FAIXAS.find(x => x.chave === c);
+    return f ? f.rotulo : String(c);
+  });
+  if (!lista.length) return null;
+  // "na faixa sem Horário do Reparo" não se lê — ausência de apontamento não é
+  // faixa. Sozinha, ela dispensa o prefixo; misturada com faixas de verdade,
+  // entra na enumeração normalmente.
+  if (lista.length === 1 && chaves[0] === FAIXA_SEM_HORARIO.chave) return FAIXA_SEM_HORARIO.rotulo;
+  return (lista.length === 1 ? 'na faixa ' : 'nas faixas ') + lista.join(' + ');
+}
+
+/**
+ * FUNÇÃO PURA (testável): o que a contagem selecionada representa.
+ *
+ * 31/08/2026 — o ranking passou a poder mostrar quem mais ACERTA, e a barra era
+ * vermelha fixa. Ranquear acerto em vermelho lê como problema: a cor tem de
+ * dizer se a contagem é boa ou ruim, senão a tela mente pelo desenho.
+ *
+ *   'ruim'   toda faixa escolhida está abaixo do critério (< 10 min)
+ *   'bom'    toda faixa escolhida está no critério ou acima
+ *   'neutro' mistura, ou "sem Horário do Reparo" — que não é acerto nem erro,
+ *            é ausência de apontamento
+ */
+function sentidoDasFaixas(chaves) {
+  const lista = chaves ? [...chaves] : [];
+  if (!lista.length) return 'ruim';                       // padrão: abaixo do critério
+  if (lista.includes(FAIXA_SEM_HORARIO.chave)) return 'neutro';
+  const faixas = lista.map(c => FAIXAS.find(x => x.chave === c)).filter(Boolean);
+  if (faixas.length !== lista.length) return 'neutro';    // chave desconhecida — não chuta cor
+  if (faixas.every(f => f.de >= MINIMO_SEG)) return 'bom';
+  if (faixas.every(f => f.ate <= MINIMO_SEG)) return 'ruim';
+  return 'neutro';
+}
+
+/**
  * Chave da faixa FINA (as sete da tela), pro filtro de desvio.
  * Devolve null quando não é mensurável — nota sem delta não pertence a faixa
  * nenhuma, e forçá-la numa faria a soma do histograma parar de fechar.
@@ -594,6 +667,26 @@ async function resumoPoReparo(de, ate, opts = {}) {
     }));
   agregado.casos_total = casos.length;
 
+  // ── Ranking de equipes SEGUE a faixa selecionada ──────────────────────────
+  // 31/08/2026, 3ª e definitiva forma da métrica no dia. O pedido foi ver
+  // também "as equipes que mais ACERTAM": marcando 10 a 30 min, o ranking vira
+  // a lista de quem mais cumpre o critério.
+  //
+  // Sem faixa, o padrão é o problema — casos abaixo do critério (< 10 min).
+  //
+  // ⚠️ Conta sobre `casos` ANTES do corte de 1.000 da tabela: o ranking mede a
+  // operação inteira, não a primeira página do detalhamento.
+  if (faixas) {
+    agregado.porEquipe = rankingNaFaixa(
+      agregado.porEquipe, casos, r => equipeDe(r.note_id).team_name);
+  }
+  agregado.ranking = {
+    por:     faixas ? 'faixa' : 'criterio',
+    rotulo:  faixas ? rotuloDasFaixas([...faixas]) : null,
+    // A cor da barra sai daqui: vermelho ranqueando acerto mentiria.
+    sentido: sentidoDasFaixas(faixas),
+  };
+
   agregado.periodo = { de, ate };
   return agregado;
 }
@@ -623,6 +716,9 @@ module.exports = {
   FAIXA_SEM_HORARIO,
   casoVisivel,
   cmpCasos,
+  rankingNaFaixa,
+  rotuloDasFaixas,
+  sentidoDasFaixas,
   agregarPoReparo,
   setoresDasRegionais,
   inicioDaSemana,

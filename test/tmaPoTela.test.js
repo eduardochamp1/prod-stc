@@ -215,7 +215,7 @@ test('o percentual continua visível ao lado da contagem', () => {
   // "54 casos" não se lê.
   const corpo = corpoDe('function renderTma', 'function switchHistSubtab');
   assert.match(corpo, /de \$\{e\.total\}/);
-  assert.match(corpo, /\$\{e\.abaixo_pct\}%/);
+  assert.match(corpo, /\$\{rkPct\(e\)\}%/);
 });
 
 test('os cartões lideram pelo acionável, não pelos 66%', () => {

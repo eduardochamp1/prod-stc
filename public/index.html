@@ -5111,31 +5111,38 @@ ${matrizHTML}
       // Ranking por CONTAGEM. "54 casos" é uma tarefa; "98,2%" empatava todo
       // mundo em vermelho e não priorizava nada.
       //
-      // 31/08/2026, na ordem em que aconteceu:
-      //   • passou a SEGUIR a faixa marcada — e aí, com "10 a 30 min" marcada,
-      //     ele ranqueava as equipes pelos casos CERTOS delas. Ranquear acerto
-      //     não prioriza nada, e o José mandou desfazer.
-      //   • voltou a ser fixo, agora em ABAIXO DO CRITÉRIO (< 10 min) em vez de
-      //     graves (< 2 min). Os 10 minutos são a regra da operação desde o
-      //     primeiro dia; os 2 minutos eram recorte meu, e deixavam a maior
-      //     parte do problema fora do ranking.
-      // A faixa voltou a ser drill-down só da tabela de detalhamento.
+      // 31/08/2026, três formas no mesmo dia — a cronologia importa porque a
+      // do meio já foi tentada e desfeita:
+      //   • graves (< 2 min) fixo;
+      //   • seguindo a faixa, com "10 a 30 min" o ranking listava as equipes
+      //     pelos casos CERTOS delas, em barra VERMELHA — desfeito;
+      //   • agora: padrão em ABAIXO DO CRITÉRIO (< 10 min), e seguindo a faixa
+      //     quando há uma marcada, de propósito, pra também dar a lista de quem
+      //     mais ACERTA. A cor acompanha o sentido (ver `d.ranking.sentido`),
+      //     senão ranquear acerto em vermelho lê como problema.
       const TOP_EQUIPES = 20;
-      const comAbaixo = (d.porEquipe || []).filter(e => e.abaixo > 0);
-      const maxG = Math.max(...comAbaixo.map(e => e.abaixo), 1);
-      const equipesHTML = comAbaixo.slice(0, TOP_EQUIPES).map(e => `
+      const rkFaixa = !!(d.ranking && d.ranking.por === 'faixa');
+      const rkVal   = e => (rkFaixa ? (e.na_faixa || 0) : e.abaixo);
+      const rkPct   = e => (rkFaixa ? (e.na_faixa_pct || 0) : e.abaixo_pct);
+      const rkNome  = rkFaixa ? `casos ${d.ranking.rotulo}` : `casos abaixo de ${r.minimo_min} min`;
+      const rkCor   = { bom: '#27ae60', neutro: '#e67e22' }[(d.ranking || {}).sentido] || '#c0392b';
+      const rkQue   = rkFaixa ? 'caso na seleção' : 'caso abaixo do critério';
+
+      const comCaso = (d.porEquipe || []).filter(e => rkVal(e) > 0);
+      const maxG = Math.max(...comCaso.map(rkVal), 1);
+      const equipesHTML = comCaso.slice(0, TOP_EQUIPES).map(e => `
         <div class="desloc-bar-row" style="cursor:default">
           <div class="desloc-bar-label">${e.equipe} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
-          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * e.abaixo / maxG).toFixed(1)}%;background:#c0392b"></div></div>
-          <div class="desloc-bar-count">${e.abaixo} <span style="font-size:10px;opacity:.6">de ${e.total} (${e.abaixo_pct}%)</span></div>
-        </div>`).join('') || '<div class="empty-state" style="font-size:12px">Nenhum caso abaixo do critério no período.</div>';
+          <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${(100 * rkVal(e) / maxG).toFixed(1)}%;background:${rkCor}"></div></div>
+          <div class="desloc-bar-count">${rkVal(e)} <span style="font-size:10px;opacity:.6">de ${e.total} (${rkPct(e)}%)</span></div>
+        </div>`).join('') || `<div class="empty-state" style="font-size:12px">Nenhum ${rkQue} no período.</div>`;
 
-      const totalAbaixoEq = comAbaixo.reduce((s, e) => s + e.abaixo, 0);
-      const poucas = comAbaixo.length > TOP_EQUIPES
+      const totalCasoEq = comCaso.reduce((s, e) => s + rkVal(e), 0);
+      const poucas = comCaso.length > TOP_EQUIPES
         ? `<div style="margin-top:10px;font-size:11px;color:var(--text2);border-top:1px solid var(--cinza2);padding-top:8px">
-             Mostrando as ${TOP_EQUIPES} primeiras de <strong>${comAbaixo.length} equipes</strong>
-             com caso abaixo do critério no período
-             (${totalAbaixoEq.toLocaleString('pt-BR')} casos no total).
+             Mostrando as ${TOP_EQUIPES} primeiras de <strong>${comCaso.length} equipes</strong>
+             com ${rkQue} no período
+             (${totalCasoEq.toLocaleString('pt-BR')} casos no total).
            </div>` : '';
 
       // Quem não preenche o Horário do Reparo. Estas notas não têm delta, então
@@ -5257,7 +5264,7 @@ ${matrizHTML}
 
         <div class="desloc-grid desloc-grid-larga" style="margin-top:18px">
           <div class="desloc-panel">
-            <h3>Equipes — casos abaixo de ${r.minimo_min} min <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
+            <h3>Equipes — ${rkNome} <span style="font-size:11px;font-weight:normal;opacity:.7;margin-left:8px">por CONTAGEM, não por percentual</span></h3>
             ${equipesHTML}
             ${poucas}
           </div>

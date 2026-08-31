@@ -130,7 +130,7 @@ test('o quadro fica ao LADO do ranking, não embaixo', () => {
   const i = SRC.indexOf('desloc-grid-larga');
   assert.ok(i > -1, 'não achei o grid de duas colunas do ranking');
   const bloco = SRC.slice(i, i + 1400);
-  assert.match(bloco, /Equipes — casos abaixo de/);
+  assert.match(bloco, /Equipes — \$\{rkNome\}/);
   assert.match(bloco, /Sem Horário do Reparo/);
   const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
   assert.match(CSS, /\.desloc-grid-larga\s*\{\s*grid-template-columns:\s*[\d.]+fr\s+[\d.]+fr/,
