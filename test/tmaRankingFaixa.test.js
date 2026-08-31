@@ -169,14 +169,20 @@ function regraCSS(seletor) {
   return CSS.slice(i, CSS.indexOf('}', i));
 }
 
-test('o rótulo para de crescer — a sobra vai pra barra', () => {
+test('a coluna do rótulo encolhe até o conteúdo — a sobra vai pra barra', () => {
   // Era `1.2fr 2fr 110px`, calibrado pro painel estreito da distribuição. No
   // painel de largura cheia do ranking isso virava ~500px de vazio antes da
   // barra começar.
+  //
+  // `minmax(140px, 230px)` foi a 1ª tentativa e NÃO resolveu: minmax ocupa a
+  // faixa inteira quando há espaço sobrando, então a coluna ia pros 230px de
+  // qualquer jeito. Só `fit-content()` encolhe até o rótulo mais largo.
   const r = regraCSS('.desloc-bar-row');
-  assert.match(r, /grid-template-columns:\s*minmax\(\s*\d+px\s*,\s*\d+px\s*\)\s+1fr\s+\d+px/,
-    'a 1ª coluna precisa de teto e a do meio tem de absorver a sobra');
+  assert.match(r, /grid-template-columns:\s*fit-content\(\s*\d+px\s*\)\s+1fr\s+\d+px/,
+    'a 1ª coluna tem de encolher ao conteúdo e a do meio absorver a sobra');
   assert.doesNotMatch(r, /1\.2fr\s+2fr/);
+  assert.doesNotMatch(r, /grid-template-columns:\s*minmax/,
+    'minmax reserva o teto inteiro — foi exatamente o que não funcionou');
 });
 
 test('o trilho e o hover não são brancos sobre fundo claro', () => {

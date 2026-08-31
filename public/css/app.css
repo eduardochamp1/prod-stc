@@ -4649,11 +4649,13 @@
    (metade da largura, dentro do .desloc-grid). O ranking de equipes é painel
    de largura CHEIA: 1.2fr virava ~500px de vazio para um rótulo de ~120px
    ("EPMRT32 GUA"), e as barras começavam no meio da tela.
-   Com minmax, o rótulo para de crescer e a sobra vai toda para a barra —
-   no painel estreito o resultado é praticamente igual ao de antes. */
+   `fit-content(230px)`: a coluna encolhe até o rótulo mais largo da lista e
+   só para de crescer aos 230px. `minmax(140px, 230px)` não resolveu — minmax
+   reserva a faixa inteira quando há espaço sobrando, então a coluna ia pros
+   230px mesmo com "EPMRT32 GUA" ocupando ~120. */
 .desloc-bar-row {
   display: grid;
-  grid-template-columns: minmax(140px, 230px) 1fr 110px;
+  grid-template-columns: fit-content(230px) 1fr 110px;
   gap: 8px;
   align-items: center;
   padding: 5px 6px;
