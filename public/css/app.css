@@ -4412,6 +4412,9 @@
     .mtx-table td.mtx-rej { color: var(--text2); }
     .mtx-table td.mtx-rej-hot { color: var(--vermelho); font-weight: 700; }
     .mtx-table td.mtx-zero { color: var(--cinza3); opacity: .4; }
+    /* SOMA (EXEC + REJE) — fecha cada grupo; preto pra não competir com o
+       verde do EXEC nem com o vermelho do REJE. */
+    .mtx-table td.mtx-soma { color: var(--preto); font-weight: 600; }
 
     /* Grupo TOTAL: leve tom amarelo + negrito. */
     .mtx-table td.mtx-total { background: #fff9e6; font-weight: 700; }

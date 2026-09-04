@@ -4069,7 +4069,8 @@
       // Dados do endpoint /performance/equipes-matriz (matrizData). Colunas de
       // tipo em ordem canônica (PROD_LINHAS top-level) + quaisquer extras
       // presentes no período (ex.: SM/VL). EXEC = concluídas; REJE = rejeitadas
-      // cruas. Uma sub-coluna EXEC e uma REJE por grupo, começando pelo TOTAL.
+      // cruas. Três sub-colunas por grupo — EXEC, REJE e SOMA (= EXEC + REJE) —
+      // começando pelo TOTAL.
       const matrizHTML = (() => {
         const eqs = (matrizData && matrizData.equipes) || [];
         if (eqs.length === 0) return '';
@@ -4080,11 +4081,12 @@
           ...[...presentes].filter(t => !ORDEM.includes(t)).sort(),
         ];
         // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL (destacado) + um grupo por tipo.
-        const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="2" title="Soma de todos os tipos">TOTAL</th>']
-          .concat(tipos.map(t => `<th class="mtx-grp" colspan="2">${t}</th>`)).join('');
-        // 2ª linha: EXEC/REJE repetido por grupo (o par do TOTAL leva mtx-total).
-        const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th>']
-          .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th>')).join('');
+        const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="3" title="Soma de todos os tipos">TOTAL</th>']
+          .concat(tipos.map(t => `<th class="mtx-grp" colspan="3">${t}</th>`)).join('');
+        // 2ª linha: EXEC/REJE/SOMA repetido por grupo (o trio do TOTAL leva mtx-total).
+        // SOMA = EXEC + REJE do próprio grupo (notas atendidas).
+        const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th><th class="mtx-soma mtx-total" title="EXEC + REJE">SOMA</th>']
+          .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th><th class="mtx-soma" title="EXEC + REJE">SOMA</th>')).join('');
         // Célula: número real, ou "—" bem apagado (classe mtx-zero) quando vazio.
         // REJE > 0 ganha mtx-rej-hot pra saltar (vermelho da marca).
         const cell = (v, cls) => v
@@ -4092,8 +4094,10 @@
           : `<td class="${cls} mtx-zero">—</td>`;
         const bodyRows = eqs.map(e => {
           const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC' : e.tipo_equipe === 'PLANTAO' ? 'EP' : 'OP';
-          const cells = [cell(e.total_exec, 'mtx-exec mtx-total'), cell(e.total_rej, 'mtx-rej mtx-total')]
-            .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej')])).join('');
+          const cells = [cell(e.total_exec, 'mtx-exec mtx-total'), cell(e.total_rej, 'mtx-rej mtx-total'),
+            cell((e.total_exec || 0) + (e.total_rej || 0), 'mtx-soma mtx-total')]
+            .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej'),
+              cell((e.exec?.[t] || 0) + (e.rej?.[t] || 0), 'mtx-soma')])).join('');
           return `<tr>
   <td class="mtx-team"><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
   ${cells}
@@ -4102,8 +4106,10 @@
         // Linha de total (rodapé): soma por coluna.
         const somaExec = (t) => eqs.reduce((s, e) => s + (t ? (e.exec?.[t] || 0) : e.total_exec), 0);
         const somaRej  = (t) => eqs.reduce((s, e) => s + (t ? (e.rej?.[t]  || 0) : e.total_rej), 0);
-        const footCells = [cell(somaExec(null), 'mtx-exec mtx-total'), cell(somaRej(null), 'mtx-rej mtx-total')]
-          .concat(tipos.flatMap(t => [cell(somaExec(t), 'mtx-exec'), cell(somaRej(t), 'mtx-rej')])).join('');
+        const footCells = [cell(somaExec(null), 'mtx-exec mtx-total'), cell(somaRej(null), 'mtx-rej mtx-total'),
+          cell(somaExec(null) + somaRej(null), 'mtx-soma mtx-total')]
+          .concat(tipos.flatMap(t => [cell(somaExec(t), 'mtx-exec'), cell(somaRej(t), 'mtx-rej'),
+            cell(somaExec(t) + somaRej(t), 'mtx-soma')])).join('');
         return `
 <div class="perf-section">
   <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe</div>
