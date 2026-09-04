@@ -4445,10 +4445,20 @@
     /* Banda cinza nas colunas SOMA — inclusive a do grupo TOTAL, pra a coluna
        ler como faixa vertical contínua. Este bloco fica DEPOIS de .mtx-total,
        do hover e do rodapé de propósito: a especificidade é igual, então é a
-       ordem que decide quem pinta o fundo. Não mexa na posição dele. */
-    .mtx-table td.mtx-soma { background: #eeeeeb; }
-    .mtx-table tbody tr:hover td.mtx-soma { background: #e4ebe4; }
-    .mtx-table tfoot .mtx-foot td.mtx-soma { background: var(--cinza2); }
+       ordem que decide quem pinta o fundo. Não mexa na posição dele.
+       Tom subido em 04/09/2026: #eeeeeb sobre branco não era percebido na
+       prática ("mudou nada" — José). Borda só à esquerda: uma à direita
+       colaria no border-left de 2px do EXEC do grupo seguinte. */
+    .mtx-table td.mtx-soma, .mtx-table thead tr:nth-child(2) th.mtx-soma {
+      border-left: 1px solid var(--cinza3);
+    }
+    .mtx-table td.mtx-soma { background: #e3e3dd; }
+    .mtx-table tbody tr:hover td.mtx-soma { background: #d8e2d8; }
+    .mtx-table tfoot .mtx-foot td.mtx-soma { background: #d5d5cd; }
+    /* Sub-cabeçalho da SOMA acompanha a faixa (texto escuro sobre cinza). */
+    .mtx-table thead tr:nth-child(2) th.mtx-soma {
+      background: #cfcfc6; color: var(--preto);
+    }
 
     /* Responsivo: aperta fonte/padding em telas estreitas (mantém scroll horizontal). */
     @media (max-width: 900px) {
