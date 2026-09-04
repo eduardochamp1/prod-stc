@@ -4021,8 +4021,12 @@
     .perf-section > .perf-section-title:focus-visible {
       outline: 2px solid var(--verde2); outline-offset: 3px;
     }
-    /* Recolhida: esconde tudo que não é o título e vira a seta pra direita. */
-    .perf-section.is-collapsed > *:not(.perf-section-title) { display: none; }
+    /* Recolhida: esconde tudo que não é o título e vira a seta pra direita.
+       !important em 04/09/2026: o #contador-cards (Dias sem Transgressão) leva
+       display:grid INLINE no HTML, e estilo inline vence regra de classe — a
+       seção recolhia o cabeçalho e deixava os cards na tela. Qualquer seção
+       nova com display inline dependeria disso também. */
+    .perf-section.is-collapsed > *:not(.perf-section-title) { display: none !important; }
     .perf-section.is-collapsed > .perf-section-title { margin-bottom: 0; }
     .perf-section.is-collapsed > .perf-section-title::after { transform: rotate(-90deg); }
     .perf-section.is-collapsed { margin-bottom: 14px; }
