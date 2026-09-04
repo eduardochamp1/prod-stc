@@ -4442,6 +4442,14 @@
     .mtx-table tfoot .mtx-foot td.mtx-team { z-index: 3; }
     .mtx-table tfoot .mtx-foot td.mtx-total { background: #fdf3d0; }
 
+    /* Banda cinza nas colunas SOMA — inclusive a do grupo TOTAL, pra a coluna
+       ler como faixa vertical contínua. Este bloco fica DEPOIS de .mtx-total,
+       do hover e do rodapé de propósito: a especificidade é igual, então é a
+       ordem que decide quem pinta o fundo. Não mexa na posição dele. */
+    .mtx-table td.mtx-soma { background: #eeeeeb; }
+    .mtx-table tbody tr:hover td.mtx-soma { background: #e4ebe4; }
+    .mtx-table tfoot .mtx-foot td.mtx-soma { background: var(--cinza2); }
+
     /* Responsivo: aperta fonte/padding em telas estreitas (mantém scroll horizontal). */
     @media (max-width: 900px) {
       .mtx-table { font-size: 11px; }
