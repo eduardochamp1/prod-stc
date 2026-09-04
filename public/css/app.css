@@ -4453,6 +4453,10 @@
       border-left: 1px solid var(--cinza3);
     }
     .mtx-table td.mtx-soma { background: #e3e3dd; }
+    /* Célula vazia da SOMA mantém a faixa: o .mtx-zero usa opacity, que apaga
+       a célula inteira (fundo incluído) e furava a coluna onde não havia valor.
+       Aqui o "—" fica apagado pela cor, não pela opacidade. */
+    .mtx-table td.mtx-soma.mtx-zero { opacity: 1; color: var(--cinza3); }
     .mtx-table tbody tr:hover td.mtx-soma { background: #d8e2d8; }
     .mtx-table tfoot .mtx-foot td.mtx-soma { background: #d5d5cd; }
     /* Sub-cabeçalho da SOMA acompanha a faixa (texto escuro sobre cinza). */
