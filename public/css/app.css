@@ -3997,6 +3997,36 @@
       border-bottom: 2px solid var(--cinza2);
     }
 
+    /* ── Seções recolhíveis ──
+       Todo título de .perf-section é o botão que recolhe a própria seção
+       (JS: alternarSecao / aplicarSecoesRecolhidas). A seta indica o estado. */
+    .perf-section > .perf-section-title {
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer; user-select: none;
+      transition: color .15s, border-color .15s;
+    }
+    .perf-section > .perf-section-title::after {
+      content: '';
+      margin-left: auto; flex: none;
+      width: 0; height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 6px solid var(--text2);
+      transition: transform .15s, border-top-color .15s;
+    }
+    .perf-section > .perf-section-title:hover {
+      color: var(--verde); border-bottom-color: var(--verde2);
+    }
+    .perf-section > .perf-section-title:hover::after { border-top-color: var(--verde2); }
+    .perf-section > .perf-section-title:focus-visible {
+      outline: 2px solid var(--verde2); outline-offset: 3px;
+    }
+    /* Recolhida: esconde tudo que não é o título e vira a seta pra direita. */
+    .perf-section.is-collapsed > *:not(.perf-section-title) { display: none; }
+    .perf-section.is-collapsed > .perf-section-title { margin-bottom: 0; }
+    .perf-section.is-collapsed > .perf-section-title::after { transform: rotate(-90deg); }
+    .perf-section.is-collapsed { margin-bottom: 14px; }
+
     /* Gauges */
     /* ── Aba Mapa ── */
     .mapa-layout {

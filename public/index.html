@@ -3793,6 +3793,8 @@
 
         const metas = getMetas();
         cont.innerHTML = renderGraficosHTML(subcatData, equipeData, regional, tipo, metas, team, csData, cs, matrizData);
+        // Títulos são recriados a cada render — reaplica o que estava recolhido.
+        aplicarSecoesRecolhidas(cont);
         // O contador agora vive DENTRO do graf-content (entre KPIs e gauges),
         // então é recriado a cada render — popula logo após.
         loadContadorTransgressao();
@@ -3800,6 +3802,79 @@
         cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
       }
     }
+
+    // ── SEÇÕES RECOLHÍVEIS (aba Gráficos) ───────────────────────────────────
+    // Clicar no título de uma .perf-section recolhe/expande o conteúdo dela.
+    // O estado vive no localStorage porque o graf-content é recriado inteiro a
+    // cada troca de filtro/período — sem persistir, toda seção reabriria.
+    const SECOES_LS_KEY = 'wpa.secoesRecolhidas';
+
+    // Chave de persistência = slug do texto do título. O que está entre
+    // parênteses é descartado de propósito: "Gauges de Subcategoria (Equipe
+    // ETCIT15)" tem que casar com "(Todas Regionais)", senão a seção reabre
+    // sozinha ao trocar de equipe.
+    function secaoChave(titleEl) {
+      const txt = titleEl.textContent || '';
+      const par = txt.indexOf('(');
+      // NFD + descarte de tudo fora do ASCII imprimível resolve acento e emoji
+      // (o título do contador começa com 🛡️) sem precisar de escapes no regex.
+      return (par >= 0 ? txt.slice(0, par) : txt)
+        .normalize('NFD')
+        .replace(/[^ -~]/g, '')
+        .trim().toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    }
+
+    function secoesRecolhidas() {
+      try { return new Set(JSON.parse(localStorage.getItem(SECOES_LS_KEY) || '[]')); }
+      catch (e) { return new Set(); }
+    }
+
+    function salvarSecoesRecolhidas(set) {
+      try { localStorage.setItem(SECOES_LS_KEY, JSON.stringify([...set])); }
+      catch (e) { /* localStorage cheio/bloqueado: recolher segue funcionando na sessão */ }
+    }
+
+    function rotularSecao(titleEl, fechada) {
+      titleEl.setAttribute('aria-expanded', String(!fechada));
+      titleEl.title = fechada ? 'Clique pra expandir' : 'Clique pra recolher';
+    }
+
+    // Marca os títulos como controles (a11y) e reaplica o que estava recolhido.
+    function aplicarSecoesRecolhidas(root) {
+      const fechadas = secoesRecolhidas();
+      (root || document).querySelectorAll('.perf-section > .perf-section-title').forEach(t => {
+        t.setAttribute('role', 'button');
+        t.setAttribute('tabindex', '0');
+        const fechada = fechadas.has(secaoChave(t));
+        t.parentElement.classList.toggle('is-collapsed', fechada);
+        rotularSecao(t, fechada);
+      });
+    }
+
+    function alternarSecao(titleEl) {
+      const fechada = titleEl.parentElement.classList.toggle('is-collapsed');
+      const set = secoesRecolhidas();
+      const k = secaoChave(titleEl);
+      if (fechada) set.add(k); else set.delete(k);
+      salvarSecoesRecolhidas(set);
+      rotularSecao(titleEl, fechada);
+    }
+
+    // Delegação no document: os títulos são recriados a cada render, então
+    // listener por elemento se perderia no próximo innerHTML.
+    document.addEventListener('click', (ev) => {
+      const t = ev.target.closest && ev.target.closest('.perf-section > .perf-section-title');
+      if (t) alternarSecao(t);
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      const t = ev.target.closest && ev.target.closest('.perf-section > .perf-section-title');
+      if (!t) return;
+      ev.preventDefault();
+      alternarSecao(t);
+    });
 
     /**
      * Gauge SVG no estilo velocímetro (arco de 240°).
