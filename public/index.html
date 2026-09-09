@@ -5524,7 +5524,14 @@ ${matrizHTML}
         `${av.dias_sem_escala} dia(s) de equipe com sessão mas SEM escala no período — `
         + 'não dá pra medir extrapolação sem janela. Ver P2-47.');
       if (r.incompletas) avisos.push(
-        `${r.incompletas} linha(s) com sessão ainda ABERTA: a prorrogação não foi medida.`);
+        `${r.incompletas} linha(s) com sessão ainda ABERTA: a prorrogação não foi medida. `
+        + `Essas passam sem o piso — com a sessão aberta não dá pra afirmar que o total é curto.`);
+      // Descarte pelo piso NUNCA é silencioso: sem isto, "faltam linhas" na
+      // conferência da Fase 4 não teria explicação.
+      if (r.descartadas_piso) avisos.push(
+        `<strong>${r.descartadas_piso} linha(s) descartada(s) pelo piso de ${r.piso_min} min</strong> `
+        + `— somavam ${r.descartadas_min} min e ${brl(r.descartadas_valor)}. `
+        + `São desvios de segundos (jitter de sincronização do app), não hora extra.`);
       if (av.origem_valores === 'seed') avisos.push(
         'Valores/hora vindos do seed do código, não de <code>app_settings</code>.');
 
@@ -5695,8 +5702,19 @@ ${matrizHTML}
           ['Período', `${_heDataBR(d.periodo?.de)} a ${_heDataBR(d.periodo?.ate)}`],
           ['Linhas', d.resumo?.linhas ?? ''],
           ['Total de horas', d.resumo?.total_horas ?? ''],
+          ['  antecipação', d.resumo?.total_antecipacao_h ?? ''],
+          ['  prorrogação', d.resumo?.total_prorrogacao_h ?? ''],
           ['Valor total', d.resumo?.valor_total ?? ''],
           ['Origem dos valores', d.avisos?.origem_valores || ''],
+          [],
+          // O piso faz parte de COMO o número foi produzido. Sem isto na
+          // planilha, uma reconferência futura com outro piso não fecha e
+          // ninguém saberia por quê.
+          [`Piso aplicado (min)`, d.resumo?.piso_min ?? ''],
+          ['Linhas descartadas pelo piso', d.resumo?.descartadas_piso ?? ''],
+          ['  minutos descartados', d.resumo?.descartadas_min ?? ''],
+          ['  valor descartado', d.resumo?.descartadas_valor ?? ''],
+          ['Linhas com sessão aberta (prorrogação não medida)', d.resumo?.incompletas ?? ''],
           [], ['Valor/hora aplicado'],
           ...Object.entries(d.valores_hora || {}).map(([t, v]) => [t, v]),
           [], ['Equipes sem cadastro HE'], ...(d.avisos?.sem_cadastro || []).map(s => [s]),

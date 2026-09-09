@@ -170,21 +170,26 @@ function sessaoDoDia(sessoes) {
  */
 function calcularHe(janela, sessao) {
   if (!janela || !sessao) return null;
-  const ant = sessao.inicioMs == null ? null
-    : Math.max(0, janela.inicioMs - sessao.inicioMs) / MS_HORA;
-  const pro = sessao.fimMs == null ? null
-    : Math.max(0, sessao.fimMs - janela.fimMs) / MS_HORA;
+  const antMs = sessao.inicioMs == null ? null
+    : Math.max(0, janela.inicioMs - sessao.inicioMs);
+  const proMs = sessao.fimMs == null ? null
+    : Math.max(0, sessao.fimMs - janela.fimMs);
+  const totalMs = (antMs || 0) + (proMs || 0);
 
-  const total_h = (ant || 0) + (pro || 0);
   return {
-    antecipacao_h: ant,
-    prorrogacao_h: pro,
-    total_h,
+    antecipacao_h: antMs == null ? null : antMs / MS_HORA,
+    prorrogacao_h: proMs == null ? null : proMs / MS_HORA,
+    total_h: totalMs / MS_HORA,
+    // ⚠️ EM MILISSEGUNDOS, sem passar por horas. O piso é comparado contra
+    // isto porque `total_h * 3600` de uma diferença de 60.000 ms dá
+    // 59,99999999999999 — erro de float que descartaria uma linha legítima de
+    // exatamente 1 minuto. Manter a unidade inteira até a comparação resolve.
+    total_ms: totalMs,
     // Arredondamentos são de EXIBIÇÃO. O dinheiro sai de `total_h` cru — ver
     // `valorTotalHe`, e a prova do 0,719 × 376,28 = 270,36 na spec §4.
-    total_dec: Math.round(total_h * 100) / 100,
-    total_min: Math.round(total_h * 60),
-    incompleta: ant == null || pro == null,
+    total_dec: Math.round((totalMs / MS_HORA) * 100) / 100,
+    total_min: Math.round(totalMs / 60000),
+    incompleta: antMs == null || proMs == null,
   };
 }
 
@@ -204,10 +209,33 @@ function valorTotalHe(totalH, valorHora) {
   return Math.round(totalH * valorHora * 100) / 100;
 }
 
-/** FUNÇÃO PURA: houve hora extra? Critério do José: qualquer uma das pontas. */
-function temHe(he) {
+/**
+ * PISO da medição: 1 minuto. Decisão do José em 09/09/2026, depois de ver dado
+ * real.
+ *
+ * Na 1ª rodada o critério era "qualquer ponta > 0", e apareceu a `ECGPR51` com
+ * prorrogação de 0,003 h — ONZE SEGUNDOS — cobrando R$ 0,86 com TOTAL (M) = 0.
+ * Isso não é hora extra, é jitter de sincronização do app. E uma linha de 11
+ * segundos numa planilha de cobrança é o que um auditor usa pra questionar as
+ * outras 405.
+ */
+const PISO_HE_SEG = 60;
+
+/**
+ * FUNÇÃO PURA (testável): a linha entra na medição?
+ *
+ * Precisa de hora extra em alguma ponta E de total no piso.
+ *
+ * ⚠️ SESSÃO ABERTA PASSA SEM O PISO. Com a sessão em aberto a prorrogação é
+ * DESCONHECIDA, então não se pode afirmar que o total está abaixo de 1 minuto —
+ * pode ser de horas. A linha fica, marcada `incompleta`, e a tela avisa.
+ * Aplicar o piso ali esconderia justamente o caso que precisa de conferência.
+ */
+function temHe(he, pisoSeg = PISO_HE_SEG) {
   if (!he) return false;
-  return (he.antecipacao_h > 0) || (he.prorrogacao_h > 0);
+  if (!((he.antecipacao_h > 0) || (he.prorrogacao_h > 0))) return false;
+  if (he.incompleta) return true;
+  return Number(he.total_ms) >= pisoSeg * 1000;
 }
 
 /**
@@ -467,6 +495,10 @@ async function medicaoHe(de, ate, opts = {}) {
   const semCadastro = new Set();
   const naoRevisadas = new Set();
   let semEscala = 0;
+  // Linhas com hora extra REAL mas abaixo do piso de 1 min (ver PISO_HE_SEG).
+  // Contadas pra que o descarte apareça: sumir com linha em silêncio viraria
+  // "faltam linhas" na conferência da Fase 4, sem ninguém saber por quê.
+  const descartadas = { linhas: 0, minutos: 0, valor: 0 };
 
   for (const [chave, sessoes] of sessoesPorChave) {
     const [equipe, dia] = chave.split('|');
@@ -488,7 +520,24 @@ async function medicaoHe(de, ate, opts = {}) {
     if (!sessao) continue;
 
     const he = calcularHe(janela, sessao);
-    if (!temHe(he)) continue;                 // critério do José: só com HE
+
+    // Tipo e preço resolvidos ANTES do piso, pra poder dizer quanto foi
+    // descartado em reais. Descarte silencioso viraria "sumiram linhas" na
+    // conferência da Fase 4.
+    const tipoHe = tipoHeDaEquipe(cad);
+    const valorHora = tipoHe ? (valores[tipoHe] ?? null) : null;
+
+    if (!temHe(he)) {
+      // Distingue "não houve hora extra" (o dia normal, não interessa) de
+      // "houve, mas abaixo do piso de 1 min" (informação: é o ruído que o
+      // piso existe pra tirar, e o gestor tem direito de saber o tamanho).
+      if (he && ((he.antecipacao_h > 0) || (he.prorrogacao_h > 0))) {
+        descartadas.linhas++;
+        descartadas.minutos += he.total_ms / 60000;
+        descartadas.valor   += valorTotalHe(he.total_h, valorHora) || 0;
+      }
+      continue;
+    }
 
     // O snapshot da sessão mais recente é o que carrega o estado final do dia.
     const ultimoSnap = sessoes
@@ -500,15 +549,14 @@ async function medicaoHe(de, ate, opts = {}) {
     // `notasExecutadas` vem vazio de propósito (ver wpaService.js:1678), então
     // `executadas` não serve pra mês fechado. `_qtd_executadas` segue no
     // objeto pra Fase 4 conferir se a planilha usa a outra contagem.
-    // O tipo que dita o preço pode vir de `tipo_breve` ou de `tipo` — ver
-    // `tipoHeDaEquipe`. A linha mostra o RESOLVIDO, senão a tela diria "sem
-    // cadastro" numa equipe que tem preço.
-    const tipoHe = tipoHeDaEquipe(cad);
+    // `tipoHe` e `valorHora` foram resolvidos ANTES do piso — a linha mostra o
+    // tipo RESOLVIDO, senão a tela diria "sem cadastro" numa equipe que tem
+    // preço. Ver `tipoHeDaEquipe`.
     const linha = montarLinhaHe({
       equipe, dia,
       cadastro:  { ...(cad || {}), regional: reg, tipo_breve: tipoHe },
       janela, sessao, he,
-      valorHora: tipoHe ? (valores[tipoHe] ?? null) : null,
+      valorHora,
       ultima:    ultimaNotaDaSessao(ultimoSnap.data),
       qtd:       ultimoSnap.concluidas,
     });
@@ -544,6 +592,11 @@ async function medicaoHe(de, ate, opts = {}) {
       linhas_sem_valor: linhas.length - comValor.length,
       incompletas:   linhas.filter(l => l._incompleta).length,
       com_relogin:   linhas.filter(l => l._relogins > 0).length,
+      // O que o piso tirou. Aparece na tela e na aba PROCEDÊNCIA do XLSX.
+      piso_min:            PISO_HE_SEG / 60,
+      descartadas_piso:    descartadas.linhas,
+      descartadas_min:     r2(descartadas.minutos),
+      descartadas_valor:   r2(descartadas.valor),
     },
     // Tudo que a tela precisa pra avisar em vez de exibir número falso.
     avisos: {
@@ -571,6 +624,7 @@ module.exports = {
   calcularHe,
   valorTotalHe,
   temHe,
+  PISO_HE_SEG,
   rotuloUltimaNota,
   ultimaNotaDaSessao,
   fmtParede,

@@ -289,12 +289,24 @@ test('arredonda em centavos', () => {
   assert.equal(valorTotalHe(1 / 3, 297.54), 99.18);
 });
 
-test('temHe exige uma das pontas > 0', () => {
-  assert.equal(temHe({ antecipacao_h: 0, prorrogacao_h: 0 }), false);
-  assert.equal(temHe({ antecipacao_h: 0.1, prorrogacao_h: 0 }), true);
-  assert.equal(temHe({ antecipacao_h: 0, prorrogacao_h: 0.1 }), true);
-  assert.equal(temHe({ antecipacao_h: null, prorrogacao_h: null }), false);
+test('temHe exige uma das pontas > 0 E o total no piso', () => {
+  // A 1ª versão deste teste só cobrava "alguma ponta > 0" — era o critério
+  // antes do piso de 1 min (09/09/2026). Os fixtures agora precisam de
+  // `total_ms`, que é a unidade que o piso compara.
+  const seg = n => n * 1000;
+  assert.equal(temHe({ antecipacao_h: 0, prorrogacao_h: 0, total_ms: 0 }), false);
+  assert.equal(temHe({ antecipacao_h: 0.1, prorrogacao_h: 0, total_ms: seg(360) }), true);
+  assert.equal(temHe({ antecipacao_h: 0, prorrogacao_h: 0.1, total_ms: seg(360) }), true);
+  assert.equal(temHe({ antecipacao_h: null, prorrogacao_h: null, total_ms: 0 }), false);
   assert.equal(temHe(null), false);
+  // Ponta > 0 mas total curto: reprovado pelo piso.
+  assert.equal(temHe({ antecipacao_h: 0.001, prorrogacao_h: 0, total_ms: seg(3) }), false);
+});
+
+test('total_ms ausente não vira linha por acidente', () => {
+  // `Number(undefined)` é NaN, e NaN >= 60000 é false — o que é o certo aqui:
+  // sem total medido não há como afirmar que passou do piso.
+  assert.equal(temHe({ antecipacao_h: 0.5, prorrogacao_h: 0 }), false);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -432,4 +444,77 @@ test('status desconhecido é capitalizado, não traduzido por aproximação', ()
   assert.equal(
     rotuloUltimaNota({ tipoCode: 'XX', codigo: '1', status: 'xpto' }),
     'XX - 1 - Xpto');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PISO DE 1 MINUTO — decisão do José em 09/09/2026, com dado real na mesa
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { PISO_HE_SEG } = require('../db/heQueries');
+
+const heDe = (fim, ini = '2026-08-16T08:00:00') =>
+  calcularHe(janela('2026-08-16', '08:00', '17:00'),
+             sessaoDoDia([{ begin: ini, end: fim }]));
+
+test('o piso é de 1 minuto', () => {
+  assert.equal(PISO_HE_SEG, 60);
+});
+
+test('a linha de 11 segundos da ECGPR51 é descartada', () => {
+  // O caso concreto que motivou o piso: prorrogação 0,003 h cobrando R$ 0,86
+  // com TOTAL (M) = 0. Não é hora extra, é jitter do app.
+  const he = heDe('2026-08-16T17:00:11');
+  assert.equal(he.total_min, 0);
+  assert.equal(temHe(he), false);
+});
+
+test('a fronteira é exata em 60 segundos — sem erro de float', () => {
+  // ⚠️ `total_h * 3600` de 60.000 ms dá 59,99999999999999 e reprovaria uma
+  // linha legítima de exatamente 1 minuto. Por isso a comparação usa
+  // `total_ms` inteiro.
+  assert.equal(heDe('2026-08-16T17:00:59').total_ms, 59000);
+  assert.equal(temHe(heDe('2026-08-16T17:00:59')), false, '59s fora');
+  assert.equal(heDe('2026-08-16T17:01:00').total_ms, 60000);
+  assert.equal(temHe(heDe('2026-08-16T17:01:00')), true, '60s exatos DENTRO');
+  assert.equal(temHe(heDe('2026-08-16T17:01:01')), true);
+});
+
+test('total_ms existe e é inteiro em ms', () => {
+  // É a unidade que o piso compara. Se virar horas de novo, o float volta.
+  const he = heDe('2026-08-16T18:16:00');
+  assert.equal(he.total_ms, 76 * 60000);
+  assert.equal(Number.isInteger(he.total_ms), true);
+});
+
+test('as duas pontas somam pro piso', () => {
+  // 40s de antecipação + 30s de prorrogação = 70s ≥ piso.
+  const he = heDe('2026-08-16T17:00:30', '2026-08-16T07:59:20');
+  assert.equal(he.total_ms, 70000);
+  assert.equal(temHe(he), true);
+});
+
+test('35s + 20s = 55s fica fora', () => {
+  const he = heDe('2026-08-16T17:00:20', '2026-08-16T07:59:25');
+  assert.equal(he.total_ms, 55000);
+  assert.equal(temHe(he), false);
+});
+
+test('sessão ABERTA passa SEM o piso', () => {
+  // Com a sessão em aberto a prorrogação é DESCONHECIDA — pode ser de horas.
+  // Aplicar o piso aqui esconderia justamente o caso que precisa de olho.
+  const he = calcularHe(janela('2026-08-16', '08:00', '17:00'),
+                        sessaoDoDia([{ begin: '2026-08-16T07:59:55', end: null }]));
+  assert.equal(he.total_ms, 5000, '5 segundos de antecipação');
+  assert.equal(he.incompleta, true);
+  assert.equal(temHe(he), true, 'passa apesar de estar abaixo do piso');
+});
+
+test('dia sem hora extra nenhuma continua fora, piso ou não', () => {
+  assert.equal(temHe(heDe('2026-08-16T16:00:00')), false);
+});
+
+test('o piso é parametrizável pra teste, mas o padrão é o do contrato', () => {
+  const he = heDe('2026-08-16T17:00:30');       // 30s
+  assert.equal(temHe(he), false, 'padrão de 60s reprova');
+  assert.equal(temHe(he, 10), true, 'com piso de 10s passa');
 });

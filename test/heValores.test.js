@@ -235,11 +235,22 @@ test('a medição usa o tipo RESOLVIDO, não tipo_breve cru', () => {
   const HEQ2 = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
   const i = HEQ2.indexOf('const tipoHe = tipoHeDaEquipe(cad)');
   assert.ok(i > -1, 'a montagem da linha tem de resolver o tipo');
-  const bloco = HEQ2.slice(i, i + 900);
-  assert.match(bloco, /valorHora: tipoHe \? \(valores\[tipoHe\] \?\? null\) : null/);
+  const bloco = HEQ2.slice(i, i + 1800);
+  assert.match(bloco, /const valorHora = tipoHe \? \(valores\[tipoHe\] \?\? null\) : null/);
   assert.match(bloco, /tipo_breve: tipoHe/, 'a linha mostra o resolvido');
   assert.match(bloco, /if \(!tipoHe\) semCadastro\.add\(equipe\)/,
     'o aviso "sem cadastro" tem de olhar o resolvido, senão acusa equipe que tem preço');
+});
+
+test('o tipo e o preço são resolvidos ANTES do piso', () => {
+  // Sem isso não daria pra dizer QUANTO em reais o piso descartou, e o
+  // descarte viraria "faltam linhas" sem explicação na conferência.
+  const HEQ2 = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
+  const iTipo = HEQ2.indexOf('const tipoHe = tipoHeDaEquipe(cad)');
+  const iPiso = HEQ2.indexOf('if (!temHe(he))', iTipo - 2000);
+  assert.ok(iTipo > -1 && iPiso > iTipo,
+    'o gate do piso tem de vir DEPOIS da resolução de tipo/preço');
+  assert.match(HEQ2.slice(iPiso, iPiso + 700), /descartadas\.valor\s*\+= valorTotalHe/);
 });
 
 test('os campos de valor cabem o número inteiro', () => {

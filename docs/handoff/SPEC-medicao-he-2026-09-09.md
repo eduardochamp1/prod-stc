@@ -33,7 +33,7 @@ outros. É trabalho de garimpo sobre dado que o WPA Monitor já ingere a cada
 | 1 | Onde fica o cadastro que falta (cidade, tipo breve, PLT/STC) | **Colunas novas em `equipes_oficiais`** + edição na tela do Admin |
 | 2 | Valores/hora por tipo | **Valor único por tipo**, sem vigência histórica |
 | 3 | Colunas de parecer/autorização | **Saem vazias**, com validação de dados (dropdown) já aplicada |
-| 4 | Quando a linha aparece | **Só quando houve HE** (antecipação > 0 **ou** prorrogação > 0) |
+| 4 | Quando a linha aparece | **Só quando houve HE** e o total alcança o **piso de 1 min** — o piso entrou em 09/09/2026 depois de ver dado real; ver §15 |
 
 ⚠️ **Risco aceito na decisão 2, registrado uma vez e encerrado.** Sem vigência,
 re-gerar a medição de julho depois de um reajuste devolve o preço de hoje, e o
@@ -398,3 +398,61 @@ previstas**:
    `INICIO SESSÃO` copiado do `INICIO ESCALA`. Medindo de verdade, o total
    sobe. Divergência para MAIS é esperada aqui.
 2. **QTD** — se divergir, testar `_qtd_executadas` antes de mexer no cálculo.
+
+## 15. Piso de 1 minuto — decidido em 09/09/2026, com dado real
+
+Na 1ª rodada em produção o critério era "qualquer ponta > 0" (decisão 4, §10) e
+apareceu a `ECGPR51`: prorrogação de **0,003 h — onze segundos** — com
+`TOTAL (M) = 0` e **R$ 0,86** cobrados. Não é hora extra, é jitter de
+sincronização do app. E uma linha de 11 segundos numa planilha de cobrança é o
+que um auditor usa para questionar as outras 405.
+
+O José definiu **piso de 1 minuto no TOTAL** (antecipação + prorrogação).
+
+### Três decisões dentro do piso
+
+**1. A comparação é em milissegundos.** `total_h * 3600` de uma diferença de
+60.000 ms dá `59,99999999999999` — erro de float que descartaria uma linha
+legítima de exatamente 1 minuto. `calcularHe` passou a devolver `total_ms`
+inteiro, e é contra ele que o piso compara. Testado nas duas bordas: 59s fora,
+60s exatos dentro.
+
+**2. Sessão ABERTA passa SEM o piso.** Com a sessão em aberto a prorrogação é
+DESCONHECIDA — pode ser de horas. Não se pode afirmar que o total está abaixo
+de 1 minuto. A linha fica, marcada `incompleta`, e a tela avisa. Aplicar o piso
+ali esconderia justamente o caso que precisa de conferência.
+
+**3. O descarte NUNCA é silencioso.** O resumo devolve `descartadas_piso`,
+`descartadas_min` e `descartadas_valor`; a tela mostra num aviso e o XLSX
+registra na aba `PROCEDÊNCIA`, junto com o piso aplicado. Sem isso, "faltam
+linhas" na conferência da Fase 4 não teria explicação — e uma reconferência
+futura com outro piso não fecharia sem ninguém saber por quê.
+
+### Primeira medição completa (16/08 a 31/08/2026, antes do piso)
+
+- 406 linhas · 39 equipes · **400,29 h** (55,55 antecipação + 344,73 prorrogação)
+- **R$ 133.738,13** antes do parecer
+- 131 linhas com relogin · 26 com sessão aberta · 1 dia sem escala
+
+Os 55,55 h de antecipação são o número que a planilha manual zera. É a
+divergência prevista da Fase 4 (§14), e agora tem tamanho.
+
+## 16. Aberto para a Fase 4
+
+⬜ **A última nota está vindo 100% `PO`.** Nas linhas conferidas em produção,
+todas. Na planilha manual os tipos variam (`DD`, `MD`, `LE`, `LN`, `SM`, `RL`,
+`UG`, `DL`). Hipótese: `ultimaNotaDaSessao` escolhe pelo `conclusionDate` mais
+recente, e talvez só parte dos tipos carregue esse campo nos snapshots — aí
+sempre vence quem tem. **É o 1º item a conferir**, porque a coluna D divergiria
+sistematicamente.
+
+⬜ **26 sessões abertas num período fechado** (16–31/08, já passado). São
+equipes que não deslogaram. Prorrogação não medida, então essas linhas cobram
+MENOS que o devido. Decidir se entram na fatura assim, ficam de fora, ou viram
+pendência operacional.
+
+⬜ **Cachoeiro e São José têm medição HE própria?** As 26 equipes de CAC
+mantiveram tipo operacional (`PLANTÃO`/`COMERCIAL`/`USO MUTUO`) e aparecem como
+"sem cadastro HE". Se não houver medição pra elas, esse aviso é ruído
+permanente e vale separar "sem tipo cadastrado" de "regional sem medição HE" —
+aviso que sempre aparece é aviso que se aprende a ignorar.

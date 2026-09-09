@@ -116,10 +116,16 @@ test('a procedência do preço vai numa aba, não como rodapé nos dados', () =>
   // evidenciária é a mesma: sem vigência no banco, a planilha é a prova.
   assert.match(SRC, /'PROCEDÊNCIA'\)/);
   const i = SRC.indexOf("'PROCEDÊNCIA'");
-  const bloco = SRC.slice(Math.max(0, i - 1200), i);
+  // Janela de 2400: a aba cresceu quando o piso entrou (09/09/2026) e a de
+  // 1200 deixou de alcançar as primeiras linhas.
+  const bloco = SRC.slice(Math.max(0, i - 2400), i);
   assert.match(bloco, /Valor\/hora aplicado/);
   assert.match(bloco, /Gerado em/);
   assert.match(bloco, /sem cadastro HE/i);
+  // O piso faz parte de COMO o número foi produzido: sem ele registrado, uma
+  // reconferência futura com outro piso não fecha e ninguém sabe por quê.
+  assert.match(bloco, /Piso aplicado \(min\)/);
+  assert.match(bloco, /Linhas descartadas pelo piso/);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
