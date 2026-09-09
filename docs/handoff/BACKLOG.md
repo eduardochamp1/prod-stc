@@ -142,7 +142,7 @@
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
-| P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fase 1 done** (09/09, cadastro + valores + Admin) — falta Fase 2 (cálculo), 3 (tela) e 4 (conferência de julho) |
+| P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 
 ---
@@ -4904,7 +4904,7 @@ mesmo ponto cego, o que reforça o item.
 ## P2-48 — Medição HE é levantada à mão do BI + portal WPA
 
 - **Categoria:** Produto/Operação
-- **Status:** **Fase 1 done** (09/09/2026) — cadastro, valores e Admin no ar; falta Fase 2/3/4. Ver
+- **Status:** **Fases 1-3 done** (09/09/2026) — cadastro, cálculo e tela com XLSX no ar. Falta a Fase 4 (conferir julho contra a planilha enviada), que é o único critério de aceite que vale. Ver
   `docs/handoff/SPEC-medicao-he-2026-09-09.md`. Implementação não iniciada.
 - **Evidência:** planilha `Medição Engelmig - CSD Guarapari (1).xlsx`, abas
   `DADOS` / `H.E STC-PLT` / `EQUIPES EXTRAS` / `Valores` (prints de 09/09/2026).
@@ -4914,7 +4914,8 @@ mesmo ponto cego, o que reforça o item.
   escala (`escala_dia` × `escalas_catalogo`), sessão (`snapshots`), notas e
   contagem. O garimpo é retrabalho mensal sobre dado consolidado, e cada
   transcrição manual é uma chance de errar número que vai à EDP.
-- **Ação:** ⬜ Fases 1–4 da spec (cadastro → cálculo → tela → conferência).
+- **Ação:** ✅ Fase 1 (cadastro, `a9e0857`) · ✅ Fase 2 (cálculo, `a4461d8`) · ✅ Fase 3 (tela + XLSX) · ⬜ **Fase 4 — conferir julho/2026 linha a linha.** Duas divergências são PREVISTAS e não são bug: antecipação para MAIS (hoje a planilha traz 0,000 em 100% das linhas, com início de sessão copiado da escala) e QTD (se divergir, testar `_qtd_executadas`).
+  ⚠️ O XLSX NÃO tem dropdown: o SheetJS community não escreve validação de dados. A lista AFIRMATIVAS vai em aba própria — ver spec §13.
 - **Critério de aceite:** o da spec §8; o que manda é a Fase 4 — gerar
   julho/2026 pelo painel e bater linha a linha contra o que foi enviado.
 - **Esforço:** ~12h somando as quatro fases.

@@ -331,7 +331,70 @@ P2-47 achou sem nenhuma linha de escala no mês inteiro. Duas fontes
 independentes apontando as mesmas equipes é indício forte de que não operam
 mais. Ver P2-47 antes de cadastrá-las.
 
-## 12. Próximo passo — Fase 2
+## 12. Fase 2 — ENTREGUE (09/09/2026)
 
-`db/heQueries.js`: escala × sessão × notas, resolvendo vira-noite (§6.2) e
-relogin (§6.3). Nada bloqueia.
+`db/heQueries.js`. Puras exportadas e testadas: `msParede`, `janelaDaEscala`,
+`janelaMaisAmpla`, `sessaoDoDia`, `calcularHe`, `valorTotalHe`, `temHe`,
+`ultimaNotaDaSessao`. 40 testes.
+
+**Hora de parede, sem conversão.** Os dois lados da subtração são lidos do
+mesmo jeito. Se algum dia o `session_begin` vier com `Z`, a função converte em
+vez de errar 3h em silêncio.
+
+**Vira-noite nas duas pontas** — a sessão que fecha 00:02 e o turno de escala
+que já começa virando. A query usa lookahead de +1 dia (o logoff fica no
+snapshot do dia seguinte, `db/queries.js:341`) e agrupa a sessão pelo dia do
+`session_begin`, não do snapshot.
+
+**Escolhas conservadoras**, cada uma no lado que não infla a fatura: dois
+códigos no dia → janela mais ampla; sessão aberta → fim null e linha
+incompleta; sem cadastro → valor null; janela ambígua → null.
+
+**QTD = `concluidas`**, não `executadas`: no histórico `notasExecutadas` vem
+vazio de propósito (`wpaService.js:1678`). `_qtd_executadas` segue no objeto
+pra Fase 4 testar a outra contagem sem refazer nada.
+
+## 13. Fase 3 — ENTREGUE (09/09/2026)
+
+- `GET /api/he/medicao?de=&ate=&regionals=&team=` — regional do `req.scope`,
+  teto de 93 dias (a medição varre snapshots do intervalo; range aberto derruba
+  a VM de 3,8GB).
+- Sub-aba `⏱ Medição HE` no Histórico, lazy (`_heCache`). Usa o período e a
+  regional do filtro que já existe na aba.
+- Tabela com 17 colunas na tela; **as 25 na ordem exata** no XLSX.
+- Botão `⬇ Baixar XLSX` → `medicao-he-<de>-a-<ate>.xlsx`, com três abas:
+  `H.E STC-PLT` (dados), `AFIRMATIVAS` (a lista inteira) e `PROCEDÊNCIA`.
+- 15 testes, com destaque pro que fixa a **ordem** das colunas: coluna fora de
+  lugar quebra o encaixe no template em silêncio e nenhum teste de cálculo pega.
+
+### ⚠️ Duas limitações, ditas de frente
+
+**1. O XLSX não tem dropdown.** O SheetJS community 0.20.3 vendorizado **não
+escreve validação de dados** — conferido, zero ocorrência de `dataValidation`
+no bundle. A spec §3 prometeu "dropdown pronto"; não dá com esta biblioteca.
+O que foi entregue: a lista `AFIRMATIVAS` completa numa aba própria, e as
+colunas de parecer vazias na ordem certa. A validação continua no seu template
+— ou cole os dados nele, que era o fluxo de sempre.
+
+**2. Datas saem como TEXTO** em `DD/MM/YYYY HH:MM:SS`, não como data do Excel.
+Como objeto `Date`, SheetJS e Excel reinterpretam fuso, e 3h aqui mudam
+dinheiro sem avisar. O custo é que não dá pra ordenar como data na planilha.
+
+### Procedência em aba separada, não em rodapé
+
+A spec §2 pedia rodapé na aba de dados. Ficou em aba própria (`PROCEDÊNCIA`):
+rodapé atrapalharia colar os dados no template. A função evidenciária é a
+mesma — sem vigência histórica no banco, esta planilha é a prova do preço
+aplicado. Ela traz data de geração, período, totais, valor/hora por tipo e as
+listas de equipe sem cadastro / não revisada.
+
+## 14. Próximo passo — Fase 4 (a única que vale como aceite)
+
+Gerar julho/2026 pelo painel e bater **linha a linha** contra a planilha
+enviada à EDP. Divergência é bug até prova em contrário, com **duas exceções
+previstas**:
+
+1. **Antecipação** — a planilha atual traz 0,000 em 100% das linhas, com
+   `INICIO SESSÃO` copiado do `INICIO ESCALA`. Medindo de verdade, o total
+   sobe. Divergência para MAIS é esperada aqui.
+2. **QTD** — se divergir, testar `_qtd_executadas` antes de mexer no cálculo.

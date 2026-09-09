@@ -1,0 +1,196 @@
+/**
+ * test/heTela.test.js
+ *
+ * Fase 3 da SPEC-medicao-he-2026-09-09 — sub-aba "Medição HE" e o XLSX.
+ *
+ * O produto aqui é a ORDEM das colunas: a planilha vai para a EDP e é colada
+ * num template existente. Coluna fora de lugar quebra o encaixe em silêncio, e
+ * nenhum teste de cálculo pega isso.
+ *
+ * Não há harness de frontend (risco H11 do backlog), então valem as invariantes
+ * estruturais que dá pra provar lendo o arquivo — no estilo do resto da suíte.
+ * Limite explícito: isto NÃO prova que a tela renderiza nem que o Excel abre.
+ */
+
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const SRC   = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+const ROTAS = fs.readFileSync(path.join(__dirname, '..', 'routes', 'index.js'), 'utf8');
+
+/** As 25 colunas, na ordem da aba `H.E STC-PLT` (spec §3). */
+const ORDEM = [
+  'EQUIPE', 'TIPO SERVIÇO', 'CIDADE', 'ÚLTIMA NOTA', 'CONCLUSÃO ÚLTIMA NOTA (h)',
+  'QTD', 'VALOR', 'INICIO ESCALA', 'INICIO SESSÃO', 'ANTECIPAÇÃO',
+  'FIM DE ESCALA', 'FIM SESSÃO', 'PRORROGAÇÃO', 'TOTAL (DECIMAL)', 'TOTAL (M)',
+  'DATA', 'VALOR TOTAL',
+  'PARECER ENGELMIG', 'JUSTIFICATIVA ENGELMIG', 'AUTORIZADO POR',
+  'PARECER EDP', 'JUSTIFICATIVA EDP', 'OBSERVAÇÕES FINAIS',
+  'ENVIAR COBRANÇA?', 'TOTAL FINAL',
+];
+
+function blocoHeColunas() {
+  const i = SRC.indexOf('const HE_COLUNAS = [');
+  assert.ok(i > -1, 'não achei HE_COLUNAS');
+  return SRC.slice(i, SRC.indexOf('];', i));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A ordem das colunas — é o produto
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('as 25 colunas existem, na ordem exata da planilha', () => {
+  const bloco = blocoHeColunas();
+  let cursor = -1;
+  for (const col of ORDEM) {
+    const at = bloco.indexOf(`'${col}'`);
+    assert.ok(at > -1, `coluna ausente: ${col}`);
+    assert.ok(at > cursor, `coluna fora de ordem: ${col}`);
+    cursor = at;
+  }
+});
+
+test('nenhuma coluna a mais nem a menos', () => {
+  // Uma coluna extra desloca todas as seguintes ao colar no template.
+  const bloco = blocoHeColunas();
+  const achadas = (bloco.match(/'[^']+'/g) || []).length;
+  assert.equal(achadas, ORDEM.length, `esperava ${ORDEM.length} colunas, achei ${achadas}`);
+});
+
+test('as 8 colunas de parecer saem vazias na linha de dados', () => {
+  // Decisão de 09/09/2026: o sistema não inventa parecer.
+  const i = SRC.indexOf('// R..Y — parecer humano');
+  assert.ok(i > -1, 'não achei o preenchimento das colunas de parecer');
+  const linha = SRC.slice(SRC.lastIndexOf('\n', i), i);
+  assert.equal((linha.match(/''/g) || []).length, 8,
+    'devem ser exatamente 8 strings vazias, uma por coluna R..Y');
+});
+
+test('a linha de dados tem 25 posições', () => {
+  const i = SRC.indexOf('aoa.push([');
+  assert.ok(i > -1);
+  const bloco = SRC.slice(i, SRC.indexOf('нет', i) > -1 ? 0 : SRC.indexOf(']);', i));
+  // 17 valores + 8 vazios. Conta as vírgulas de topo é frágil, então checa as
+  // âncoras: primeira e última coluna de dado.
+  assert.match(bloco, /l\.equipe/);
+  assert.match(bloco, /l\.valor_total == null \? '' : l\.valor_total/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Honestidade do XLSX
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('datas saem como TEXTO, não como Date', () => {
+  // Objeto Date faz SheetJS/Excel reinterpretarem fuso; 3h aqui muda dinheiro.
+  const i = SRC.indexOf('async function downloadHeXLSX');
+  const bloco = SRC.slice(i, SRC.indexOf('/**', i + 10));
+  assert.match(bloco, /_heDataBR\(l\.inicio_escala\)/);
+  assert.match(bloco, /_heDataBR\(l\.fim_sessao\)/);
+  assert.doesNotMatch(bloco, /new Date\(l\./, 'nada de Date por linha');
+});
+
+test('a limitação do dropdown está escrita no código', () => {
+  // SheetJS community não escreve dataValidation (conferido: 0 ocorrências no
+  // bundle). Prometer dropdown e não entregar seria pior que não prometer.
+  const i = SRC.indexOf('async function downloadHeXLSX');
+  const doc = SRC.slice(Math.max(0, i - 1400), i);
+  assert.match(doc, /SEM DROPDOWN/);
+  assert.match(doc, /dataValidation/);
+});
+
+test('a lista AFIRMATIVAS vai completa, em aba própria', () => {
+  // Decisão de 09/09/2026: lista inteira, sem subconjunto por coluna.
+  for (const v of ['SIM', 'NÃO', 'PROCEDENTE', 'IMPROCEDENTE', 'ACORDO 30 MINUTOS',
+                   'EQUIPE PARA COMPENSAÇÃO', 'SEM AUTORIZAÇÃO', 'STC ATENDENDO PO']) {
+    assert.ok(SRC.includes(`'${v}'`), `AFIRMATIVAS sem ${v}`);
+  }
+  assert.match(SRC, /book_append_sheet\(wb,[\s\S]{0,200}'AFIRMATIVAS'\)/);
+});
+
+test('a procedência do preço vai numa aba, não como rodapé nos dados', () => {
+  // Rodapé na aba de dados atrapalharia colar no template. A função
+  // evidenciária é a mesma: sem vigência no banco, a planilha é a prova.
+  assert.match(SRC, /'PROCEDÊNCIA'\)/);
+  const i = SRC.indexOf("'PROCEDÊNCIA'");
+  const bloco = SRC.slice(Math.max(0, i - 1200), i);
+  assert.match(bloco, /Valor\/hora aplicado/);
+  assert.match(bloco, /Gerado em/);
+  assert.match(bloco, /sem cadastro HE/i);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A tela avisa em vez de exibir número que não se sustenta
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('os cinco avisos que impedem confiar no total estão na tela', () => {
+  const i = SRC.indexOf('function renderHeMedicao');
+  const bloco = SRC.slice(i, SRC.indexOf('async function downloadHeXLSX', i));
+  assert.match(bloco, /schema_sem_he/,    'banco sem o cadastro HE');
+  assert.match(bloco, /sem_cadastro/,     'equipe sem tipo_breve');
+  assert.match(bloco, /nao_revisadas/,    'cadastro transcrito não conferido');
+  assert.match(bloco, /dias_sem_escala/,  'sessão sem janela de escala');
+  assert.match(bloco, /incompletas/,      'sessão ainda aberta');
+  assert.match(bloco, /origem_valores === 'seed'/, 'preço vindo do código');
+});
+
+test('valor ausente aparece como travessão, nunca como zero', () => {
+  const i = SRC.indexOf('function renderHeMedicao');
+  const fn = SRC.slice(i, SRC.indexOf('async function downloadHeXLSX', i));
+  assert.match(fn, /v == null \? '—'/, 'brl(null) tem de virar —');
+
+  // ⚠️ O escopo é a LINHA, não a função. No KPI o `r.valor_total || 0` é
+  // correto — soma de nenhuma linha é zero de verdade. O que não pode é a
+  // linha de uma equipe sem cadastro exibir R$ 0,00 como se nada fosse devido.
+  const ini = fn.indexOf('const corpo = linhas.map');
+  const linha = fn.slice(ini, fn.indexOf(".join('')", ini));
+  assert.ok(ini > -1 && linha.length > 100, 'não achei o template da linha');
+  assert.match(linha, /brl\(l\.valor_total\)/, 'a linha passa o valor cru pro brl()');
+  assert.doesNotMatch(linha, /l\.valor_total \|\| 0/, 'valor por linha não pode cair pra 0');
+  assert.doesNotMatch(linha, /l\.valor_hora \|\| 0/);
+});
+
+test('a sub-aba é lazy — não custa a quem só quer as sessões', () => {
+  const i = SRC.indexOf("} else if (name === 'he') {");
+  assert.ok(i > -1, 'não achei o ramo da sub-aba HE');
+  assert.match(SRC.slice(i, i + 500), /if \(!_heCache\) loadHeMedicao\(\)/);
+});
+
+test('a sub-aba existe e some ao trocar pra outra', () => {
+  assert.match(SRC, /id="hist-subtab-he"[^>]*onclick="switchHistSubtab\('he'\)"/);
+  assert.match(SRC, /id="hist-he-content"/);
+  const i = SRC.indexOf('function switchHistSubtab');
+  const bloco = SRC.slice(i, i + 900);
+  assert.match(bloco, /if \(hePanel\) hePanel\.style\.display = 'none'/,
+    'sem isto o painel HE fica visível junto com as sessões');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A rota
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('a rota usa req.scope, nunca a regional crua da query', () => {
+  const i = ROTAS.indexOf("router.get('/he/medicao'");
+  assert.ok(i > -1, 'não achei a rota');
+  const bloco = ROTAS.slice(i, i + 1500);
+  assert.match(bloco, /req\.scope\.regionals/);
+  assert.doesNotMatch(bloco, /req\.query\.regionals/,
+    'ler a regional da query burlaria o escopo do token');
+});
+
+test('a rota tem teto de período', () => {
+  // A medição varre snapshots do intervalo inteiro; sem teto, um range aberto
+  // derruba a VM de 3,8GB.
+  const i = ROTAS.indexOf("router.get('/he/medicao'");
+  const bloco = ROTAS.slice(i, i + 1500);
+  assert.match(bloco, /MAX_DIAS = 93/);
+  assert.match(bloco, /status\(400\)/);
+});
+
+test("'ALL' do multi-select não vira sigla literal", () => {
+  const i = ROTAS.indexOf("router.get('/he/medicao'");
+  assert.match(ROTAS.slice(i, i + 1500), /_semAll/);
+});

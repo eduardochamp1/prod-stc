@@ -3237,6 +3237,39 @@ router.get('/escala/agora', async (req, res) => {
 // docs/handoff/SPEC-tma-po-reparo-2026-08-30.md.
 const _poReparoQ = require('../db/poReparoQueries');
 
+// GET /api/he/medicao?de=&ate=&regionals=&team=
+//
+// Medição de hora extra (SPEC-medicao-he-2026-09-09). A regional vem do
+// `req.scope` já intersectado pelo applyScope, nunca da query crua.
+const _heQ = require('../db/heQueries');
+router.get('/he/medicao', async (req, res) => {
+  try {
+    const hoje = dateBRT();
+    const de  = req.query.de  || (hoje.slice(0, 8) + '01');
+    const ate = req.query.ate || hoje;
+
+    // Teto de 93 dias, mesmo do /export/historico: a medição varre snapshots
+    // do período inteiro e o intervalo aberto derrubaria a VM (3,8GB).
+    const MAX_DIAS = 93;
+    if (new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z') > MAX_DIAS * 86400000) {
+      return res.status(400).json({ error: `Período máximo: ${MAX_DIAS} dias.` });
+    }
+
+    const regionais = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length)
+      ? req.scope.regionals : null;
+    const _csv = v => (v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : null);
+    const _semAll = a => (a && !a.includes('ALL') && a.length ? a : null);
+
+    res.json(await _heQ.medicaoHe(de, ate, {
+      regionais,
+      teams: _semAll(_csv(req.query.team)),
+    }));
+  } catch (err) {
+    console.error('[he/medicao]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/po-reparo?de=&ate=&regionals=
 router.get('/po-reparo', async (req, res) => {
   try {

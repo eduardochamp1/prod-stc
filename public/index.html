@@ -713,6 +713,7 @@
       <div class="hist-subtabs">
         <button class="hist-subtab-btn active" id="hist-subtab-sessoes" onclick="switchHistSubtab('sessoes')">📋 Sessões por equipe</button>
         <button class="hist-subtab-btn" id="hist-subtab-subcats" onclick="switchHistSubtab('subcats')">📊 Subcategorias</button>
+        <button class="hist-subtab-btn" id="hist-subtab-he" onclick="switchHistSubtab('he')">⏱ Medição HE</button>
       </div>
 
       <div id="hist-content">
@@ -720,6 +721,13 @@
       </div>
 
       <div id="hist-subcats-content" style="display:none">
+        <div class="empty-state">Carregando…</div>
+      </div>
+
+      <!-- ── MEDIÇÃO HE (SPEC-medicao-he-2026-09-09) ────────────────────────
+           Antecipação + prorrogação × valor/hora do tipo da equipe. Usa o
+           mesmo período e a mesma regional do filtro do Histórico, acima. -->
+      <div id="hist-he-content" style="display:none">
         <div class="empty-state">Carregando…</div>
       </div>
 
@@ -5388,13 +5396,262 @@ ${matrizHTML}
 
       const sessoesPanel = document.getElementById('hist-content');
       const subcatsPanel = document.getElementById('hist-subcats-content');
+      const hePanel      = document.getElementById('hist-he-content');
+      if (hePanel) hePanel.style.display = 'none';
       if (name === 'subcats') {
         sessoesPanel.style.display = 'none';
         subcatsPanel.style.display = '';
         loadHistoricoSubcats();
+      } else if (name === 'he') {
+        sessoesPanel.style.display = 'none';
+        subcatsPanel.style.display = 'none';
+        if (hePanel) hePanel.style.display = '';
+        // Lazy: a medição varre snapshots do período e não pode custar em quem
+        // só quer as sessões. Mesmo padrão do `_tmaCarregada` nos Deslocamentos.
+        if (!_heCache) loadHeMedicao();
       } else {
         subcatsPanel.style.display = 'none';
         sessoesPanel.style.display = '';
+      }
+    }
+
+    // ── MEDIÇÃO HE (SPEC-medicao-he-2026-09-09, Fase 3) ─────────────────────
+    // Substitui o levantamento manual (BI + busca nota por nota no portal).
+    // Antecipação + prorrogação × valor/hora do tipo da equipe.
+    let _heCache = null;
+
+    /** Cabeçalhos na ORDEM da aba `H.E STC-PLT`. A ordem é o produto. */
+    const HE_COLUNAS = [
+      'EQUIPE', 'TIPO SERVIÇO', 'CIDADE', 'ÚLTIMA NOTA', 'CONCLUSÃO ÚLTIMA NOTA (h)',
+      'QTD', 'VALOR', 'INICIO ESCALA', 'INICIO SESSÃO', 'ANTECIPAÇÃO',
+      'FIM DE ESCALA', 'FIM SESSÃO', 'PRORROGAÇÃO', 'TOTAL (DECIMAL)', 'TOTAL (M)',
+      'DATA', 'VALOR TOTAL',
+      // R..Y — julgamento humano. Saem VAZIAS, por decisão de 09/09/2026.
+      'PARECER ENGELMIG', 'JUSTIFICATIVA ENGELMIG', 'AUTORIZADO POR',
+      'PARECER EDP', 'JUSTIFICATIVA EDP', 'OBSERVAÇÕES FINAIS',
+      'ENVIAR COBRANÇA?', 'TOTAL FINAL',
+    ];
+
+    /** Lista AFIRMATIVAS da aba DADOS, inteira (decisão de 09/09/2026). */
+    const HE_AFIRMATIVAS = [
+      'SIM', 'NÃO', 'PROCEDENTE', 'IMPROCEDENTE', 'BRENDA/DEPT', 'DIEGO',
+      'LEANDRO CAETANO', 'LEONARDO/DEPT', 'MAIKE', 'PAULO CESAR', 'VINICIOS',
+      'VITOR', 'ACORDO 30 MINUTOS', 'EQUIPE PARA COMPENSAÇÃO', 'SEM AUTORIZAÇÃO',
+      'STC ATENDENDO PO',
+    ];
+
+    /** '2026-07-18 20:43:06' → '18/07/2026 20:43:06'. Vazio vira ''. */
+    function _heDataBR(s) {
+      if (!s) return '';
+      const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?/);
+      if (!m) return String(s);
+      return `${m[3]}/${m[2]}/${m[1]}${m[4] ? ' ' + m[4] : ''}`;
+    }
+
+    async function loadHeMedicao() {
+      const cont = document.getElementById('hist-he-content');
+      if (!cont) return;
+      cont.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>'
+        + 'Medindo hora extra do período…</div>';
+      try {
+        const hoje = todayISO();
+        const de  = document.getElementById('hist-de-input')?.value  || (hoje.slice(0, 8) + '01');
+        const ate = document.getElementById('hist-ate-input')?.value || hoje;
+        const { regionalsCsv } = _readMultiRegional('hist-regional-select');
+        _heCache = await fetch(`${API}/he/medicao?de=${de}&ate=${ate}&regionals=${regionalsCsv}`)
+          .then(r => r.json());
+        if (_heCache.error) throw new Error(_heCache.error);
+        renderHeMedicao(_heCache);
+      } catch (err) {
+        cont.innerHTML = `<div class="empty-state">Erro: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderHeMedicao(d) {
+      const cont = document.getElementById('hist-he-content');
+      if (!cont) return;
+      const r = d.resumo || {}, av = d.avisos || {};
+      const brl = v => (v == null ? '—'
+        : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+
+      // Avisos ANTES da tabela. Cada um destes é um motivo pra não confiar no
+      // total ainda — esconder embaixo seria o painel afirmando o que não sabe.
+      const avisos = [];
+      if (av.schema_sem_he) avisos.push(
+        'O cadastro HE não existe no banco — rode <code>scripts/migrar-he-cadastro.js --apply</code>. '
+        + 'Sem ele não há cidade, tipo nem valor/hora.');
+      if ((av.sem_cadastro || []).length) avisos.push(
+        `<strong>${av.sem_cadastro.length} equipe(s) sem cadastro HE</strong>: `
+        + `${av.sem_cadastro.slice(0, 12).join(', ')}${av.sem_cadastro.length > 12 ? '…' : ''}. `
+        + 'As horas aparecem; o valor fica vazio (nunca zero).');
+      if ((av.nao_revisadas || []).length) avisos.push(
+        `<strong>${av.nao_revisadas.length} equipe(s) com cadastro NÃO REVISADO.</strong> `
+        + 'O cadastro veio de transcrição da planilha — confira em Admin → Equipes antes de faturar.');
+      if (av.dias_sem_escala) avisos.push(
+        `${av.dias_sem_escala} dia(s) de equipe com sessão mas SEM escala no período — `
+        + 'não dá pra medir extrapolação sem janela. Ver P2-47.');
+      if (r.incompletas) avisos.push(
+        `${r.incompletas} linha(s) com sessão ainda ABERTA: a prorrogação não foi medida.`);
+      if (av.origem_valores === 'seed') avisos.push(
+        'Valores/hora vindos do seed do código, não de <code>app_settings</code>.');
+
+      const avisosHTML = avisos.length
+        ? `<div style="background:#fdf3d7;border:1px solid #e8c96a;border-left:4px solid #f39c12;
+                       border-radius:6px;padding:9px 13px;margin-bottom:16px;font-size:11.5px;
+                       color:#7a5b12;line-height:1.6">
+             ${avisos.map(a => `• ${a}`).join('<br>')}
+           </div>` : '';
+
+      const linhas = d.linhas || [];
+      const corpo = linhas.map(l => `<tr>
+          <td>${_heDataBR(l.data)}</td>
+          <td><strong>${l.equipe}</strong> <span style="font-size:10px;opacity:.5">${l.regional || ''}</span></td>
+          <td>${l.servico || '—'}</td>
+          <td>${escapeHtml(l.cidade || '—')}</td>
+          <td>${l.tipo_breve || '<span style="color:#c0392b">sem cadastro</span>'}</td>
+          <td style="font-size:11px">${escapeHtml(l.ultima_nota || '—')}</td>
+          <td>${_heDataBR(l.ultima_nota_em) || '—'}</td>
+          <td style="text-align:right">${l.qtd == null ? '—' : l.qtd}</td>
+          <td>${_heDataBR(l.inicio_escala)}</td>
+          <td>${_heDataBR(l.inicio_sessao)}</td>
+          <td style="text-align:right">${l.antecipacao_h == null ? '—' : l.antecipacao_h.toFixed(3)}</td>
+          <td>${_heDataBR(l.fim_escala)}</td>
+          <td>${_heDataBR(l.fim_sessao) || '<span style="color:#e67e22">aberta</span>'}</td>
+          <td style="text-align:right">${l.prorrogacao_h == null ? '—' : l.prorrogacao_h.toFixed(3)}</td>
+          <td style="text-align:right;font-weight:600">${l.total_min}</td>
+          <td style="text-align:right">${l.valor_hora == null ? '—' : brl(l.valor_hora)}</td>
+          <td style="text-align:right;font-weight:600;color:${l.valor_total == null ? '#c0392b' : 'inherit'}">${brl(l.valor_total)}</td>
+        </tr>`).join('');
+
+      cont.innerHTML = `
+        <div class="desloc-kpis">
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Linhas com hora extra</div>
+            <div class="desloc-kpi-value">${(r.linhas || 0).toLocaleString('pt-BR')}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">${r.equipes || 0} equipe(s)</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Total de horas</div>
+            <div class="desloc-kpi-value">${(r.total_horas || 0).toLocaleString('pt-BR')}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">antecipação + prorrogação</div>
+          </div>
+          <div class="desloc-kpi" style="border-color:#086738;border-width:2px">
+            <div class="desloc-kpi-label">Valor total</div>
+            <div class="desloc-kpi-value" style="color:#086738;font-size:22px">${brl(r.valor_total || 0)}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">antes do parecer</div>
+          </div>
+          <div class="desloc-kpi">
+            <div class="desloc-kpi-label">Com relogin</div>
+            <div class="desloc-kpi-value">${r.com_relogin || 0}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">1º login → último logoff</div>
+          </div>
+        </div>
+
+        ${avisosHTML}
+
+        <div class="desloc-panel">
+          <h3>Medição — ${_heDataBR(d.periodo?.de)} a ${_heDataBR(d.periodo?.ate)}
+            <button class="btn-refresh" id="btn-he-xlsx" onclick="downloadHeXLSX()"
+                    style="float:right;margin-top:-4px"
+                    title="Baixa a planilha com as 25 colunas na ordem da medição">⬇ Baixar XLSX</button>
+            <button class="btn-refresh" onclick="_heCache=null;loadHeMedicao()"
+                    style="float:right;margin-top:-4px;margin-right:8px;background:var(--cinza2);color:var(--text)">↻ Recalcular</button>
+          </h3>
+          ${linhas.length === 0
+            ? '<div class="empty-state" style="font-size:12px">Nenhuma hora extra no período.</div>'
+            : `<div style="max-height:520px;overflow:auto">
+                 <table class="desloc-tbl">
+                   <thead><tr>
+                     <th>Data</th><th>Equipe</th><th>Serv.</th><th>Cidade</th><th>Tipo</th>
+                     <th>Última nota</th><th>Conclusão</th><th>Qtd</th>
+                     <th>Início escala</th><th>Início sessão</th><th>Antec.</th>
+                     <th>Fim escala</th><th>Fim sessão</th><th>Prorrog.</th>
+                     <th>Total (m)</th><th>Valor/h</th><th>Valor total</th>
+                   </tr></thead>
+                   <tbody>${corpo}</tbody>
+                 </table>
+               </div>`}
+          <div style="margin-top:10px;font-size:11px;color:var(--text2);border-top:1px solid var(--cinza2);padding-top:8px">
+            As colunas de parecer (PARECER ENGELMIG, AUTORIZADO POR, ENVIAR COBRANÇA?, e as da EDP)
+            saem <strong>vazias</strong> no XLSX, na ordem certa, pra você preencher.
+            Valores/hora: ${Object.entries(d.valores_hora || {}).map(([t, v]) => `${t} ${brl(v)}`).join(' · ')}.
+          </div>
+        </div>`;
+    }
+
+    /**
+     * XLSX da medição, com as 25 colunas na ordem da planilha atual.
+     *
+     * ⚠️ SEM DROPDOWN. O SheetJS community (0.20.3, vendorizado) NÃO escreve
+     * validação de dados — conferido: zero ocorrência de `dataValidation` no
+     * bundle. A lista AFIRMATIVAS vai numa aba própria, e a validação em si
+     * continua sendo aplicada no seu template (ou coloque uma vez e reutilize).
+     *
+     * Datas saem como TEXTO em DD/MM/YYYY HH:MM:SS de propósito: como objeto
+     * Date o Excel/SheetJS reinterpreta fuso, e um deslocamento de 3h aqui
+     * mudaria dinheiro em silêncio. Ver o cabeçalho de db/heQueries.js.
+     */
+    async function downloadHeXLSX() {
+      if (!window.XLSX) { alert('Biblioteca XLSX não carregada. Recarregue a página.'); return; }
+      if (!_heCache || !(_heCache.linhas || []).length) { alert('Nada a exportar no período.'); return; }
+      const btn = document.getElementById('btn-he-xlsx');
+      const orig = btn?.innerHTML;
+      if (btn) { btn.innerHTML = '⏳ Gerando…'; btn.disabled = true; }
+      try {
+        const d = _heCache;
+        const aoa = [HE_COLUNAS];
+        for (const l of d.linhas) {
+          aoa.push([
+            l.equipe, l.servico || '', l.cidade || '',
+            l.ultima_nota || '', _heDataBR(l.ultima_nota_em),
+            l.qtd == null ? '' : l.qtd,
+            l.valor_hora == null ? '' : l.valor_hora,
+            _heDataBR(l.inicio_escala), _heDataBR(l.inicio_sessao),
+            l.antecipacao_h == null ? '' : l.antecipacao_h,
+            _heDataBR(l.fim_escala), _heDataBR(l.fim_sessao),
+            l.prorrogacao_h == null ? '' : l.prorrogacao_h,
+            l.total_dec, l.total_min, _heDataBR(l.data),
+            l.valor_total == null ? '' : l.valor_total,
+            '', '', '', '', '', '', '', '',        // R..Y — parecer humano
+          ]);
+        }
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = HE_COLUNAS.map((c, i) => ({ wch: [9, 12, 20, 34, 22, 6, 11][i] || 18 }));
+        // Formato de número nas colunas de dinheiro (G, Q) e de horas (J, M, N).
+        for (let lin = 2; lin <= aoa.length; lin++) {
+          for (const [col, fmt] of [['G', 'R$ #,##0.00'], ['Q', 'R$ #,##0.00'],
+                                    ['J', '0.000'], ['M', '0.000'], ['N', '0.00']]) {
+            const cel = ws[`${col}${lin}`];
+            if (cel && typeof cel.v === 'number') cel.z = fmt;
+          }
+        }
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'H.E STC-PLT');
+        XLSX.utils.book_append_sheet(wb,
+          XLSX.utils.aoa_to_sheet([['AFIRMATIVAS'], ...HE_AFIRMATIVAS.map(v => [v])]),
+          'AFIRMATIVAS');
+        // Procedência em aba SEPARADA, não como rodapé na aba de dados: rodapé
+        // atrapalharia colar isto no seu template. A função é a mesma — sem
+        // vigência histórica no banco (spec §2), esta planilha é a evidência do
+        // preço aplicado.
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+          ['Gerado em', _heDataBR(String(d.gerado_em || '').slice(0, 19).replace('T', ' '))],
+          ['Período', `${_heDataBR(d.periodo?.de)} a ${_heDataBR(d.periodo?.ate)}`],
+          ['Linhas', d.resumo?.linhas ?? ''],
+          ['Total de horas', d.resumo?.total_horas ?? ''],
+          ['Valor total', d.resumo?.valor_total ?? ''],
+          ['Origem dos valores', d.avisos?.origem_valores || ''],
+          [], ['Valor/hora aplicado'],
+          ...Object.entries(d.valores_hora || {}).map(([t, v]) => [t, v]),
+          [], ['Equipes sem cadastro HE'], ...(d.avisos?.sem_cadastro || []).map(s => [s]),
+          [], ['Equipes com cadastro NÃO revisado'], ...(d.avisos?.nao_revisadas || []).map(s => [s]),
+        ]), 'PROCEDÊNCIA');
+
+        XLSX.writeFile(wb, `medicao-he-${d.periodo?.de}-a-${d.periodo?.ate}.xlsx`);
+      } catch (err) {
+        alert('Falha ao gerar XLSX: ' + err.message);
+      } finally {
+        if (btn) { btn.innerHTML = orig; btn.disabled = false; }
       }
     }
 
