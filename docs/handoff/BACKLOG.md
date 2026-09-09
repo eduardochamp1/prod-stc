@@ -5016,7 +5016,16 @@ mesmo ponto cego, o que reforça o item.
   (07:00+), depois de o turno da madrugada fechar. Reprocessar D-2 é preferível
   a mover o horário: cobre o turno longo sem depender de adivinhar o mais
   tardio. É mudança em cron de PRODUÇÃO — decisão do dono.
-  ⬜ **Histórico:** `scripts/recuperar-logoffs.js` (dry-run por padrão) chama o
+  ⬜ **Histórico:** `scripts/recuperar-logoffs.js` (dry-run por padrão). ⚠️ A 1ª
+  versão delegava pro próprio `runSyncLogoffs` e recuperou **0 de 113** em 16
+  datas, mesmo com a EDP devolvendo dezenas de sessões fechadas por dia. Causa:
+  o job procura o snapshot com `.gte(date).order(captured_at DESC).limit(20)` —
+  para "ontem" os 20 mais recentes são os certos; para uma data antiga são de
+  SEMANAS DEPOIS e o alvo nunca entra na janela. **É um 2º defeito do job, além
+  do horário.** O script passou a casar por (equipe, início) direto, com o
+  instante NORMALIZADO (o job compara string exata, que quebra com
+  milissegundo ou offset diferente), e grava coluna + jsonb em sincronia.
+  Antes dizia: chama o
   próprio job para as datas com sessão aberta. Idempotente: só preenche onde o
   fim está ausente.
   ⬜ Depois de recuperar, re-conferir o total da Medição HE — ele vai **subir**.

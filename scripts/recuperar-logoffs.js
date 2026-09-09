@@ -11,27 +11,32 @@
  * equipe foi pra casa. Se o logoff não está no banco, é falha de CAPTURA, não
  * estado real. Não é algo a decidir na fatura: é dado a recuperar.
  *
- * ── A CAUSA ─────────────────────────────────────────────────────────────────
- * `runSyncLogoffs` (`services/cronService.js:1562`) roda às **03:00** e
- * processa **o dia anterior**, filtrando só sessões que já têm `EndTime`:
+ * ── DOIS DEFEITOS, INDEPENDENTES (ver P1-47) ────────────────────────────────
  *
- *     const fechadas = sessions.filter(s => ... s.EndTime && ...)
+ * 1. HORÁRIO. `runSyncLogoffs` roda às 03:00 e processa o dia anterior,
+ *    filtrando só sessão que JÁ tem `EndTime`. Turno que entra 20:00 e sai
+ *    05:00 ainda está aberto às 03:00 — o job o vê sem fim, pula, e nunca
+ *    volta àquela data.
  *
- * Um turno que entra 20:00 e sai 05:00 AINDA ESTÁ ABERTO às 03:00. O job o vê
- * sem fim, pula — e nunca volta àquela data. O logoff existe na EDP; nós
- * simplesmente paramos de perguntar.
+ * 2. JANELA DE BUSCA — e é por isso que este script NÃO reusa o job.
+ *    O job procura o snapshot com
+ *        .gte('date', date).order('captured_at', DESC).limit(20)
+ *    Para "ontem" isso funciona: os 20 mais recentes são os do dia certo. Para
+ *    uma data antiga, os 20 mais recentes são de SEMANAS DEPOIS, e o snapshot
+ *    alvo nunca entra na janela.
  *
- * Medido em 09/09/2026, período 16–31/08: 113 sessões sem logoff, e as cinco
- * equipes mais reincidentes são todas de turno noturno — EPGPR30 (login 20:00),
- * EPPTE04 (21:00), EPAVP38 (21:11), EPCIT33 (17:00), EPCIT32.
+ *    A 1ª versão deste script delegava pro job e recuperou 0 de 113 em 16
+ *    datas, mesmo com a API devolvendo dezenas de sessões fechadas por dia.
+ *    Eu reusei a função assumindo que fosse agnóstica de data. Não é.
  *
- * ⚠️ ESTE SCRIPT ESCREVE. Ele chama o job de produção `runSyncLogoffs` para
- * datas passadas. O job é idempotente por construção: só preenche onde
- * `sessionEnd` está null, e nunca sobrescreve logoff existente.
+ * Aqui o casamento é feito por (equipe, session_begin) direto, sem janela, e o
+ * instante é comparado NORMALIZADO — o job compara string exata
+ * (`sb1 === beginTime`), o que quebra se a EDP mudar milissegundo ou offset.
  *
- * ⚠️ Grava no jsonb `data`, não na coluna `session_end` — é o que o job faz, e
- * a medição já lê os dois via COALESCE (`db/heQueries.js`). A dessincronia
- * entre coluna e payload é outro item, registrado no backlog.
+ * ⚠️ ESTE SCRIPT ESCREVE. Preenche `session_end` E `data->>'sessionEnd'`,
+ * mantendo os dois em sincronia — o job de produção grava só o jsonb, e foi
+ * essa dessincronia que fez a medição ler o campo errado. Idempotente: o UPDATE
+ * só atinge linha cujo fim está ausente, e nunca sobrescreve logoff existente.
  *
  *   node scripts/recuperar-logoffs.js --de 2026-08-16 --ate 2026-08-31
  *   node scripts/recuperar-logoffs.js --de 2026-08-16 --ate 2026-08-31 --apply
@@ -42,6 +47,7 @@
 require('dotenv').config();
 
 const { _getPool } = require('../services/pgShim');
+const { msParede } = require('../db/heQueries');
 
 function arg(nome, padrao) {
   const i = process.argv.indexOf(`--${nome}`);
@@ -51,13 +57,14 @@ function arg(nome, padrao) {
 const DE    = arg('de', '2026-08-16');
 const ATE   = arg('ate', '2026-08-31');
 const APPLY = process.argv.includes('--apply');
-// Pausa entre datas. Cada data são 4 chamadas (uma por setor) à API da EDP, e
-// a conta é compartilhada com o cron e com outro sistema (P1-25). Não é medo
-// de bloqueio — o bloqueio é por LOGIN falho, não por volume — é pra não
-// competir com a coleta de 15 min.
-const PAUSA_MS = Number(arg('pausa', 1500)) || 1500;
+// Pausa entre chamadas à EDP. A conta é compartilhada com o cron de 15 min e
+// com outro sistema (P1-25). O bloqueio da conta é por LOGIN falho, não por
+// volume — a pausa é pra não competir com a coleta.
+const PAUSA_MS = Number(arg('pausa', 800)) || 800;
 
 const dorme = ms => new Promise(r => setTimeout(r, ms));
+const norm  = v => String(v || '').toUpperCase().trim();
+const VAZIO = '0001-01-01T00:00:00';
 
 async function main() {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(DE) || !/^\d{4}-\d{2}-\d{2}$/.test(ATE)) {
@@ -67,81 +74,135 @@ async function main() {
 
   const pool = _getPool();
 
-  // Quais datas têm sessão sem logoff. Só essas precisam ser re-perguntadas —
-  // varrer o período todo gastaria chamada à EDP sem motivo.
-  const { rows } = await pool.query(
+  // Sessões sem fim, com o setor — precisamos dele pra saber qual conta WPA
+  // consultar.
+  const { rows: abertas } = await pool.query(
     `WITH ultimo AS (
        SELECT DISTINCT ON (team_name, session_begin)
-              team_name, session_begin,
+              upper(btrim(team_name)) AS equipe, sector_id, session_begin,
               COALESCE(session_end, data->>'sessionEnd', data->>'session_end') AS fim
          FROM public.snapshots
         WHERE date BETWEEN $1::date AND ($2::date + 7)
           AND session_begin IS NOT NULL
         ORDER BY team_name, session_begin, captured_at DESC
      )
-     SELECT substring(session_begin, 1, 10) AS dia, count(*)::int AS abertas
+     SELECT equipe, sector_id, session_begin,
+            substring(session_begin, 1, 10) AS dia
        FROM ultimo
       WHERE fim IS NULL
         AND substring(session_begin, 1, 10) BETWEEN $3 AND $4
-      GROUP BY 1
-      ORDER BY 1`,
+      ORDER BY dia, equipe`,
     [DE, ATE, DE, ATE]);
 
-  if (!rows.length) {
+  if (!abertas.length) {
     console.log('\n✔ Nenhuma sessão sem logoff no período. Nada a recuperar.\n');
     return;
   }
 
-  const total = rows.reduce((s, r) => s + r.abertas, 0);
-  console.log(`\n${total} sessão(ões) sem logoff em ${rows.length} data(s):\n`);
-  for (const r of rows) {
-    console.log(`  ${r.dia}  ${String(r.abertas).padStart(3)} aberta(s)`);
+  // Pares (dia, setor) a consultar — uma chamada por par, não por sessão.
+  const pares = new Map();
+  for (const a of abertas) {
+    const k = `${a.dia}|${a.sector_id}`;
+    pares.set(k, (pares.get(k) || 0) + 1);
+  }
+
+  console.log(`\n${abertas.length} sessão(ões) sem logoff, `
+    + `em ${pares.size} par(es) dia×setor:\n`);
+  for (const [k, n] of [...pares.entries()].sort()) {
+    const [dia, setor] = k.split('|');
+    console.log(`  ${dia}  ${String(setor).padEnd(5)} ${String(n).padStart(3)} aberta(s)`);
   }
 
   if (!APPLY) {
-    console.log('\n── DRY-RUN. Nada foi chamado nem escrito. ──');
-    console.log(`   Com --apply, o job runSyncLogoffs roda para essas ${rows.length} data(s),`);
-    console.log('   consultando a EDP e preenchendo só onde o fim está ausente.');
-    console.log('   Idempotente: rodar de novo não altera o que já foi preenchido.\n');
+    console.log('\n── DRY-RUN. Nada foi consultado nem escrito. ──');
+    console.log('   Com --apply: consulta a EDP por par dia×setor, casa por');
+    console.log('   (equipe, início da sessão) e grava o fim onde estiver ausente.');
+    console.log('   Idempotente — rodar de novo não altera o que já foi preenchido.\n');
     return;
   }
 
-  const { runSyncLogoffs } = require('../services/cronService');
-  console.log(`\n→ recuperando ${rows.length} data(s), pausa de ${PAUSA_MS}ms entre elas…\n`);
+  const { getSessionsByDate } = require('../services/wpaService');
+  const ENGELMIG = process.env.WPA_COMPANY_ID
+    || '92a2f98e-8877-433e-8358-173b94c13a54';
 
-  let atualizados = 0;
+  console.log(`\n→ consultando ${pares.size} par(es), pausa de ${PAUSA_MS}ms…\n`);
+
+  // Índice: 'SETOR|DIA' → Map('EQUIPE|msDoInicio' → EndTime)
+  const indice = new Map();
   const falhas = [];
-  for (const r of rows) {
+  for (const k of [...pares.keys()].sort()) {
+    const [dia, setor] = k.split('|');
     try {
-      const res = await runSyncLogoffs(r.dia);
-      const n = (res && res.updated) || 0;
-      atualizados += n;
-      console.log(`  ${r.dia}  ${String(n).padStart(3)} logoff(s) recuperado(s) `
-        + `de ${r.abertas} aberta(s)`);
+      const sessoes = await getSessionsByDate(setor, dia);
+      const mapa = new Map();
+      for (const s of (sessoes || [])) {
+        if (s.Team?.CompanyId !== ENGELMIG) continue;
+        if (!s.EndTime || s.EndTime === VAZIO) continue;
+        const ms = msParede(s.BeginTime);
+        const nome = norm(s.Team?.Name || s.Team?.ExternalReference);
+        if (ms == null || !nome) continue;
+        mapa.set(`${nome}|${ms}`, s.EndTime);
+      }
+      indice.set(k, mapa);
+      console.log(`  ${dia} ${String(setor).padEnd(5)} `
+        + `${String(mapa.size).padStart(3)} sessão(ões) fechada(s) na EDP`);
     } catch (err) {
-      falhas.push({ dia: r.dia, erro: err.message });
-      console.error(`  ${r.dia}  ✖ ${err.message}`);
+      falhas.push({ k, erro: err.message });
+      console.error(`  ${dia} ${String(setor).padEnd(5)} ✖ ${err.message}`);
     }
     await dorme(PAUSA_MS);
   }
 
-  console.log(`\n✔ ${atualizados} logoff(s) recuperado(s) de ${total} sessão(ões).`);
-  if (falhas.length) {
-    console.log(`\n⚠️  ${falhas.length} data(s) falharam:`);
-    for (const f of falhas) console.log(`   ${f.dia}: ${f.erro}`);
+  // ── Casamento e escrita ───────────────────────────────────────────────────
+  console.log('\n→ casando e gravando…\n');
+  let gravadas = 0, semPar = 0;
+  const naoCasaram = [];
+
+  for (const a of abertas) {
+    const mapa = indice.get(`${a.dia}|${a.sector_id}`);
+    if (!mapa) continue;                     // consulta daquele par falhou
+    const ms = msParede(a.session_begin);
+    const fim = ms == null ? null : mapa.get(`${a.equipe}|${ms}`);
+    if (!fim) {
+      semPar++;
+      if (naoCasaram.length < 12) {
+        naoCasaram.push(`${a.dia} ${a.equipe} ${String(a.session_begin).slice(0, 19)}`);
+      }
+      continue;
+    }
+
+    // Preenche COLUNA e JSONB. O WHERE garante idempotência e impede
+    // sobrescrever logoff que já exista.
+    const { rowCount } = await pool.query(
+      `UPDATE public.snapshots
+          SET session_end = $3,
+              data = jsonb_set(COALESCE(data, '{}'::jsonb), '{sessionEnd}',
+                               to_jsonb($3::text), true)
+        WHERE upper(btrim(team_name)) = $1
+          AND session_begin = $2
+          AND COALESCE(session_end, data->>'sessionEnd', data->>'session_end') IS NULL`,
+      [a.equipe, a.session_begin, fim]);
+    if (rowCount > 0) gravadas++;
   }
 
-  const resto = total - atualizados;
-  if (resto > 0) {
-    console.log(`\n${resto} sessão(ões) seguem sem logoff. Duas leituras possíveis:`);
-    console.log('  • A EDP não tem o fim tampouco — a equipe nunca deslogou no app.');
-    console.log('    Aí é dado que não existe, e a prorrogação é imensurável.');
-    console.log('  • A coleta estava fora naquele dia e a sessão nem chegou');
-    console.log('    completa ao banco. Ver P1-39 (incidente SJC de 24-25/08).');
-    console.log('\nRode o diag-he-sessoes-abertas.js pra ver quais sobraram.');
+  console.log(`✔ ${gravadas} sessão(ões) com o fim recuperado da EDP.`);
+  console.log(`  ${semPar} sem par na EDP.`);
+  if (naoCasaram.length) {
+    console.log('\n  Amostra das que não casaram:');
+    for (const s of naoCasaram) console.log(`    ${s}`);
   }
-  console.log('\nA Medição HE já lê o jsonb via COALESCE — recarregue a aba pra');
-  console.log('ver a prorrogação recuperada entrar no total.\n');
+  if (falhas.length) {
+    console.log(`\n⚠️  ${falhas.length} consulta(s) falharam:`);
+    for (const f of falhas) console.log(`   ${f.k}: ${f.erro}`);
+  }
+
+  if (semPar > 0) {
+    console.log('\nSem par na EDP significa que a própria EDP não tem o fim:');
+    console.log('  • a equipe nunca deslogou no app — dado que não existe; ou');
+    console.log('  • a sessão é de um dia em que a coleta estava fora e nem');
+    console.log('    chegou completa ao banco (P1-39, incidente SJC 24-25/08).');
+  }
+  console.log('\nRecarregue a Medição HE: a prorrogação recuperada entra no total.\n');
 }
 
 main()
