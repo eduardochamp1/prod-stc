@@ -1881,11 +1881,28 @@ router.get('/admin/equipes', async (_req, res) => {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
     const sb = require('../services/dbClient').getClient();
-    const { data, error } = await sb
+    // Duas tentativas, no mesmo molde de services/equipesOficiais.js:219/226.
+    // As colunas de cadastro HE (cidade, tipo_breve, servico, turno_cadastro,
+    // he_revisado) só existem depois de scripts/migrar-he-cadastro.js --apply.
+    // Sem este fallback, subir o código antes de rodar a migration derruba a
+    // tela de Admin inteira — e aqui não há staging pra pegar isso antes.
+    const _COLS_BASE = 'sigla, regional, tipo, placa, ativo, escala_inicio, escala_fim, '
+                     + 'created_at, updated_at';
+    const _COLS_HE   = ', cidade, tipo_breve, servico, turno_cadastro, he_revisado';
+    let { data, error } = await sb
       .from('equipes_oficiais')
-      .select('sigla, regional, tipo, placa, ativo, escala_inicio, escala_fim, created_at, updated_at')
+      .select(_COLS_BASE + _COLS_HE)
       .order('regional')
       .order('sigla');
+    if (error && /column .* does not exist|undefined column/i.test(error.message || '')) {
+      console.warn('[admin/equipes] cadastro HE ausente no schema — '
+        + 'rode scripts/migrar-he-cadastro.js --apply');
+      ({ data, error } = await sb
+        .from('equipes_oficiais')
+        .select(_COLS_BASE)
+        .order('regional')
+        .order('sigla'));
+    }
     if (error) throw error;
     // Normaliza escala pra string "HH:MM" — pg retorna TIME como "HH:MM:SS",
     // mas a UI espera "HH:MM" (input type="time"). Conversão consistente.
@@ -1963,6 +1980,50 @@ router.put('/admin/equipes/:sigla', async (req, res) => {
   if (body.ativo !== undefined) {
     if (typeof body.ativo !== 'boolean') return res.status(400).json({ error: 'ativo deve ser boolean' });
     upd.ativo = body.ativo;
+  }
+  // ── Cadastro da Medição HE (Fase 1, 09/09/2026) ───────────────────────────
+  // O seed veio de TRANSCRIÇÃO da aba DADOS da planilha, e o José pediu
+  // "editável e revisável". Estes campos são a parte editável; `he_revisado`
+  // é a revisável.
+  if (body.cidade !== undefined) {
+    const v = body.cidade === null ? null : String(body.cidade).trim().toUpperCase();
+    if (v !== null && (v.length < 2 || v.length > 60)) {
+      return res.status(400).json({ error: 'cidade inválida (2 a 60 caracteres)' });
+    }
+    upd.cidade = v || null;
+  }
+  if (body.tipo_breve !== undefined) {
+    // ⚠️ tipo_breve errado = valor/hora errado = fatura errada. Só os tipos
+    // que existem no contrato passam; nada é normalizado por aproximação.
+    const { TIPOS_BREVE } = require('../db/heCadastroSeed');
+    const v = body.tipo_breve === null || body.tipo_breve === '' ? null
+      : String(body.tipo_breve).trim().toUpperCase();
+    if (v !== null && !TIPOS_BREVE.includes(v)) {
+      return res.status(400).json({ error: `tipo_breve inválido (use ${TIPOS_BREVE.join('/')})` });
+    }
+    upd.tipo_breve = v;
+  }
+  if (body.servico !== undefined) {
+    const v = body.servico === null || body.servico === '' ? null
+      : String(body.servico).trim().toUpperCase();
+    if (v !== null && !['STC', 'PLT'].includes(v)) {
+      return res.status(400).json({ error: 'servico inválido (use STC ou PLT)' });
+    }
+    upd.servico = v;
+  }
+  if (body.turno_cadastro !== undefined) {
+    const v = body.turno_cadastro === null || body.turno_cadastro === '' ? null
+      : String(body.turno_cadastro).trim().toUpperCase();
+    if (v !== null && !['DIURNO', 'NOTURNO'].includes(v)) {
+      return res.status(400).json({ error: 'turno_cadastro inválido (use DIURNO ou NOTURNO)' });
+    }
+    upd.turno_cadastro = v;
+  }
+  if (body.he_revisado !== undefined) {
+    if (typeof body.he_revisado !== 'boolean') {
+      return res.status(400).json({ error: 'he_revisado deve ser boolean' });
+    }
+    upd.he_revisado = body.he_revisado;
   }
   // escala_inicio / escala_fim: aceitam "HH:MM" ou "HH:MM:SS" (TIME without TZ
   // no Postgres). null/'' limpa a escala. Tudo que vier é validado antes de

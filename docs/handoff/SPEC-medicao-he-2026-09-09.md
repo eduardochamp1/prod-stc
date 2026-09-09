@@ -269,10 +269,69 @@ colunas nulas — nada existente muda de comportamento, e `DROP COLUMN` reverte 
 necessário. `app_settings` é chave nova. **Nenhum dado operacional é reescrito
 em nenhuma fase.**
 
-## 10. Pendências antes de codar a Fase 2
+## 10. Pendências — RESPONDIDAS em 09/09/2026
 
-1. ⬜ Definição de **QTD** (§6.4).
-2. ⬜ **Antecipação** entra no total? (§6.5) — é dinheiro.
-3. ⬜ Arquivo real da aba **DADOS** para o backfill (§5.3).
-4. ⬜ Dropdowns: subconjunto por coluna ou lista única? (§3)
-5. ⬜ O que é **EQUIPES EXTRAS** (§6.7).
+1. ✅ **QTD** = quantidade de notas mesmo. As linhas com `QTD = 0` e 7h de
+   prorrogação são exceção real, não erro de leitura: houve prorrogação de 7
+   horas sem nota concluída.
+2. ✅ **Antecipação ENTRA no total.** `total_h = antecipacao_h + prorrogacao_h`.
+   ⚠️ Consequência a acompanhar na Fase 4: hoje a planilha traz antecipação
+   0,000 em 100% das linhas, com `INICIO SESSÃO` copiado do `INICIO ESCALA`.
+   Medindo de verdade, o total do mês pode subir. **Divergência para MAIS
+   contra a planilha enviada é esperada aqui** — é hora extra que não estava
+   sendo cobrada, não bug do cálculo.
+3. ✅ **Transcrever o cadastro**, deixando editável e revisável. Ver §11.
+4. ✅ **Dropdowns:** lista `AFIRMATIVAS` inteira em todas as colunas de parecer.
+   Sem subconjunto por coluna — substitui a proposta do §3.
+5. ✅ **EQUIPES EXTRAS:** desconsiderar. Uma aba só.
+
+## 11. Fase 1 — ENTREGUE (09/09/2026)
+
+- `db/heCadastroSeed.js` — 45 equipes transcritas da aba DADOS, com
+  `tipo_breve` **derivado** da coluna TIPO. Derivar em vez de transcrever a
+  coluna TIPO BREVE em separado elimina uma leitura de print: se as duas
+  discordassem, a divergência apareceria em vez de eu escolher uma.
+- `scripts/migrar-he-cadastro.js` — dry-run por padrão, `--csv` para conferir
+  contra a planilha, `--apply` para valer. Transação com rollback.
+- Colunas novas em `equipes_oficiais`: `cidade`, `tipo_breve`, `servico`,
+  `turno_cadastro`, `he_revisado`.
+- Valores/hora em `app_settings.he-valores-hora` — reajuste sem deploy.
+- `PUT /api/admin/equipes/:sigla` aceita os 5 campos, com `tipo_breve` fechado
+  na lista do contrato. O GET tem fallback para o schema antigo, no molde de
+  `services/equipesOficiais.js:219/226` — subir o código antes da migration
+  não derruba a tela de Admin, e aqui não há staging pra pegar isso.
+- 27 testes.
+
+### A trava da transcrição
+
+Toda linha entra com `he_revisado = false`. A tela da Fase 3 avisa enquanto
+houver equipe não revisada no período. E o script **não cria** equipe que não
+exista: criar a partir de transcrição de print a colocaria na whitelist e ela
+passaria a contar em **todas** as métricas do painel, muito além da medição.
+
+### Conferência cruzada que a transcrição passou
+
+O `tipo_breve` lido na aba DADOS foi cruzado com a coluna VALOR da aba de
+medição — leitura independente do mesmo print. **22 das 45 conferem**; as 23
+sem cruzamento são as que precisam de olho humano, e estão marcadas
+(`conferido: false`).
+
+Duas divergências anotadas, não escondidas:
+
+- **ECMRT51** — DADOS diz `A2 2P 22D` (R$ 376,28), mas a medição tem linhas a
+  R$ 297,54, que é L1. Se confirmado, são linhas **cobradas a menos**.
+- **EPGPR32** — a coluna TIPO BREVE ficou ambígua no print; `A3` foi derivado
+  da coluna TIPO.
+
+### Achado que corrobora o P2-47
+
+A aba DADOS tem 45 equipes e **não** inclui `ETGPR18`, `ETGPR19`, `ETMRT15`
+nem `ETPKE15` — que estão ativas em `equipes_oficiais`. São **4 das 10** que o
+P2-47 achou sem nenhuma linha de escala no mês inteiro. Duas fontes
+independentes apontando as mesmas equipes é indício forte de que não operam
+mais. Ver P2-47 antes de cadastrá-las.
+
+## 12. Próximo passo — Fase 2
+
+`db/heQueries.js`: escala × sessão × notas, resolvendo vira-noite (§6.2) e
+relogin (§6.3). Nada bloqueia.

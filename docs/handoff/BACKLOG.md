@@ -142,7 +142,7 @@
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
-| P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **spec escrita** (09/09) — `SPEC-medicao-he-2026-09-09.md`; 5 pendências antes de codar |
+| P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fase 1 done** (09/09, cadastro + valores + Admin) — falta Fase 2 (cálculo), 3 (tela) e 4 (conferência de julho) |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 
 ---
@@ -4904,7 +4904,7 @@ mesmo ponto cego, o que reforça o item.
 ## P2-48 — Medição HE é levantada à mão do BI + portal WPA
 
 - **Categoria:** Produto/Operação
-- **Status:** **spec escrita** (09/09/2026) — ver
+- **Status:** **Fase 1 done** (09/09/2026) — cadastro, valores e Admin no ar; falta Fase 2/3/4. Ver
   `docs/handoff/SPEC-medicao-he-2026-09-09.md`. Implementação não iniciada.
 - **Evidência:** planilha `Medição Engelmig - CSD Guarapari (1).xlsx`, abas
   `DADOS` / `H.E STC-PLT` / `EQUIPES EXTRAS` / `Valores` (prints de 09/09/2026).
@@ -4920,7 +4920,7 @@ mesmo ponto cego, o que reforça o item.
 - **Esforço:** ~12h somando as quatro fases.
 - **Rollback:** fases 2–4 são leitura (`git revert`); a migration só adiciona
   colunas nulas.
-- **Bloqueado por:** 5 pendências da spec §10 — definição de QTD, se
+- **Desbloqueado 09/09/2026:** as 5 pendências foram respondidas (spec §10). QTD é contagem de notas mesmo; **antecipação entra no total** — e como a planilha atual traz antecipação 0,000 em 100% das linhas, a Fase 4 deve medir MAIS que o enviado. Antes dizia: definição de QTD, se
   antecipação entra no total (é dinheiro), arquivo da aba DADOS, formato dos
   dropdowns e o que separa EQUIPES EXTRAS.
 - **Relacionado:** P1-14 (vira-noite parte o turno em 2 dias) e P2-47 (equipe
