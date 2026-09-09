@@ -518,3 +518,55 @@ o que sugere sessão perdida e reautenticação, não turno.
    todas as equipes da regional ao mesmo tempo. O script passou a marcar dia
    com mais de 2,5× a média e a mostrar o horário do último snapshot — é o que
    faz 24/08 saltar aos olhos.
+
+## 18. Recuperação dos logoffs — 113 de 113 (09/09/2026)
+
+`scripts/recuperar-logoffs.js --apply`, período 16–31/08:
+
+```
+✔ 113 sessão(ões) com o fim recuperado da EDP.
+  0 sem par na EDP.
+```
+
+**Recuperação total.** Toda "sessão aberta" tinha o logoff na API da EDP —
+incluindo as **49 de DSSJ em 24/08**, porque o P1-39 foi credencial NOSSA
+inválida, não perda de dado deles.
+
+### O que isso corrige no raciocínio
+
+O José disse: *"não faz sentido termos sessão em aberto de um dia fechado"*.
+Estava certo, e o dado confirmou 113 vezes. Antes dessa observação a análise
+estava indo pro lugar errado: eu apresentei as 113 como **decisão de negócio**
+("cobrar só a antecipação ou deixar fora?"), quando eram **falha de captura**.
+Não havia nada imensurável — havia dado que não foi buscado.
+
+⚠️ **Lição pro próximo diagnóstico:** "estado impossível na operação" é sinal de
+bug de captura, não de estado a modelar. Equipe vai pra casa; sessão de dia
+fechado tem fim. Sempre.
+
+### Consequência pro `runSyncLogoffs` (P1-47)
+
+Se a EDP tinha 100% dos fins, o job das 03:00 está deixando passar tudo o que
+não fecha antes dele. E vale suspeitar de mais: ele casa por **string exata**
+(`sb1 === beginTime`), enquanto a recuperação casou 113/113 com o instante
+**normalizado**. Formato com milissegundo ou offset diferente não casa por
+string.
+
+⬜ Depois de consertar o horário (reprocessar D-2), **medir quantos logoffs o
+job efetivamente grava por noite**. A suspeita é que a contribuição dele seja
+próxima de zero e que os 2.024 fins que já existiam venham todos do snapshot
+normal (05:00–23:45), não dele.
+
+### Os três consertos do dia, na ordem
+
+A primeira medição de 16–31/08 mostrou **R$ 133.738,13**. Estava abaixo do
+devido por três defeitos meus, todos encontrados por observação do José ou pelo
+dado:
+
+1. `R$ 0,00` no cartão de valor quando nenhuma linha tinha cadastro — número
+   falso se passando por fato.
+2. Logoff lido da coluna `session_end` quando o back-fill grava no jsonb —
+   164 sessões tratadas como abertas.
+3. 113 logoffs nunca buscados na EDP — prorrogação de turno noturno perdida.
+
+Nenhum deles apareceria numa conferência que só olhasse o total.

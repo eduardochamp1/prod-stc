@@ -5028,7 +5028,15 @@ mesmo ponto cego, o que reforça o item.
   Antes dizia: chama o
   próprio job para as datas com sessão aberta. Idempotente: só preenche onde o
   fim está ausente.
-  ⬜ Depois de recuperar, re-conferir o total da Medição HE — ele vai **subir**.
+  ✅ **Histórico recuperado em 09/09/2026: 113 de 113, ZERO sem par na EDP.**
+  Prova que o dado sempre existiu e que o job simplesmente não o busca —
+  inclusive as 49 de DSSJ em 24/08, porque o P1-39 foi credencial nossa.
+  ⬜ Depois de consertar o horário, MEDIR quantos logoffs o job grava por
+  noite. Suspeita: contribuição próxima de zero, com os fins existentes vindo
+  todos do snapshot normal (05:00–23:45). Ver também que ele casa por string
+  exata (`sb1 === beginTime`) enquanto a recuperação casou 113/113 com o
+  instante normalizado.
+  ⬜ Re-conferir o total da Medição HE — ele vai **subir**.
 - **Critério de aceite:**
   - [ ] `diag-he-sessoes-abertas.js` no período 16–31/08 volta com as abertas
         reduzidas às do P1-39 (as ~50 de 24/08) mais resíduo justificado.
