@@ -142,6 +142,7 @@
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
+| P2-49 | Fonte Roboto nunca carregou: `roboto.css` não existe (só os TTF) — painel roda no fallback desde 08/07; P1-9 foi fechado com o critério desmarcado | Frontend | pending — causa isolada 09/09, conserto é 1 arquivo |
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 
@@ -4926,3 +4927,52 @@ mesmo ponto cego, o que reforça o item.
   dropdowns e o que separa EQUIPES EXTRAS.
 - **Relacionado:** P1-14 (vira-noite parte o turno em 2 dias) e P2-47 (equipe
   sem escala cadastrada) — as duas atingem esta medição.
+
+---
+
+## P2-49 — A fonte Roboto nunca carregou: o `roboto.css` não existe
+
+- **Categoria:** Frontend
+- **Status:** pending — causa isolada em 09/09/2026, conserto é 1 arquivo novo
+- **Evidência:** o console do navegador acusa, em TODA carga de página, duas
+  vezes:
+  > `Refused to apply style from 'http://172.25.3.154:3002/vendor/roboto/roboto.css'
+  > because its MIME type ('') is not a supported stylesheet MIME type`
+
+  `public/index.html:12` tem `<link rel="stylesheet" href="vendor/roboto/roboto.css">`
+  e o diretório tem só os TTF:
+  ```
+  public/vendor/roboto/roboto-300.ttf  roboto-400.ttf  roboto-500.ttf  roboto-700.ttf
+  ```
+  **`roboto.css` não existe.** O request 404, a resposta vem sem
+  `Content-Type`, o navegador recusa, e nenhum `@font-face` é declarado.
+- **Impacto:** `body { font-family: 'Roboto', sans-serif }` cai no fallback
+  genérico do sistema desde 08/07/2026. O painel nunca renderizou na tipografia
+  da marca — nem para os gestores, nem nos prints que vão pra EDP. É cosmético,
+  mas é a identidade visual da Engelmig num painel de cliente.
+- **Por que passou:** o P1-9 ("Vendorizar Leaflet + fonte Roboto") foi marcado
+  **done** com o critério `[ ] Fonte Roboto carrega (visualmente
+  indistinguível)` ainda **desmarcado**. O passo 3 do próprio item
+  ("Adicionar `@font-face` em CSS pra Roboto local") não foi executado. O
+  Leaflet, que era a outra metade, funcionou — e isso mascarou a falta.
+  ⚠️ Lição de processo: fechar item com critério de aceite aberto esconde
+  trabalho não feito por 2 meses.
+- **Ação:** ⬜ Criar `public/vendor/roboto/roboto.css` com quatro `@font-face`
+  (300/400/500/700) apontando pros TTF que já estão no repo, `format('truetype')`
+  e `font-display: swap`.
+  ⬜ Conferir no DevTools → Network que o CSS vem 200 com
+  `content-type: text/css`, e em Rendering → que a fonte usada é Roboto.
+- **Critério de aceite:**
+  - [ ] Zero erro de MIME no console.
+  - [ ] `document.fonts.check('16px Roboto')` devolve `true`.
+  - [ ] Nenhum request a `fonts.googleapis.com` (o Fortinet bloqueia — é o
+        motivo da vendorização).
+- **Esforço:** 15 min.
+- **Risco do conserto (não é zero):** trocar o fallback pela Roboto muda as
+  métricas de texto em TODAS as telas de uma vez — largura de coluna, quebra de
+  linha, altura de card. Não aplicar no meio de uma validação de medição.
+- **Rollback:** deletar o arquivo. O `<link>` volta a 404 e a tela volta ao
+  fallback — exatamente o estado de hoje.
+- **Relacionado:** P1-9 (que devia ter feito isto), e o P0-1 (bus factor:
+  ninguém percebeu por 2 meses).
+- **Fonte:** console do José, 09/09/2026, durante a validação da Medição HE.
