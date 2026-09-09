@@ -412,3 +412,24 @@ test('fmtParede não desloca o dia', () => {
   assert.equal(fmtParede(null), null);
   assert.equal(fmtParede(NaN), null);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rótulo de status — texto que vai numa planilha enviada à EDP
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('concluida sai acentuada — o snapshot guarda sem acento', () => {
+  assert.equal(
+    rotuloUltimaNota({ tipoCode: 'MD', codigo: '045006418420', status: 'concluida' }),
+    'MD - 045006418420 - Concluída');
+});
+
+test('status desconhecido é capitalizado, não traduzido por aproximação', () => {
+  // A planilha tem "Interrompida", que não existe nos snapshots. Chutar uma
+  // tradução seria pior que mostrar o termo cru.
+  assert.equal(
+    rotuloUltimaNota({ tipoCode: 'DD', codigo: '9', status: 'interrompida' }),
+    'DD - 9 - Interrompida');
+  assert.equal(
+    rotuloUltimaNota({ tipoCode: 'XX', codigo: '1', status: 'xpto' }),
+    'XX - 1 - Xpto');
+});

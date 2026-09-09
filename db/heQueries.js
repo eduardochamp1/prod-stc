@@ -223,8 +223,13 @@ function rotuloUltimaNota(nota) {
   if (!nota) return null;
   const tipo = nota.tipoCode || nota.tipoNome || '??';
   const num  = nota.codigo || nota.id || '';
-  const st   = nota.status
-    ? String(nota.status).charAt(0).toUpperCase() + String(nota.status).slice(1)
+  // Acentuação explícita: `concluida` vem sem acento do snapshot, e este texto
+  // vai numa planilha enviada à EDP. Status desconhecido é só capitalizado —
+  // inventar tradução seria pior que mostrar o termo cru.
+  const ROTULOS = { executada: 'Executada', concluida: 'Concluída', rejeitada: 'Rejeitada' };
+  const bruto = nota.status ? String(nota.status).toLowerCase() : null;
+  const st = bruto
+    ? (ROTULOS[bruto] || bruto.charAt(0).toUpperCase() + bruto.slice(1))
     : null;
   return [tipo, num, st].filter(Boolean).join(' - ');
 }
@@ -476,15 +481,27 @@ async function medicaoHe(de, ate, opts = {}) {
 
   linhas.sort((a, b) => a.data.localeCompare(b.data) || a.equipe.localeCompare(b.equipe));
 
-  const totalValor = linhas.reduce((s, l) => s + (l.valor_total || 0), 0);
+  const comValor    = linhas.filter(l => l.valor_total != null);
+  const totalValor  = comValor.reduce((s, l) => s + l.valor_total, 0);
+  const r2 = n => Math.round(n * 100) / 100;
   return {
     periodo: { de, ate },
     linhas,
     resumo: {
       linhas:        linhas.length,
       equipes:       new Set(linhas.map(l => l.equipe)).size,
-      total_horas:   Math.round(linhas.reduce((s, l) => s + (l._total_h || 0), 0) * 100) / 100,
-      valor_total:   Math.round(totalValor * 100) / 100,
+      total_horas:   r2(linhas.reduce((s, l) => s + (l._total_h || 0), 0)),
+      // Separados porque a Fase 4 precisa isolar exatamente a divergência
+      // prevista: a planilha atual zera a antecipação, e o sistema mede.
+      total_antecipacao_h: r2(linhas.reduce((s, l) => s + (l.antecipacao_h || 0), 0)),
+      total_prorrogacao_h: r2(linhas.reduce((s, l) => s + (l.prorrogacao_h || 0), 0)),
+      // ⚠️ Soma só do que TEM valor, e o contador do que não tem vem ao lado.
+      // Sem `linhas_sem_valor`, um período em que NENHUMA linha tem cadastro
+      // exibiria "R$ 0,00" — que se lê como "nada a cobrar" quando a verdade é
+      // "não sei". Reportado em 09/09/2026 na 1ª abertura da tela.
+      valor_total:      r2(totalValor),
+      linhas_com_valor: comValor.length,
+      linhas_sem_valor: linhas.length - comValor.length,
       incompletas:   linhas.filter(l => l._incompleta).length,
       com_relogin:   linhas.filter(l => l._relogins > 0).length,
     },

@@ -5467,6 +5467,15 @@ ${matrizHTML}
       }
     }
 
+    /**
+     * O valor total pode ser apresentado como fato?
+     * Só quando TODAS as linhas do período têm valor/hora. Com qualquer linha
+     * sem cadastro, o total é parcial e o cartão avisa em vez de afirmar.
+     */
+    function _heValorConfiavel(r) {
+      return !!(r && r.linhas > 0 && !r.linhas_sem_valor);
+    }
+
     function renderHeMedicao(d) {
       const cont = document.getElementById('hist-he-content');
       if (!cont) return;
@@ -5533,12 +5542,23 @@ ${matrizHTML}
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Total de horas</div>
             <div class="desloc-kpi-value">${(r.total_horas || 0).toLocaleString('pt-BR')}</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">antecipação + prorrogação</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">
+              ${(r.total_antecipacao_h || 0).toLocaleString('pt-BR')} antecip. +
+              ${(r.total_prorrogacao_h || 0).toLocaleString('pt-BR')} prorrog.</div>
           </div>
-          <div class="desloc-kpi" style="border-color:#086738;border-width:2px">
+          <div class="desloc-kpi" style="border-color:${_heValorConfiavel(r) ? '#086738' : '#f39c12'};border-width:2px">
             <div class="desloc-kpi-label">Valor total</div>
-            <div class="desloc-kpi-value" style="color:#086738;font-size:22px">${brl(r.valor_total || 0)}</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:2px">antes do parecer</div>
+            <div class="desloc-kpi-value" style="color:${_heValorConfiavel(r) ? '#086738' : '#f39c12'};font-size:22px">${
+              // ⚠️ NUNCA "R$ 0,00" quando nenhuma linha tem valor. Zero se lê
+              // como "nada a cobrar"; a verdade é "não sei ainda". Reportado
+              // na 1ª abertura da tela, em 09/09/2026.
+              r.linhas && r.linhas_com_valor === 0 ? '—' : brl(r.valor_total || 0)}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px">${
+              r.linhas && r.linhas_com_valor === 0
+                ? 'nenhuma linha tem valor/hora — falta cadastro'
+                : (r.linhas_sem_valor
+                    ? `parcial · ${r.linhas_sem_valor} de ${r.linhas} linha(s) sem valor`
+                    : 'antes do parecer')}</div>
           </div>
           <div class="desloc-kpi">
             <div class="desloc-kpi-label">Com relogin</div>

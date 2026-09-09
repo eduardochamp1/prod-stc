@@ -194,3 +194,37 @@ test("'ALL' do multi-select não vira sigla literal", () => {
   const i = ROTAS.indexOf("router.get('/he/medicao'");
   assert.match(ROTAS.slice(i, i + 1500), /_semAll/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// O total não pode se passar por fato — reportado na 1ª abertura, 09/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('sem nenhuma linha com valor, o KPI mostra travessão, não R$ 0,00', () => {
+  // Aconteceu de verdade: 640 linhas, cadastro HE ausente, e o cartão exibiu
+  // "R$ 0,00" — que se lê como "nada a cobrar" quando a verdade é "não sei".
+  const i = SRC.indexOf('_heValorConfiavel');
+  assert.ok(i > -1, 'não achei o guarda do valor total');
+  const j = SRC.indexOf('desloc-kpi-label">Valor total');
+  const bloco = SRC.slice(j, j + 1200);
+  assert.match(bloco, /r\.linhas_com_valor === 0 \? '—'/);
+  assert.match(bloco, /falta cadastro/);
+});
+
+test('total parcial se identifica como parcial', () => {
+  const j = SRC.indexOf('desloc-kpi-label">Valor total');
+  assert.match(SRC.slice(j, j + 1200), /parcial · \$\{r\.linhas_sem_valor\}/);
+});
+
+test('_heValorConfiavel exige TODAS as linhas com valor', () => {
+  const i = SRC.indexOf('function _heValorConfiavel');
+  assert.match(SRC.slice(i, i + 300), /r\.linhas > 0 && !r\.linhas_sem_valor/);
+});
+
+test('o KPI de horas separa antecipação de prorrogação', () => {
+  // A Fase 4 precisa isolar a divergência prevista: a planilha atual zera a
+  // antecipação e o sistema mede.
+  const i = SRC.indexOf('desloc-kpi-label">Total de horas');
+  const bloco = SRC.slice(i, i + 600);
+  assert.match(bloco, /total_antecipacao_h/);
+  assert.match(bloco, /total_prorrogacao_h/);
+});
