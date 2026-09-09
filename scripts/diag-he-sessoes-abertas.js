@@ -186,7 +186,48 @@ async function main() {
     + `(${(100 * concentracao / classificadas.length).toFixed(0)}%).`);
   console.log(concentracao / classificadas.length > 0.5
     ? '  ⇒ CONCENTRADO em poucas equipes: é hábito de turma, tratável com cobrança.'
-    : '  ⇒ ESPALHADO entre equipes: sugere comportamento geral do app, não turma.\n');
+    : '  ⇒ Espalhado entre equipes. ATENÇÃO: isto NÃO significa "comportamento\n'
+      + '    geral do app" — veja a concentração POR DIA abaixo antes de concluir.');
+
+  // ── Concentração por DIA ──────────────────────────────────────────────────
+  // A lente por equipe engana quando a causa é uma PARADA DE COLETA: o
+  // incidente atinge todas as equipes de uma regional ao mesmo tempo, e por
+  // equipe parece "espalhado". Em 09/09/2026 a 1ª versão deste script concluiu
+  // "espalhado, comportamento do app" enquanto 11 equipes de SJC estavam
+  // congeladas no MESMO instante (24/08 10:15) — era o incidente do P1-39,
+  // credencial SJC inválida por ~18h.
+  const porDia = new Map();
+  const ultimoPorDia = new Map();
+  for (const c of classificadas) {
+    const dia = String(c.session_begin).slice(0, 10);
+    porDia.set(dia, (porDia.get(dia) || 0) + 1);
+    const vistos = ultimoPorDia.get(dia) || new Set();
+    vistos.add(String(c.visto_em).slice(11, 16));
+    ultimoPorDia.set(dia, vistos);
+  }
+  const dias = [...porDia.entries()].sort((a, b) => b[1] - a[1]);
+  const media = classificadas.length / porDia.size;
+  console.log('\n── Concentração por DIA ──\n');
+  for (const [dia, n] of dias.slice(0, 8)) {
+    const horas = [...(ultimoPorDia.get(dia) || [])].sort();
+    const suspeito = n > media * 2.5;
+    console.log(`  ${dia}  ${String(n).padStart(3)}${suspeito ? '  ⚠️' : '    '}`
+      + `  último snapshot visto: ${horas.slice(0, 4).join(', ')}`
+      + (horas.length > 4 ? '…' : ''));
+  }
+  console.log(`\n  média por dia: ${media.toFixed(1)}`);
+  const picos = dias.filter(([, n]) => n > media * 2.5);
+  if (picos.length) {
+    console.log(`  ⚠️ ${picos.length} dia(s) acima de 2,5× a média: `
+      + picos.map(([d]) => d).join(', '));
+    console.log('  Pico num único dia, com várias equipes congeladas no MESMO');
+    console.log('  horário, é PARADA DE COLETA, não comportamento de equipe.');
+    console.log('  Cruze com o err.log e com o P1-39 antes de tratar como campo.');
+  } else {
+    console.log('  Nenhum pico — distribuição diária uniforme, o que aponta pra');
+    console.log('  comportamento recorrente de turno, não incidente pontual.');
+  }
+  console.log('');
 
   // ── Por regional ──────────────────────────────────────────────────────────
   const porReg = new Map();

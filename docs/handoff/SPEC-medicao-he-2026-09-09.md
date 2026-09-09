@@ -456,3 +456,65 @@ mantiveram tipo operacional (`PLANTÃO`/`COMERCIAL`/`USO MUTUO`) e aparecem como
 "sem cadastro HE". Se não houver medição pra elas, esse aviso é ruído
 permanente e vale separar "sem tipo cadastrado" de "regional sem medição HE" —
 aviso que sempre aparece é aviso que se aprende a ignorar.
+
+## 17. Sessões abertas — analisado em 09/09/2026
+
+Pedido: *"2: VAMOS ANALISAR"*. Ferramenta:
+`scripts/diag-he-sessoes-abertas.js` (read-only).
+
+### Achado 1 — BUG MEU: o logoff estava no jsonb
+
+`dataWriter.saveSnapshot` (`dataWriter.js:48`) grava a coluna `session_end` no
+momento do snapshot. Mas `runSyncLogoffs`, das 03:00
+(`cronService.js:1619`) — o job que existe justamente pra pegar o logoff de
+quem saiu DEPOIS do último snapshot do dia — faz `update({ data: newData })`
+e **não toca na coluna**.
+
+Eu escolhi ler a coluna por ser indexada, e ela é exatamente a que o back-fill
+não mantém. O código antigo do painel (`queries.js:402`) sempre leu do payload.
+
+**Medido:** 277 de 2.137 sessões (13,0%) apareciam abertas. Com
+`COALESCE(session_end, data->>'sessionEnd', data->>'session_end')`, caíram pra
+**113 (5,3%)** — **164 sessões recuperadas**, e a aritmética fecha
+(277 − 164 = 113).
+
+**Efeito no dinheiro:** a prorrogação de todo turno que atravessa a meia-noite
+estava subnotificada. São os `EP*` de plantão, o turno em que hora extra mais
+acontece. Os R$ 133.738,13 da 1ª medição estavam ABAIXO do devido.
+
+⬜ **Backlog:** `runSyncLogoffs` deveria manter coluna e jsonb em sincronia.
+Qualquer código futuro que leia a coluna cai na mesma armadilha — eu caí. É
+conserto em caminho de ESCRITA de produção, então não foi feito junto.
+
+### Achado 2 — as 113 restantes são, na maioria, o incidente do P1-39
+
+Distribuição: **SJC 74**, GUA 20, CAC 19. E no detalhe aparecem 11 equipes de
+SJC congeladas no MESMO instante — `2026-08-24 10:15:05`, com login entre 06:43
+e 07:57.
+
+Isso é a parada de coleta de **24-25/08/2026 (credencial SJC inválida)**, que
+originou o próprio P1-39. As sessões estavam abertas quando a coleta morreu e
+nunca receberam logoff, porque não havia coleta.
+
+Não é bug da medição: é lacuna de dado conhecida e datada. Para 24-25/08 a
+prorrogação de SJC é genuinamente imensurável.
+
+### Achado 3 — resíduo real de turno noturno
+
+Fora do incidente, sobra um punhado recorrente: `EPGPR30` (14), `EPPTE04` (12),
+`EPAVP38` (8), `EPCIT33` (7), `EPCIT32` (7). Login entre 17:00 e 22:54, último
+snapshot 23:45, relogin no dia seguinte. Nestas, nem o job das 03:00 capturou o
+logoff. `EPPTE04` chama atenção por relogar de madrugada (03:11, 04:51, 05:34),
+o que sugere sessão perdida e reautenticação, não turno.
+
+### Correções de método no próprio script
+
+1. **Não conclua "abandono" por relogin.** A 1ª versão rotulou 259 turnos
+   noturnos legítimos como lixo porque a equipe logou de novo depois — turno
+   diário relogá todo dia no mesmo horário. Se a recomendação tivesse sido
+   seguida, 259 linhas boas sairiam da fatura.
+2. **Concentração por DIA, não só por equipe.** A lente por equipe diz
+   "espalhado" quando a causa é uma parada de coleta, porque o incidente atinge
+   todas as equipes da regional ao mesmo tempo. O script passou a marcar dia
+   com mais de 2,5× a média e a mostrar o horário do último snapshot — é o que
+   faz 24/08 saltar aos olhos.
