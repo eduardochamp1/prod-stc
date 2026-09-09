@@ -181,3 +181,80 @@ test('a ausência de vigência histórica está dita na própria tela', () => {
   const i = SRC.indexOf('Valores/hora — Medição HE');
   assert.match(SRC.slice(i, i + 900), /Sem vigência histórica/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// O tipo que dita o preço pode vir de `tipo` — reportado em 09/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { tipoHeDaEquipe } = require('../db/heQueries');
+
+test('tipo_breve tem precedência quando preenchido', () => {
+  assert.equal(tipoHeDaEquipe({ tipo_breve: 'A2', tipo: 'L1' }), 'A2');
+});
+
+test('cai pro `tipo` quando tipo_breve está vazio', () => {
+  // O José preencheu o tipo de turma na coluna `tipo` pelo Admin antes da
+  // migration rodar. O trabalho está feito e é correto — a medição usa.
+  for (const t of TIPOS_BREVE) {
+    assert.equal(tipoHeDaEquipe({ tipo_breve: null, tipo: t }), t);
+  }
+  assert.equal(tipoHeDaEquipe({ tipo: 'a2' }), 'A2', 'caixa não importa');
+  assert.equal(tipoHeDaEquipe({ tipo: ' L0M ' }), 'L0M');
+});
+
+test('tipo operacional NÃO vira preço', () => {
+  // `tipo` também guarda PLANTAO/COMERCIAL/BTZERO/USO MUTUO. Nenhum é tipo de
+  // hora extra; aceitar seria escolher um valor/hora no chute.
+  for (const t of ['PLANTAO', 'PLANTÃO', 'COMERCIAL', 'BTZERO', 'CS',
+                   'USO MUTUO', 'CORTE L0', 'CORTE L1', 'MD', 'RAMAL', 'A2N']) {
+    assert.equal(tipoHeDaEquipe({ tipo: t }), null, `${t} não é tipo de HE`);
+  }
+});
+
+test('tipo_breve inválido não impede o fallback', () => {
+  // Lixo em tipo_breve não pode mascarar um `tipo` bom.
+  assert.equal(tipoHeDaEquipe({ tipo_breve: 'XPTO', tipo: 'A1' }), 'A1');
+});
+
+test('sem nenhum dos dois, devolve null', () => {
+  assert.equal(tipoHeDaEquipe({}), null);
+  assert.equal(tipoHeDaEquipe(null), null);
+  assert.equal(tipoHeDaEquipe({ tipo_breve: '', tipo: '' }), null);
+});
+
+test('a query do cadastro traz a coluna `tipo`', () => {
+  // Sem ela no SELECT, o fallback nunca teria o que ler.
+  const HEQ2 = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
+  const i = HEQ2.indexOf('async function _cadastroEquipes');
+  const bloco = HEQ2.slice(i, i + 1400);
+  assert.match(bloco, /AS sigla, regional, tipo, \$\{_COLS_HE\}/);
+  assert.match(bloco, /AS sigla, regional, tipo\s*\n/, 'o fallback de schema antigo também');
+});
+
+test('a medição usa o tipo RESOLVIDO, não tipo_breve cru', () => {
+  const HEQ2 = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
+  const i = HEQ2.indexOf('const tipoHe = tipoHeDaEquipe(cad)');
+  assert.ok(i > -1, 'a montagem da linha tem de resolver o tipo');
+  const bloco = HEQ2.slice(i, i + 900);
+  assert.match(bloco, /valorHora: tipoHe \? \(valores\[tipoHe\] \?\? null\) : null/);
+  assert.match(bloco, /tipo_breve: tipoHe/, 'a linha mostra o resolvido');
+  assert.match(bloco, /if \(!tipoHe\) semCadastro\.add\(equipe\)/,
+    'o aviso "sem cadastro" tem de olhar o resolvido, senão acusa equipe que tem preço');
+});
+
+test('os campos de valor cabem o número inteiro', () => {
+  // "356.63" aparecia como "35": com 4 campos por linha o input de número
+  // reservava espaço pras setinhas e o resto sumia.
+  //
+  // ⚠️ Asserções POSITIVAS, de propósito. A 1ª versão usava
+  // `doesNotMatch(/min-width:120px/)` e reprovava por causa do comentário que
+  // explica o defeito — foi a 3ª vez no dia que uma regra negativa minha pegou
+  // a própria prosa. Especificar o que DEVE existir é mais preciso e não
+  // depende de como o comentário está escrito.
+  const i = SRC.indexOf('async function carregarHeValores');
+  const bloco = SRC.slice(i, SRC.indexOf('async function salvarHeValores', i));
+  assert.match(bloco, /gridTemplateColumns = 'repeat\(auto-fit, minmax\(168px, 1fr\)\)'/,
+    'grid com largura mínima igual pra todos os campos');
+  assert.match(bloco, /style="width:100%;min-width:0;/,
+    'o input precisa de min-width:0 pra não estourar a célula do grid');
+});

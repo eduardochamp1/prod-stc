@@ -9462,13 +9462,21 @@ ${matrizHTML}
         const d = await fetch(`${API}/admin/he-valores`).then(r => r.json());
         if (d.error) throw new Error(d.error);
         _heValMax = d.max || 10000;
+        // ⚠️ `min-width:120px` cortava o valor: com 4 campos por linha,
+        // "356.63" aparecia como "35" — o input de número reserva espaço pras
+        // setinhas e o resto some. Reportado em 09/09/2026 com o print.
+        // 168px cabe "1234.56" mais as setas; o grid de 3 colunas garante que
+        // TODOS os campos tenham a mesma largura, em vez de o flex apertar a
+        // primeira linha e sobrar espaço na segunda.
+        grid.style.display = 'grid';
+        grid.style.gridTemplateColumns = 'repeat(auto-fit, minmax(168px, 1fr))';
         grid.innerHTML = (d.tipos || []).map(t => `
-          <div class="filter-group" style="flex:1;min-width:120px">
+          <div class="filter-group">
             <span class="filter-label">${t} — R$/h</span>
             <input type="number" step="0.01" min="0.01" max="${_heValMax}"
                    class="month-input" id="he-val-${t}"
                    value="${d.valores && d.valores[t] != null ? d.valores[t] : ''}"
-                   style="width:100%;border:none;outline:none" />
+                   style="width:100%;min-width:0;border:none;outline:none" />
           </div>`).join('');
         if (st) {
           st.textContent = d.origem === 'app_settings'

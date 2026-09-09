@@ -309,6 +309,33 @@ function montarLinhaHe({ equipe, dia, cadastro, janela, sessao, he, valorHora, u
 const _COLS_HE = 'cidade, tipo_breve, servico, he_revisado';
 
 /**
+ * FUNÇÃO PURA (testável): o tipo de turma que dita o valor/hora da equipe.
+ *
+ * Ordem: `tipo_breve` (a coluna criada pra isso) e, se estiver vazia, a coluna
+ * `tipo` que já existia.
+ *
+ * ⚠️ POR QUE O FALLBACK EXISTE. Em 09/09/2026 o José preencheu o tipo de turma
+ * direto na coluna `tipo` pela tela do Admin, antes de a migration ter rodado.
+ * O trabalho está feito e é correto — então a medição usa. Mas o fallback só
+ * aceita valor que seja um dos 6 do contrato: `tipo` também guarda
+ * 'PLANTAO', 'COMERCIAL', 'BTZERO', 'USO MUTUO'…, e nenhum desses é tipo de
+ * hora extra. Aceitar qualquer coisa aqui seria escolher um preço no chute.
+ *
+ * ⚠️ `tipo` NÃO é campo livre: ele alimenta o breakdown por tipo do Monitor
+ * (`db/escalaQueries.js:168`) e, funcionalmente, a exclusão da equipe de
+ * USO MUTUO do alerta de offline (`public/index.html:8012`). Se algum dia os
+ * dois usos divergirem, `tipo_breve` é o lugar certo pro tipo de HE.
+ */
+function tipoHeDaEquipe(cad) {
+  if (!cad) return null;
+  const norm = v => (v == null ? null : String(v).toUpperCase().trim());
+  const tb = norm(cad.tipo_breve);
+  if (tb && TIPOS_BREVE.includes(tb)) return tb;
+  const t = norm(cad.tipo);
+  return t && TIPOS_BREVE.includes(t) ? t : null;
+}
+
+/**
  * Cadastro HE por equipe. Fallback pro schema sem as colunas novas, no molde
  * de `services/equipesOficiais.js:219/226`: consultar antes de rodar
  * `scripts/migrar-he-cadastro.js` não pode derrubar a tela.
@@ -316,7 +343,7 @@ const _COLS_HE = 'cidade, tipo_breve, servico, he_revisado';
 async function _cadastroEquipes(pool) {
   try {
     const { rows } = await pool.query(
-      `SELECT upper(btrim(sigla)) AS sigla, regional, ${_COLS_HE}
+      `SELECT upper(btrim(sigla)) AS sigla, regional, tipo, ${_COLS_HE}
          FROM public.equipes_oficiais WHERE ativo`);
     return { mapa: new Map(rows.map(r => [r.sigla, r])), temCadastro: true };
   } catch (err) {
@@ -324,7 +351,7 @@ async function _cadastroEquipes(pool) {
     console.warn('[he] cadastro HE ausente no schema — '
       + 'rode scripts/migrar-he-cadastro.js --apply');
     const { rows } = await pool.query(
-      `SELECT upper(btrim(sigla)) AS sigla, regional
+      `SELECT upper(btrim(sigla)) AS sigla, regional, tipo
          FROM public.equipes_oficiais WHERE ativo`);
     return { mapa: new Map(rows.map(r => [r.sigla, r])), temCadastro: false };
   }
@@ -473,19 +500,23 @@ async function medicaoHe(de, ate, opts = {}) {
     // `notasExecutadas` vem vazio de propósito (ver wpaService.js:1678), então
     // `executadas` não serve pra mês fechado. `_qtd_executadas` segue no
     // objeto pra Fase 4 conferir se a planilha usa a outra contagem.
+    // O tipo que dita o preço pode vir de `tipo_breve` ou de `tipo` — ver
+    // `tipoHeDaEquipe`. A linha mostra o RESOLVIDO, senão a tela diria "sem
+    // cadastro" numa equipe que tem preço.
+    const tipoHe = tipoHeDaEquipe(cad);
     const linha = montarLinhaHe({
       equipe, dia,
-      cadastro:  cad ? { ...cad, regional: reg } : { regional: reg },
+      cadastro:  { ...(cad || {}), regional: reg, tipo_breve: tipoHe },
       janela, sessao, he,
-      valorHora: cad && cad.tipo_breve ? (valores[cad.tipo_breve] ?? null) : null,
+      valorHora: tipoHe ? (valores[tipoHe] ?? null) : null,
       ultima:    ultimaNotaDaSessao(ultimoSnap.data),
       qtd:       ultimoSnap.concluidas,
     });
     linha._qtd_executadas = ultimoSnap.executadas;
     linhas.push(linha);
 
-    if (!cad || !cad.tipo_breve) semCadastro.add(equipe);
-    else if (!cad.he_revisado) naoRevisadas.add(equipe);
+    if (!tipoHe) semCadastro.add(equipe);
+    else if (cad && cad.tipo_breve && !cad.he_revisado) naoRevisadas.add(equipe);
   }
 
   linhas.sort((a, b) => a.data.localeCompare(b.data) || a.equipe.localeCompare(b.equipe));
@@ -544,4 +575,5 @@ module.exports = {
   ultimaNotaDaSessao,
   fmtParede,
   montarLinhaHe,
+  tipoHeDaEquipe,
 };
