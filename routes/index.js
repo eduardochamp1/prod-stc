@@ -1875,6 +1875,91 @@ function _validateEquipe(body) {
   return errors;
 }
 
+// ── VALORES/HORA DA MEDIÇÃO HE ──────────────────────────────────────────────
+// Preço de contrato por tipo de turma (A1/A2/A3/L0M/L1/L3). Editável sem
+// deploy, porque reajuste não pode exigir subir código.
+//
+// Sob `router.use('/admin', requireAdmin)` — e é rota PRÓPRIA, não o
+// `/settings/:key` genérico, que já teve furo de IDOR (P1-18).
+//
+// ⚠️ ISTO É DINHEIRO. A validação é fechada: só os 6 tipos do contrato, só
+// número positivo, e com teto — um zero a mais digitado sem querer multiplica
+// a fatura por 10 e ninguém confere 600 linhas na mão.
+const HE_VALOR_MAX = 10000;
+
+// GET /api/admin/he-valores
+router.get('/admin/he-valores', async (_req, res) => {
+  try {
+    const { TIPOS_BREVE, VALORES_HORA_SEED } = require('../db/heCadastroSeed');
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'banco indisponível' });
+    const row = await sq.getSetting('he-valores-hora');
+    const salvos = (row && row.data) || null;
+    res.json({
+      tipos: TIPOS_BREVE,
+      valores: salvos || VALORES_HORA_SEED,
+      origem: salvos ? 'app_settings' : 'seed',
+      atualizado_em: (row && row.updated_at) || null,
+      seed: VALORES_HORA_SEED,       // pra tela poder mostrar de onde veio
+      max: HE_VALOR_MAX,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/he-valores  { valores: { A1: 356.63, ... } }
+router.put('/admin/he-valores', async (req, res) => {
+  const { TIPOS_BREVE } = require('../db/heCadastroSeed');
+  const entrada = (req.body && req.body.valores) || null;
+  if (!entrada || typeof entrada !== 'object') {
+    return res.status(400).json({ error: 'envie { valores: { TIPO: número } }' });
+  }
+
+  // Chave desconhecida é ERRO, não é ignorada: se a tela mandar "A4", quem
+  // digitou precisa saber que não foi salvo, em vez de descobrir na fatura.
+  const desconhecidas = Object.keys(entrada).filter(k => !TIPOS_BREVE.includes(k));
+  if (desconhecidas.length) {
+    return res.status(400).json({
+      error: `tipo(s) fora do contrato: ${desconhecidas.join(', ')}. `
+           + `Aceitos: ${TIPOS_BREVE.join('/')}`,
+    });
+  }
+
+  const valores = {};
+  for (const t of TIPOS_BREVE) {
+    if (entrada[t] === undefined || entrada[t] === null || entrada[t] === '') continue;
+    const n = Number(entrada[t]);
+    if (!Number.isFinite(n) || n <= 0) {
+      return res.status(400).json({ error: `${t}: valor deve ser número maior que zero` });
+    }
+    if (n > HE_VALOR_MAX) {
+      return res.status(400).json({
+        error: `${t}: R$ ${n} passa do teto de R$ ${HE_VALOR_MAX}/h. `
+             + 'Se estiver certo, o teto precisa ser revisto no código — '
+             + 'a guarda existe porque um zero a mais multiplica a fatura.',
+      });
+    }
+    // 2 casas: valor/hora de contrato é em centavos, e mais casas só criariam
+    // divergência de arredondamento contra a planilha.
+    valores[t] = Math.round(n * 100) / 100;
+  }
+  if (!Object.keys(valores).length) {
+    return res.status(400).json({ error: 'nenhum valor válido enviado' });
+  }
+
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'banco indisponível' });
+    await sq.setSetting('he-valores-hora', valores);
+    console.log(`[admin/he-valores] atualizado por ${req.user && req.user.username}: `
+      + Object.entries(valores).map(([t, v]) => `${t}=${v}`).join(' '));
+    res.json({ ok: true, valores });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/equipes — lista todas (incluindo inativas)
 router.get('/admin/equipes', async (_req, res) => {
   try {

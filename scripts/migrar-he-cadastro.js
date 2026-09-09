@@ -122,15 +122,6 @@ async function main() {
       return;
     }
 
-    console.log('→ valores/hora em app_settings…');
-    await client.query(
-      `INSERT INTO public.app_settings (key, value, updated_at)
-            VALUES ('he-valores-hora', $1::jsonb, now())
-       ON CONFLICT (key) DO UPDATE
-            SET value = EXCLUDED.value, updated_at = now()`,
-      [JSON.stringify(VALORES_HORA_SEED)]);
-    console.log('  ok');
-
     console.log('→ cadastro por equipe…');
     let atualizadas = 0;
     const ausentes = [];
@@ -163,8 +154,31 @@ async function main() {
     }
 
     await client.query('COMMIT');
-    console.log('\n✔ aplicado.');
-    console.log('  PRÓXIMO PASSO: revisar o cadastro no Admin. Enquanto');
+    console.log('\n✔ cadastro aplicado.');
+
+    // ⚠️ FORA da transação do cadastro, de propósito.
+    //
+    // Na 1ª versão este INSERT estava DENTRO dela e usava a coluna `value`,
+    // que não existe (a coluna é `data` — ver schema-atual.sql:29). O erro
+    // derrubava a transação inteira e levava o cadastro das 45 equipes com
+    // ele: o trabalho valioso se perdia por causa da semente de preço.
+    // Agora a semente é um passo separado, e falhar aqui é ruído, não perda.
+    try {
+      await client.query(
+        `INSERT INTO public.app_settings (key, data, updated_at)
+              VALUES ('he-valores-hora', $1::jsonb, now())
+         ON CONFLICT (key) DO UPDATE
+              SET data = EXCLUDED.data, updated_at = now()`,
+        [JSON.stringify(VALORES_HORA_SEED)]);
+      console.log('✔ valores/hora semeados em app_settings.');
+    } catch (e) {
+      console.error('\n⚠️  cadastro OK, mas a semente de valores/hora falhou:');
+      console.error(`   ${e.message}`);
+      console.error('   O cadastro está salvo. Preencha os valores em Admin → '
+        + 'Valores/hora (HE) — a medição avisa enquanto vierem do seed.');
+    }
+
+    console.log('\n  PRÓXIMO PASSO: revisar o cadastro no Admin. Enquanto');
     console.log('  he_revisado = false, a tela de Medição HE avisa.\n');
   } catch (err) {
     await client.query('ROLLBACK');

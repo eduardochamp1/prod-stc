@@ -883,6 +883,30 @@
             <div id="eq-form" style="display:none;margin-top:12px;padding:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px"></div>
           </div>
 
+          <!-- Valores/hora da Medição HE -->
+          <div>
+            <div class="modal-section-title">⏱ Valores/hora — Medição HE</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Preço de contrato por tipo de turma. Alimenta a coluna VALOR e o
+              VALOR TOTAL da sub-aba <strong>Medição HE</strong> (Histórico).
+              Reajuste é editado aqui, sem deploy.
+              <br><strong>Sem vigência histórica:</strong> re-gerar uma medição
+              antiga usa o preço de hoje. O XLSX carrega na aba PROCEDÊNCIA o
+              valor aplicado e a data de geração — é a evidência do que foi
+              enviado.
+            </div>
+            <div id="he-val-grid" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end"></div>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+              <button class="btn-refresh" onclick="salvarHeValores()"
+                      style="height:36px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
+                💾 Salvar
+              </button>
+              <button class="btn-refresh" onclick="carregarHeValores()"
+                      style="height:36px;padding:0 16px;font-size:12px">↻ Recarregar</button>
+              <span id="he-val-status" style="font-size:11px;color:var(--text2)"></span>
+            </div>
+          </div>
+
           <!-- Contador: dias sem transgressão -->
           <div>
             <div class="modal-section-title">🛡️ Contador — Dias sem Transgressão</div>
@@ -8781,6 +8805,10 @@ ${matrizHTML}
       loadContadorConfig();
       // Carrega o fator de threshold de deslocamento
       loadDeslocThresholdConfig();
+      // Valores/hora da Medição HE. try/catch: falha aqui não pode impedir o
+      // resto do painel Admin de abrir (mesma regra do filtro de equipes).
+      try { carregarHeValores(); }
+      catch (e) { console.warn('[admin] valores HE:', e && e.message); }
       const bfDe = document.getElementById('bf-de');
       const bfAte = document.getElementById('bf-ate');
       if (!bfDe.value) bfDe.value = ontem;
@@ -9417,6 +9445,79 @@ ${matrizHTML}
         if (cac) cac.value = (data.CAC && data.CAC.inicio) || '';
       } catch (err) {
         console.warn('[contador] falha ao carregar config:', err.message);
+      }
+    }
+
+    // ── VALORES/HORA DA MEDIÇÃO HE (Admin) ──────────────────────────────────
+    // Preço de contrato por tipo. A validação de verdade é no backend
+    // (PUT /admin/he-valores) — aqui é só conveniência de digitação.
+    let _heValMax = 10000;
+
+    async function carregarHeValores() {
+      const grid = document.getElementById('he-val-grid');
+      const st = document.getElementById('he-val-status');
+      if (!grid) return;
+      grid.innerHTML = '<span style="font-size:11px;color:var(--text2)">carregando…</span>';
+      try {
+        const d = await fetch(`${API}/admin/he-valores`).then(r => r.json());
+        if (d.error) throw new Error(d.error);
+        _heValMax = d.max || 10000;
+        grid.innerHTML = (d.tipos || []).map(t => `
+          <div class="filter-group" style="flex:1;min-width:120px">
+            <span class="filter-label">${t} — R$/h</span>
+            <input type="number" step="0.01" min="0.01" max="${_heValMax}"
+                   class="month-input" id="he-val-${t}"
+                   value="${d.valores && d.valores[t] != null ? d.valores[t] : ''}"
+                   style="width:100%;border:none;outline:none" />
+          </div>`).join('');
+        if (st) {
+          st.textContent = d.origem === 'app_settings'
+            ? `salvos${d.atualizado_em ? ' em ' + new Date(d.atualizado_em).toLocaleString('pt-BR') : ''}`
+            : 'ainda não salvos — mostrando o seed do código';
+          st.style.color = d.origem === 'app_settings' ? 'var(--text2)' : '#e67e22';
+        }
+      } catch (err) {
+        grid.innerHTML = `<span style="font-size:11px;color:#c0392b">Erro: ${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    async function salvarHeValores() {
+      const st = document.getElementById('he-val-status');
+      const inputs = [...document.querySelectorAll('[id^="he-val-"]')]
+        .filter(el => el.tagName === 'INPUT');
+      const valores = {};
+      for (const el of inputs) {
+        const tipo = el.id.replace('he-val-', '');
+        if (el.value === '') continue;
+        valores[tipo] = Number(el.value);
+      }
+      if (!Object.keys(valores).length) {
+        if (st) { st.textContent = 'nada preenchido'; st.style.color = '#c0392b'; }
+        return;
+      }
+      // Confirmação explícita: isto muda o VALOR TOTAL de toda medição futura,
+      // e o número vai pra EDP. Salvar preço sem um "tem certeza" é barato
+      // demais pro efeito que tem.
+      const resumo = Object.entries(valores)
+        .map(([t, v]) => `${t} = R$ ${v.toFixed(2)}`).join('\n');
+      if (!confirm(`Gravar estes valores/hora?\n\n${resumo}\n\n`
+        + 'Afeta o VALOR TOTAL de toda medição gerada a partir de agora.')) return;
+
+      if (st) { st.textContent = 'salvando…'; st.style.color = 'var(--text2)'; }
+      try {
+        const r = await fetch(`${API}/admin/he-valores`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ valores }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        if (st) { st.textContent = '✔ salvo'; st.style.color = 'var(--verde)'; }
+        // A medição em cache foi calculada com o preço antigo.
+        _heCache = null;
+        await carregarHeValores();
+      } catch (err) {
+        if (st) { st.textContent = 'Erro: ' + err.message; st.style.color = '#c0392b'; }
       }
     }
 

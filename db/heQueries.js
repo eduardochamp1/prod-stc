@@ -330,12 +330,21 @@ async function _cadastroEquipes(pool) {
   }
 }
 
-/** Valores/hora do `app_settings`; cai no seed se a chave não existir. */
+/**
+ * Valores/hora do `app_settings`; cai no seed se a chave não existir.
+ *
+ * ⚠️ A coluna é `data`, não `value`. A 1ª versão lia `value`, o SELECT
+ * estourava, o catch engolia e a tela mostrava "Valores/hora vindos do seed do
+ * código" — que é justamente o aviso que existe pra esse caso, e foi o que
+ * revelou o erro em 09/09/2026. O nome certo está em `db/schema-atual.sql:29`
+ * e nos dois usos que já existiam (`db/queries.js:988` e
+ * `db/deslocamentosQueries.js:123`).
+ */
 async function _valoresHora(pool) {
   try {
     const { rows } = await pool.query(
-      `SELECT value FROM public.app_settings WHERE key = 'he-valores-hora'`);
-    const v = rows[0] && rows[0].value;
+      `SELECT data FROM public.app_settings WHERE key = 'he-valores-hora'`);
+    const v = rows[0] && rows[0].data;
     const obj = typeof v === 'string' ? JSON.parse(v) : v;
     if (obj && typeof obj === 'object') {
       // Só os tipos do contrato, e só número positivo — chave estranha no
