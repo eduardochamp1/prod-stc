@@ -5570,11 +5570,18 @@ ${matrizHTML}
         ${avisosHTML}
 
         <div class="desloc-panel">
-          <!-- ⚠️ FLEX, não float. Com `float:right` nos botões, o container da
-               tabela (que tem overflow:auto, logo é um bloco de formatação
-               novo) ENCOLHE pra desviar do float — é regra do CSS, não bug do
-               navegador. A tabela perdia ~350px de largura e sobrava um vão à
-               direita, abaixo dos botões. Reportado em 09/09/2026. -->
+          <!-- FLEX, nao float. Com float:right nos botoes, o container da
+               tabela (que tem overflow:auto, logo e um bloco de formatacao
+               novo) ENCOLHE pra desviar do float: e regra do CSS, nao bug do
+               navegador. Medido em 09/09/2026: container 733px num painel de
+               1026px, 265px perdidos.
+               ATENCAO: este comentario esta DENTRO de um template literal.
+               Crase aqui FECHA a string e derruba o script INTEIRO — nao so
+               esta tela. Aconteceu em 09/09/2026: a 1a versao marcava o nome
+               da propriedade CSS entre crases, o painel parou com
+               "SyntaxError: Unexpected identifier float" e nada renderizou.
+               Sem crase, sem acento, sem cifrao-chave aqui dentro.
+               Ver test/htmlScriptSintaxe.test.js. -->
           <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
             <span>Medição — ${_heDataBR(d.periodo?.de)} a ${_heDataBR(d.periodo?.ate)}</span>
             <button class="btn-refresh" onclick="_heCache=null;loadHeMedicao()"
