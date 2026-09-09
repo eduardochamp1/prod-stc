@@ -83,7 +83,13 @@ async function main() {
     `WITH ultimo AS (
        SELECT DISTINCT ON (team_name, session_begin)
               upper(btrim(team_name)) AS equipe, regional,
-              session_begin, session_end,
+              session_begin,
+              -- ATENCAO: sem crase aqui dentro. Este comentario SQL vive num
+              -- template literal, e crase fecha a string. Ver o COALESCE em
+              -- db/heQueries.js: o job das 03:00 grava o logoff so no jsonb.
+              COALESCE(session_end, data->>'sessionEnd', data->>'session_end') AS session_end,
+              session_end AS session_end_coluna,
+              data->>'sessionEnd' AS session_end_payload,
               to_char(captured_at AT TIME ZONE 'America/Sao_Paulo',
                       'YYYY-MM-DD"T"HH24:MI:SS') AS visto_em
          FROM public.snapshots
@@ -99,10 +105,22 @@ async function main() {
   if (!rows.length) { console.log('Nenhuma sessão no período.\n'); return; }
 
   const abertas = rows.filter(r => !r.session_end);
+  // Quantas dependem do jsonb pra ter logoff. Foi o que enganou a 1ª execução
+  // deste script: 277 "abertas" que na verdade tinham o logoff gravado pelo
+  // job das 03:00, só não na coluna.
+  const soNoPayload = rows.filter(r => !r.session_end_coluna && r.session_end_payload);
   console.log(`Sessões no período:        ${rows.length}`);
   console.log(`Com logoff registrado:     ${rows.length - abertas.length}`);
   console.log(`SEM logoff (abertas):      ${abertas.length}`
     + `  (${(100 * abertas.length / rows.length).toFixed(1)}%)\n`);
+
+  console.log('── Onde o logoff está gravado ──\n');
+  console.log(`  Só no jsonb, coluna NULL:  ${soNoPayload.length}`);
+  console.log('  Estas são turnos que atravessam a meia-noite: o logoff vem do');
+  console.log('  job runSyncLogoffs (03:00), que grava apenas o payload —');
+  console.log('  services/cronService.js:1619. Ler só a coluna as tratava como');
+  console.log('  sessão aberta e subnotificava a prorrogação do turno noturno.');
+  console.log('  ⇒ A medição usa COALESCE(coluna, payload) desde 09/09/2026.\n');
 
   if (!abertas.length) {
     console.log('✔ Nenhuma sessão aberta no período — nada a analisar.\n');
@@ -140,14 +158,17 @@ async function main() {
   const semLogoff   = classificadas.filter(c => !c.relogouDepois);
 
   console.log('── Classificação ──\n');
-  console.log(`(b) Logoff fora do alcance da medição: 0`);
-  console.log(`    Descartada por construção: a busca cobriu ${DIAS} dia(s) além`);
-  console.log(`    do período e nenhuma delas tem logoff em NENHUM snapshot.`);
-  console.log(`    ⇒ Ampliar o lookahead da medição NÃO resolveria.\n`);
-  console.log(`(c) Sessão ABANDONADA (equipe logou de novo depois): ${abandonadas.length}`);
-  console.log(`    A sessão antiga é lixo — não deveria virar linha de cobrança.\n`);
-  console.log(`(a) Equipe simplesmente não deslogou: ${semLogoff.length}`);
-  console.log(`    Comportamento de campo. A prorrogação é imensurável.\n`);
+  console.log(`Busca cobriu ${DIAS} dia(s) além do período, e nem a coluna nem o`);
+  console.log('payload têm logoff pra estas. Ampliar o lookahead não resolve.\n');
+  console.log(`(c) Relogou depois: ${abandonadas.length}`);
+  console.log('    ⚠️ NÃO CONCLUA "abandono" só por isso. Turno diário relogá');
+  console.log('    todo dia no mesmo horário — na 1ª execução deste script, em');
+  console.log('    09/09/2026, o critério "logou de novo = abandonada" rotulou');
+  console.log('    259 turnos noturnos legítimos como lixo. Abandono de verdade');
+  console.log('    é o relogin MUITO antes do turno seguinte; olhe a coluna');
+  console.log('    "relogou depois" na lista e compare com o horário do login.\n');
+  console.log(`(a) Sem relogin posterior: ${semLogoff.length}`);
+  console.log('    Prorrogação imensurável. Estas cobram só a antecipação.\n');
 
   // ── Reincidência ──────────────────────────────────────────────────────────
   const porEquipe = new Map();

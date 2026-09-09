@@ -112,6 +112,50 @@ test('nenhum caractere de controle solto no arquivo', () => {
     `caractere de controle 0x${controle ? controle[0].charCodeAt(0).toString(16) : ''} no arquivo`);
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TODO arquivo de scripts/ compila
+//
+// ── POR QUE ISTO EXISTE (2ª vez no mesmo dia, 09/09/2026) ───────────────────
+// Depois do incidente da crase no index.html, cometi o MESMO erro num
+// comentário SQL dentro de um template literal em
+// `scripts/diag-he-sessoes-abertas.js`. A suíte passou 962/962 verde porque:
+//   • o teste acima só olha public/index.html;
+//   • `node --test` carrega db/, services/ e routes/ por `require`, então erro
+//     de sintaxe lá quebra algum teste — mas NINGUÉM importa scripts/.
+// Os scripts são justamente o que roda direto em produção, à mão, com o dedo
+// do operador. Eram o único diretório de JS sem nenhuma verificação.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DIR_SCRIPTS = path.join(__dirname, '..', 'scripts');
+
+test('todo .js de scripts/ compila', () => {
+  const arquivos = fs.readdirSync(DIR_SCRIPTS).filter(f => f.endsWith('.js'));
+  assert.ok(arquivos.length > 5, `esperava vários scripts, achei ${arquivos.length}`);
+  for (const f of arquivos) {
+    const codigo = fs.readFileSync(path.join(DIR_SCRIPTS, f), 'utf8');
+    try {
+      new vm.Script(codigo, { filename: `scripts/${f}` });
+    } catch (err) {
+      assert.fail(`scripts/${f} NÃO COMPILA:\n  ${err.message}\n`
+        + '  Suspeito frequente: crase dentro de template literal — inclusive em\n'
+        + '  comentário SQL, que foi o erro de 09/09/2026.');
+    }
+  }
+});
+
+test('nenhum comentário SQL com crase dentro de template literal', () => {
+  // Defesa específica: comentário `--` dentro de uma query em template literal
+  // é onde a crase reapareceu depois de eu já ter documentado o perigo.
+  const culpados = [];
+  for (const f of fs.readdirSync(DIR_SCRIPTS).filter(x => x.endsWith('.js'))) {
+    const codigo = fs.readFileSync(path.join(DIR_SCRIPTS, f), 'utf8');
+    for (const linha of codigo.split('\n')) {
+      if (/^\s*--/.test(linha) && linha.includes('`')) culpados.push(`${f}: ${linha.trim()}`);
+    }
+  }
+  assert.deepEqual(culpados, []);
+});
+
 test('o BOM não aparece DENTRO de nenhum bloco de script', () => {
   // No meio do JS, aí sim ele quebra o parse. (Cobertura de verdade: o teste de
   // compilação acima pegaria, mas a mensagem aqui é bem mais direta.)

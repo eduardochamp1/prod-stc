@@ -518,3 +518,42 @@ test('o piso é parametrizável pra teste, mas o padrão é o do contrato', () =
   assert.equal(temHe(he), false, 'padrão de 60s reprova');
   assert.equal(temHe(he, 10), true, 'com piso de 10s passa');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// O logoff pode estar SÓ no jsonb — bug medido em 09/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HEQ_SRC = require('node:fs').readFileSync(
+  require('node:path').join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
+
+test('a query de sessões usa COALESCE(coluna, payload) pro logoff', () => {
+  // `dataWriter.saveSnapshot` grava a coluna `session_end` no snapshot, mas o
+  // job runSyncLogoffs (03:00) — que pega o logoff de quem saiu depois do
+  // último snapshot — atualiza SÓ o jsonb. Lendo apenas a coluna, 277 de 2.137
+  // sessões (13%) apareciam como abertas: eram turnos noturnos, e a
+  // prorrogação de todo turno que atravessa a meia-noite ficava subnotificada.
+  const i = HEQ_SRC.indexOf('DISTINCT ON (team_name, session_begin)');
+  assert.ok(i > -1, 'não achei a query de sessões');
+  const bloco = HEQ_SRC.slice(i, i + 600);
+  assert.match(bloco,
+    /COALESCE\(session_end, data->>'sessionEnd', data->>'session_end'\) AS session_end/);
+});
+
+test('as duas grafias do payload entram no COALESCE', () => {
+  // `cronService` lê `data?.sessionEnd || data?.session_end` — as duas existem
+  // no histórico, então ignorar uma perderia sessão antiga.
+  const i = HEQ_SRC.indexOf("COALESCE(session_end, data->>'sessionEnd'");
+  const bloco = HEQ_SRC.slice(i, i + 120);
+  assert.match(bloco, /data->>'sessionEnd'/);
+  assert.match(bloco, /data->>'session_end'/);
+});
+
+test('o motivo do COALESCE está escrito, com o file:line da causa', () => {
+  // Sem isso, a próxima pessoa "simplifica" pra ler só a coluna indexada e o
+  // bug volta — foi exatamente o raciocínio que me levou a ele.
+  const i = HEQ_SRC.indexOf('O LOGOFF PODE ESTAR SÓ NO JSONB');
+  assert.ok(i > -1, 'o aviso tem de estar no código, não só no commit');
+  const bloco = HEQ_SRC.slice(i, i + 1400);
+  assert.match(bloco, /cronService\.js:\d+/, 'aponta o job que grava só o payload');
+  assert.match(bloco, /dataWriter\.js:\d+/, 'e quem grava a coluna');
+});

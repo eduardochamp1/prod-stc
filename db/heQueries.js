@@ -464,9 +464,30 @@ async function medicaoHe(de, ate, opts = {}) {
   //
   // DISTINCT ON (equipe, session_begin) + captured_at DESC = o último estado
   // conhecido de cada sessão, que é onde o `session_end` final vive.
+  //
+  // ⚠️ O LOGOFF PODE ESTAR SÓ NO JSONB — e por isso o COALESCE.
+  //
+  // `dataWriter.saveSnapshot` (`services/dataWriter.js:48`) grava a coluna
+  // `session_end` no momento do snapshot. Mas o job `runSyncLogoffs`, das
+  // 03:00 (`services/cronService.js:1619`), que existe justamente pra pegar o
+  // logoff de quem saiu DEPOIS do último snapshot do dia, atualiza apenas o
+  // payload: `update({ data: newData })`. A coluna fica NULL.
+  //
+  // Consequência medida em 09/09/2026: 277 de 2.137 sessões (13%) apareciam
+  // como ABERTAS na medição — quase todas de PLANTÃO (`EP*`), com login à
+  // tarde/noite e último snapshot sempre às 23:45. Não eram sessões abertas
+  // nem abandonadas: eram TURNOS NOTURNOS cujo logoff o job das 03:00 gravou
+  // no jsonb. Ler só a coluna subnotificava a prorrogação de todo turno que
+  // atravessa a meia-noite.
+  //
+  // O código antigo do painel (`db/queries.js:402`) sempre leu do payload; eu
+  // preferi a coluna por ser indexada, e ela é justamente a que o back-fill
+  // não mantém. As duas grafias entram no COALESCE porque `cronService` aceita
+  // ambas ao ler.
   const { rows: sesRows } = await pool.query(
     `SELECT DISTINCT ON (team_name, session_begin)
-            upper(btrim(team_name)) AS equipe, regional, session_begin, session_end,
+            upper(btrim(team_name)) AS equipe, regional, session_begin,
+            COALESCE(session_end, data->>'sessionEnd', data->>'session_end') AS session_end,
             concluidas, executadas, data
        FROM public.snapshots
       WHERE date BETWEEN $1::date AND $2::date
