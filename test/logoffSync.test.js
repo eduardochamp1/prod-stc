@@ -229,3 +229,23 @@ test('grava a COLUNA e o JSONB juntos', () => {
   // Idempotência: só toca linha sem fim, e nunca sobrescreve.
   assert.match(bloco, /COALESCE\(session_end, data->>'sessionEnd', data->>'session_end'\) IS NULL/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// O script não pode confundir "hoje em curso" com falha de captura
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('o script marca e separa as sessões de HOJE', () => {
+  // 09/09/2026: eu mandei conferir o conserto com um intervalo que incluía
+  // hoje. Apareceram 35 sessões abertas — todas de equipes em campo naquele
+  // momento — e o número pareceu falha do conserto. Era o esperado: o dia não
+  // acabou. Juízo sobre captura só vale em dia fechado.
+  const S = fs.readFileSync(
+    path.join(__dirname, '..', 'scripts', 'recuperar-logoffs.js'), 'utf8');
+  assert.match(S, /HOJE SEMPRE TEM SESSÃO ABERTA/);
+  assert.match(S, /const HOJE = dateBRT\(\)/);
+  assert.match(S, /p\.dia >= HOJE/);
+  assert.match(S, /esperado, não é falha de captura/);
+  // Se TUDO que sobrou é de hoje, o script conclui limpo em vez de alarmar.
+  assert.match(S, /deHoje === total/);
+  assert.match(S, /Fora de hoje, nenhuma sessão sem logoff/);
+});

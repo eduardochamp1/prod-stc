@@ -33,6 +33,7 @@ require('dotenv').config();
 
 const { _getPool } = require('../services/pgShim');
 const { sessoesSemFim, sincronizarDia } = require('../db/logoffSync');
+const { dateBRT } = require('../services/timeUtil');
 
 function arg(nome, padrao) {
   const i = process.argv.indexOf(`--${nome}`);
@@ -84,14 +85,36 @@ async function main() {
     return;
   }
 
+  // ⚠️ HOJE SEMPRE TEM SESSÃO ABERTA — e não é defeito.
+  //
+  // O dia não acabou: as equipes estão em campo e a sessão está legitimamente
+  // sem fim. Em 09/09/2026 eu mandei o José conferir o conserto do P1-47 com
+  // um intervalo que INCLUÍA hoje, ele viu 35 sessões abertas e o número
+  // parecia falha do conserto. Era o esperado. Marcar aqui evita a leitura
+  // errada — e o dia de HOJE nunca deveria entrar num juízo sobre captura.
+  const HOJE = dateBRT();
   const total = pendentes.reduce((s, p) => s + p.abertas.length, 0);
+  const deHoje = pendentes.filter(p => p.dia >= HOJE)
+    .reduce((s, p) => s + p.abertas.length, 0);
+
   console.log(`\n${total} sessão(ões) sem logoff em ${pendentes.length} dia(s):\n`);
   for (const p of pendentes) {
     const porSetor = new Map();
     for (const a of p.abertas) porSetor.set(a.sector_id, (porSetor.get(a.sector_id) || 0) + 1);
     const detalhe = [...porSetor.entries()].sort()
       .map(([s, n]) => `${s} ${n}`).join(' · ');
-    console.log(`  ${p.dia}  ${String(p.abertas.length).padStart(3)}   ${detalhe}`);
+    const marca = p.dia >= HOJE ? '  ← HOJE, em curso' : '';
+    console.log(`  ${p.dia}  ${String(p.abertas.length).padStart(3)}   ${detalhe}${marca}`);
+  }
+
+  if (deHoje > 0) {
+    console.log(`\n⚠️  ${deHoje} de ${total} são de HOJE (${HOJE}) — sessão em curso,`);
+    console.log('   esperado, não é falha de captura. Pra julgar a captura, use');
+    console.log('   um intervalo que termine ONTEM ou antes.');
+    if (deHoje === total) {
+      console.log('\n✔ Fora de hoje, nenhuma sessão sem logoff no período.\n');
+      return;
+    }
   }
 
   if (!APPLY) {
