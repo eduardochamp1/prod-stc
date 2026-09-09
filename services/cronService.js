@@ -1562,72 +1562,56 @@ function stopCron() {
 async function runSyncLogoffs(targetDate) {
   if (process.env.DATA_MODE === 'mock') return;
 
-  const { getSessionsByDate } = require('./wpaService');
-  const { getClient } = require('./dbClient');
-  const sb = getClient();
-  if (!sb) return;
+  const { getSessionsByDate, isSectorDisabled } = require('./wpaService');
+  const { _getPool } = require('./pgShim');
+  const { sincronizarDia, diaMenos } = require('../db/logoffSync');
+  const { dateBRT } = require('./timeUtil');
 
-  // Default: dia anterior (BRT). Se passou dia específico, usa esse.
-  const date = targetDate || new Date(Date.now() - (3 + 24) * 3600 * 1000).toISOString().slice(0, 10);
+  const pool = _getPool();
+  if (!pool) return;
 
-  console.log(`[CRON] sync-logoffs: buscando sessões finalizadas de ${date}`);
-  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
-  const ENGELMIG_COMPANY_ID = process.env.WPA_COMPANY_ID || '92a2f98e-8877-433e-8358-173b94c13a54';
+  const ENGELMIG_COMPANY_ID = process.env.WPA_COMPANY_ID
+    || '92a2f98e-8877-433e-8358-173b94c13a54';
+
+  // ⚠️ D-1 **E** D-2 — conserto do P1-47 (09/09/2026).
+  //
+  // Este job rodava só pra D-1, às 03:00, e filtrava apenas sessão que JÁ
+  // tinha `EndTime`. Turno que entra 20:00 e sai 05:00 ainda está ABERTO às
+  // 03:00: o job o via sem fim, pulava, e NUNCA voltava àquela data. Resultado
+  // medido em 16-31/08: 113 sessões sem logoff, todas com o fim disponível na
+  // EDP — a prorrogação de todo turno noturno se perdia, e é o turno em que
+  // hora extra mais acontece.
+  //
+  // Com D-2 o turno ganha ~24h pra fechar antes de a gente perguntar, e o
+  // horário do cron deixa de importar. Reprocessar é seguro: `sessoesSemFim`
+  // só devolve o que está sem fim, e `gravarFim` nunca sobrescreve.
+  const hoje = targetDate ? null : dateBRT();
+  const dias = targetDate ? [targetDate] : [diaMenos(hoje, 1), diaMenos(hoje, 2)];
 
   let totalUpdated = 0;
-  for (const sectorId of SETORES) {
-    if (isSectorDisabled(sectorId)) continue;   // conta desativada — pula (P1-21)
+  const porDia = [];
+  for (const dia of dias) {
     try {
-      const sessions = await getSessionsByDate(sectorId, date);
-      // Filtra só Engelmig + com EndTime preenchido (= sessões realmente fechadas)
-      const fechadas = sessions.filter(s =>
-        s.Team?.CompanyId === ENGELMIG_COMPANY_ID && s.EndTime && s.EndTime !== '0001-01-01T00:00:00'
-      );
-      if (fechadas.length === 0) {
-        console.log(`[CRON] sync-logoffs: ${sectorId} sem sessões fechadas`);
-        continue;
-      }
-
-      // Para cada sessão fechada, atualiza o snapshot mais recente daquela
-      // equipe que ainda tem sessionEnd=null (= snapshot da sessão aberta).
-      for (const s of fechadas) {
-        const teamName = s.Team?.Name || s.Team?.ExternalReference;
-        if (!teamName) continue;
-        const beginTime = s.BeginTime;
-        const endTime   = s.EndTime;
-
-        // Busca último snap dessa equipe cujo sessionBegin bate
-        const { data: rows } = await sb
-          .from('snapshots')
-          .select('id, data, captured_at')
-          .eq('team_name', teamName)
-          .gte('date', date)
-          .order('captured_at', { ascending: false })
-          .limit(20);
-
-        if (!rows || rows.length === 0) continue;
-
-        // Acha o snap com sessionBegin == beginTime E sessionEnd null (precisa atualizar)
-        const snap = rows.find(r => {
-          const sb1 = r.data?.sessionBegin || r.data?.session_begin;
-          const se1 = r.data?.sessionEnd || r.data?.session_end;
-          return sb1 === beginTime && !se1;
-        });
-        if (!snap) continue;
-
-        // Atualiza o sessionEnd no payload
-        const newData = { ...snap.data, sessionEnd: endTime };
-        const { error } = await sb.from('snapshots').update({ data: newData }).eq('id', snap.id);
-        if (!error) totalUpdated++;
-        else console.warn(`[CRON] sync-logoffs: falha update ${teamName}: ${error.message}`);
-      }
-      console.log(`[CRON] sync-logoffs: ${sectorId} - ${fechadas.length} sessões fechadas processadas`);
+      const r = await sincronizarDia(pool, getSessionsByDate, dia, {
+        companyId: ENGELMIG_COMPANY_ID,
+        setorDesabilitado: isSectorDisabled,   // P1-21: conta desativada não é erro
+        log: msg => console.log(`[CRON] ${msg}`),
+      });
+      totalUpdated += r.gravadas;
+      porDia.push(r);
     } catch (err) {
-      console.warn(`[CRON] sync-logoffs: ${sectorId} falhou: ${err.message}`);
+      console.warn(`[CRON] sync-logoffs: ${dia} falhou: ${err.message}`);
+      porDia.push({ dia, abertas: 0, gravadas: 0, semPar: 0, falhas: [{ erro: err.message }] });
     }
   }
-  console.log(`[CRON] sync-logoffs: ✓ ${totalUpdated} snapshots atualizados com sessionEnd`);
-  return { date, updated: totalUpdated };
+
+  const semPar = porDia.reduce((s, r) => s + (r.semPar || 0), 0);
+  console.log(`[CRON] sync-logoffs: ✓ ${totalUpdated} sessão(ões) com sessionEnd `
+    + `recuperado em ${dias.length} dia(s)`
+    + (semPar ? ` · ${semPar} sem par na EDP` : ''));
+  // `date` mantido no retorno pra não quebrar chamador antigo (scripts que
+  // passam targetDate e leem res.date/res.updated).
+  return { date: dias[0], dias, updated: totalUpdated, semPar, porDia };
 }
 
 module.exports = {

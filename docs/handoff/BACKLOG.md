@@ -144,7 +144,7 @@
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
 | P2-49 | Fonte Roboto nunca carregou: `roboto.css` não existe (só os TTF) — painel roda no fallback desde 08/07; P1-9 foi fechado com o critério desmarcado | Frontend | pending — causa isolada 09/09, conserto é 1 arquivo |
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
-| P1-47 | `runSyncLogoffs` roda às 03:00 e processa só o dia anterior: turno que sai depois disso NUNCA tem logoff capturado — a Medição HE perde a prorrogação de todo turno noturno | Dados/Cobrança | pending — causa isolada 09/09; `scripts/recuperar-logoffs.js` recupera o histórico |
+| P1-47 | `runSyncLogoffs` perdia o logoff de todo turno que sai depois das 03:00 — a Medição HE perdia a prorrogação do turno noturno | Dados/Cobrança | **done** (09/09) — D-1+D-2, busca sem janela, casamento por instante, grava coluna+jsonb; 18 testes. Histórico de 16-31/08 recuperado (113/113) |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 
 ---
@@ -4983,7 +4983,7 @@ mesmo ponto cego, o que reforça o item.
 ## P1-47 — `runSyncLogoffs` roda às 03:00 e perde todo turno que sai depois
 
 - **Categoria:** Dados/Cobrança
-- **Status:** pending — **causa isolada 09/09/2026**; recuperação do histórico
+- **Status:** **done** (09/09/2026) — os três defeitos consertados em `db/logoffSync.js`, usado pelo cron E pelo script; 18 testes. Histórico de 16-31/08 recuperado (113/113). Antes dizia: pending, causa isolada; recuperação do histórico
   já disponível em `scripts/recuperar-logoffs.js`
 - **Origem:** observação do José, 09/09/2026, sobre a Medição HE: *"não faz
   sentido termos sessão em aberto de um dia fechado"*. Está certo — sessão de
