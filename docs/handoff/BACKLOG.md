@@ -144,6 +144,7 @@
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
 | P2-49 | Fonte Roboto nunca carregou: `roboto.css` não existe (só os TTF) — painel roda no fallback desde 08/07; P1-9 foi fechado com o critério desmarcado | Frontend | pending — causa isolada 09/09, conserto é 1 arquivo |
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
+| P1-47 | `runSyncLogoffs` roda às 03:00 e processa só o dia anterior: turno que sai depois disso NUNCA tem logoff capturado — a Medição HE perde a prorrogação de todo turno noturno | Dados/Cobrança | pending — causa isolada 09/09; `scripts/recuperar-logoffs.js` recupera o histórico |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 
 ---
@@ -4976,3 +4977,58 @@ mesmo ponto cego, o que reforça o item.
 - **Relacionado:** P1-9 (que devia ter feito isto), e o P0-1 (bus factor:
   ninguém percebeu por 2 meses).
 - **Fonte:** console do José, 09/09/2026, durante a validação da Medição HE.
+
+---
+
+## P1-47 — `runSyncLogoffs` roda às 03:00 e perde todo turno que sai depois
+
+- **Categoria:** Dados/Cobrança
+- **Status:** pending — **causa isolada 09/09/2026**; recuperação do histórico
+  já disponível em `scripts/recuperar-logoffs.js`
+- **Origem:** observação do José, 09/09/2026, sobre a Medição HE: *"não faz
+  sentido termos sessão em aberto de um dia fechado"*. Está certo — sessão de
+  dia fechado TEM fim; a equipe foi pra casa. Se não está no banco, é falha de
+  captura, não estado real.
+- **Evidência:** `services/cronService.js:1487` agenda o job às **03:00** e
+  `:1571` faz ele processar **o dia anterior**. O filtro em `:1583` só aceita
+  sessão que já tem `EndTime`:
+  ```js
+  const fechadas = sessions.filter(s => ... s.EndTime && s.EndTime !== '0001-01-01T00:00:00')
+  ```
+  Um turno que entra 20:00 e sai 05:00 **ainda está aberto às 03:00**. O job o
+  vê sem fim, pula — e **nunca volta àquela data**. O logoff existe na EDP;
+  paramos de perguntar.
+
+  Medido no período 16–31/08/2026 com `scripts/diag-he-sessoes-abertas.js`:
+  113 sessões sem logoff, e as cinco equipes mais reincidentes são todas de
+  turno noturno — `EPGPR30` (14, login 20:00), `EPPTE04` (12, 21:00),
+  `EPAVP38` (8, 21:11), `EPCIT33` (7, 17:00), `EPCIT32` (7). Somam 48.
+- **Impacto — é dinheiro, e é permanente.** Sem `sessionEnd` a Medição HE não
+  mede prorrogação, e a linha cobra só a antecipação. No período medido a
+  prorrogação é **344,73 h** contra **55,55 h** de antecipação: nessas linhas
+  está saindo justamente a parte grande. Atinge o turno NOTURNO, que é onde
+  hora extra mais acontece. **Toda noite, desde sempre.**
+- **Não é o mesmo que o P1-39.** Daquele incidente (coleta SJC fora em
+  24-25/08) vêm 50 das 113 — ali o dado não existe porque não houve coleta.
+  Este item é diferente: o dado existe na EDP e o job não busca.
+- **Ação:**
+  ⬜ **Causa:** o job precisa reprocessar também **D-2**, ou rodar mais tarde
+  (07:00+), depois de o turno da madrugada fechar. Reprocessar D-2 é preferível
+  a mover o horário: cobre o turno longo sem depender de adivinhar o mais
+  tardio. É mudança em cron de PRODUÇÃO — decisão do dono.
+  ⬜ **Histórico:** `scripts/recuperar-logoffs.js` (dry-run por padrão) chama o
+  próprio job para as datas com sessão aberta. Idempotente: só preenche onde o
+  fim está ausente.
+  ⬜ Depois de recuperar, re-conferir o total da Medição HE — ele vai **subir**.
+- **Critério de aceite:**
+  - [ ] `diag-he-sessoes-abertas.js` no período 16–31/08 volta com as abertas
+        reduzidas às do P1-39 (as ~50 de 24/08) mais resíduo justificado.
+  - [ ] Uma noite nova (turno 20:00→05:00) fecha com `sessionEnd` preenchido
+        sem intervenção manual.
+- **Esforço:** 30 min o cron; a recuperação do histórico é tempo de máquina.
+- **Rollback:** o script só ADICIONA `sessionEnd` onde estava ausente — não há
+  o que reverter. A mudança de cron é `git revert`.
+- **Relacionado:** P1-39 (coleta SJC fora, causa das outras 50), P2-48
+  (Medição HE, que expôs isto), e ⚠️ o próprio `runSyncLogoffs` grava só o
+  jsonb e não a coluna `session_end` — dessincronia que fez a medição ler o
+  campo errado; ver `db/heQueries.js`, comentário do COALESCE.
