@@ -36,6 +36,9 @@
 require('dotenv').config();
 
 const { _getPool } = require('../services/pgShim');
+// Reusa a leitura de parede da medição — a conta de duração tem de usar a
+// MESMA regra do módulo que está sendo diagnosticado.
+const { msParede } = require('../db/heQueries');
 
 function arg(nome, padrao) {
   const i = process.argv.indexOf(`--${nome}`);
@@ -64,20 +67,34 @@ async function main() {
   // Último estado conhecido de CADA sessão. A janela vai muito além de `ATE`
   // de propósito: é o que permite ver se o logoff existe fora do alcance da
   // medição (hipótese "b").
+  // ⚠️ DOIS DETALHES DE TIPO, os dois já erraram (09/09/2026):
+  //
+  // 1. `$4`/`$5` em vez de reusar `$1`/`$2` no filtro de texto. O Postgres
+  //    infere o tipo do parâmetro pelo 1º uso: com `$1::date` no CTE, o `$1`
+  //    vira `date`, e `substring(...) BETWEEN $1 AND $2` estoura com
+  //    "operator does not exist: text >= date".
+  //
+  // 2. `captured_at` vem convertido pra PAREDE BRT aqui, no SQL. Ele é
+  //    timestamptz (instante absoluto) e `session_begin` é hora de parede sem
+  //    fuso. Subtrair um do outro na VM (que roda em UTC) erra 3 horas — é a
+  //    mesma armadilha descrita no cabeçalho de `db/heQueries.js`, e eu a
+  //    cometi justamente no script que diagnostica aquele módulo.
   const { rows } = await pool.query(
     `WITH ultimo AS (
        SELECT DISTINCT ON (team_name, session_begin)
               upper(btrim(team_name)) AS equipe, regional,
-              session_begin, session_end, captured_at
+              session_begin, session_end,
+              to_char(captured_at AT TIME ZONE 'America/Sao_Paulo',
+                      'YYYY-MM-DD"T"HH24:MI:SS') AS visto_em
          FROM public.snapshots
         WHERE date BETWEEN $1::date AND ($2::date + $3::int)
           AND session_begin IS NOT NULL
         ORDER BY team_name, session_begin, captured_at DESC
      )
      SELECT * FROM ultimo
-      WHERE substring(session_begin, 1, 10) BETWEEN $1 AND $2
+      WHERE substring(session_begin, 1, 10) BETWEEN $4 AND $5
       ORDER BY session_begin, equipe`,
-    [DE, ATE, DIAS]);
+    [DE, ATE, DIAS, DE, ATE]);
 
   if (!rows.length) { console.log('Nenhuma sessão no período.\n'); return; }
 
@@ -101,13 +118,15 @@ async function main() {
   }
 
   const classificadas = abertas.map(r => {
-    const inicioMs = Date.parse(String(r.session_begin).replace(/Z$/i, ''));
-    const ultimoMs = new Date(r.captured_at).getTime();
+    // Os DOIS lados como parede BRT, pela mesma função que a medição usa.
+    // `Date.parse` direto misturaria parede com instante e erraria 3h.
+    const inicioMs = msParede(r.session_begin);
+    const ultimoMs = msParede(r.visto_em);
     const logins   = (proximoLogin.get(r.equipe) || [])
       .filter(b => String(b) > String(r.session_begin));
     return {
       ...r,
-      abertaMs: Number.isFinite(inicioMs) ? ultimoMs - inicioMs : null,
+      abertaMs: (inicioMs != null && ultimoMs != null) ? ultimoMs - inicioMs : null,
       relogouDepois: logins.length > 0,
       proximoLoginEm: logins.sort()[0] || null,
     };
@@ -177,7 +196,7 @@ async function main() {
     console.log(
       `${c.equipe.padEnd(10)} ${String(c.regional || '—').padEnd(6)} `
       + `${String(c.session_begin).slice(0, 19).padEnd(21)} `
-      + `${new Date(c.captured_at).toISOString().slice(0, 19).replace('T', ' ').padEnd(21)} `
+      + `${String(c.visto_em).replace('T', ' ').padEnd(21)} `
       + `${(c.abertaMs != null ? fmtH(c.abertaMs) : '—').padStart(7)}  `
       + (c.relogouDepois ? `sim, ${String(c.proximoLoginEm).slice(0, 16)}` : 'não'));
   }
