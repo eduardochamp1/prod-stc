@@ -5570,17 +5570,22 @@ ${matrizHTML}
         ${avisosHTML}
 
         <div class="desloc-panel">
-          <h3>Medição — ${_heDataBR(d.periodo?.de)} a ${_heDataBR(d.periodo?.ate)}
-            <button class="btn-refresh" id="btn-he-xlsx" onclick="downloadHeXLSX()"
-                    style="float:right;margin-top:-4px"
-                    title="Baixa a planilha com as 25 colunas na ordem da medição">⬇ Baixar XLSX</button>
+          <!-- ⚠️ FLEX, não float. Com `float:right` nos botões, o container da
+               tabela (que tem overflow:auto, logo é um bloco de formatação
+               novo) ENCOLHE pra desviar do float — é regra do CSS, não bug do
+               navegador. A tabela perdia ~350px de largura e sobrava um vão à
+               direita, abaixo dos botões. Reportado em 09/09/2026. -->
+          <h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span>Medição — ${_heDataBR(d.periodo?.de)} a ${_heDataBR(d.periodo?.ate)}</span>
             <button class="btn-refresh" onclick="_heCache=null;loadHeMedicao()"
-                    style="float:right;margin-top:-4px;margin-right:8px;background:var(--cinza2);color:var(--text)">↻ Recalcular</button>
+                    style="margin-left:auto;background:var(--cinza2);color:var(--text)">↻ Recalcular</button>
+            <button class="btn-refresh" id="btn-he-xlsx" onclick="downloadHeXLSX()"
+                    title="Baixa a planilha com as 25 colunas na ordem da medição">⬇ Baixar XLSX</button>
           </h3>
           ${linhas.length === 0
             ? '<div class="empty-state" style="font-size:12px">Nenhuma hora extra no período.</div>'
-            : `<div style="max-height:520px;overflow:auto">
-                 <table class="desloc-tbl">
+            : `<div style="max-height:min(72vh, 700px);overflow:auto">
+                 <table class="desloc-tbl he-tbl">
                    <thead><tr>
                      <th>Data</th><th>Equipe</th><th>Serv.</th><th>Cidade</th><th>Tipo</th>
                      <th>Última nota</th><th>Conclusão</th><th>Qtd</th>

@@ -4744,6 +4744,22 @@
 .desloc-bar-fill { height: 100%; border-radius: 3px; transition: width .3s; }
 .desloc-bar-count { font-size: 12px; font-weight: 600; text-align: right; }
 
+/* Medição HE (09/09/2026): 17 colunas não cabem na tela, então a tabela rola
+   na horizontal e na vertical. O cabeçalho fixo é o mínimo pra conferir uma
+   medição de ~600 linhas — sem ele, ao rolar você não sabe mais qual coluna
+   está lendo, e essa planilha vai pra EDP.
+   Escopado em `.he-tbl` de propósito: as tabelas do TMA e dos Deslocamentos
+   não pediram isso e não vão mudar de comportamento por tabela. */
+.he-tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* Opaco: com fundo transparente as linhas apareceriam POR BAIXO do
+     cabeçalho ao rolar. `--cinza1` é o mesmo fundo do painel. */
+  background: var(--cinza1);
+  box-shadow: inset 0 -1px 0 var(--cinza2);
+}
+
 .desloc-trend-svg { width: 100%; height: 200px; }
 
 .desloc-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }

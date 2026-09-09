@@ -228,3 +228,47 @@ test('o KPI de horas separa antecipação de prorrogação', () => {
   assert.match(bloco, /total_antecipacao_h/);
   assert.match(bloco, /total_prorrogacao_h/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layout da tabela — reportado em 09/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('os botões do cabeçalho NÃO usam float', () => {
+  // `float:right` + container com `overflow:auto` = o container é um bloco de
+  // formatação novo e ENCOLHE pra desviar do float. É regra do CSS, não bug do
+  // navegador, e custava ~350px de largura da tabela.
+  const i = SRC.indexOf('<h3 style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">');
+  assert.ok(i > -1, 'o cabeçalho da Medição HE tem de ser flex');
+  const bloco = SRC.slice(i, i + 900);
+  assert.match(bloco, /id="btn-he-xlsx"/);
+  assert.doesNotMatch(bloco, /float:\s*right/, 'float aqui estrangula a tabela');
+  assert.match(bloco, /margin-left:auto/, 'os botões vão pra direita sem float');
+});
+
+test('nenhum float:right sobrou em atributo de estilo', () => {
+  // Os dois únicos do projeto eram os botões da Medição HE. Se voltarem, volta
+  // o mesmo defeito.
+  //
+  // A regex casa só DENTRO de style="…": a 1ª versão contava ocorrências no
+  // arquivo inteiro e acusava o próprio comentário que explica o defeito. O
+  // comentário fica (é arqueologia datada); o teste é que estava largo.
+  const emEstilo = SRC.match(/style="[^"]*float:\s*right/g) || [];
+  assert.deepEqual(emEstilo, []);
+});
+
+test('o cabeçalho da tabela HE é fixo ao rolar', () => {
+  const CSS = fs.readFileSync(path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
+  const i = CSS.indexOf('.he-tbl thead th');
+  assert.ok(i > -1, 'não achei a regra do cabeçalho fixo');
+  const regra = CSS.slice(i, CSS.indexOf('}', i));
+  assert.match(regra, /position:\s*sticky/);
+  assert.match(regra, /top:\s*0/);
+  // Fundo opaco: transparente deixaria as linhas passarem POR BAIXO do
+  // cabeçalho durante a rolagem.
+  assert.match(regra, /background:\s*var\(--cinza1\)/);
+  assert.match(SRC, /class="desloc-tbl he-tbl"/, 'a classe tem de estar na tabela');
+});
+
+test('a altura da tabela acompanha a tela', () => {
+  assert.match(SRC, /max-height:min\(72vh, 700px\)/);
+});
