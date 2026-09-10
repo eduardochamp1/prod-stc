@@ -27,6 +27,20 @@
  *   node scripts/backfill-note-details.js --de 2026-08-01
  *   node scripts/backfill-note-details.js --de 2026-08-01 --apply
  *   node scripts/backfill-note-details.js --de 2026-08-01 --todas --apply
+ *
+ * -- --recachear: O CASO QUE O BACKFILL COMUM NAO PEGA ----------------------
+ * 10/09/2026. O backfill acima rodou, preencheu 289 notas -- e a lacuna das
+ * regras quase nao se mexeu. Motivo: `registradoEm` (de `RegisteredAt2`) so
+ * passou a ser gravado em **30/08/2026** (`services/notaProcessor.js`). Os
+ * payloads cacheados ANTES disso estao no banco COM os checkpoints e SEM o
+ * campo. A nota nao esta faltando: esta VELHA.
+ *
+ * `--recachear` seleciona exatamente essas -- tem checkpoint, nenhum com
+ * `registradoEm`. E o oposto do modo normal (que so olha o que falta), e o
+ * unico caminho deste script que SOBRESCREVE payload existente.
+ *
+ *   node scripts/backfill-note-details.js --de 2026-08-01 --recachear
+ *   node scripts/backfill-note-details.js --de 2026-08-01 --recachear --apply
  */
 
 'use strict';
@@ -47,6 +61,7 @@ const DE      = arg('de', '2026-08-01');
 const ATE     = arg('ate', dateBRT());
 const APPLY   = tem('apply');
 const TODAS   = tem('todas');
+const RECACHE = tem('recachear');
 const LIMITE  = Number(arg('limite', '100000'));
 const CONC    = Math.max(1, Number(arg('conc', '3')));
 const PAUSA   = Math.max(0, Number(arg('pausa', '250')));
@@ -104,6 +119,31 @@ async function candidatas(pool) {
   return { porId, porDia, sessoes: rows.length };
 }
 
+/**
+ * Notas cujo payload e ANTERIOR ao `registradoEm` (30/08/2026): tem
+ * checkpoint, e nenhum checkpoint traz o campo.
+ *
+ * O teste roda no Postgres, nao em JS, pra nao trazer milhares de payloads
+ * completos pra memoria so pra descartar a maioria.
+ */
+async function payloadsVelhos(pool, ids) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const { rows } = await pool.query(
+      `SELECT note_id::text AS id
+         FROM public.note_details
+        WHERE note_id = ANY($1::uuid[])
+          AND jsonb_typeof(payload->'checkpoints') = 'array'
+          AND jsonb_array_length(payload->'checkpoints') > 0
+          AND NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements(payload->'checkpoints') cp
+                 WHERE cp->>'registradoEm' IS NOT NULL)`,
+      [ids.slice(i, i + 500)]);
+    out.push(...rows.map(r => r.id));
+  }
+  return out;
+}
+
 /** `.in()` tem limite prático — pergunta em blocos. */
 async function faltando(ids) {
   const sq = require('../db/queries');
@@ -117,7 +157,7 @@ async function faltando(ids) {
 (async () => {
   const pool = _getPool();
   console.log(`\n=== BACKFILL note_details — ${DE} a ${ATE} ===`);
-  console.log(`Escopo: ${TODAS ? 'TODAS as notas da sessão' : 'só a ÚLTIMA nota de cada sessão'}`
+  console.log(`Escopo: ${RECACHE ? 'RE-CACHE de payload velho' : (TODAS ? 'TODAS as notas da sessão' : 'só a ÚLTIMA nota de cada sessão')}`
     + `  |  ${APPLY ? 'APPLY (escreve)' : 'simulação (não chama a EDP)'}\n`);
 
   const { porId, porDia, sessoes } = await candidatas(pool);
@@ -126,32 +166,47 @@ async function faltando(ids) {
   console.log(`Notas candidatas:   ${todosIds.length}`);
   if (!todosIds.length) { console.log('Nada a fazer.'); process.exit(0); }
 
-  const faltam = new Set(await faltando(todosIds));
-  console.log(`Já em note_details: ${todosIds.length - faltam.size}`);
-  console.log(`FALTANDO:           ${faltam.size}\n`);
+  // No modo normal, "alvo" = o que falta. No --recachear, "alvo" = o que esta
+  // la porem velho. Os dois conjuntos sao disjuntos de proposito: recachear
+  // nao deve re-buscar o que ja veio certo.
+  const alvo = new Set(RECACHE
+    ? await payloadsVelhos(pool, todosIds)
+    : await faltando(todosIds));
+  if (RECACHE) {
+    console.log(`Payload SEM registradoEm (anterior a 30/08): ${alvo.size}`);
+  } else {
+    console.log(`Ja em note_details: ${todosIds.length - alvo.size}`);
+    console.log(`FALTANDO:           ${alvo.size}`);
+  }
+  console.log('');
 
   // Por dia — mostra se a lacuna é histórica (resolve com este script) ou de
   // hoje (é o cron correndo atrás, e aí não há o que corrigir).
   const dias = [...porDia.keys()].sort();
-  console.log('  dia          candidatas   faltando');
+  console.log(`  dia          candidatas   ${RECACHE ? 'velhas  ' : 'faltando'}`);
   for (const d of dias) {
     const ids = [...porDia.get(d)];
-    const f = ids.filter(i => faltam.has(i)).length;
+    const f = ids.filter(i => alvo.has(i)).length;
     if (!f) continue;
     console.log(`  ${d}   ${String(ids.length).padStart(10)} ${String(f).padStart(10)}`
       + (d === dateBRT() ? '   ← HOJE, o cron ainda está pegando' : ''));
   }
 
-  if (!faltam.size) { console.log('\nCobertura completa. Nada a buscar.'); process.exit(0); }
-
-  if (!APPLY) {
-    console.log(`\nSimulação — nenhuma chamada à EDP foi feita.`);
-    console.log(`Pra preencher: acrescente --apply (${faltam.size} chamadas, `
-      + `~${Math.ceil(faltam.size / CONC * 0.6 / 60)} min a conc=${CONC}).`);
+  if (!alvo.size) {
+    console.log(RECACHE
+      ? '\nNenhum payload velho no periodo. As duas regras ja tem o que precisam.'
+      : '\nCobertura completa. Nada a buscar.');
     process.exit(0);
   }
 
-  const lote = todosIds.filter(i => faltam.has(i)).slice(0, LIMITE).map(i => porId.get(i));
+  if (!APPLY) {
+    console.log(`\nSimulação — nenhuma chamada à EDP foi feita.`);
+    console.log(`Pra preencher: acrescente --apply (${alvo.size} chamadas, `
+      + `~${Math.ceil(alvo.size / CONC * 0.6 / 60)} min a conc=${CONC}).`);
+    process.exit(0);
+  }
+
+  const lote = todosIds.filter(i => alvo.has(i)).slice(0, LIMITE).map(i => porId.get(i));
   const { cachearLote } = require('../services/noteDetailCacher');
   const t0 = Date.now();
   const r = await cachearLote(lote, {

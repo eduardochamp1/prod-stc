@@ -5545,8 +5545,17 @@ ${matrizHTML}
         if (r.acordo_sem_id)      causas.push(`${r.acordo_sem_id} sem identificar a ultima nota (o snapshot nao trouxe o Id)`);
         if (r.acordo_sem_detalhe) causas.push(`${r.acordo_sem_detalhe} com a nota conhecida mas <strong>fora de <code>note_details</code></strong> — falta backfill de detalhe`);
         if (r.acordo_sem_cp)      causas.push(`${r.acordo_sem_cp} com detalhe gravado porem <em>sem nenhum checkpoint</em> no payload`);
+        // ⚠️ A causa que MAIS aparece no historico: `registradoEm` so passou a
+        // ser gravado em 30/08/2026. Payload cacheado antes disso tem a nota e
+        // tem os checkpoints, e mesmo assim nao avalia. Backfill do que FALTA
+        // nao conserta — conserta re-buscar o que JA ESTA la.
+        if (r.acordo_sem_registro) causas.push(`${r.acordo_sem_registro} com checkpoint <strong>gravado antes de 30/08/2026</strong>, sem o horario <code>registradoEm</code> — pede <code>--recachear</code>`);
+        if (r.acordo_sem_evento0)  causas.push(`${r.acordo_sem_evento0} sem nenhum <em>Inicio do Deslocamento</em> apontado (a equipe nunca registrou)`);
         avisos.push(
-          `<strong>${r.acordo_sem_dado} de ${(r.acordo_sem_dado + (r.acordo_com_cp || 0))} linha(s) sem checkpoint na ultima nota</strong> — `
+          // O denominador e o TOTAL de linhas. A 1a versao somava sem_dado +
+          // com_cp e contava linha duas vezes: `com_cp` inclui linha que tem
+          // checkpoint e mesmo assim nao avaliou (sem event=0, sem registradoEm).
+          `<strong>${r.acordo_sem_dado} de ${(r.acordo_linhas || (d.linhas || []).length)} linha(s) sem avaliar</strong> — `
           + `a regra do acordo ${r.acordo_margem_min} min e a do deslocamento pra base nao foram avaliadas nelas. `
           + `Avaliadas: ${r.acordo_sim} cumprem, ${r.acordo_nao} nao.`
           + (causas.length ? `<br>&nbsp;&nbsp;&nbsp;Por que: ${causas.join('; ')}.` : ''));

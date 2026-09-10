@@ -565,7 +565,18 @@ async function _aplicarAcordo30(pool, linhas) {
   //   semId      → não sabemos QUAL nota é a última (o snapshot não trouxe Id)
   //   semDetalhe → sabemos a nota, mas ela não está em `note_details`
   //   semCp      → temos o detalhe, mas o payload não tem checkpoints
-  const diag = { comCheckpoint: 0, semId: 0, semDetalhe: 0, semCp: 0 };
+  //   semRegistro→ tem checkpoint, mas NENHUM traz `registradoEm`
+  //   semEvento0 → tem `registradoEm`, mas não há event=0 (nunca apontou desloc.)
+  //
+  // ⚠️ semRegistro É O CASO DOMINANTE, e demorou pra aparecer. `registradoEm`
+  // (de `RegisteredAt2`) só passou a ser gravado em 30/08/2026
+  // (`services/notaProcessor.js`). Todo payload cacheado ANTES disso está no
+  // banco sem o campo — a nota está lá, os checkpoints estão lá, e mesmo assim
+  // a regra não avalia. Isso NÃO se resolve preenchendo o que falta: resolve
+  // RE-BUSCANDO o que já existe (`scripts/backfill-note-details.js --recachear`).
+  // Confundir os dois custou uma rodada inteira de backfill em 10/09/2026.
+  const diag = { comCheckpoint: 0, semId: 0, semDetalhe: 0, semCp: 0,
+                 semRegistro: 0, semEvento0: 0 };
 
   const ids = [...new Set(linhas.map(l => l._ultima_note_id).filter(Boolean))];
   if (!ids.length) {
@@ -597,6 +608,8 @@ async function _aplicarAcordo30(pool, linhas) {
 
     // Regra 1 — acordo 30 min.
     const iniMs = inicioDeslocamento(cps);
+    if (!cps.some(cp => cp && cp.registradoEm)) diag.semRegistro++;
+    else if (iniMs == null) diag.semEvento0++;
     if (iniMs != null) {
       l.desloc_ultima_nota = fmtParede(iniMs);
       l.acordo_30 = acordo30(iniMs, l._fim_escala_ms);
@@ -829,6 +842,9 @@ async function medicaoHe(de, ate, opts = {}) {
       acordo_sem_detalhe:  acordo.semDetalhe,
       acordo_sem_cp:       acordo.semCp,
       acordo_com_cp:       acordo.comCheckpoint,
+      acordo_sem_registro: acordo.semRegistro,
+      acordo_sem_evento0:  acordo.semEvento0,
+      acordo_linhas:       linhas.length,
       // Volta pra base: quantas linhas puderam ser inferidas.
       base_com_dado:       linhas.filter(l => l.desloc_base_min != null).length,
       base_min_mediana:    (() => {
