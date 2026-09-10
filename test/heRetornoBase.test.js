@@ -127,3 +127,36 @@ test('a regra 2 saiu do laco de checkpoints', () => {
   assert.ok(!/deslocBase\(/.test(bloco),
     'a regua inferida voltou pro laco do acordo 30');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOJE NÃO É LACUNA.
+//
+// `runSyncIntervalos` roda às 03:10 sobre D-1, então o dia corrente sempre
+// aparece sem intervalo. No print de 10/09/2026 o aviso acusou "22 linhas em
+// dia SEM coleta" e mandou rodar backfill — e o único dia afetado era o
+// próprio dia de hoje. É a mesma armadilha do P1-47, quando eu mandei conferir
+// um período que incluía hoje e 35 de 40 sessões "abertas" eram turnos em
+// curso.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('o dia corrente e contado como PENDENTE, nao como lacuna', () => {
+  const SRC = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
+  const i = SRC.indexOf('async function _aplicarRetornoBase');
+  const bloco = SRC.slice(i, SRC.indexOf('/** FUNÇÃO PURA: ms de parede', i));
+  assert.match(bloco, /coletaPendente/);
+  // A comparação tem de ser com o dia BRT, não com o relógio do processo (a VM
+  // roda em UTC: depois das 21h, `new Date()` já está no dia seguinte).
+  assert.match(bloco, /dateBRT\(\)/);
+  assert.ok(!/new Date\(\)\.toISOString\(\)\.slice\(0, 10\)/.test(bloco),
+    'usar o relogio do processo vira dia errado na VM em UTC');
+});
+
+test('a tela separa "pendente hoje" de "sem coleta"', () => {
+  const HTML = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.match(HTML, /r\.base_coleta_pendente/);
+  const i = HTML.indexOf('r.base_coleta_pendente');
+  const bloco = HTML.slice(i, i + 600);
+  // O aviso de hoje NAO pode mandar rodar backfill.
+  assert.ok(!/backfill-intervalos/.test(bloco),
+    'o aviso de hoje esta pedindo backfill do proprio dia');
+});

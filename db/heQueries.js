@@ -489,8 +489,20 @@ function retornoDaSessao(apontamentos) {
  * desde 22/08/2026 e roda 1x/dia sobre D-1 — todo dia anterior está vazio.
  */
 async function _aplicarRetornoBase(pool, linhas) {
-  const diag = { medido: 0, emAberto: 0, semApontamento: 0, semColeta: 0, dias_sem_coleta: [] };
+  const diag = {
+    medido: 0, emAberto: 0, semApontamento: 0,
+    semColeta: 0, dias_sem_coleta: [],
+    // ⚠️ HOJE NÃO É LACUNA. `runSyncIntervalos` roda às 03:10 sobre D-1, então
+    // o dia corrente SEMPRE aparece sem intervalo — e vai ser coletado amanhã,
+    // sozinho. A 1ª versão somava isso no "sem coleta" e mandava rodar
+    // backfill: no print de 10/09/2026 o único dia acusado era o próprio dia.
+    // É o mesmo erro que eu cometi no P1-47, quando mandei conferir um período
+    // que incluía hoje e 35 das 40 sessões "abertas" eram turnos em curso.
+    coletaPendente: 0,
+  };
   if (!linhas.length) return diag;
+  const { dateBRT } = require('../services/timeUtil');
+  const hoje = dateBRT();
 
   const dias = [...new Set(linhas.map(l => l.data))].sort();
   const de = dias[0], ate = dias[dias.length - 1];
@@ -534,8 +546,11 @@ async function _aplicarRetornoBase(pool, linhas) {
 
   for (const l of linhas) {
     if (!diasComColeta.has(l.data)) {
-      diag.semColeta++;
-      if (!diag.dias_sem_coleta.includes(l.data)) diag.dias_sem_coleta.push(l.data);
+      if (l.data >= hoje) diag.coletaPendente++;      // será coletado às 03:10
+      else {
+        diag.semColeta++;
+        if (!diag.dias_sem_coleta.includes(l.data)) diag.dias_sem_coleta.push(l.data);
+      }
       continue;
     }
     const r = retornoDaSessao(porChave.get(`${l.equipe}|${l.data}`));
@@ -993,6 +1008,7 @@ async function medicaoHe(de, ate, opts = {}) {
       base_em_aberto:      base.emAberto,
       base_sem_apontamento: base.semApontamento,
       base_sem_coleta:     base.semColeta,
+      base_coleta_pendente: base.coletaPendente,
       base_dias_sem_coleta: base.dias_sem_coleta,
       base_com_dado:       linhas.filter(l => l.desloc_base_min != null).length,
       base_min_mediana:    (() => {

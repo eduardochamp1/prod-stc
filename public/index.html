@@ -5575,6 +5575,12 @@ ${matrizHTML}
           + `A coleta so existe desde <strong>22/08/2026</strong>; pra tras precisa de `
           + `<code>scripts/backfill-intervalos.js</code>.`);
       }
+      // O dia corrente NAO e lacuna: o cron das 03:10 varre D-1. Misturar isso
+      // com "sem coleta" fazia o painel pedir backfill do proprio dia de hoje.
+      if (r.base_coleta_pendente) avisos.push(
+        `${r.base_coleta_pendente} linha(s) de <strong>hoje</strong>: os apontamentos da sessao `
+        + `sao coletados as 03:10 do dia seguinte, entao a coluna de retorno a base `
+        + `so preenche amanha. Nao ha nada a corrigir.`);
       if (r.base_sem_apontamento) avisos.push(
         `${r.base_sem_apontamento} linha(s) em dia coletado, porem <strong>sem o apontamento `
         + `"29 - Retorno da equipe a base"</strong>. Aqui a coluna vazia e a resposta certa: `
