@@ -634,29 +634,88 @@ do laço. Uma por linha seriam ~400 consultas e custaria mais que a medição
 inteira. Cobertura depende de `note_details`, populada por cron — nota antiga
 pode não estar lá, e aí a linha cai em "sem dado".
 
-## 20. Segunda regra pedida — BLOQUEADA, falta definição
+## 20. Deslocamento para a base — régua escolhida em 09/09/2026
 
 Pedido: *"adicionar uma coluna com o horário e o tempo do último deslocamento
 para a base"*.
 
-**Não há dado de "base" no sistema.** Verificado em 09/09/2026:
+### ⚠️ Não existe dado de base no sistema
+
+Verificado ANTES de qualquer código:
 
 - os checkpoints documentados são `0..4` e **todos pertencem a uma NOTA**
-  (`docs/handoff/API-WPA-EDP.md`); não existe evento de retorno;
-- `db/deslocamentosQueries.js` só pareia `0→1` dentro de notas — não modela
-  base;
+  (`docs/handoff/API-WPA-EDP.md`); não há evento de retorno;
+- `db/deslocamentosQueries.js` só pareia `0→1` dentro de notas;
 - não há localização de base em `equipes_oficiais` nem em lugar nenhum.
 
-⬜ **Precisa da definição do José.** Candidatas, e cada uma dá número diferente:
+Foram apresentadas três réguas candidatas e **o José escolheu a 1**:
 
-1. **Do fim do trabalho da última nota até o logoff** — `event 3` da última
-   nota → `sessionEnd`. Usa só dado que já temos. É a interpretação mais
-   provável: a equipe fecha a última nota, dirige de volta e desloga na base.
-2. **Do último `event 1` (Fim do Deslocamento) até o logoff** — variante que
-   ancora no fim do último deslocamento registrado.
-3. **Um apontamento próprio no app**, que existiria em outro endpoint ainda
-   não mapeado. Se for este, precisa de investigação na API antes de qualquer
-   código.
+> **Do fim do trabalho da última nota até o logoff** — `event 3` da última nota
+> → `sessionEnd`.
 
-Enquanto não houver definição, a coluna não foi criada — inventar a régua aqui
-poria um número fabricado numa planilha de cobrança.
+A leitura operacional: a equipe fecha a última nota, dirige de volta e desloga
+na base.
+
+**Isto é INFERÊNCIA, não deslocamento medido.** Não há GPS nem apontamento de
+retorno — são dois instantes que já temos, subtraídos. Quem ler a coluna
+precisa saber disso, e é por isso que está escrito aqui e no código. Sem esse
+aviso, daqui a seis meses alguém trata o número como se fosse rastreamento.
+
+### Duas colunas, também no fim
+
+`INÍCIO DESLOC. BASE` (AB) e `TEMPO DESLOC. BASE (M)` (AC), em minutos — mesma
+unidade de `TOTAL (M)`.
+
+### `fimTrabalho` pega o ÚLTIMO `event = 3`
+
+Assimétrico em relação a `inicioDeslocamento`, que pega o **primeiro**
+`event = 0`, e de propósito: lá a pergunta é *"quando foi despachada?"* — o
+primeiro despacho; aqui é *"quando terminou?"* — o último fim. Pegar o primeiro
+`3` numa nota com várias tentativas encurtaria o trabalho e alongaria a viagem.
+
+### Quando fica vazio
+
+| Situação | Resultado |
+|---|---|
+| Sem `event 3` na última nota | vazio |
+| Sessão ainda aberta (sem logoff) | vazio |
+| **Logoff ANTERIOR ao fim do trabalho** | vazio |
+| Logoff exatamente no fim do trabalho | **0 min** (medida real) |
+
+A terceira linha é a que importa: logoff antes do fim do trabalho é impossível
+na operação — ou o dado está inconsistente, ou a "última nota" não é a que
+fecha o dia. Duração negativa, ou zerada, seria invenção. Zero só aparece
+quando é medido de verdade, e há teste separando os dois casos.
+
+O resumo devolve `base_com_dado` e `base_min_mediana`, pra dar noção de
+cobertura e de ordem de grandeza sem abrir a planilha.
+
+### Custo zero de consulta
+
+Reusa os checkpoints que a regra do acordo 30 min já lê em lote. Nenhuma
+consulta nova.
+
+## 21. Estado ao fim de 09/09/2026
+
+**No ar:** cadastro, cálculo, tela, XLSX, valores/hora editáveis, piso de 1 min,
+regra do acordo 30 min, deslocamento para a base. Suíte 1002/1002.
+
+**Consertado no caminho** (nenhum apareceria numa conferência que só olhasse o
+total): `R$ 0,00` falso no cartão de valor; logoff lido da coluna quando o
+back-fill grava no jsonb (164 sessões); 113 logoffs nunca buscados na EDP; e o
+P1-47, que subnotificava a prorrogação de **todo turno noturno, toda noite**.
+
+**Aberto:**
+
+⬜ **Fase 4** — gerar julho e bater linha a linha contra a planilha enviada.
+Divergência esperada: a antecipação, **para mais**, porque a planilha atual a
+zera.
+
+⬜ **Cadastro de CAC e SJC** — as duas têm medição própria (confirmado pelo
+José). Faltam cidade, tipo breve e serviço das equipes delas. Os valores/hora
+são os mesmos dos de Guarapari (decisão de 09/09), então o modelo
+`tipo → valor` continua valendo.
+
+⬜ **Cobertura do `note_details`** — as duas regras novas dependem dele, que é
+populado por cron. Ver na tela quantas linhas caem em "sem dado" antes de
+confiar nas colunas.
