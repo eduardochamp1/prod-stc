@@ -5537,10 +5537,20 @@ ${matrizHTML}
       // Cobertura da regra do acordo 30 min. Sem checkpoint a condicao nao foi
       // AVALIADA — e uma coluna vazia por falta de dado nao pode ser lida como
       // 'nao cumpriu'.
-      if (r.acordo_sem_dado) avisos.push(
-        `<strong>${r.acordo_sem_dado} linha(s) sem checkpoint de deslocamento</strong> na ultima `
-        + `nota — a regra do acordo ${r.acordo_margem_min} min nao pode ser avaliada nelas. `
-        + `Avaliadas: ${r.acordo_sim} cumprem, ${r.acordo_nao} nao.`);
+      // O numero sozinho nao dizia O QUE FAZER. Sao TRES causas com acoes
+      // diferentes, e a primeira versao somava as tres num balde so (364 de 403
+      // linhas em 16-31/08, sem pista de por onde comecar).
+      if (r.acordo_sem_dado) {
+        const causas = [];
+        if (r.acordo_sem_id)      causas.push(`${r.acordo_sem_id} sem identificar a ultima nota (o snapshot nao trouxe o Id)`);
+        if (r.acordo_sem_detalhe) causas.push(`${r.acordo_sem_detalhe} com a nota conhecida mas <strong>fora de <code>note_details</code></strong> — falta backfill de detalhe`);
+        if (r.acordo_sem_cp)      causas.push(`${r.acordo_sem_cp} com detalhe gravado porem <em>sem nenhum checkpoint</em> no payload`);
+        avisos.push(
+          `<strong>${r.acordo_sem_dado} de ${(r.acordo_sem_dado + (r.acordo_com_cp || 0))} linha(s) sem checkpoint na ultima nota</strong> — `
+          + `a regra do acordo ${r.acordo_margem_min} min e a do deslocamento pra base nao foram avaliadas nelas. `
+          + `Avaliadas: ${r.acordo_sim} cumprem, ${r.acordo_nao} nao.`
+          + (causas.length ? `<br>&nbsp;&nbsp;&nbsp;Por que: ${causas.join('; ')}.` : ''));
+      }
       if (r.descartadas_piso) avisos.push(
         `<strong>${r.descartadas_piso} linha(s) descartada(s) pelo piso de ${r.piso_min} min</strong> `
         + `— somavam ${r.descartadas_min} min e ${brl(r.descartadas_valor)}. `

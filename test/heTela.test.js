@@ -298,3 +298,30 @@ test('o cabeçalho da tabela HE é fixo ao rolar', () => {
 test('a altura da tabela acompanha a tela', () => {
   assert.match(SRC, /max-height:min\(72vh, 700px\)/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cobertura das regras de checkpoint — POR QUÊ, não só QUANTOS
+//
+// 09/09/2026: o primeiro print da regra do acordo mostrou "364 linhas sem
+// checkpoint" de 403. O número é inútil sozinho: as três causas possíveis
+// pedem ações opostas (corrigir o snapshot, rodar backfill de detalhe, ou
+// aceitar que a nota não tem checkpoint mesmo). O aviso tem de decompor.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('o aviso de cobertura decompõe as três causas', () => {
+  const i = SRC.indexOf('r.acordo_sem_dado');
+  assert.ok(i > -1, 'não achei o aviso de cobertura');
+  const bloco = SRC.slice(i, i + 1600);
+  assert.match(bloco, /r\.acordo_sem_id/,      'falta a causa "snapshot sem Id da nota"');
+  assert.match(bloco, /r\.acordo_sem_detalhe/, 'falta a causa "fora de note_details"');
+  assert.match(bloco, /r\.acordo_sem_cp/,      'falta a causa "payload sem checkpoint"');
+  // A que aponta pra ação mais provável (backfill) tem de nomear a tabela.
+  assert.match(bloco, /note_details/);
+});
+
+test('o resumo da API expõe as três causas separadas', () => {
+  const HQ = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
+  for (const k of ['acordo_sem_id', 'acordo_sem_detalhe', 'acordo_sem_cp', 'acordo_com_cp']) {
+    assert.match(HQ, new RegExp(k + ':'), `o resumo não devolve ${k}`);
+  }
+});

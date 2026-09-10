@@ -559,8 +559,19 @@ async function _valoresHora(pool) {
  * false (conferi e não cumpre) — ver `acordo30`.
  */
 async function _aplicarAcordo30(pool, linhas) {
+  // ⚠️ TRÊS CAUSAS DIFERENTES pra "sem dado", e cada uma pede outra ação.
+  // A 1ª versão contava tudo junto — 364 de 403 linhas em 16-31/08 — e o aviso
+  // não dizia o que fazer. Separar é o que transforma o número em tarefa:
+  //   semId      → não sabemos QUAL nota é a última (o snapshot não trouxe Id)
+  //   semDetalhe → sabemos a nota, mas ela não está em `note_details`
+  //   semCp      → temos o detalhe, mas o payload não tem checkpoints
+  const diag = { comCheckpoint: 0, semId: 0, semDetalhe: 0, semCp: 0 };
+
   const ids = [...new Set(linhas.map(l => l._ultima_note_id).filter(Boolean))];
-  if (!ids.length) return { comCheckpoint: 0, semDetalhe: linhas.length };
+  if (!ids.length) {
+    diag.semId = linhas.length;
+    return diag;
+  }
 
   let porId = new Map();
   try {
@@ -573,14 +584,16 @@ async function _aplicarAcordo30(pool, linhas) {
     // Falta de detalhe é degradação, não erro: a medição segue sem as duas
     // colunas novas em vez de não sair.
     console.warn('[he] checkpoints da última nota indisponíveis:', err.message);
-    return { comCheckpoint: 0, semDetalhe: linhas.length };
+    diag.semDetalhe = linhas.length;
+    return diag;
   }
 
-  let comCheckpoint = 0, semDetalhe = 0;
   for (const l of linhas) {
-    const cps = l._ultima_note_id ? porId.get(l._ultima_note_id) : null;
-    if (!cps) { semDetalhe++; continue; }
-    comCheckpoint++;
+    if (!l._ultima_note_id) { diag.semId++; continue; }
+    if (!porId.has(l._ultima_note_id)) { diag.semDetalhe++; continue; }
+    const cps = porId.get(l._ultima_note_id);
+    if (!cps || !cps.length) { diag.semCp++; continue; }
+    diag.comCheckpoint++;
 
     // Regra 1 — acordo 30 min.
     const iniMs = inicioDeslocamento(cps);
@@ -598,7 +611,7 @@ async function _aplicarAcordo30(pool, linhas) {
     }
 
   }
-  return { comCheckpoint, semDetalhe };
+  return diag;
 }
 
 function _diaMais(iso, n) {
@@ -811,6 +824,11 @@ async function medicaoHe(de, ate, opts = {}) {
       // Sem checkpoint da última nota — a condição NÃO foi avaliada. Separado
       // de `acordo_nao` de propósito: "não sei" não é "não cumpre".
       acordo_sem_dado:     linhas.filter(l => l.acordo_30 == null).length,
+      // Decomposicao do "sem dado": tres causas, tres acoes.
+      acordo_sem_id:       acordo.semId,
+      acordo_sem_detalhe:  acordo.semDetalhe,
+      acordo_sem_cp:       acordo.semCp,
+      acordo_com_cp:       acordo.comCheckpoint,
       // Volta pra base: quantas linhas puderam ser inferidas.
       base_com_dado:       linhas.filter(l => l.desloc_base_min != null).length,
       base_min_mediana:    (() => {
