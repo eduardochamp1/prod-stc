@@ -406,6 +406,149 @@ function deslocBase(fimTrabalhoMs, fimSessaoMs) {
   return { inicioMs: fimTrabalhoMs, duracaoMs, duracaoMin: Math.round(duracaoMs / 60000) };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RETORNO À BASE — APONTAMENTO 29 (medido, não inferido)
+//
+// ⚠️ EU ESTAVA ERRADO, e o comentário acima ("NÃO EXISTE DADO DE BASE NO
+// SISTEMA") ficou de propósito: ele registra o raciocínio que falhou. Eu olhei
+// os checkpoints (0..4, todos de NOTA) e concluí que não havia dado. O José
+// informou em 10/09/2026 que as equipes apontam o retorno explicitamente, e
+// que isso entra nos apontamentos da SESSÃO — `sessao_intervalo` (P2-15), a
+// mesma tabela do "15 - Horário de Refeição".
+//
+// Medido no período 22/08–09/09: **1135 apontamentos com o código** e **670
+// sem ele**. É o MESMO evento gravado com dois textos diferentes, então casar
+// por igualdade de string perderia 37% dos casos.
+//
+// ⚠️ FUSO: `sessao_intervalo.inicio` é TIMESTAMPTZ e o normalizador anexa 'Z'
+// (`wpaService.js:949`, "a EDP manda UTC sem dizer que é UTC"). Isso está
+// ERRADO pra este endpoint: medido em 10/09/2026 com a refeição como oráculo,
+// 1368 de 1765 almoços caem entre 11h e 14h quando o instante é lido como
+// PAREDE, contra 393 quando lido como UTC. A amostra do 29 confirma — o fim do
+// retorno bate no logoff ao minuto. Por isso a leitura aqui é
+// `AT TIME ZONE 'UTC'`: ela DESFAZ o 'Z' e recupera a parede original.
+// A causa raiz é do normalizador e vale pra outros consumidores — ver P1-48.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * FUNÇÃO PURA (testável): este apontamento é o retorno à base?
+ *
+ * Tolera o prefixo de código opcional, porque o banco tem as duas formas.
+ * Não tenta interpretar o número sozinho: "29" isolado não é garantia de nada
+ * — o que identifica o evento é o texto.
+ */
+function ehRetornoBase(motivo) {
+  if (motivo == null) return false;
+  const t = String(motivo)
+    .replace(/^\s*\d{1,3}\s*[-–—]\s*/, '')   // tira '29 - ', se houver
+    .trim()
+    .toUpperCase();
+  return /^RETORNO DA EQUIPE\b/.test(t) && /\bBASE$/.test(t);
+}
+
+/**
+ * FUNÇÃO PURA (testável): o ÚLTIMO retorno à base do dia.
+ *
+ * "o horário e o tempo do ÚLTIMO deslocamento para a base" — pedido do José em
+ * 09/09/2026. Uma equipe pode voltar à base no meio do dia (carregar material,
+ * trocar viatura) e sair de novo; o que fecha o dia é o último.
+ *
+ * `fim` nulo é apontamento EM ABERTO (17 de 1135 no período medido): a equipe
+ * marcou a saída e não fechou. Devolve `duracaoMin: null` e `emAberto: true` —
+ * o horário de início é conhecido e vai pra planilha, a duração não é
+ * inventada. Fechar com o logoff pareceria medição e seria estimativa.
+ */
+function retornoDaSessao(apontamentos) {
+  let melhor = null;
+  for (const a of (apontamentos || [])) {
+    if (!a || !ehRetornoBase(a.motivo)) continue;
+    const iniMs = msParede(a.inicio);
+    if (iniMs == null) continue;
+    if (melhor && iniMs <= melhor.inicioMs) continue;
+    const fimMs = msParede(a.fim);
+    // Fim anterior ao início é dado inconsistente, não duração negativa.
+    const dur = fimMs == null || fimMs < iniMs ? null : fimMs - iniMs;
+    melhor = {
+      inicioMs: iniMs,
+      fimMs:    dur == null ? null : fimMs,
+      duracaoMin: dur == null ? null : Math.round(dur / 60000),
+      emAberto: fimMs == null,
+    };
+  }
+  return melhor;
+}
+
+/**
+ * Preenche `desloc_base_em` / `desloc_base_min` a partir do apontamento 29.
+ *
+ * Uma consulta só pro período inteiro, no molde de `_aplicarAcordo30`.
+ *
+ * O diagnóstico separa "não apontou" de "não coletamos", porque as ações são
+ * opostas: a 1ª é comportamento da equipe (e a coluna vazia é a resposta
+ * certa), a 2ª é lacuna nossa e pede backfill. `runSyncIntervalos` só existe
+ * desde 22/08/2026 e roda 1x/dia sobre D-1 — todo dia anterior está vazio.
+ */
+async function _aplicarRetornoBase(pool, linhas) {
+  const diag = { medido: 0, emAberto: 0, semApontamento: 0, semColeta: 0, dias_sem_coleta: [] };
+  if (!linhas.length) return diag;
+
+  const dias = [...new Set(linhas.map(l => l.data))].sort();
+  const de = dias[0], ate = dias[dias.length - 1];
+
+  let porChave = new Map();      // 'EQUIPE|dia' → [apontamentos]
+  let diasComColeta = new Set();
+  try {
+    // `AT TIME ZONE 'UTC'` DESFAZ o 'Z' anexado na coleta e devolve a parede.
+    // O texto sai formatado do banco pra `msParede` ler igual ao resto — sem
+    // Date do driver no meio, que reintroduziria fuso.
+    const { rows } = await pool.query(
+      `SELECT upper(btrim(equipe))                AS equipe,
+              to_char(data, 'YYYY-MM-DD')         AS dia,
+              motivo,
+              to_char(inicio AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS inicio,
+              to_char(fim    AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS fim
+         FROM public.sessao_intervalo
+        WHERE data BETWEEN $1::date AND $2::date
+          AND motivo ILIKE '%retorno%base%'`, [de, ate]);
+    for (const r of rows) {
+      const k = `${r.equipe}|${r.dia}`;
+      if (!porChave.has(k)) porChave.set(k, []);
+      porChave.get(k).push(r);
+    }
+
+    // Quais dias foram varridos? Dia sem NENHUM intervalo (de qualquer motivo)
+    // é dia não coletado — diferente de dia em que ninguém apontou retorno.
+    const { rows: cob } = await pool.query(
+      `SELECT to_char(data, 'YYYY-MM-DD') AS dia
+         FROM public.sessao_intervalo
+        WHERE data BETWEEN $1::date AND $2::date
+        GROUP BY data`, [de, ate]);
+    diasComColeta = new Set(cob.map(r => r.dia));
+  } catch (err) {
+    // Tabela ausente (migration 014 não rodou) é degradação, não erro: a
+    // medição sai sem a coluna em vez de não sair.
+    console.warn('[he] sessao_intervalo indisponível:', err.message);
+    diag.semColeta = linhas.length;
+    return diag;
+  }
+
+  for (const l of linhas) {
+    if (!diasComColeta.has(l.data)) {
+      diag.semColeta++;
+      if (!diag.dias_sem_coleta.includes(l.data)) diag.dias_sem_coleta.push(l.data);
+      continue;
+    }
+    const r = retornoDaSessao(porChave.get(`${l.equipe}|${l.data}`));
+    if (!r) { diag.semApontamento++; continue; }
+    l.desloc_base_em  = fmtParede(r.inicioMs);
+    l.desloc_base_min = r.duracaoMin;
+    if (r.emAberto) diag.emAberto++; else diag.medido++;
+  }
+
+  diag.dias_sem_coleta.sort();
+  return diag;
+}
+
 /** FUNÇÃO PURA: ms de parede → 'YYYY-MM-DD HH:MM:SS' pra planilha. */
 function fmtParede(ms) {
   if (ms == null || !Number.isFinite(ms)) return null;
@@ -615,14 +758,10 @@ async function _aplicarAcordo30(pool, linhas) {
       l.acordo_30 = acordo30(iniMs, l._fim_escala_ms);
     }
 
-    // Regra 2 — volta pra base: fim do trabalho da última nota → logoff.
-    // Régua escolhida pelo José em 09/09/2026 entre três candidatas (spec §20).
-    const volta = deslocBase(fimTrabalho(cps), l._fim_sessao_ms);
-    if (volta) {
-      l.desloc_base_em  = fmtParede(volta.inicioMs);
-      l.desloc_base_min = volta.duracaoMin;
-    }
-
+    // A regra 2 (volta pra base) NÃO mora mais aqui. Ela era inferida dos
+    // checkpoints da nota — fim do trabalho → logoff — porque eu acreditava
+    // que não havia apontamento de base. Há: `_aplicarRetornoBase`, sobre o
+    // apontamento 29 da sessão. 10/09/2026.
   }
   return diag;
 }
@@ -805,6 +944,8 @@ async function medicaoHe(de, ate, opts = {}) {
 
   // Regra do acordo 30 min (pedido do José, 09/09/2026) — em lote.
   const acordo = await _aplicarAcordo30(pool, linhas);
+  // Retorno à base (apontamento 29) — outra fonte, outro lote.
+  const base = await _aplicarRetornoBase(pool, linhas);
 
   const comValor    = linhas.filter(l => l.valor_total != null);
   const totalValor  = comValor.reduce((s, l) => s + l.valor_total, 0);
@@ -845,7 +986,14 @@ async function medicaoHe(de, ate, opts = {}) {
       acordo_sem_registro: acordo.semRegistro,
       acordo_sem_evento0:  acordo.semEvento0,
       acordo_linhas:       linhas.length,
-      // Volta pra base: quantas linhas puderam ser inferidas.
+      // Volta pra base — agora MEDIDA (apontamento 29), não inferida.
+      // As quatro causas são disjuntas e somam `linhas.length`; cada uma pede
+      // uma ação diferente, e "sem coleta" é a única que é lacuna NOSSA.
+      base_medido:         base.medido,
+      base_em_aberto:      base.emAberto,
+      base_sem_apontamento: base.semApontamento,
+      base_sem_coleta:     base.semColeta,
+      base_dias_sem_coleta: base.dias_sem_coleta,
       base_com_dado:       linhas.filter(l => l.desloc_base_min != null).length,
       base_min_mediana:    (() => {
         const v = linhas.map(l => l.desloc_base_min).filter(n => n != null).sort((x, y) => x - y);
@@ -890,6 +1038,11 @@ module.exports = {
   tipoHeDaEquipe,
   inicioDeslocamento,
   acordo30,
+  ehRetornoBase,
+  retornoDaSessao,
+  // SUPERSEDIDAS em 10/09/2026 pelo apontamento 29 (ver _aplicarRetornoBase).
+  // Ficam exportadas porque os testes delas registram a regua anterior e o
+  // raciocinio que a escolheu -- arqueologia, nao codigo vivo.
   fimTrabalho,
   deslocBase,
   EVENT_FIM_TRABALHO,

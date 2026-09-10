@@ -5556,10 +5556,33 @@ ${matrizHTML}
           // com_cp e contava linha duas vezes: `com_cp` inclui linha que tem
           // checkpoint e mesmo assim nao avaliou (sem event=0, sem registradoEm).
           `<strong>${r.acordo_sem_dado} de ${(r.acordo_linhas || (d.linhas || []).length)} linha(s) sem avaliar</strong> — `
-          + `a regra do acordo ${r.acordo_margem_min} min e a do deslocamento pra base nao foram avaliadas nelas. `
+          + `a regra do acordo ${r.acordo_margem_min} min nao pode ser avaliada nelas. `
           + `Avaliadas: ${r.acordo_sim} cumprem, ${r.acordo_nao} nao.`
           + (causas.length ? `<br>&nbsp;&nbsp;&nbsp;Por que: ${causas.join('; ')}.` : ''));
       }
+
+      // Retorno a base — fonte DIFERENTE da regra do acordo (apontamento 29 da
+      // sessao, nao checkpoint de nota), logo aviso proprio. Juntar os dois
+      // esconderia que a acao e outra: aqui o que falta e coleta de intervalo,
+      // nao detalhe de nota.
+      if (r.base_sem_coleta) {
+        const dias = r.base_dias_sem_coleta || [];
+        const amostra = dias.slice(0, 3).map(_heDataBR).join(', ');
+        avisos.push(
+          `<strong>${r.base_sem_coleta} linha(s) em dia(s) SEM coleta de apontamento de sessao</strong> — `
+          + `a coluna de retorno a base fica vazia neles. `
+          + `${dias.length} dia(s) afetado(s)${amostra ? `, a comecar por ${amostra}` : ''}. `
+          + `A coleta so existe desde <strong>22/08/2026</strong>; pra tras precisa de `
+          + `<code>scripts/backfill-intervalos.js</code>.`);
+      }
+      if (r.base_sem_apontamento) avisos.push(
+        `${r.base_sem_apontamento} linha(s) em dia coletado, porem <strong>sem o apontamento `
+        + `"29 - Retorno da equipe a base"</strong>. Aqui a coluna vazia e a resposta certa: `
+        + `a equipe nao apontou o retorno.`);
+      if (r.base_em_aberto) avisos.push(
+        `${r.base_em_aberto} apontamento(s) de retorno <strong>em aberto</strong> (sem hora de fim). `
+        + `O horario de inicio aparece; a duracao fica vazia — fechar com o logoff seria `
+        + `estimativa, nao medicao.`);
       if (r.descartadas_piso) avisos.push(
         `<strong>${r.descartadas_piso} linha(s) descartada(s) pelo piso de ${r.piso_min} min</strong> `
         + `— somavam ${r.descartadas_min} min e ${brl(r.descartadas_valor)}. `

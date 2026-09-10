@@ -142,6 +142,7 @@
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
 | P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
+| P1-48 | `_normTzIso` anexa `Z` em instante que a EDP manda como hora de PAREDE — `sessao_intervalo` está gravada 3h adiantada, e `getNoteHistoric` usa o mesmo normalizador | Dados/Fuso | pending — medido 10/09 (oráculo da refeição: 1368/1765 almoços entre 11h-14h lendo como parede, 393 lendo como UTC). A Medição HE já compensa na leitura (`AT TIME ZONE 'UTC'`); falta decidir a raiz |
 | P2-49 | Fonte Roboto nunca carregou: `roboto.css` não existe (só os TTF) — painel roda no fallback desde 08/07; P1-9 foi fechado com o critério desmarcado | Frontend | pending — causa isolada 09/09, conserto é 1 arquivo |
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
 | P1-47 | `runSyncLogoffs` perdia o logoff de todo turno que sai depois das 03:00 — a Medição HE perdia a prorrogação do turno noturno | Dados/Cobrança | **done** (09/09) — D-1+D-2, busca sem janela, casamento por instante, grava coluna+jsonb; 18 testes. Histórico de 16-31/08 recuperado (113/113) |
@@ -4977,6 +4978,58 @@ mesmo ponto cego, o que reforça o item.
 - **Relacionado:** P1-9 (que devia ter feito isto), e o P0-1 (bus factor:
   ninguém percebeu por 2 meses).
 - **Fonte:** console do José, 09/09/2026, durante a validação da Medição HE.
+
+---
+
+## P1-48 — `_normTzIso` anexa `Z` num instante que a EDP manda como parede
+
+- **Categoria:** Dados/Fuso
+- **Status:** pending (aberto em 10/09/2026)
+
+**Evidência.** `services/wpaService.js:944-950` anexa `Z` a todo ISO sem
+marcador de fuso, com o comentário "a EDP manda UTC sem dizer que é UTC". Para
+`GET /api/sessions/{id}/break` isso é **falso**, e dá pra provar sem depender de
+documentação — usando a REFEIÇÃO como oráculo, porque almoço acontece entre 11h
+e 14h de parede. Medido em 10/09/2026, período 22/08–09/09, 1765 apontamentos de
+`Horário de Refeição`:
+
+| leitura do instante gravado | almoços entre 11h e 14h |
+|---|---|
+| `inicio AT TIME ZONE 'America/Sao_Paulo'` (era UTC) | 393 / 1765 |
+| `inicio AT TIME ZONE 'UTC'` (era parede) | **1368 / 1765** |
+
+A amostra do apontamento 29 fecha o caso: lendo como parede, o FIM do retorno
+à base bate no logoff ao minuto (ECACH50 em 09/09 — fim 17:52, logoff 17:52;
+ECANC50 — fim 17:00, logoff 17:00). Lendo como UTC, o retorno terminaria 3h
+antes do logoff em todas as linhas.
+
+**Impacto.** `sessao_intervalo` inteira está gravada 3h adiantada. Hoje ninguém
+mais lê essa tabela, então o dano está contido — mas o MESMO `_normTzIso`
+alimenta `getNoteHistoric` (`CreatedAt`/`RemovedAt`, usado na posse de nota) e
+qualquer consumidor novo herda o erro sem aviso.
+
+**O que já foi feito.** A Medição HE compensa na leitura: `_aplicarRetornoBase`
+lê com `AT TIME ZONE 'UTC'`, que DESFAZ o `Z` e recupera a parede
+(`db/heQueries.js`, testado em `test/heRetornoBase.test.js`). É correção local
+e não destrutiva — não mexe no que está gravado.
+
+**Ação (a decidir).** Duas saídas, e a escolha não é minha:
+1. Corrigir `_normTzIso` para não anexar `Z` neste endpoint e **reescrever** o
+   histórico de `sessao_intervalo` (~9 mil linhas). Deixa o banco certo, mas
+   invalida qualquer leitura que já compense o erro.
+2. Manter a gravação como está e documentar que `sessao_intervalo` é lida com
+   `AT TIME ZONE 'UTC'`. Mais barato, mas é uma armadilha permanente pro
+   próximo que consultar a tabela.
+
+**Critério de aceite.** Qualquer que seja a saída, `scripts/diag-retorno-base.js`
+tem de continuar apontando a leitura correta, e o oráculo da refeição tem de
+sobreviver como teste.
+
+**Rollback.** Se for a saída 1: a coleta é idempotente por
+(session_id, inicio) — refazer o backfill reconstrói a tabela.
+
+**Fonte:** correção do José em 10/09/2026 ("temos um apontamento específico que
+as equipes utilizam para apontar retorno a base"), que levou ao diag.
 
 ---
 
