@@ -235,7 +235,10 @@ test('a medição usa o tipo RESOLVIDO, não tipo_breve cru', () => {
   const HEQ2 = fs.readFileSync(path.join(__dirname, '..', 'db', 'heQueries.js'), 'utf8');
   const i = HEQ2.indexOf('const tipoHe = tipoHeDaEquipe(cad)');
   assert.ok(i > -1, 'a montagem da linha tem de resolver o tipo');
-  const bloco = HEQ2.slice(i, i + 1800);
+  // Janela alargada em 09/09/2026: a regra do acordo 30 min acrescentou linhas
+  // entre a resolução do tipo e o aviso de "sem cadastro", e a de 1800 deixou
+  // de alcançar.
+  const bloco = HEQ2.slice(i, i + 2600);
   assert.match(bloco, /const valorHora = tipoHe \? \(valores\[tipoHe\] \?\? null\) : null/);
   assert.match(bloco, /tipo_breve: tipoHe/, 'a linha mostra o resolvido');
   assert.match(bloco, /if \(!tipoHe\) semCadastro\.add\(equipe\)/,

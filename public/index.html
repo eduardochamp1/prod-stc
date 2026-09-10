@@ -5454,6 +5454,11 @@ ${matrizHTML}
       'PARECER ENGELMIG', 'JUSTIFICATIVA ENGELMIG', 'AUTORIZADO POR',
       'PARECER EDP', 'JUSTIFICATIVA EDP', 'OBSERVAÇÕES FINAIS',
       'ENVIAR COBRANÇA?', 'TOTAL FINAL',
+      // ── Regra do acordo 30 min (09/09/2026) ──
+      // NO FIM, depois de TOTAL FINAL, de propósito: as 25 primeiras espelham
+      // a planilha atual e são coladas no template existente. Inserir no meio
+      // deslocaria todas as seguintes e quebraria o encaixe em silêncio.
+      'INÍCIO DESLOC. ÚLTIMA NOTA', 'ACORDO 30 MIN',
     ];
 
     /** Lista AFIRMATIVAS da aba DADOS, inteira (decisão de 09/09/2026). */
@@ -5528,6 +5533,13 @@ ${matrizHTML}
         + `Essas passam sem o piso — com a sessão aberta não dá pra afirmar que o total é curto.`);
       // Descarte pelo piso NUNCA é silencioso: sem isto, "faltam linhas" na
       // conferência da Fase 4 não teria explicação.
+      // Cobertura da regra do acordo 30 min. Sem checkpoint a condicao nao foi
+      // AVALIADA — e uma coluna vazia por falta de dado nao pode ser lida como
+      // 'nao cumpriu'.
+      if (r.acordo_sem_dado) avisos.push(
+        `<strong>${r.acordo_sem_dado} linha(s) sem checkpoint de deslocamento</strong> na ultima `
+        + `nota — a regra do acordo ${r.acordo_margem_min} min nao pode ser avaliada nelas. `
+        + `Avaliadas: ${r.acordo_sim} cumprem, ${r.acordo_nao} nao.`);
       if (r.descartadas_piso) avisos.push(
         `<strong>${r.descartadas_piso} linha(s) descartada(s) pelo piso de ${r.piso_min} min</strong> `
         + `— somavam ${r.descartadas_min} min e ${brl(r.descartadas_valor)}. `
@@ -5561,6 +5573,17 @@ ${matrizHTML}
           <td style="text-align:right;font-weight:600">${l.total_min}</td>
           <td style="text-align:right">${l.valor_hora == null ? '—' : brl(l.valor_hora)}</td>
           <td style="text-align:right;font-weight:600;color:${l.valor_total == null ? '#c0392b' : 'inherit'}">${brl(l.valor_total)}</td>
+          <td>${_heDataBR(l.desloc_ultima_nota) || '—'}</td>
+          <td>${
+            // Três estados, e a tela distingue os três. O XLSX só escreve o
+            // "sim" (ver downloadHeXLSX): lá, "não sei" e "não cumpre" saem
+            // igualmente vazios porque a planilha não deve afirmar nenhum.
+            l.acordo_30 === true
+              ? '<span style="color:#086738;font-weight:600">Acordo 30 min</span>'
+              : (l.acordo_30 === false
+                  ? '<span style="color:var(--text2)">não</span>'
+                  : '<span style="color:#e67e22" title="sem checkpoint de deslocamento na última nota">sem dado</span>')
+          }</td>
         </tr>`).join('');
 
       cont.innerHTML = `
@@ -5630,6 +5653,7 @@ ${matrizHTML}
                      <th>Início escala</th><th>Início sessão</th><th>Antec.</th>
                      <th>Fim escala</th><th>Fim sessão</th><th>Prorrog.</th>
                      <th>Total (m)</th><th>Valor/h</th><th>Valor total</th>
+                     <th>Início desloc. últ. nota</th><th>Acordo 30 min</th>
                    </tr></thead>
                    <tbody>${corpo}</tbody>
                  </table>
@@ -5676,6 +5700,12 @@ ${matrizHTML}
             l.total_dec, l.total_min, _heDataBR(l.data),
             l.valor_total == null ? '' : l.valor_total,
             '', '', '', '', '', '', '', '',        // R..Y — parecer humano
+            // Z, AA — regra do acordo 30 min. Só escreve o rótulo quando a
+            // condição foi VERIFICADA e é verdadeira; false e "não sei" saem
+            // vazios. Escrever "não" numa planilha de cobrança seria afirmar
+            // que a equipe não cumpriu, e `null` não sustenta isso.
+            _heDataBR(l.desloc_ultima_nota),
+            l.acordo_30 === true ? 'Acordo 30 min' : '',
           ]);
         }
         const ws = XLSX.utils.aoa_to_sheet(aoa);

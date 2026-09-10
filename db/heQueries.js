@@ -285,6 +285,65 @@ function ultimaNotaDaSessao(payload) {
   return melhor ? { nota: melhor, conclusaoMs: melhorMs } : null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRA DO "ACORDO 30 MIN" — pedido do José em 09/09/2026
+//
+// "quando uma equipe aponta o deslocamento para a última nota do dia pelo menos
+// 30 minutos antes do fim da escala".
+//
+// A lógica de negócio: se a equipe JÁ ESTAVA a caminho da última nota bem antes
+// do turno fechar, a hora extra é legítima — ela foi despachada em tempo e o
+// serviço simplesmente passou do horário. É a justificativa que hoje é
+// preenchida à mão na coluna AUTORIZADO POR, onde 'ACORDO 30 MINUTOS' é um dos
+// valores da lista AFIRMATIVAS.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Checkpoint 0 = Início do Deslocamento (docs/handoff/API-WPA-EDP.md §297). */
+const EVENT_INICIO_DESLOC = 0;
+const ACORDO_MARGEM_SEG = 30 * 60;
+
+/**
+ * FUNÇÃO PURA (testável): quando a equipe começou a se deslocar pra nota.
+ *
+ * Devolve o PRIMEIRO `event = 0`. Uma nota pode ter vários — "cada novo
+ * event=0 começa uma tentativa" (API-WPA-EDP §299) — e a pergunta é "foi
+ * despachada em tempo?", que fala do primeiro despacho, não da última
+ * tentativa. Usar o último premiaria quem tentou de novo tarde.
+ *
+ * ⚠️ Lê `registradoEm` (que vem de `RegisteredAt2`), NUNCA `TimeStamp`. Nos
+ * eventos 0 e 1 o `TimeStamp` é o relógio do aparelho no momento da
+ * SINCRONIZAÇÃO: medido na nota 104875481, deu 55 min de erro no evento 0.
+ * Ver a tabela em `docs/handoff/API-WPA-EDP.md`.
+ */
+function inicioDeslocamento(checkpoints) {
+  let menor = null;
+  for (const cp of (checkpoints || [])) {
+    if (!cp || Number(cp.event) !== EVENT_INICIO_DESLOC) continue;
+    const ms = msParede(cp.registradoEm);
+    if (ms == null) continue;
+    if (menor == null || ms < menor) menor = ms;
+  }
+  return menor;
+}
+
+/**
+ * FUNÇÃO PURA (testável): a condição do acordo foi cumprida?
+ *
+ * `true` só quando o deslocamento começou com pelo menos 30 min de folga antes
+ * do fim da escala. "Pelo menos 30" inclui exatamente 30, então a fronteira é
+ * inclusiva.
+ *
+ * ⚠️ Devolve **null quando não dá pra avaliar** (sem checkpoint, sem escala) —
+ * nunca `false`. Falso diria "conferimos e não cumpre", o que é afirmação
+ * sobre a equipe; null diz "não sei", que é a verdade. A distinção importa
+ * porque essa coluna vira justificativa de cobrança.
+ */
+function acordo30(inicioDeslocMs, fimEscalaMs, margemSeg = ACORDO_MARGEM_SEG) {
+  if (inicioDeslocMs == null || fimEscalaMs == null) return null;
+  if (!Number.isFinite(inicioDeslocMs) || !Number.isFinite(fimEscalaMs)) return null;
+  return inicioDeslocMs <= fimEscalaMs - margemSeg * 1000;
+}
+
 /** FUNÇÃO PURA: ms de parede → 'YYYY-MM-DD HH:MM:SS' pra planilha. */
 function fmtParede(ms) {
   if (ms == null || !Number.isFinite(ms)) return null;
@@ -324,9 +383,16 @@ function montarLinhaHe({ equipe, dia, cadastro, janela, sessao, he, valorHora, u
     data:           dia,
     valor_total:    valorTotalHe(he.total_h, valorHora),
     // Metadados que não vão pra planilha, mas a tela usa pra avisar.
+    // Regra do acordo 30 min — preenchidas depois, quando os checkpoints da
+    // última nota são lidos em lote (ver `_aplicarAcordo30`).
+    desloc_ultima_nota: null,
+    acordo_30:          null,
     _total_h:       he.total_h,
     _incompleta:    he.incompleta,
     _relogins:      sessao.relogins,
+    // ms do fim da escala, pra comparar com o início do deslocamento sem
+    // reparsear a string formatada.
+    _fim_escala_ms: janela.fimMs,
   };
 }
 
@@ -415,6 +481,46 @@ async function _valoresHora(pool) {
     console.warn('[he] app_settings.he-valores-hora ilegível:', err.message);
   }
   return { valores: { ...VALORES_HORA_SEED }, origem: 'seed' };
+}
+
+/**
+ * Preenche `desloc_ultima_nota` e `acordo_30` nas linhas, em LOTE.
+ *
+ * Uma consulta só pros checkpoints de todas as últimas notas do período — 400
+ * consultas dentro do laço custariam mais que a medição inteira.
+ *
+ * Cobertura não é garantida: `note_details` é populada por cron e nota antiga
+ * pode não estar lá. Sem checkpoint, `acordo_30` fica **null** (não sei), nunca
+ * false (conferi e não cumpre) — ver `acordo30`.
+ */
+async function _aplicarAcordo30(pool, linhas) {
+  const ids = [...new Set(linhas.map(l => l._ultima_note_id).filter(Boolean))];
+  if (!ids.length) return { comCheckpoint: 0, semDetalhe: linhas.length };
+
+  let porId = new Map();
+  try {
+    const { rows } = await pool.query(
+      `SELECT note_id::text AS id, payload->'checkpoints' AS cps
+         FROM public.note_details
+        WHERE note_id = ANY($1::uuid[])`, [ids]);
+    porId = new Map(rows.map(r => [r.id, r.cps]));
+  } catch (err) {
+    // Falta de detalhe é degradação, não erro: a medição segue sem as duas
+    // colunas novas em vez de não sair.
+    console.warn('[he] checkpoints da última nota indisponíveis:', err.message);
+    return { comCheckpoint: 0, semDetalhe: linhas.length };
+  }
+
+  let comCheckpoint = 0, semDetalhe = 0;
+  for (const l of linhas) {
+    const cps = l._ultima_note_id ? porId.get(l._ultima_note_id) : null;
+    const iniMs = inicioDeslocamento(cps);
+    if (iniMs == null) { semDetalhe++; continue; }
+    comCheckpoint++;
+    l.desloc_ultima_nota = fmtParede(iniMs);
+    l.acordo_30 = acordo30(iniMs, l._fim_escala_ms);
+  }
+  return { comCheckpoint, semDetalhe };
 }
 
 function _diaMais(iso, n) {
@@ -582,6 +688,9 @@ async function medicaoHe(de, ate, opts = {}) {
       qtd:       ultimoSnap.concluidas,
     });
     linha._qtd_executadas = ultimoSnap.executadas;
+    // Guardado pra buscar os checkpoints em lote depois do laço.
+    const _ult = ultimaNotaDaSessao(ultimoSnap.data);
+    linha._ultima_note_id = (_ult && _ult.nota && _ult.nota.id) || null;
     linhas.push(linha);
 
     if (!tipoHe) semCadastro.add(equipe);
@@ -589,6 +698,9 @@ async function medicaoHe(de, ate, opts = {}) {
   }
 
   linhas.sort((a, b) => a.data.localeCompare(b.data) || a.equipe.localeCompare(b.equipe));
+
+  // Regra do acordo 30 min (pedido do José, 09/09/2026) — em lote.
+  const acordo = await _aplicarAcordo30(pool, linhas);
 
   const comValor    = linhas.filter(l => l.valor_total != null);
   const totalValor  = comValor.reduce((s, l) => s + l.valor_total, 0);
@@ -614,6 +726,13 @@ async function medicaoHe(de, ate, opts = {}) {
       incompletas:   linhas.filter(l => l._incompleta).length,
       com_relogin:   linhas.filter(l => l._relogins > 0).length,
       // O que o piso tirou. Aparece na tela e na aba PROCEDÊNCIA do XLSX.
+      // Regra do acordo 30 min.
+      acordo_margem_min:   ACORDO_MARGEM_SEG / 60,
+      acordo_sim:          linhas.filter(l => l.acordo_30 === true).length,
+      acordo_nao:          linhas.filter(l => l.acordo_30 === false).length,
+      // Sem checkpoint da última nota — a condição NÃO foi avaliada. Separado
+      // de `acordo_nao` de propósito: "não sei" não é "não cumpre".
+      acordo_sem_dado:     linhas.filter(l => l.acordo_30 == null).length,
       piso_min:            PISO_HE_SEG / 60,
       descartadas_piso:    descartadas.linhas,
       descartadas_min:     r2(descartadas.minutos),
@@ -651,4 +770,8 @@ module.exports = {
   fmtParede,
   montarLinhaHe,
   tipoHeDaEquipe,
+  inicioDeslocamento,
+  acordo30,
+  EVENT_INICIO_DESLOC,
+  ACORDO_MARGEM_SEG,
 };

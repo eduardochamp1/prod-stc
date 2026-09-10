@@ -557,3 +557,93 @@ test('o motivo do COALESCE está escrito, com o file:line da causa', () => {
   assert.match(bloco, /cronService\.js:\d+/, 'aponta o job que grava só o payload');
   assert.match(bloco, /dataWriter\.js:\d+/, 'e quem grava a coluna');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REGRA DO ACORDO 30 MIN — pedido do José, 09/09/2026
+//
+// "quando uma equipe aponta o deslocamento para a última nota do dia pelo menos
+// 30 minutos antes do fim da escala".
+// ─────────────────────────────────────────────────────────────────────────────
+
+const {
+  inicioDeslocamento, acordo30, EVENT_INICIO_DESLOC, ACORDO_MARGEM_SEG,
+} = require('../db/heQueries');
+
+const cp = (event, registradoEm) => ({ event, registradoEm });
+
+test('o evento do início de deslocamento é o 0', () => {
+  // docs/handoff/API-WPA-EDP.md §297. Trocar isso silenciosamente leria o
+  // checkpoint errado e a regra passaria a responder outra pergunta.
+  assert.equal(EVENT_INICIO_DESLOC, 0);
+  assert.equal(ACORDO_MARGEM_SEG, 1800);
+});
+
+test('pega o PRIMEIRO event 0, não o último', () => {
+  // "Cada novo event=0 começa uma tentativa" (API-WPA-EDP §299). A pergunta é
+  // "foi despachada em tempo?", que fala do 1º despacho — usar o último
+  // premiaria quem tentou de novo tarde.
+  const ini = inicioDeslocamento([
+    cp(0, '2026-08-16T16:20:00'),
+    cp(1, '2026-08-16T16:35:00'),
+    cp(0, '2026-08-16T15:40:00'),
+    cp(2, '2026-08-16T16:40:00'),
+  ]);
+  assert.equal(fmtParede(ini), '2026-08-16 15:40:00');
+});
+
+test('ignora os outros eventos', () => {
+  assert.equal(inicioDeslocamento([cp(1, '2026-08-16T16:00:00'),
+                                   cp(2, '2026-08-16T16:10:00'),
+                                   cp(3, '2026-08-16T17:00:00'),
+                                   cp(4, '2026-08-16T16:50:00')]), null);
+});
+
+test('checkpoint sem instante legível é ignorado, não vira zero', () => {
+  const ini = inicioDeslocamento([cp(0, null), cp(0, 'lixo'), cp(0, '2026-08-16T15:00:00')]);
+  assert.equal(fmtParede(ini), '2026-08-16 15:00:00');
+  assert.equal(inicioDeslocamento([cp(0, null)]), null);
+  assert.equal(inicioDeslocamento([]), null);
+  assert.equal(inicioDeslocamento(null), null);
+});
+
+test('event como string ainda casa — o payload varia', () => {
+  assert.notEqual(inicioDeslocamento([{ event: '0', registradoEm: '2026-08-16T15:00:00' }]), null);
+});
+
+const FIM_ESCALA = janelaDaEscala('2026-08-16', '08:00', '17:00').fimMs;
+
+test('a fronteira dos 30 min é INCLUSIVA — "pelo menos 30"', () => {
+  assert.equal(acordo30(FIM_ESCALA - 30 * 60000, FIM_ESCALA), true, '30 min exatos cumprem');
+  assert.equal(acordo30(FIM_ESCALA - 30 * 60000 - 1, FIM_ESCALA), true, '30 min e 1ms');
+  assert.equal(acordo30(FIM_ESCALA - 29 * 60000, FIM_ESCALA), false, '29 min não');
+});
+
+test('deslocamento bem antes do fim cumpre; depois do fim, não', () => {
+  assert.equal(acordo30(FIM_ESCALA - 3 * 3600000, FIM_ESCALA), true);
+  assert.equal(acordo30(FIM_ESCALA + 60000, FIM_ESCALA), false);
+});
+
+test('sem dado devolve NULL, nunca false', () => {
+  // ⚠️ `false` diria "conferimos e a equipe não cumpriu" — afirmação sobre a
+  // equipe, numa coluna que vira justificativa de cobrança. `null` diz "não
+  // sei", que é a verdade quando falta o checkpoint.
+  assert.equal(acordo30(null, FIM_ESCALA), null);
+  assert.equal(acordo30(FIM_ESCALA - 3600000, null), null);
+  assert.equal(acordo30(NaN, FIM_ESCALA), null);
+  assert.equal(acordo30(undefined, undefined), null);
+});
+
+test('a margem é parametrizável, mas o padrão é o do acordo', () => {
+  const vinte = FIM_ESCALA - 20 * 60000;
+  assert.equal(acordo30(vinte, FIM_ESCALA), false, 'padrão de 30 min reprova');
+  assert.equal(acordo30(vinte, FIM_ESCALA, 15 * 60), true, 'com 15 min passa');
+});
+
+test('turno vira-noite: a comparação usa o fim REAL da escala', () => {
+  // C17 17:00→02:00. O fim é 02:00 do dia SEGUINTE — comparar contra 02:00 do
+  // mesmo dia daria "cumpriu" pra qualquer deslocamento da tarde.
+  const j = janelaDaEscala('2026-08-16', '17:00', '02:00');
+  assert.equal(fmtParede(j.fimMs), '2026-08-17 02:00:00');
+  assert.equal(acordo30(msParede('2026-08-17T01:00:00'), j.fimMs), true, '1h antes das 02:00');
+  assert.equal(acordo30(msParede('2026-08-17T01:45:00'), j.fimMs), false, '15 min antes, não');
+});

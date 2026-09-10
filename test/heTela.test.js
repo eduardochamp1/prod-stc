@@ -54,11 +54,28 @@ test('as 25 colunas existem, na ordem exata da planilha', () => {
   }
 });
 
-test('nenhuma coluna a mais nem a menos', () => {
-  // Uma coluna extra desloca todas as seguintes ao colar no template.
+test('as 25 da planilha vêm PRIMEIRO; extras só depois', () => {
+  // ⚠️ Esta é a invariante que protege o encaixe no template do José: as 25
+  // primeiras são a planilha dele, na ordem dela. Coluna nova inserida no MEIO
+  // desloca todas as seguintes e quebra o "colar" em silêncio — nenhum teste
+  // de cálculo pegaria.
+  //
+  // Em 09/09/2026 entraram INÍCIO DESLOC. ÚLTIMA NOTA e ACORDO 30 MIN (regra do
+  // acordo 30 min), e foram pro FIM justamente por isso.
   const bloco = blocoHeColunas();
-  const achadas = (bloco.match(/'[^']+'/g) || []).length;
-  assert.equal(achadas, ORDEM.length, `esperava ${ORDEM.length} colunas, achei ${achadas}`);
+  const achadas = (bloco.match(/'([^']+)'/g) || []).map(s => s.slice(1, -1));
+  assert.deepEqual(achadas.slice(0, ORDEM.length), ORDEM,
+    'as 25 primeiras têm de ser exatamente a planilha, na ordem');
+  const extras = achadas.slice(ORDEM.length);
+  assert.deepEqual(extras, ['INÍCIO DESLOC. ÚLTIMA NOTA', 'ACORDO 30 MIN']);
+});
+
+test('a linha de dados tem uma posição por coluna', () => {
+  // 17 valores + 8 vazios de parecer + 2 da regra nova = 27.
+  const i = SRC.indexOf('aoa.push([');
+  const bloco = SRC.slice(i, SRC.indexOf(']);', i));
+  assert.match(bloco, /_heDataBR\(l\.desloc_ultima_nota\)/);
+  assert.match(bloco, /l\.acordo_30 === true \? 'Acordo 30 min' : ''/);
 });
 
 test('as 8 colunas de parecer saem vazias na linha de dados', () => {

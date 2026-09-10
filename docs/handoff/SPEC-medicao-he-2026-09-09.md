@@ -570,3 +570,93 @@ dado:
 3. 113 logoffs nunca buscados na EDP — prorrogação de turno noturno perdida.
 
 Nenhum deles apareceria numa conferência que só olhasse o total.
+
+## 19. Regra do "Acordo 30 min" (09/09/2026)
+
+Pedido: *"quando uma equipe aponta o deslocamento para a última nota do dia
+pelo menos 30 minutos antes do fim da escala… uma coluna com o horário indicado
+do apontamento de deslocamento para a nota e uma coluna com a condição
+respondida"*.
+
+**A lógica de negócio:** se a equipe já estava a caminho da última nota bem
+antes do turno fechar, a hora extra é legítima — foi despachada em tempo e o
+serviço passou do horário. É a justificativa que hoje é digitada à mão na
+coluna `AUTORIZADO POR`, onde `ACORDO 30 MINUTOS` é um dos valores da lista
+`AFIRMATIVAS`.
+
+### Duas colunas novas, NO FIM
+
+`INÍCIO DESLOC. ÚLTIMA NOTA` (Z) e `ACORDO 30 MIN` (AA), **depois** de
+`TOTAL FINAL`. As 25 primeiras seguem espelhando a planilha, na ordem dela —
+inserir no meio deslocaria todas as seguintes e quebraria o encaixe no template
+em silêncio. Um teste fixa essa invariante.
+
+⚠️ **Não preenche a coluna `AUTORIZADO POR` automaticamente.** Coerente com a
+decisão 3 (§10): o sistema não emite parecer nem autorização. Ele responde a
+condição factual e o humano decide se leva pro campo de autorização.
+
+### De onde sai
+
+Checkpoint **`event = 0` (Início do Deslocamento)** da última nota do dia,
+lendo `registradoEm` — que vem de `RegisteredAt2`.
+
+⚠️ **Nunca `TimeStamp`.** Nos eventos 0 e 1 o `TimeStamp` é o relógio do
+aparelho no momento da SINCRONIZAÇÃO: medido na nota 104875481, deu **55 min**
+de erro no evento 0. Tabela em `docs/handoff/API-WPA-EDP.md`.
+
+**Vale o PRIMEIRO `event = 0`**, não o último. "Cada novo event=0 começa uma
+tentativa" — e a pergunta é "foi despachada em tempo?", que fala do primeiro
+despacho. Usar o último premiaria quem tentou de novo tarde.
+
+### Três estados, e a diferença entre dois deles é o ponto
+
+| Estado | Tela | XLSX |
+|---|---|---|
+| Cumpriu | `Acordo 30 min` (verde) | `Acordo 30 min` |
+| Não cumpriu | `não` | *(vazio)* |
+| **Sem checkpoint** | `sem dado` (âmbar) | *(vazio)* |
+
+⚠️ `acordo30` devolve **null**, nunca `false`, quando falta o checkpoint.
+`false` diria "conferimos e a equipe não cumpriu" — afirmação sobre a equipe,
+numa coluna que vira justificativa de cobrança. O resumo separa
+`acordo_sim` / `acordo_nao` / `acordo_sem_dado`, e a tela avisa quantas ficaram
+sem avaliação.
+
+A fronteira é **inclusiva**: exatamente 30 min antes cumpre ("pelo menos 30").
+
+Turno vira-noite usa o fim REAL da escala — pra um C17 (17:00→02:00) a
+comparação é contra 02:00 do dia SEGUINTE.
+
+### Custo
+
+Os checkpoints das últimas notas são lidos em **uma consulta em lote** depois
+do laço. Uma por linha seriam ~400 consultas e custaria mais que a medição
+inteira. Cobertura depende de `note_details`, populada por cron — nota antiga
+pode não estar lá, e aí a linha cai em "sem dado".
+
+## 20. Segunda regra pedida — BLOQUEADA, falta definição
+
+Pedido: *"adicionar uma coluna com o horário e o tempo do último deslocamento
+para a base"*.
+
+**Não há dado de "base" no sistema.** Verificado em 09/09/2026:
+
+- os checkpoints documentados são `0..4` e **todos pertencem a uma NOTA**
+  (`docs/handoff/API-WPA-EDP.md`); não existe evento de retorno;
+- `db/deslocamentosQueries.js` só pareia `0→1` dentro de notas — não modela
+  base;
+- não há localização de base em `equipes_oficiais` nem em lugar nenhum.
+
+⬜ **Precisa da definição do José.** Candidatas, e cada uma dá número diferente:
+
+1. **Do fim do trabalho da última nota até o logoff** — `event 3` da última
+   nota → `sessionEnd`. Usa só dado que já temos. É a interpretação mais
+   provável: a equipe fecha a última nota, dirige de volta e desloga na base.
+2. **Do último `event 1` (Fim do Deslocamento) até o logoff** — variante que
+   ancora no fim do último deslocamento registrado.
+3. **Um apontamento próprio no app**, que existiria em outro endpoint ainda
+   não mapeado. Se for este, precisa de investigação na API antes de qualquer
+   código.
+
+Enquanto não houver definição, a coluna não foi criada — inventar a régua aqui
+poria um número fabricado numa planilha de cobrança.
