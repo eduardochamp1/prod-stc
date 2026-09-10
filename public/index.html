@@ -5459,6 +5459,7 @@ ${matrizHTML}
       // a planilha atual e são coladas no template existente. Inserir no meio
       // deslocaria todas as seguintes e quebraria o encaixe em silêncio.
       'INÍCIO DESLOC. ÚLTIMA NOTA', 'ACORDO 30 MIN',
+      'INÍCIO DESLOC. BASE', 'TEMPO DESLOC. BASE (M)',
     ];
 
     /** Lista AFIRMATIVAS da aba DADOS, inteira (decisão de 09/09/2026). */
@@ -5584,6 +5585,8 @@ ${matrizHTML}
                   ? '<span style="color:var(--text2)">não</span>'
                   : '<span style="color:#e67e22" title="sem checkpoint de deslocamento na última nota">sem dado</span>')
           }</td>
+          <td>${_heDataBR(l.desloc_base_em) || '—'}</td>
+          <td style="text-align:right">${l.desloc_base_min == null ? '—' : l.desloc_base_min}</td>
         </tr>`).join('');
 
       cont.innerHTML = `
@@ -5654,6 +5657,7 @@ ${matrizHTML}
                      <th>Fim escala</th><th>Fim sessão</th><th>Prorrog.</th>
                      <th>Total (m)</th><th>Valor/h</th><th>Valor total</th>
                      <th>Início desloc. últ. nota</th><th>Acordo 30 min</th>
+                     <th>Início volta base</th><th>Volta base (m)</th>
                    </tr></thead>
                    <tbody>${corpo}</tbody>
                  </table>
@@ -5706,6 +5710,11 @@ ${matrizHTML}
             // que a equipe não cumpriu, e `null` não sustenta isso.
             _heDataBR(l.desloc_ultima_nota),
             l.acordo_30 === true ? 'Acordo 30 min' : '',
+            // AB, AC — volta pra base: fim do trabalho da última nota → logoff.
+            // Vazio quando não dá pra inferir (sem checkpoint, sessão aberta,
+            // ou logoff anterior ao fim do trabalho). Ver `deslocBase`.
+            _heDataBR(l.desloc_base_em),
+            l.desloc_base_min == null ? '' : l.desloc_base_min,
           ]);
         }
         const ws = XLSX.utils.aoa_to_sheet(aoa);

@@ -67,7 +67,10 @@ test('as 25 da planilha vêm PRIMEIRO; extras só depois', () => {
   assert.deepEqual(achadas.slice(0, ORDEM.length), ORDEM,
     'as 25 primeiras têm de ser exatamente a planilha, na ordem');
   const extras = achadas.slice(ORDEM.length);
-  assert.deepEqual(extras, ['INÍCIO DESLOC. ÚLTIMA NOTA', 'ACORDO 30 MIN']);
+  assert.deepEqual(extras, [
+    'INÍCIO DESLOC. ÚLTIMA NOTA', 'ACORDO 30 MIN',        // regra do acordo 30 min
+    'INÍCIO DESLOC. BASE', 'TEMPO DESLOC. BASE (M)',      // volta pra base
+  ]);
 });
 
 test('a linha de dados tem uma posição por coluna', () => {

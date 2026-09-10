@@ -344,6 +344,68 @@ function acordo30(inicioDeslocMs, fimEscalaMs, margemSeg = ACORDO_MARGEM_SEG) {
   return inicioDeslocMs <= fimEscalaMs - margemSeg * 1000;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DESLOCAMENTO PARA A BASE — pedido do José em 09/09/2026
+//
+// "adicionar uma coluna com o horário e o tempo do último deslocamento para a
+// base".
+//
+// ⚠️ NÃO EXISTE DADO DE BASE NO SISTEMA. Verificado: os checkpoints
+// documentados são 0..4 e TODOS pertencem a uma nota
+// (`docs/handoff/API-WPA-EDP.md`); não há evento de retorno, e não há
+// localização de base em `equipes_oficiais` nem em lugar nenhum.
+//
+// A régua foi ESCOLHIDA pelo José entre três candidatas (spec §20):
+//   **do fim do trabalho da última nota até o logoff.**
+// A leitura operacional: a equipe fecha a última nota, dirige de volta e
+// desloga na base. Não é medição de GPS — é inferência a partir de dois
+// instantes que temos, e a spec registra isso pra ninguém tratar como
+// deslocamento medido.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Checkpoint 3 = Fim do Trabalho (docs/handoff/API-WPA-EDP.md §297). */
+const EVENT_FIM_TRABALHO = 3;
+
+/**
+ * FUNÇÃO PURA (testável): quando o trabalho na nota terminou de fato.
+ *
+ * Devolve o **ÚLTIMO** `event = 3`. É assimétrico em relação a
+ * `inicioDeslocamento` (que pega o PRIMEIRO `event = 0`), e de propósito: lá a
+ * pergunta é "quando foi despachada?", que é o primeiro despacho; aqui é
+ * "quando terminou?", que é o último fim. Usar o primeiro `3` numa nota com
+ * várias tentativas encurtaria o trabalho e alongaria a viagem de volta.
+ */
+function fimTrabalho(checkpoints) {
+  let maior = null;
+  for (const cp of (checkpoints || [])) {
+    if (!cp || Number(cp.event) !== EVENT_FIM_TRABALHO) continue;
+    const ms = msParede(cp.registradoEm);
+    if (ms == null) continue;
+    if (maior == null || ms > maior) maior = ms;
+  }
+  return maior;
+}
+
+/**
+ * FUNÇÃO PURA (testável): a volta pra base, inferida.
+ *
+ * Começa no fim do trabalho da última nota e termina no logoff.
+ *
+ * Devolve **null** quando:
+ *   • falta uma das pontas (sem checkpoint, ou sessão ainda aberta);
+ *   • o logoff é ANTERIOR ao fim do trabalho. Isso é impossível na operação —
+ *     ou o dado está inconsistente, ou a "última nota" não é a que fecha o
+ *     dia. Devolver duração negativa, ou zerar, seria inventar; null diz que
+ *     não dá pra afirmar.
+ */
+function deslocBase(fimTrabalhoMs, fimSessaoMs) {
+  if (fimTrabalhoMs == null || fimSessaoMs == null) return null;
+  if (!Number.isFinite(fimTrabalhoMs) || !Number.isFinite(fimSessaoMs)) return null;
+  const duracaoMs = fimSessaoMs - fimTrabalhoMs;
+  if (duracaoMs < 0) return null;
+  return { inicioMs: fimTrabalhoMs, duracaoMs, duracaoMin: Math.round(duracaoMs / 60000) };
+}
+
 /** FUNÇÃO PURA: ms de parede → 'YYYY-MM-DD HH:MM:SS' pra planilha. */
 function fmtParede(ms) {
   if (ms == null || !Number.isFinite(ms)) return null;
@@ -387,12 +449,15 @@ function montarLinhaHe({ equipe, dia, cadastro, janela, sessao, he, valorHora, u
     // última nota são lidos em lote (ver `_aplicarAcordo30`).
     desloc_ultima_nota: null,
     acordo_30:          null,
+    desloc_base_em:     null,
+    desloc_base_min:    null,
     _total_h:       he.total_h,
     _incompleta:    he.incompleta,
     _relogins:      sessao.relogins,
     // ms do fim da escala, pra comparar com o início do deslocamento sem
     // reparsear a string formatada.
     _fim_escala_ms: janela.fimMs,
+    _fim_sessao_ms: sessao.fimMs,
   };
 }
 
@@ -514,11 +579,24 @@ async function _aplicarAcordo30(pool, linhas) {
   let comCheckpoint = 0, semDetalhe = 0;
   for (const l of linhas) {
     const cps = l._ultima_note_id ? porId.get(l._ultima_note_id) : null;
-    const iniMs = inicioDeslocamento(cps);
-    if (iniMs == null) { semDetalhe++; continue; }
+    if (!cps) { semDetalhe++; continue; }
     comCheckpoint++;
-    l.desloc_ultima_nota = fmtParede(iniMs);
-    l.acordo_30 = acordo30(iniMs, l._fim_escala_ms);
+
+    // Regra 1 — acordo 30 min.
+    const iniMs = inicioDeslocamento(cps);
+    if (iniMs != null) {
+      l.desloc_ultima_nota = fmtParede(iniMs);
+      l.acordo_30 = acordo30(iniMs, l._fim_escala_ms);
+    }
+
+    // Regra 2 — volta pra base: fim do trabalho da última nota → logoff.
+    // Régua escolhida pelo José em 09/09/2026 entre três candidatas (spec §20).
+    const volta = deslocBase(fimTrabalho(cps), l._fim_sessao_ms);
+    if (volta) {
+      l.desloc_base_em  = fmtParede(volta.inicioMs);
+      l.desloc_base_min = volta.duracaoMin;
+    }
+
   }
   return { comCheckpoint, semDetalhe };
 }
@@ -733,6 +811,12 @@ async function medicaoHe(de, ate, opts = {}) {
       // Sem checkpoint da última nota — a condição NÃO foi avaliada. Separado
       // de `acordo_nao` de propósito: "não sei" não é "não cumpre".
       acordo_sem_dado:     linhas.filter(l => l.acordo_30 == null).length,
+      // Volta pra base: quantas linhas puderam ser inferidas.
+      base_com_dado:       linhas.filter(l => l.desloc_base_min != null).length,
+      base_min_mediana:    (() => {
+        const v = linhas.map(l => l.desloc_base_min).filter(n => n != null).sort((x, y) => x - y);
+        return v.length ? v[Math.floor(v.length / 2)] : null;
+      })(),
       piso_min:            PISO_HE_SEG / 60,
       descartadas_piso:    descartadas.linhas,
       descartadas_min:     r2(descartadas.minutos),
@@ -772,6 +856,9 @@ module.exports = {
   tipoHeDaEquipe,
   inicioDeslocamento,
   acordo30,
+  fimTrabalho,
+  deslocBase,
+  EVENT_FIM_TRABALHO,
   EVENT_INICIO_DESLOC,
   ACORDO_MARGEM_SEG,
 };

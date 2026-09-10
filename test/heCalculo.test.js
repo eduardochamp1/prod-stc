@@ -647,3 +647,68 @@ test('turno vira-noite: a comparação usa o fim REAL da escala', () => {
   assert.equal(acordo30(msParede('2026-08-17T01:00:00'), j.fimMs), true, '1h antes das 02:00');
   assert.equal(acordo30(msParede('2026-08-17T01:45:00'), j.fimMs), false, '15 min antes, não');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLTA PRA BASE — régua escolhida pelo José em 09/09/2026 (spec §20, opção 1):
+// do fim do trabalho da última nota até o logoff.
+//
+// ⚠️ NÃO é deslocamento medido. Não existe dado de base no sistema — nem evento
+// de retorno, nem localização. É INFERÊNCIA a partir de dois instantes que
+// temos, e quem ler a coluna precisa saber disso.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { fimTrabalho, deslocBase, EVENT_FIM_TRABALHO } = require('../db/heQueries');
+
+test('o evento do fim do trabalho é o 3', () => {
+  assert.equal(EVENT_FIM_TRABALHO, 3);
+});
+
+test('pega o ÚLTIMO event 3 — assimétrico ao acordo, de propósito', () => {
+  // `inicioDeslocamento` pega o PRIMEIRO event 0 ("quando foi despachada?");
+  // aqui é "quando terminou?", que é o último fim. Pegar o primeiro numa nota
+  // com várias tentativas encurtaria o trabalho e alongaria a viagem.
+  const ft = fimTrabalho([
+    cp(3, '2026-08-16T17:10:00'),
+    cp(0, '2026-08-16T15:40:00'),
+    cp(3, '2026-08-16T18:05:00'),
+  ]);
+  assert.equal(fmtParede(ft), '2026-08-16 18:05:00');
+});
+
+test('sem event 3, não há de onde partir', () => {
+  assert.equal(fimTrabalho([cp(0, '2026-08-16T15:00:00'), cp(4, '2026-08-16T17:00:00')]), null);
+  assert.equal(fimTrabalho([]), null);
+  assert.equal(fimTrabalho(null), null);
+});
+
+test('a volta vai do fim do trabalho ao logoff', () => {
+  const ft = msParede('2026-08-16T18:05:00');
+  const v = deslocBase(ft, msParede('2026-08-16T18:37:00'));
+  assert.equal(fmtParede(v.inicioMs), '2026-08-16 18:05:00');
+  assert.equal(v.duracaoMin, 32);
+  assert.equal(v.duracaoMs, 32 * 60000);
+});
+
+test('logoff ANTES do fim do trabalho devolve null', () => {
+  // Impossível na operação: ou o dado está inconsistente, ou a "última nota"
+  // não é a que fecha o dia. Duração negativa, ou zerada, seria invenção.
+  assert.equal(deslocBase(msParede('2026-08-16T18:00:00'),
+                          msParede('2026-08-16T17:00:00')), null);
+});
+
+test('logoff exatamente no fim do trabalho é volta de zero, não null', () => {
+  // Zero aqui é medida real (deslogou na hora), diferente de "não sei".
+  const t = msParede('2026-08-16T18:00:00');
+  assert.equal(deslocBase(t, t).duracaoMin, 0);
+});
+
+test('sessão aberta ou sem checkpoint devolve null', () => {
+  assert.equal(deslocBase(msParede('2026-08-16T18:00:00'), null), null);
+  assert.equal(deslocBase(null, msParede('2026-08-16T18:30:00')), null);
+  assert.equal(deslocBase(NaN, msParede('2026-08-16T18:30:00')), null);
+});
+
+test('volta que atravessa a meia-noite conta certo', () => {
+  const v = deslocBase(msParede('2026-08-16T23:40:00'), msParede('2026-08-17T00:25:00'));
+  assert.equal(v.duracaoMin, 45);
+});
