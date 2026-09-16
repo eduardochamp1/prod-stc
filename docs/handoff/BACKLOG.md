@@ -147,8 +147,8 @@
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
 | P1-47 | `runSyncLogoffs` perdia o logoff de todo turno que sai depois das 03:00 — a Medição HE perdia a prorrogação do turno noturno | Dados/Cobrança | **done** (09/09) — D-1+D-2, busca sem janela, casamento por instante, grava coluna+jsonb; 18 testes. Histórico de 16-31/08 recuperado (113/113) |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
-| P1-49 | Conta de 2 regionais (`engelmig_es` = GUA+CAC) tinha o dropdown de regional TRAVADO em 4 abas — resíduo do P1-19, que foi corrigido só na Histórico | Frontend | **done** (16/09) — fonte única `_travarRegionalPorEscopo` em 6 abas; 9 testes; falta confirmar em prod |
-| P1-50 | Trocar de conta sem recarregar deixava os dropdowns com a regional da conta ANTERIOR → consulta com regional fora do escopo, 403, aba presa em "Carregando…" | Frontend | **done** (16/09) — guarda `window.MultiSelect` era código morto (3ª vez); 9 testes |
+| P1-49 | Conta de 2 regionais (`engelmig_es` = GUA+CAC) tinha o dropdown de regional TRAVADO em 4 abas — resíduo do P1-19, que foi corrigido só na Histórico | Frontend | **done** (16/09) — fonte única `_travarRegionalPorEscopo` em 6 abas; 9 testes; **confirmado em prod 16/09** |
+| P1-50 | Trocar de conta sem recarregar deixava os dropdowns com a regional da conta ANTERIOR → consulta com regional fora do escopo, 403, aba presa em "Carregando…" | Frontend | **done** (16/09) — guarda `window.MultiSelect` era código morto (3ª vez); 9 testes; **confirmado em prod 16/09** |
 
 ---
 
@@ -5110,7 +5110,7 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
 ## P1-49 — a conta do ES não conseguia filtrar por região (resíduo do P1-19)
 
 - **Categoria:** Frontend
-- **Status:** **done** (16/09/2026) — falta confirmar em produção com a conta
+- **Status:** **done** (16/09/2026) — **verificado em produção em 16/09/2026**
 - **Fonte:** reportado em 16/09/2026 — "um usuário da conta do ES não está
   conseguindo fazer o filtro de região".
 - **Evidência:**
@@ -5158,11 +5158,14 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   novo.
 - **Critério de aceite:**
   - [x] Suíte verde: 1038 testes, 0 falhas.
-  - [ ] **Em produção:** logar como `engelmig_es` e, nas 4 abas, abrir o dropdown
-        de regional e selecionar só Guarapari — a lista tem de responder.
+  - [x] **Em produção (16/09):** logado como `engelmig_es`, as 4 abas abrem o
+        dropdown e respondem ao filtro. Confirmado pelo dono.
   - [ ] Logar como `guarapari`: dropdown continua travado em Guarapari.
   - [ ] Logar como `admin`: estreitar o Monitor pra 1 regional, abrir Ranking e
         Histórico — nenhuma das duas pode travar.
+        ⚠️ Estes dois NÃO foram exercitados em 16/09 — o que se verificou foi o
+        caminho da conta ES. Ficam abertos: o 1º prova que a trava legítima
+        continua de pé, o 2º cobre o resíduo do P1-19 corrigido no Ranking.
 - **Esforço:** 2h (investigação + fix + testes).
 - **Rollback:** `git revert` do commit. Só `public/index.html` e `test/` —
   nada de backend, banco ou dado.
@@ -5182,7 +5185,7 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
 ## P1-50 — trocar de conta sem recarregar contaminava os dropdowns de regional
 
 - **Categoria:** Frontend
-- **Status:** **done** (16/09/2026) — falta confirmar em produção
+- **Status:** **done** (16/09/2026) — **verificado em produção em 16/09/2026**
 - **Fonte:** encontrado em 16/09/2026 **durante a conferência do P1-49**, ao
   trocar de conta pelo botão "Sair" sem recarregar a página.
 - **Evidência:**
@@ -5235,11 +5238,10 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   `window.MultiSelect` no arquivo, pra não haver quarta vez.
 - **Critério de aceite:**
   - [x] Suíte verde: 1047 testes, 0 falhas.
-  - [ ] **Em produção:** entrar como `guarapari`, abrir Rejeições/Deslocamentos/
-        TMA/Notas/Gráficos, clicar em "Sair", entrar como `cachoeiro` **sem
-        recarregar** e voltar nessas abas — todas têm de dizer Cachoeiro e
-        carregar.
+  - [x] **Em produção (16/09):** `guarapari` → Sair → `cachoeiro` sem recarregar;
+        as 5 abas passam a dizer Cachoeiro e carregam. Confirmado pelo dono.
   - [ ] Mesmo teste na ordem inversa e com `engelmig_es` no meio.
+        ⚠️ NÃO exercitado em 16/09 — verificou-se só o sentido guarapari→cachoeiro.
 - **Esforço:** 1h30 (investigação + fix + testes).
 - **Rollback:** `git revert`. Só `public/index.html` e `test/`.
 - **Relacionado:** P1-49 (achado durante a conferência dele; os dois se somam),
