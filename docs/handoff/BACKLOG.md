@@ -148,6 +148,7 @@
 | P1-47 | `runSyncLogoffs` perdia o logoff de todo turno que sai depois das 03:00 — a Medição HE perdia a prorrogação do turno noturno | Dados/Cobrança | **done** (09/09) — D-1+D-2, busca sem janela, casamento por instante, grava coluna+jsonb; 18 testes. Histórico de 16-31/08 recuperado (113/113) |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 | P1-49 | Conta de 2 regionais (`engelmig_es` = GUA+CAC) tinha o dropdown de regional TRAVADO em 4 abas — resíduo do P1-19, que foi corrigido só na Histórico | Frontend | **done** (16/09) — fonte única `_travarRegionalPorEscopo` em 6 abas; 9 testes; falta confirmar em prod |
+| P1-50 | Trocar de conta sem recarregar deixava os dropdowns com a regional da conta ANTERIOR → consulta com regional fora do escopo, 403, aba presa em "Carregando…" | Frontend | **done** (16/09) — guarda `window.MultiSelect` era código morto (3ª vez); 9 testes |
 
 ---
 
@@ -5175,3 +5176,81 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   `_deriveLegacyRegional` + `REGIONAIS_GROUPS` mata a classe inteira. Note que
   `services/regionalGroups.js`, que o comentário do front diz espelhar, **não
   existe mais no backend** — o grupo `ES` hoje só vive no frontend.
+
+---
+
+## P1-50 — trocar de conta sem recarregar contaminava os dropdowns de regional
+
+- **Categoria:** Frontend
+- **Status:** **done** (16/09/2026) — falta confirmar em produção
+- **Fonte:** encontrado em 16/09/2026 **durante a conferência do P1-49**, ao
+  trocar de conta pelo botão "Sair" sem recarregar a página.
+- **Evidência:**
+  - Logado como `cachoeiro` (escopo `CAC`), as abas **Rejeições,
+    Deslocamentos, TMA, Notas e Gráficos** mostravam **"Guarapari"** no filtro
+    de regional e ficavam presas em "Carregando…". O Monitor, na mesma sessão,
+    mostrava "Cachoeiro" — correto.
+  - No console, com a conta `engelmig_es`, o `<select>` já vinha certo
+    (`["ALL","GUA","CAC"]`) enquanto o painel do componente exibia São José dos
+    Campos. O DOM estava podado; o componente, não.
+  - Verificado em browser real que `typeof window.MultiSelect === "undefined"`
+    e que a guarda `if (window.MultiSelect && …)` nunca passa. `const` no topo
+    de um `<script>` **não** vira propriedade do `window` (só `var` vira), e
+    `window.MultiSelect` nunca foi atribuído em commit nenhum.
+- **Causa:** a guarda do bloco de sincronia em `applyUserPermissions` era
+  `window.MultiSelect` — **código morto**. `applyUserPermissions` podava o
+  `<select>` pro escopo certo, mas nunca dava `MultiSelect.refresh()`, e o
+  componente guarda a lista de itens em memória desde o `init`.
+  O Monitor escapava porque `init()` re-chama `MultiSelect.init` a cada login e
+  o `init` com instância existente cai em `refresh()`. As demais abas são
+  guardadas por `_rejMultiInited`, `_deslocMultiInited`, `_grafMultiInited`,
+  `_tmaMultiInited` — flags de módulo **não resetadas no login** —, então o
+  `init` nunca re-rodava e o `refresh` nunca acontecia.
+  Segundo defeito somado ao primeiro: `refresh()` atualizava `inst.items` mas
+  **não** o `allLabel`, então o rótulo "Todas (…)" continuava o da conta velha
+  mesmo depois de os itens trocarem.
+- **Impacto:** indisponibilidade, **não** exposição. O `<select>` estava
+  correto e `applyScope` (router-level) devolve 403 quando a interseção é
+  vazia — nenhum dado de outra regional foi servido. O que acontecia era a aba
+  inteira parar de carregar para quem trocasse de conta ou refizesse login sem
+  recarregar. Interage com o P1-49: em conta de 1 regional,
+  `_travarRegionalPorEscopo` chamava `setValues(['CAC'])` sobre itens velhos,
+  nada casava, o fallback do `setValues` marcava TUDO (= a regional errada) e
+  então travava — deixando a conta **presa na regional de outro**.
+- **A arqueologia:** este mesmo erro já tinha sido corrigido **duas vezes**:
+  `f1a3ada` (08/06, Monitor) e `b591dc3` (09/06, Notas), ambos trocando
+  `window.MultiSelect` por checagem de escopo local. `fbedb26` (11/06, "fix(auth):
+  applyUserPermissions sempre re-popula dropdown regional") reintroduziu o padrão
+  no terceiro lugar, dois dias depois — e esse ficou três meses.
+- **Ação (feita):**
+  ✅ Guarda passa a ser `typeof MultiSelect !== 'undefined'`, igual ao que
+  `f1a3ada`/`b591dc3` fizeram.
+  ✅ `refresh()` recalcula o `allLabel`. Só quando o call-site **não** fixou um
+  rótulo (`allLabelFixo`, usado por Monitor/Ranking/Histórico) e só quando as
+  options novas trazem um `ALL`/`TODAS` — senão os selects de equipe, que são
+  repopulados sem `ALL`, perderiam o rótulo próprio.
+  ✅ `test/multiSelectEscopo.test.js` — 9 testes. Carrega a IIFE **real** do
+  `index.html` sobre um DOM mínimo e observa o que o componente renderizou.
+  Contra o código anterior, 5 dos 9 falham. Inclui o teste-guarda que proíbe
+  `window.MultiSelect` no arquivo, pra não haver quarta vez.
+- **Critério de aceite:**
+  - [x] Suíte verde: 1047 testes, 0 falhas.
+  - [ ] **Em produção:** entrar como `guarapari`, abrir Rejeições/Deslocamentos/
+        TMA/Notas/Gráficos, clicar em "Sair", entrar como `cachoeiro` **sem
+        recarregar** e voltar nessas abas — todas têm de dizer Cachoeiro e
+        carregar.
+  - [ ] Mesmo teste na ordem inversa e com `engelmig_es` no meio.
+- **Esforço:** 1h30 (investigação + fix + testes).
+- **Rollback:** `git revert`. Só `public/index.html` e `test/`.
+- **Relacionado:** P1-49 (achado durante a conferência dele; os dois se somam),
+  P1-46 (`MultiSelect.init` ignora o filtro restaurado — mesma família).
+- **Dívida que fica:** `isSinglesigla` em `applyUserPermissions` é
+  **sempre false** — a expressão é `… && escopo.length === 1 && !expanded`, mas
+  `expandRegional` devolve `[sigla]` (truthy) para qualquer valor que não seja
+  `'ALL'`, então `!expanded` nunca é verdade. O ramo que travaria o `<select>`
+  pra conta de 1 regional é inalcançável. Hoje não faz falta —
+  `_travarRegionalPorEscopo` trava no init de cada aba e o backend valida —, mas
+  significa que, depois de um re-login sem reload, a conta de 1 regional fica com
+  o dropdown DESTRAVADO (com as opções certas). Corrigir exige decidir qual das
+  duas travas é a fonte única. **NÃO corrigido aqui de propósito**: ativar mais
+  um ramo morto no mesmo commit misturaria duas mudanças não testáveis em browser.

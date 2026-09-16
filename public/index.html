@@ -1466,7 +1466,28 @@
         el.disabled = isSinglesigla;
 
         // Sincroniza o componente MultiSelect (se já inicializado pra esse id)
-        if (window.MultiSelect && MultiSelect.getValues) {
+        //
+        // bug reportado em 16/09/2026 (P1-50): a conta `cachoeiro` via "Guarapari"
+        // em Rejeições, Deslocamentos, TMA, Notas e Gráficos, e as abas ficavam
+        // presas em "Carregando…" (a consulta saía com regionals=GUA e o
+        // applyScope devolvia 403). Causa: a guarda aqui era `window.MultiSelect`,
+        // que é SEMPRE undefined — `const MultiSelect` no topo do <script> não
+        // vira propriedade do window (só `var` vira), e nada nunca atribuiu
+        // window.MultiSelect. O bloco inteiro era código morto: o <select> era
+        // podado pro escopo certo, mas o componente seguia com os itens da conta
+        // ANTERIOR, porque ele guarda a lista em memória desde o init.
+        //
+        // O Monitor escapava porque init() re-chama MultiSelect.init a cada
+        // login e o init com instância existente cai em refresh(). As outras
+        // abas têm flags _*MultiInited que não são resetadas no login, então o
+        // init nunca re-roda — e nunca havia refresh.
+        //
+        // Este MESMO erro já tinha sido corrigido duas vezes dias antes:
+        // f1a3ada (08/06, Monitor) e b591dc3 (09/06, Notas), os dois trocando
+        // window.MultiSelect por checagem de escopo local. fbedb26 (11/06)
+        // reintroduziu o padrão aqui. Terceira vez — daí o teste-guarda em
+        // test/multiSelectEscopo.test.js.
+        if (typeof MultiSelect !== 'undefined' && MultiSelect.getValues) {
           try {
             MultiSelect.refresh(id);
             if (isSinglesigla) {
@@ -1643,7 +1664,13 @@
         if (!sel) { console.warn('[MultiSelect] select não encontrado:', selectId); return; }
         if (_instances[selectId]) { refresh(selectId); return; }
 
-        const allLabel = opts.allLabel || sel.querySelector('option[value="ALL"]')?.textContent?.trim()
+        // allLabelFixo = rótulo passado pelo call-site (ex: 'Todas as Regionais'
+        // do Monitor/Ranking/Histórico). Tem precedência e o refresh() não mexe.
+        // Sem ele, o rótulo sai do <option value="ALL"> e PODE mudar quando o
+        // escopo do user muda — ver P1-50 (16/09/2026): sem recalcular no
+        // refresh, a conta nova herdava "Todas (Guarapari)" da conta anterior.
+        const allLabelFixo = opts.allLabel || null;
+        const allLabel = allLabelFixo || sel.querySelector('option[value="ALL"]')?.textContent?.trim()
                        || sel.querySelector('option[value="TODAS"]')?.textContent?.trim()
                        || 'Todas';
 
@@ -1654,7 +1681,7 @@
         }));
 
         const inst = {
-          sel, allLabel, items,
+          sel, allLabel, allLabelFixo, items,
           selected: new Set(items.filter(o => o.value !== 'ALL' && o.value !== 'TODAS').map(o => o.value)),
           onChange: opts.onChange || null,
           scrollMaxH: opts.scrollMaxH || 280,
@@ -1733,6 +1760,18 @@
           value: o.value, label: o.textContent.trim()
         }));
         inst.items = newItems;
+
+        // P1-50 (16/09/2026): o rótulo "todas" também tem de acompanhar. Sem
+        // isto, trocar de conta deixava o botão dizendo "Todas (Guarapari)" pra
+        // um user de Cachoeiro — os itens trocavam, o rótulo não. Só recalcula
+        // quando o call-site NÃO fixou um rótulo e quando as options novas
+        // realmente trazem um ALL/TODAS; senão mantém o que já havia (os selects
+        // de equipe são repopulados sem ALL e perderiam o rótulo próprio).
+        if (!inst.allLabelFixo) {
+          const novoAll = inst.sel.querySelector('option[value="ALL"]')?.textContent?.trim()
+                       || inst.sel.querySelector('option[value="TODAS"]')?.textContent?.trim();
+          if (novoAll) inst.allLabel = novoAll;
+        }
         const realNew = newItems.filter(o => o.value !== 'ALL' && o.value !== 'TODAS');
         const prevValid = new Set(Array.from(inst.selected).filter(v => realNew.some(o => o.value === v)));
         if (eraTodas) {
