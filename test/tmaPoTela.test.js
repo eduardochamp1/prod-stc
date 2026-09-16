@@ -164,10 +164,18 @@ test('as equipes são populadas ANTES do MultiSelect inicializar', () => {
 });
 
 test('o filtro de regional respeita o perfil regional do usuário', () => {
+  // 16/09/2026 — a trava saiu daqui pra `_travarRegionalPorEscopo` (fonte única).
+  // A versão anterior deste teste exigia `getStoredSession` + `setDisabled` no
+  // corpo da initTma, e era exatamente esse inline que travava o dropdown da
+  // conta engelmig_es (2 regionais): ele decidia pela string legada
+  // `sess.regional`, que pra GUA|CAC vale 'ES' — sigla que não existe no select.
+  // O invariante de PERMISSÃO continua o mesmo e é provado em
+  // test/regionalTravaEscopo.test.js: trava ⟺ o token tem 1 regional só.
   const corpo = corpoDe('async function initTma', 'function _tmaFiltros');
-  assert.match(corpo, /getStoredSession/);
-  assert.match(corpo, /MultiSelect\.setDisabled\('tma-regional-select', true\)/,
+  assert.match(corpo, /_travarRegionalPorEscopo\('tma-regional-select'\)/,
     'usuário de uma regional não pode trocar o filtro pra ver outra');
+  assert.ok(!/getStoredSession/.test(corpo),
+    'a trava não pode voltar a ler a sessão direto — decide pelo escopo do token');
 });
 
 test('filtro vazio NÃO vira parâmetro na querystring', () => {

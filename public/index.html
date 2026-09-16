@@ -1284,6 +1284,13 @@
     // dropdowns de regional ao perfil do user (linhas ~6255, 6742, 7299, 7419, 5502).
     // Migrar para sess.regionals[] em task futura — quando todos sumirem, remover
     // _deriveLegacyRegional e o set de data.regional em saveSession().
+    //
+    // 16/09/2026 (P1-49): os 4 que travavam dropdown sumiram — viraram
+    // _travarRegionalPorEscopo, que decide pelo escopo do JWT. Restam os que só
+    // LEEM a string (modal de Metas via __currentUserRegional, expandRegional,
+    // regionalAutorizada). O TODO segue válido: foi justamente esta string que
+    // travou o filtro da conta engelmig_es (GUA|CAC → 'ES', sigla que não existe
+    // em <option> nenhum). Enquanto ela existir, a classe de bug existe.
     function _deriveLegacyRegional(regionals) {
       if (!Array.isArray(regionals) || regionals.length === 0) return 'ALL';
       // ALL = todas as ativas selecionadas
@@ -1935,6 +1942,44 @@
         ? selectedRegionals[0]
         : selectedRegionals.join(',');
     }
+
+    // Trava (ou não) o dropdown de regional de uma aba conforme o ESCOPO do user.
+    // Fonte única — antes cada aba tinha sua própria cópia, e as cópias divergiram.
+    //
+    // bug reportado em 16/09/2026: "usuário da conta do ES não está conseguindo
+    // fazer o filtro de região". Causa: 4 abas (Rejeições, Deslocamentos,
+    // Gráficos, TMA) travavam testando a string legada `sess.regional !== 'ALL'`.
+    // Pra engelmig_es (regionals=[GUA,CAC]), _deriveLegacyRegional devolve 'ES' —
+    // que NÃO é <option> do select (applyUserPermissions popula só ALL/GUA/CAC).
+    // setValues(['ES']) não casava nada e caía no fallback "marca tudo", então os
+    // números apareciam certos; o setDisabled(true) logo depois é que congelava o
+    // filtro. Admin (deriva 'ALL') e conta de 1 regional não eram afetados — por
+    // isso só o ES reclamou.
+    //
+    // É a MESMA causa do P1-19 (13/08, 5e2c17a), que só foi corrigida na aba
+    // Histórico. O comentário de lá dizia que a Gráficos "nunca travou porque
+    // testava sess.regional, que não existe no token v2" — a premissa estava
+    // errada: saveSession deriva sess.regional desde 12/06 (c5db39a). A Gráficos
+    // não travava PRO ADMIN (deriva 'ALL'), não por ausência do campo. Essa
+    // conclusão é que deixou as outras 4 abas para trás. Comentário original
+    // preservado no call-site da Histórico.
+    //
+    // Regra: só o ESCOPO (userRegionals, imutável, do JWT) pode travar. O FILTRO
+    // corrente (selectedRegionals/currentRegional, mutável) só é refletido.
+    function _travarRegionalPorEscopo(selectId) {
+      if (typeof MultiSelect === 'undefined' || !MultiSelect.setValues) return;
+      try {
+        if (userRegionals.length === 1) {
+          MultiSelect.setValues(selectId, [userRegionals[0]]);
+          MultiSelect.setDisabled(selectId, true);
+        } else if (Array.isArray(selectedRegionals)
+                   && selectedRegionals.length
+                   && selectedRegionals.length < userRegionals.length) {
+          // reflete a seleção das outras abas, mas mantém DESTRAVADO
+          MultiSelect.setValues(selectId, [...selectedRegionals]);
+        }
+      } catch (_) { /* não inicializado ainda — ok */ }
+    }
     let currentFilter = '';
     let currentTab = 'monitor';
     let selectedTipos = new Set(Object.keys(TIPOS_SERVICO)); // todos selecionados por padrão
@@ -2274,12 +2319,8 @@
         MultiSelect.init('rej-tipo-select',     { onChange: () => loadRejeicoes() });
         // Motivos populam dinamicamente em loadRejMotivosSelect — refresh é chamado lá
         MultiSelect.init('rej-motivo-select',   { onChange: () => loadRejeicoes(), scrollMaxH: 360 });
-        // Respeita permissão de regional (não-admin não muda)
-        const sess = getStoredSession();
-        if (sess && sess.regional && sess.regional !== 'ALL') {
-          MultiSelect.setValues('rej-regional-select', [sess.regional]);
-          MultiSelect.setDisabled('rej-regional-select', true);
-        }
+        // Respeita permissão de regional (não-admin não muda) — ver _travarRegionalPorEscopo
+        _travarRegionalPorEscopo('rej-regional-select');
         _rejMultiInited = true;
       } else {
         // Equipes podem ter sido repopuladas — refresh
@@ -2802,11 +2843,7 @@
           },
         });
         MultiSelect.init('desloc-equipe-select',   { onChange: () => loadDeslocamentos() });
-        const sess = getStoredSession();
-        if (sess && sess.regional && sess.regional !== 'ALL') {
-          MultiSelect.setValues('desloc-regional-select', [sess.regional]);
-          MultiSelect.setDisabled('desloc-regional-select', true);
-        }
+        _travarRegionalPorEscopo('desloc-regional-select');
         _deslocMultiInited = true;
       } else {
         MultiSelect.refresh('desloc-equipe-select');
@@ -3590,11 +3627,7 @@
       });
       MultiSelect.init('graf-tipo-select',     { onChange: () => { _grafRefiltrarEquipes(); loadGraficos(); } });
       MultiSelect.init('graf-equipe-select',   { onChange: () => loadGraficos() });
-      const sess = getStoredSession();
-      if (sess && sess.regional && sess.regional !== 'ALL') {
-        MultiSelect.setValues('graf-regional-select', [sess.regional]);
-        MultiSelect.setDisabled('graf-regional-select', true);
-      }
+      _travarRegionalPorEscopo('graf-regional-select');
       _grafMultiInited = true;
     }
 
@@ -4777,13 +4810,12 @@ ${matrizHTML}
           allLabel: 'Todas as Regionais',
         });
         _rankingMultiInited = true;
-        // Re-aplica restrição de regional se o usuário tem perfil regional
-        if (currentRegional && currentRegional !== 'ALL' && !String(currentRegional).includes(',')) {
-          try {
-            MultiSelect.setValues('ranking-regional-select', [currentRegional]);
-            MultiSelect.setDisabled('ranking-regional-select', true);
-          } catch (_) { /* ok */ }
-        }
+        // Re-aplica restrição de regional se o usuário tem perfil regional.
+        // 16/09/2026 — era o mesmo defeito do P1-19: testava `currentRegional`
+        // (o FILTRO corrente) em vez do escopo, então bastava o admin estreitar o
+        // Monitor pra 1 regional e abrir o Ranking pela 1ª vez pra ele travar até
+        // o reload. Resíduo que ficou de fora da correção de 13/08.
+        _travarRegionalPorEscopo('ranking-regional-select');
       }
 
       const input = document.getElementById('ranking-mes-input');
@@ -5062,11 +5094,7 @@ ${matrizHTML}
         MultiSelect.init('tma-regional-select', { onChange: () => loadTma() });
         MultiSelect.init('tma-equipe-select',   { onChange: () => loadTma() });
         MultiSelect.init('tma-faixa-select',    { onChange: () => loadTma() });
-        const sess = getStoredSession();
-        if (sess && sess.regional && sess.regional !== 'ALL') {
-          MultiSelect.setValues('tma-regional-select', [sess.regional]);
-          MultiSelect.setDisabled('tma-regional-select', true);
-        }
+        _travarRegionalPorEscopo('tma-regional-select');
         _tmaMultiInited = true;
       }
       loadTma();
@@ -6193,17 +6221,9 @@ ${matrizHTML}
         // (imutável, do JWT). Só o escopo pode governar uma trava de permissão.
         // A Gráficos nunca travou porque testava sess.regional, que não existe no
         // token v2 — as duas abas ficaram inconsistentes.
-        try {
-          if (userRegionals.length === 1) {
-            MultiSelect.setValues('hist-regional-select', [userRegionals[0]]);
-            MultiSelect.setDisabled('hist-regional-select', true);
-          } else if (Array.isArray(selectedRegionals)
-                     && selectedRegionals.length
-                     && selectedRegionals.length < userRegionals.length) {
-            // reflete a seleção corrente das outras abas, mas mantém DESTRAVADO
-            MultiSelect.setValues('hist-regional-select', [...selectedRegionals]);
-          }
-        } catch (_) { /* ok */ }
+        // 16/09/2026 — corpo extraído pra _travarRegionalPorEscopo (idêntico), pra
+        // que as outras abas parem de divergir desta. Comentário acima preservado.
+        _travarRegionalPorEscopo('hist-regional-select');
       }
 
       // BRT (UTC-3) — UTC puro daria "amanhã" após 21h, quebrando o range padrão

@@ -147,6 +147,7 @@
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
 | P1-47 | `runSyncLogoffs` perdia o logoff de todo turno que sai depois das 03:00 — a Medição HE perdia a prorrogação do turno noturno | Dados/Cobrança | **done** (09/09) — D-1+D-2, busca sem janela, casamento por instante, grava coluna+jsonb; 18 testes. Histórico de 16-31/08 recuperado (113/113) |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
+| P1-49 | Conta de 2 regionais (`engelmig_es` = GUA+CAC) tinha o dropdown de regional TRAVADO em 4 abas — resíduo do P1-19, que foi corrigido só na Histórico | Frontend | **done** (16/09) — fonte única `_travarRegionalPorEscopo` em 6 abas; 9 testes; falta confirmar em prod |
 
 ---
 
@@ -5102,3 +5103,75 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   (Medição HE, que expôs isto), e ⚠️ o próprio `runSyncLogoffs` grava só o
   jsonb e não a coluna `session_end` — dessincronia que fez a medição ler o
   campo errado; ver `db/heQueries.js`, comentário do COALESCE.
+
+---
+
+## P1-49 — a conta do ES não conseguia filtrar por região (resíduo do P1-19)
+
+- **Categoria:** Frontend
+- **Status:** **done** (16/09/2026) — falta confirmar em produção com a conta
+- **Fonte:** reportado em 16/09/2026 — "um usuário da conta do ES não está
+  conseguindo fazer o filtro de região".
+- **Evidência:**
+  - `AUTH_USERS` na VM tem 5 contas, todas com hash `scrypt`:
+    `admin`=GUA|CAC|SJC, `guarapari`=GUA, `cachoeiro`=CAC, `sjc`=SJC,
+    **`engelmig_es`=GUA|CAC**. A única de 2 regionais é a que quebrava.
+  - `_deriveLegacyRegional([GUA,CAC])` devolve `'ES'`
+    (`public/index.html`, bloco da sessão) — mas `applyUserPermissions` popula
+    os `<select>` só com `ALL/GUA/CAC`. **`ES` não é `<option>` de nada.**
+  - 4 abas travavam o dropdown testando `sess.regional !== 'ALL'`:
+    Rejeições, Deslocamentos, Gráficos e TMA (linhas 2279, 2806, 3594 e 5066
+    antes do fix). `setValues(['ES'])` não casava nenhuma option e caía no
+    fallback "marca tudo" — por isso os NÚMEROS apareciam certos e ninguém
+    percebeu antes; o `setDisabled(true)` da linha seguinte é que congelava o
+    filtro.
+  - Admin deriva `'ALL'` (condição falsa, não trava) e conta de 1 regional
+    deriva a própria sigla (trava certo, a option existe). **Só a conta de 2
+    regionais quebrava** — e ela é uma só, daí o relato isolado.
+- **Causa:** é a MESMA do P1-19 (13/08, `5e2c17a`), que foi corrigido apenas na
+  aba Histórico. O comentário deixado lá afirmava que "a Gráficos nunca travou
+  porque testava `sess.regional`, que não existe no token v2" — **a premissa
+  estava errada**: `saveSession` deriva `sess.regional` desde 12/06 (`c5db39a`).
+  A Gráficos não travava **pro admin** (deriva `'ALL'`), não por ausência do
+  campo. Essa conclusão é que deixou as outras 4 abas para trás.
+- **Impacto:** nenhum dado errado e nenhum vazamento — o escopo do backend
+  (`applyScope`) nunca esteve em questão e o fallback mostrava GUA+CAC, que é
+  exatamente o escopo da conta. O que se perdia era a capacidade de **estreitar**
+  pra uma regional só nessas 4 abas. Desde 26/05/2026 (`1355a79`), quando as
+  travas nasceram.
+- **Ação (feita):**
+  ✅ Fonte única `_travarRegionalPorEscopo(selectId)` — decide pelo **escopo**
+  (`userRegionals`, imutável, do JWT), nunca pela string legada nem pelo filtro
+  corrente. Trava ⟺ o token tem 1 regional só.
+  ✅ Aplicada nas 6 abas: Rejeições, Deslocamentos, Gráficos, TMA, Ranking e
+  Histórico (esta última passou a chamar o helper; comentário de 13/08 preservado).
+  ✅ Ranking tinha ainda o defeito original do P1-19 — travava por
+  `currentRegional` (o FILTRO), então bastava o admin estreitar o Monitor e abrir
+  o Ranking pela 1ª vez pra travar até o reload. Corrigido junto.
+  ✅ `test/regionalTravaEscopo.test.js` — 9 testes, incluindo 2 guardas
+  estruturais que impedem a volta do padrão (nenhuma aba pode travar por
+  `sess.regional`, e `setDisabled` de regional só pode sair da fonte única).
+  ✅ `test/tmaPoTela.test.js` atualizado: prendia a implementação antiga
+  (`getStoredSession` + `setDisabled` inline no corpo da `initTma`) — que era
+  justamente o bug. O invariante de permissão continua provado, agora no arquivo
+  novo.
+- **Critério de aceite:**
+  - [x] Suíte verde: 1038 testes, 0 falhas.
+  - [ ] **Em produção:** logar como `engelmig_es` e, nas 4 abas, abrir o dropdown
+        de regional e selecionar só Guarapari — a lista tem de responder.
+  - [ ] Logar como `guarapari`: dropdown continua travado em Guarapari.
+  - [ ] Logar como `admin`: estreitar o Monitor pra 1 regional, abrir Ranking e
+        Histórico — nenhuma das duas pode travar.
+- **Esforço:** 2h (investigação + fix + testes).
+- **Rollback:** `git revert` do commit. Só `public/index.html` e `test/` —
+  nada de backend, banco ou dado.
+- **Relacionado:** P1-19 (mesma causa, corrigido pela metade), P1-46 (dropdown
+  de regional dessincronizado no Monitor).
+- **Dívida que fica:** o TODO `post-Task-10` no topo do bloco de sessão continua
+  válido — `sess.regional` e `_deriveLegacyRegional` só existem por compat e são
+  a origem desta classe de bug. Sobraram callsites lendo a string legada
+  (`window.__currentUserRegional` no modal de Metas, `expandRegional`,
+  `regionalAutorizada`). Migrar tudo pra `regionals[]` e apagar
+  `_deriveLegacyRegional` + `REGIONAIS_GROUPS` mata a classe inteira. Note que
+  `services/regionalGroups.js`, que o comentário do front diz espelhar, **não
+  existe mais no backend** — o grupo `ES` hoje só vive no frontend.
