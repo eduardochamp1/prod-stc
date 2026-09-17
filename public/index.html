@@ -9776,11 +9776,29 @@ ${matrizHTML}
          </div>`;
 
       // Snapshot age
+      //
+      // Bug reportado em 17/09/2026 — "sem dados" aqui NÃO significava ausência
+      // de snapshot: o `last_snapshot` só é calculado dentro de um
+      // `if (teams.length > 0)` no backend, então quando a leitura de
+      // teams_current estourava o campo vinha null e este card dizia "sem
+      // dados" com a coleta 100% saudável do outro lado (snapshot_last_ok:
+      // teams 146, sectors_failed []). Agora, sem a idade direta, caímos no
+      // `snapshot_last_ok` (P1-3) — que é gravado pelo próprio ciclo de coleta
+      // e não depende dessa leitura.
       let snapStr = 'sem dados', snapColor = 'var(--vermelho)';
+      const _idade = m => (m < 60 ? `há ${m} min` : `há ${(m / 60).toFixed(1)}h`);
+      const _corIdade = m =>
+        m < 30 ? 'var(--verde)' : m < 90 ? 'var(--amarelo)' : 'var(--vermelho)';
       if (h.last_snapshot && h.last_snapshot.ageMinutes !== undefined) {
-        const m = h.last_snapshot.ageMinutes;
-        snapStr   = m < 60 ? `há ${m} min` : `há ${(m / 60).toFixed(1)}h`;
-        snapColor = m < 30 ? 'var(--verde)' : m < 90 ? 'var(--amarelo)' : 'var(--vermelho)';
+        snapStr   = _idade(h.last_snapshot.ageMinutes);
+        snapColor = _corIdade(h.last_snapshot.ageMinutes);
+      } else if (typeof h.snapshot_stale_min === 'number') {
+        snapStr   = _idade(h.snapshot_stale_min) + ' (ciclo)';
+        snapColor = _corIdade(h.snapshot_stale_min);
+      }
+      if (h.snapshot_error && h.snapshot_error.message) {
+        snapStr   = snapStr + ' · erro no ciclo';
+        snapColor = 'var(--vermelho)';
       }
 
       // Token
@@ -9810,10 +9828,31 @@ ${matrizHTML}
       }
 
       // Logged hoje
-      const logged   = h.teams_logged_today || {};
-      const totalLog = logged.total || 0;
-      const loggedStr = `${totalLog}/${h.whitelist.total} (GUA ${logged.byRegional?.GUA || 0} · CAC ${logged.byRegional?.CAC || 0})`;
-      const loggedColor = totalLog > h.whitelist.total * 0.7 ? 'var(--verde)' : totalLog > h.whitelist.total * 0.4 ? 'var(--amarelo)' : 'var(--vermelho)';
+      //
+      // Bug reportado em 17/09/2026 — "SAÚDE DO SISTEMA mostra 0/138 logaram
+      // hoje" numa quinta-feira às 16h20, com teams_current cheia (117 linhas,
+      // 4 min de idade) e os 4 setores coletados sem falha.
+      //
+      // O backend responde `teams_logged_today: { error }` quando a query
+      // estoura (routes/index.js), e o `logged.total || 0` daqui transformava
+      // essa exceção num ZERO indistinguível de "ninguém logou". Foi o que
+      // escondeu por 4 meses o `data->>date` sem aspas do getTeamsCurrent.
+      //
+      // Mesma regra que o P1-39 estabeleceu no card de regional: falha vira
+      // texto visível, nunca `0` — um zero falso é pior que um traço honesto.
+      const logged = h.teams_logged_today || {};
+      let loggedStr, loggedColor;
+      if (logged.error) {
+        loggedStr   = 'erro: ' + String(logged.error).slice(0, 40);
+        loggedColor = 'var(--vermelho)';
+      } else if (logged.total === undefined || logged.total === null) {
+        loggedStr   = '—';
+        loggedColor = 'var(--text2)';
+      } else {
+        const totalLog = logged.total;
+        loggedStr = `${totalLog}/${h.whitelist.total} (GUA ${logged.byRegional?.GUA || 0} · CAC ${logged.byRegional?.CAC || 0})`;
+        loggedColor = totalLog > h.whitelist.total * 0.7 ? 'var(--verde)' : totalLog > h.whitelist.total * 0.4 ? 'var(--amarelo)' : 'var(--vermelho)';
+      }
 
       // Missing
       const miss = h.teams_missing_today || {};
