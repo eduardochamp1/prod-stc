@@ -149,6 +149,7 @@
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
 | P1-49 | Conta de 2 regionais (`engelmig_es` = GUA+CAC) tinha o dropdown de regional TRAVADO em 4 abas — resíduo do P1-19, que foi corrigido só na Histórico | Frontend | **done** (16/09) — fonte única `_travarRegionalPorEscopo` em 6 abas; 9 testes; **confirmado em prod 16/09** |
 | P1-50 | Trocar de conta sem recarregar deixava os dropdowns com a regional da conta ANTERIOR → consulta com regional fora do escopo, 403, aba presa em "Carregando…" | Frontend | **done** (16/09) — guarda `window.MultiSelect` era código morto (3ª vez); 9 testes; **confirmado em prod 16/09** |
+| P1-51 | `getTeamsCurrent` quebrado desde a migração pro pgShim: jsonb path `data->>date` SEM aspas → `column "date" does not exist`. O painel de saúde ficou 4 meses cego (`0/138` + "sem dados" com a coleta perfeita) e o `/wpa/nota` não resolve número de OS | Dados/Ops | **done** (17/09) — aspas na chave + card exibe erro em vez de `0`; 13 testes; **falta confirmar em prod** |
 
 ---
 
@@ -5256,3 +5257,102 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   o dropdown DESTRAVADO (com as opções certas). Corrigir exige decidir qual das
   duas travas é a fonte única. **NÃO corrigido aqui de propósito**: ativar mais
   um ramo morto no mesmo commit misturaria duas mudanças não testáveis em browser.
+
+---
+
+## P1-51 — `getTeamsCurrent` quebrado desde a migração pro pgShim: o painel de saúde ficou 4 meses cego
+
+- **Categoria:** Dados / Ops
+- **Status:** **done** (17/09/2026) — **falta confirmar em produção**
+- **Fonte:** reportado pelo José em 17/09/2026, ao abrir a aba Admin →
+  "SAÚDE DO SISTEMA" às 16h20 de uma quinta-feira.
+- **Evidência:**
+  - O card mostrava `LOGARAM HOJE: 0/138 (GUA 0 · CAC 0)` e
+    `ÚLTIMO SNAPSHOT: sem dados`, com o token WPA válido (2873 min).
+  - A tabela "Equipes oficiais sem login hoje" **não** renderizava — se fosse
+    zero legítimo, `avaliar()` teria empurrado as 79 equipes GUA+CAC pra lista
+    e a tabela estaria lá. A ausência dela é a assinatura de exceção.
+  - No banco, no mesmo instante, o oposto:
+    ```
+    SELECT count(*), max(updated_at) FROM teams_current;
+     117 | 2026-09-17 16:16:26.214-03
+    ```
+    e `app_settings.snapshot_last_ok` =
+    `{"teams": 146, "ghosts": 0, "sectors_ok": ["DESG","DEPT","DESC","DSSJ"],
+    "sectors_failed": [], "sectors_skipped": []}`, `snapshot_error.message: null`.
+    **A coleta estava perfeita.** O cego era o painel.
+  - SQL que o `db/queries.js:259` gerava (reproduzido com `Query._build()`):
+    ```sql
+    SELECT "data", "regional", "updated_at" FROM "teams_current"
+    WHERE data->>date >= $1 ORDER BY "team_name" ASC
+    ```
+  - Confirmado na VM:
+    ```
+    psql -c "SELECT count(*) FROM teams_current WHERE data->>date >= '2026-09-10';"
+    ERROR:  column "date" does not exist
+    psql -c "SELECT count(*) FROM teams_current WHERE data->>'date' >= '2026-09-10';"
+     117
+    ```
+- **Causa:** `db/queries.js` filtrava por `'data->>date'` — chave do jsonb
+  **sem aspas**. O `_id()` do `services/pgShim.js:79` devolve a string crua
+  quando ela contém `->`, então o `date` solto chegava ao Postgres como
+  **referência de coluna**; `teams_current` tem `team_name, regional,
+  sector_id, data, updated_at` e nenhuma coluna `date`. A query morria inteira,
+  o pgShim devolvia `{data:null,error}` (shape do supabase-js) e o
+  `if (error) throw error` estourava.
+- **Por que sobreviveu 4 meses:**
+  1. A linha **nasceu válida**: escrita em 27/04/2026 no antigo
+     `db/supabaseQueries.js`, quando o backend era Supabase de verdade — o
+     **PostgREST aceita** `data->>date` sem aspas. Virou defeito silencioso em
+     25/05/2026 (`8217da4`, "Fase 3 — shim sobre driver pg"), que passa a string
+     direto pro SQL. É uma **regressão latente da migração Supabase → Postgres**,
+     não um erro de digitação novo.
+  2. Os dois chamadores são de tolerância/diagnóstico, não do caminho do
+     Monitor — por isso os números do painel sempre estiveram certos.
+  3. **Nenhum dos 1047 testes exercitava este SQL** (`routes.test.js` só cita
+     `getTeamsCurrent` em comentário). Mesma classe do P2-39.
+  4. O front traduzia a exceção em `0`, então o sintoma parecia um dado
+     plausível ("ninguém logou") em vez de uma falha.
+  - Era o **único** jsonb path do repo sem aspas — `deslocamentosQueries`,
+    `heQueries` e `logoffSync` usam `->>'chave'`, e o próprio docstring do
+    pgShim documenta a forma certa (`col->>'x'`).
+- **Impacto:**
+  - `/admin/health` (`routes/index.js:1720`): o painel que existe pra dizer se a
+    coleta quebrou estava **estruturalmente incapaz de dizer isso** desde
+    25/05/2026. Um "0/138" vermelho permanente também treina o operador a
+    ignorar o card — alerta que grita todo dia é alerta que ninguém lê (mesmo
+    argumento do P1-26).
+  - `/wpa/nota` (`routes/index.js:1129`): o fallback que resolve **número humano
+    de OS → UUID** estourava. É justamente o caminho de auditoria da EDP, onde o
+    gestor tem o número da nota na mão e não o UUID (era o motivo do P2-34).
+  - Sem impacto em número reportado: o Monitor, o Histórico e a consolidação
+    usam `services/dataService` e `getTeamsByDateFromSnapshots`, não esta função.
+- **Ação (feita):**
+  1. `db/queries.js` — `.filter("data->>'date'", 'gte', cutoff7)`, com
+     comentário datado explicando o mecanismo e a origem na migração.
+  2. `test/teamsCurrentJsonbPath.test.js` (5 testes) — trava o SQL gerado, com
+     pool fake; roda sem Postgres. Verificado que fica **vermelho** ao reverter
+     o fix.
+  3. `public/index.html` — `renderHealth` deixa de traduzir exceção em `0`:
+     erro vira texto visível, ausência vira `—`, e o "Último snapshot" cai no
+     `snapshot_last_ok` (P1-3) quando a leitura direta falha. Regra do P1-39.
+  4. `test/healthCardErro.test.js` (8 testes) — extrai `renderHealth` do
+     index.html e **executa** a função (ela é pura), cobrindo erro, ausência,
+     zero legítimo e caminho feliz.
+- **Aceite:**
+  - [x] `psql -c "… WHERE data->>'date' >= …"` devolve as linhas (117 em 17/09).
+  - [x] Suíte verde: 1060 testes, 0 falhas.
+  - [x] Teste comprovadamente pega a regressão (revert → 2 vermelhos).
+  - [ ] **Em produção:** card mostra `~117/138` com GUA e CAC preenchidos, e
+        "Último snapshot" com idade em minutos. *(pendente do deploy)*
+  - [ ] **Em produção:** `/wpa/nota` resolve um NÚMERO de OS (não-UUID).
+- **Esforço:** 2h (diagnóstico incluído; o fix é um par de aspas).
+- **Rollback:** `git revert` do commit. Os três arquivos são independentes — dá
+  pra reverter só o front (`public/index.html` + `healthCardErro.test.js`)
+  mantendo o fix do SQL, que é o que conserta o dado.
+- **Depende de:** nada.
+- **Resíduo (não corrigido aqui):** o card `WHITELIST` mostra
+  `138 (GUA 44 · CAC 35)` — 44+35=79, o detalhamento omite os 59 do SJC,
+  enquanto `0/138` usa o total COM SJC. Numerador e denominador são coerentes
+  entre si (ambos incluem SJC); só o parêntese é incompleto. Cosmético, fora
+  do escopo deste item.
