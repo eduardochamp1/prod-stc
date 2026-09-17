@@ -253,10 +253,31 @@ async function getTeamsCurrent(filters = {}) {
   // Janela de segurança: descarta registros com mais de 7 dias.
   const cutoff7 = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
+  // A chave do jsonb PRECISA vir entre aspas: `data->>'date'`.
+  //
+  // Bug reportado em 17/09/2026 — "SAÚDE DO SISTEMA mostra 0/138 logaram hoje e
+  // 'último snapshot: sem dados'", com a coleta perfeita no mesmo instante
+  // (snapshot_last_ok: teams 146, ghosts 0, sectors_failed []). teams_current
+  // tinha 117 linhas, atualizadas 4 min antes.
+  //
+  // Estava `'data->>date'`, sem aspas. O _id() do pgShim devolve a string crua
+  // quando ela contém `->` (services/pgShim.js:79), então o SQL saía
+  // `WHERE data->>date >= $1` e o Postgres lia o `date` solto como COLUNA:
+  //   ERROR: column "date" does not exist
+  // A query inteira morria, pgShim devolvia {data:null,error}, e o `if (error)
+  // throw error` 8 linhas abaixo estourava. Quem chamava exibia zero, não erro.
+  //
+  // Nasceu válida: foi escrita em 27/04/2026 no antigo db/supabaseQueries.js,
+  // quando o backend era Supabase de verdade — o PostgREST ACEITA a forma sem
+  // aspas. Virou defeito silencioso em 25/05/2026 (8217da4, "Fase 3 — shim
+  // sobre driver pg"), que passa a string direto pro SQL. Ficou 4 meses no ar
+  // porque os dois chamadores são de tolerância/diagnóstico, e nenhum teste
+  // exercitava este SQL. Era o único jsonb path do repo sem aspas — o próprio
+  // docstring do pgShim documenta a forma certa (`col->>'x'`).
   let query = sb
     .from('teams_current')
     .select('data, regional, updated_at')
-    .filter('data->>date', 'gte', cutoff7);
+    .filter("data->>'date'", 'gte', cutoff7);
 
   if (Array.isArray(filters.regionals) && filters.regionals.length > 0) {
     query = inRegionals(query, filters.regionals);
