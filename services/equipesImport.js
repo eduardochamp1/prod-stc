@@ -60,6 +60,23 @@ function montarPlano(linhas, equipesAtuais, opts = {}) {
   const { regional, setor, tipoPadrao, reativar = false } = opts;
   const out = { novas: [], alteradas: [], identicas: 0, inativas: [], erros: [] };
 
+  // Validação do LOTE: um erro aqui invalida tudo, então sai cedo. Repare que
+  // o erro não tem `linhaPlanilha` — não é de linha, é da configuração.
+  const loteErro = (motivo) => {
+    out.erros.push({ linhaPlanilha: null, siglaCrua: null, campo: null, valor: null, motivo });
+    return out;
+  };
+  if (!RE_REG.test(regional || ''))   return loteErro('regional do lote inválida (use GUA, CAC ou SJC)');
+  if (!RE_SETOR.test(setor || ''))    return loteErro('setor do lote inválido (use DESG, DEPT, DESC ou DSSJ)');
+  if (!RE_TIPO.test(_norm(tipoPadrao))) {
+    return loteErro('tipo padrão é obrigatório: `tipo` é NOT NULL no schema, '
+      + 'e célula de tipo vazia precisa de um valor pra onde cair');
+  }
+  if ((linhas || []).length > MAX_LINHAS) {
+    return loteErro(`lote tem ${linhas.length} linhas; o máximo é ${MAX_LINHAS}. `
+      + 'O cadastro tem ~143 equipes — um arquivo maior que isso é engano.');
+  }
+
   const atuais = new Map();
   (equipesAtuais || []).forEach(e => atuais.set(_norm(e.sigla), e));
 
