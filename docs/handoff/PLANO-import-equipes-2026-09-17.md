@@ -1,5 +1,41 @@
 # Importar equipes de planilha — Plano de Implementação
 
+> **EXECUTADO em 18/09/2026.** As 12 tarefas foram concluídas em sequência, em
+> TDD. As caixas `- [ ]` abaixo ficaram como estavam de propósito: o registro do
+> que foi feito são os commits, e desmarcar/marcar 72 caixas não acrescentaria
+> informação. Suíte ao fim: **1109 testes, 0 falhas** (eram 1047 no início).
+>
+> | Tarefa | Commit |
+> |---|---|
+> | 1 — `setor` no GET | `d03d4b8` |
+> | 2 — módulo puro + validadores | `ecfee29` |
+> | 3 — `montarPlano` (novas/idênticas/alteradas) | `d882086` |
+> | 4 — erros que apontam a linha | `0b59b77` |
+> | 5 — inativas + payload homogêneo | `c81d46b` |
+> | 6 — rota `/admin/equipes/importar` | `9357089` |
+> | 6b — contrato HTTP (401/403/400) | `677336d` |
+> | 7 — `DSSJ` nos seletores | `ebf569e` |
+> | 8 — busca e filtro | `eccba79` |
+> | 9 — detecção de cabeçalho | `d2d0237` |
+> | 10 — bloco de importação e prévia | `964adb7` |
+> | 11 — backlog e spec | `b6e35ce` |
+>
+> **Três desvios do plano, todos registrados no commit correspondente:**
+>
+> 1. **Tarefa 7** — `_SETOR_REGIONAL` foi para DENTRO de `_setorChanged`. Fora
+>    dela, a constante não existiria no escopo do `new Function` do teste e a
+>    extração quebraria.
+> 2. **Tarefa 6b** — os 4 testes passaram de primeira, porque a Tarefa 6 já
+>    tinha escrito a rota com a validação antes da checagem de banco. Para não
+>    aceitar teste sem dentes, a ordem foi invertida de propósito (os dois de
+>    `400` ficaram vermelhos) e depois restaurada.
+> 3. **Tarefa 8** — o `extrairFuncao` dos testes de tela tinha um defeito
+>    próprio: casava a primeira `{` depois do nome, então um parâmetro
+>    desestruturado devolvia só a assinatura, com um `SyntaxError` que não
+>    apontava a causa. Corrigido para fechar os parênteses antes.
+>
+> Os aceites de **produção** seguem em aberto — ver P2-50 e P2-51 no BACKLOG.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Cadastrar equipes oficiais em lote a partir de planilha `.xlsx`, com prévia que mostra linha a linha o que vai acontecer, mais busca/filtro na lista de 138 equipes.
