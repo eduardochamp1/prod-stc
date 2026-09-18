@@ -9744,6 +9744,67 @@ ${matrizHTML}
       return html;
     }
 
+    // ── ACUMULADO: PERDA POR REJEIÇÃO ─────────────────────────────────────────
+    /**
+     * Agrupa as equipes por regional e calcula a perda por rejeição. PURA —
+     * por isso é testável (test/acumuladoRejeicao.test.js extrai e executa).
+     *
+     * Entrada: `matrizData.equipes`, como o _buildEquipeTipoMatrix devolve
+     * (db/queries.js:1319) — NÃO a variável `equipes`, que é outra coisa e não
+     * tem total_exec/total_rej.
+     *
+     * ⚠️ A taxa do grupo é PONDERADA: soma(rej) ÷ soma(atendidas). NUNCA a
+     * média das taxas das equipes. Uma equipe 1/2 (50%) e outra 10/1000 (1%)
+     * dariam média 25,5%, quando a perda real do grupo é 11/1002 = 1,1%.
+     * Média de percentual é um dos jeitos clássicos de um número virar mentira
+     * num painel que a EDP audita. Ver §6 da SPEC-acumulado-rejeicao.
+     *
+     * @returns {Array} [{ regional, total_exec, total_rej, total_atend, taxa,
+     *                     equipes: [{ team_name, total_exec, total_rej,
+     *                                 total_atend, taxa }] }]
+     */
+    function _agruparPerdaPorRegional(equipesMatriz) {
+      const porReg = new Map();
+
+      (equipesMatriz || []).forEach(e => {
+        const reg = e.regional || '—';
+        if (!porReg.has(reg)) {
+          porReg.set(reg, {
+            regional: reg, total_exec: 0, total_rej: 0, total_atend: 0,
+            taxa: 0, equipes: [],
+          });
+        }
+        const g     = porReg.get(reg);
+        const exec  = Number(e.total_exec) || 0;
+        const rej   = Number(e.total_rej)  || 0;
+        const atend = exec + rej;
+
+        g.total_exec  += exec;
+        g.total_rej   += rej;
+        g.total_atend += atend;
+        g.equipes.push({
+          team_name: e.team_name,
+          total_exec: exec, total_rej: rej, total_atend: atend,
+          taxa: atend > 0 ? rej / atend : 0,
+        });
+      });
+
+      const grupos = [...porReg.values()];
+      grupos.forEach(g => {
+        g.taxa = g.total_atend > 0 ? g.total_rej / g.total_atend : 0;
+        // Maior taxa primeiro; empate por volume atendido desc, depois sigla.
+        // Sem corte de amostra mínima, por decisão do José em 18/09 — a coluna
+        // "Atendidas" fica ao lado e denuncia volume irrisório na própria
+        // linha. Ver §4.3 do spec: foi escolha, não esquecimento.
+        g.equipes.sort((a, b) =>
+          b.taxa - a.taxa ||
+          b.total_atend - a.total_atend ||
+          String(a.team_name).localeCompare(String(b.team_name)));
+      });
+      grupos.sort((a, b) => String(a.regional).localeCompare(String(b.regional)));
+      return grupos;
+    }
+
     function renderEquipesTabela(eqs) {
       if (eqs.length === 0) return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhuma equipe cadastrada.</div>';
       const rows = eqs.map(e => {
