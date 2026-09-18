@@ -230,3 +230,77 @@ test('tipo padrão ausente recusa o lote (tipo é NOT NULL no schema)', () => {
   assert.equal(p.erros.length, 1);
   assert.match(p.erros[0].motivo, /tipo padrão/i);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inativas e o payload do upsert
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { linhasParaUpsert } = require('../services/equipesImport');
+
+test('sigla inativa presente na planilha cai em `inativas`', () => {
+  const p = montarPlano(
+    [{ linhaPlanilha: 2, sigla: 'EBGPR62', tipo: 'BTZERO', placa: 'ABC-1234' }],
+    [equipe({ ativo: false })], LOTE);
+
+  assert.equal(p.inativas.length, 1);
+  assert.equal(p.inativas[0].sigla, 'EBGPR62');
+});
+
+test('sem reativar, o payload NÃO contém a chave ativo em nenhuma linha', () => {
+  // Spec 3.3: linha nova pega o DEFAULT true do schema; linha existente mantém
+  // o valor. Reativar mexe em número reportado (P2-20 ao contrário) e é decisão.
+  const p = montarPlano([
+    { linhaPlanilha: 2, sigla: 'EBGPR62', tipo: 'BTZERO', placa: 'NOV-0001' },
+    { linhaPlanilha: 3, sigla: 'ENOVA01', tipo: 'CS',     placa: null },
+  ], [equipe({ ativo: false })], { ...LOTE, reativar: false });
+
+  const rows = linhasParaUpsert(p, { reativar: false });
+  assert.equal(rows.length, 2);
+  rows.forEach(r => assert.ok(!('ativo' in r), 'nenhuma linha pode trazer `ativo`'));
+});
+
+test('com reativar, TODAS as linhas trazem ativo:true — nunca um lote misto', () => {
+  // pgShim.upsert monta as colunas pela UNIÃO das chaves e põe null onde falta
+  // (services/pgShim.js:294). Como `ativo` é NOT NULL, lote misto derruba o
+  // statement inteiro. É o P3-14 do backlog.
+  const p = montarPlano([
+    { linhaPlanilha: 2, sigla: 'EBGPR62', tipo: 'BTZERO', placa: 'ABC-1234' },
+    { linhaPlanilha: 3, sigla: 'ENOVA01', tipo: 'CS',     placa: null },
+  ], [equipe({ ativo: false })], { ...LOTE, reativar: true });
+
+  const rows = linhasParaUpsert(p, { reativar: true });
+  assert.equal(rows.length, 2);
+  rows.forEach(r => assert.equal(r.ativo, true, 'todas as linhas têm de trazer ativo'));
+
+  const chaves = new Set(rows.flatMap(r => Object.keys(r)));
+  rows.forEach(r => assert.equal(
+    Object.keys(r).length, chaves.size,
+    'todas as linhas têm de ter EXATAMENTE as mesmas chaves'));
+});
+
+test('linhasParaUpsert junta novas e alteradas, e ignora idênticas e erros', () => {
+  const p = montarPlano([
+    { linhaPlanilha: 2, sigla: 'EBGPR62', tipo: 'BTZERO', placa: 'NOV-0001' }, // alterada
+    { linhaPlanilha: 3, sigla: 'ENOVA01', tipo: 'CS',     placa: null },       // nova
+    { linhaPlanilha: 4, sigla: 'EIGUAL1', tipo: 'CS',     placa: null },       // idêntica
+    { linhaPlanilha: 5, sigla: 'EB',      tipo: 'CS',     placa: null },       // erro
+  ], [
+    equipe(),
+    equipe({ sigla: 'EIGUAL1', tipo: 'CS', placa: null }),
+  ], LOTE);
+
+  const rows = linhasParaUpsert(p, { reativar: false });
+  const siglas = rows.map(r => r.sigla).sort();
+  assert.deepEqual(siglas, ['EBGPR62', 'ENOVA01']);
+});
+
+test('toda linha do upsert carrega as colunas do schema, com updated_at', () => {
+  const p = montarPlano(
+    [{ linhaPlanilha: 2, sigla: 'ENOVA01', tipo: 'CS', placa: null }],
+    [], LOTE);
+
+  const [row] = linhasParaUpsert(p, { reativar: false });
+  assert.deepEqual(Object.keys(row).sort(),
+    ['placa', 'regional', 'setor', 'sigla', 'tipo', 'updated_at']);
+  assert.ok(!Number.isNaN(Date.parse(row.updated_at)));
+});

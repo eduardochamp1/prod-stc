@@ -142,9 +142,43 @@ function montarPlano(linhas, equipesAtuais, opts = {}) {
   return out;
 }
 
+/**
+ * Converte o plano nas linhas do upsert. Novas + alteradas; idênticas e erros
+ * ficam de fora.
+ *
+ * ⚠️ TODAS as linhas devolvidas têm EXATAMENTE as mesmas chaves. O
+ * `pgShim.upsert` monta as colunas do INSERT pela UNIÃO das chaves de todas as
+ * linhas e põe `null` onde a chave falta (services/pgShim.js:294). Como `ativo`
+ * é NOT NULL no schema, um lote misto — algumas linhas com `ativo`, outras sem
+ * — derrubaria o statement inteiro. É a armadilha do P3-14.
+ *
+ * Por isso `ativo` entra em todas as linhas (quando reativar) ou em nenhuma.
+ * Com `reativar: true`, marcar ativo=true no lote inteiro é correto: quem já
+ * estava ativo não muda, e quem estava inativo é exatamente quem se quer de
+ * volta. Equipe fora da planilha não entra no upsert, então não é tocada.
+ */
+function linhasParaUpsert(plano, opts = {}) {
+  const { reativar = false } = opts;
+  const agora = new Date().toISOString();
+
+  return [...(plano.novas || []), ...(plano.alteradas || [])].map(e => {
+    const row = {
+      sigla:      e.sigla,
+      setor:      e.setor,
+      regional:   e.regional,
+      tipo:       e.tipo,
+      placa:      e.placa,
+      updated_at: agora,
+    };
+    if (reativar) row.ativo = true;
+    return row;
+  });
+}
+
 module.exports = {
   validateEquipe,
   montarPlano,
+  linhasParaUpsert,
   MAX_LINHAS,
   RE_SIGLA, RE_TIPO, RE_PLACA, RE_REG, RE_SETOR, RE_TIME,
 };
