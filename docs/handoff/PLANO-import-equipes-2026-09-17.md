@@ -133,7 +133,13 @@ git commit -m "fix(admin): GET /admin/equipes nao devolvia setor — form reescr
 
   A coluna Setor da tabela mostrava '—' pra todas as equipes, e o formulario
   caia no fallback do index.html:9481 e mandava o palpite no PUT: editar uma
-  equipe DEPT a tornava DESG, e uma DSSJ virava DESG mantendo regional SJC.
+  equipe DSSJ a tornaria DESG, mantendo regional SJC.
+
+  Armadilha LATENTE: medido na VM em 17/09, nenhuma linha esta corrompida
+  (DESC|CAC 35, DESG|GUA 49, DSSJ|SJC 59). Seguraram duas coincidencias — DEPT
+  nao tem nenhuma equipe, entao o fallback acerta por sorte em GUA e CAC; e
+  nenhuma equipe de SJC passou por este formulario. Dispara no primeiro edit
+  de SJC, que fica mais provavel agora que o DSSJ entra no seletor.
 
   Tambem e pre-requisito da importacao em lote: sem o setor atual, montarPlano
   veria TODA equipe existente como 'setor mudando'.
@@ -1865,7 +1871,7 @@ git commit -m "feat(admin): bloco de importacao de planilha com previa
 Na tabela de índice do `BACKLOG.md`, depois da linha do `P1-51`:
 
 ```markdown
-| P1-52 | `GET /admin/equipes` não devolvia `setor`: a coluna da tabela mostrava `—` pra todas e o formulário REESCREVIA o campo ao salvar (DEPT→DESG, DSSJ→DESG com regional SJC) | Dados/Frontend | **done** (17/09) — `setor` no SELECT + DSSJ no seletor; falta medir linhas já corrompidas |
+| P2-50 | `GET /admin/equipes` não devolvia `setor`: a coluna da tabela mostrava `—` pra todas e o formulário reescrevia o campo ao salvar. **Medido: zero linhas corrompidas** — a armadilha nunca disparou | Dados/Frontend | **done** (17/09) — `setor` no SELECT + DSSJ no seletor; latente, sem reparo a fazer |
 ```
 
 E no fim do arquivo, o item completo:
@@ -1874,10 +1880,14 @@ E no fim do arquivo, o item completo:
 
 ---
 
-## P1-52 — `GET /admin/equipes` não devolvia `setor`, e o formulário reescrevia o campo
+## P2-50 — `GET /admin/equipes` não devolvia `setor`: armadilha latente, zero dano
 
 - **Categoria:** Dados / Frontend
-- **Status:** **done** (17/09/2026) — falta medir e reparar linhas já corrompidas
+- **Status:** **done** (17/09/2026) — medido na VM, **nada a reparar**
+- **Severidade:** entrou como candidato a P1 e foi **rebaixado a P2 pela
+  medição**. O mecanismo é real, mas nunca disparou — ver "Dano real" abaixo.
+  Registrar a diferença entre o que o código permite e o que de fato aconteceu
+  é o ponto: sem a medição, este item teria custado um reparo inexistente.
 - **Fonte:** achado em 17/09/2026 ao especificar a importação em lote
   (`SPEC-import-equipes-2026-09-17.md`).
 - **Evidência:**
@@ -1890,24 +1900,51 @@ E no fim do arquivo, o item completo:
     `e.setor || (e.regional === 'CAC' ? 'DESC' : 'DESG')`.
   - `salvarEquipe` enviava esse palpite, e o `PUT` (`routes/index.js:2049`)
     gravava sem questionar.
-- **Impacto:** editar qualquer equipe pelo formulário reescrevia o `setor`.
-  Uma equipe **DEPT** virava **DESG**; uma **DSSJ** virava **DESG** mantendo
-  `regional: SJC` — linha que passa nos dois CHECKs isolados e é incoerente.
-  O `setor` mapeia pro CSD da EDP (`REGIONAL_MAP` em `wpaService.js:1863`) e
+- **Impacto potencial:** editar qualquer equipe pelo formulário reescrevia o
+  `setor`. Uma **DEPT** viraria **DESG**; uma **DSSJ** viraria **DESG** mantendo
+  `regional: SJC` — linha que passa nos dois CHECKs isolados e é incoerente. O
+  `setor` mapeia pro CSD da EDP (`REGIONAL_MAP` em `wpaService.js:1863`) e
   alimenta o `getMeta` da whitelist.
+- **Dano real: ZERO.** Medido na VM em 17/09/2026:
+
+  ```
+   setor | regional | count
+  -------+----------+-------
+   DESC  | CAC      |    35
+   DESG  | GUA      |    49
+   DSSJ  | SJC      |    59
+  ```
+
+  Nenhuma combinação incoerente. Duas coincidências seguraram:
+
+  1. **`DEPT` não tem nenhuma equipe.** Com DEPT vazio, o fallback
+     `e.regional === 'CAC' ? 'DESC' : 'DESG'` acerta por sorte: toda equipe GUA
+     é mesmo DESG e toda CAC é mesmo DESC, então editar uma delas gravava o
+     valor correto.
+  2. **Nenhuma equipe de SJC passou por este formulário.** As 59 seguem `DSSJ`;
+     tivessem passado, teriam virado `DESG`. Entraram por script/migração
+     quando o SJC foi adicionado, em 08/06/2026.
+
+  Aritmética que confere com o painel: 49+35+59 = **143 linhas**, contra **138**
+  na whitelist (que só conta ativas) — e como o card de saúde mostrava `GUA 44`,
+  as 5 inativas são todas de Guarapari.
+- **Por que consertar mesmo assim:** a armadilha dispara no **primeiro** edit de
+  equipe SJC, e o risco sobe agora — o `DSSJ` está entrando nos seletores nesta
+  mesma entrega, o que torna a edição de equipe SJC pela tela algo que passa a
+  acontecer.
 - **Ação:** `setor` entrou no `_COLS_BASE`. O `DSSJ` entrou no seletor e o
   `_setorChanged` passou a usar o mapa dos quatro setores.
 - **Aceite:**
   - [x] `GET /admin/equipes` devolve `setor`; teste trava o SELECT.
   - [x] Seletor oferece os 4 setores; teste executa `_setorChanged`.
-  - [ ] **Medir linhas já corrompidas** na VM:
-        `psql -d wpa_monitor -c "SELECT setor, regional, count(*) FROM equipes_oficiais GROUP BY 1,2 ORDER BY 1,2;"`
-        Combinação `DESG|SJC`, `DESG|CAC` ou `DESC|GUA` indica linha reescrita
-        por edição passada.
-  - [ ] Reparar as linhas encontradas (ação manual, uma a uma, pelo formulário
-        já corrigido).
-- **Esforço:** 30min o código; a medição depende da VM.
+  - [x] **Medido:** nenhuma linha corrompida (saída acima, VM, 17/09/2026).
+  - [x] Nada a reparar.
+- **Esforço:** 30min.
 - **Rollback:** `git revert`. Nenhuma mudança de schema.
+- **Observação de cadastro:** `DEPT` está no CHECK do schema, no `REGIONAL_MAP`
+  e no seletor, mas **não tem nenhuma equipe**. Não é defeito — é setor da EDP
+  sem turma da Engelmig hoje. Fica registrado pra ninguém confundir "coluna
+  vazia" com "importação falhou" mais adiante.
 ```
 
 - [ ] **Step 2: Atualizar o status do spec**
@@ -1928,7 +1965,7 @@ Expected: 0 falhas
 
 ```bash
 git add docs/handoff/BACKLOG.md docs/handoff/SPEC-import-equipes-2026-09-17.md
-git commit -m "docs: P1-52 (setor ausente no GET) e status do spec de importacao
+git commit -m "docs: P2-50 (setor ausente no GET) e status do spec de importacao
 
   Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -1947,4 +1984,6 @@ Depois do deploy (`git pull && pm2 delete wpa-monitor && pm2 start ecosystem.con
 - [ ] Gravar e conferir que a lista recarrega com as equipes novas
 - [ ] Rodar de novo a **mesma** planilha: tudo cai em "idênticas", nada é
       gravado (idempotência)
-- [ ] Medir as linhas corrompidas do P1-52 com o `psql` da §Aceite
+- [ ] Editar uma equipe **SJC** pelo formulário e conferir que o setor continua
+      `DSSJ` — é o caso que a armadilha do P2-50 quebrava, e o único que a
+      medição de 17/09 não pôde provar (porque nenhuma SJC tinha sido editada)
