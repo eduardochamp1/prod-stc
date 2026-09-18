@@ -9493,6 +9493,7 @@ ${matrizHTML}
               <option value="DESG" ${setor === 'DESG' ? 'selected' : ''}>DESG</option>
               <option value="DEPT" ${setor === 'DEPT' ? 'selected' : ''}>DEPT</option>
               <option value="DESC" ${setor === 'DESC' ? 'selected' : ''}>DESC</option>
+              <option value="DSSJ" ${setor === 'DSSJ' ? 'selected' : ''}>DSSJ</option>
             </select>
           </div>
           <div>
@@ -9539,11 +9540,21 @@ ${matrizHTML}
         </div>`;
     }
 
-    // Auto-deriva regional ao trocar setor (DESG/DEPT → GUA, DESC → CAC)
+    // Auto-deriva regional ao trocar setor. O mapa espelha o REGIONAL_MAP de
+    // services/wpaService.js:1863 — manter alinhado.
+    //
+    // 17/09/2026: antes era `(setor === 'DESC') ? 'CAC' : 'GUA'`, e o select
+    // nem oferecia DSSJ. Cadastrar equipe de SJC pela tela não funcionava,
+    // apesar de o banco e o validateEquipe aceitarem desde 08/06/2026 — e
+    // editar uma equipe SJC existente a teria movido pra GUA. Ver P2-50.
+    //
+    // O mapa fica DENTRO da função de propósito: assim ela é auto-contida e o
+    // teste consegue extraí-la do HTML e executá-la isolada.
     function _setorChanged() {
+      const SETOR_REGIONAL = { DESG: 'GUA', DEPT: 'GUA', DESC: 'CAC', DSSJ: 'SJC' };
       const setor = document.getElementById('eq-form-setor').value;
       const reg   = document.getElementById('eq-form-regional');
-      reg.value = (setor === 'DESC') ? 'CAC' : 'GUA';
+      reg.value = SETOR_REGIONAL[setor] || 'GUA';
     }
 
     async function salvarEquipe(isNew) {
