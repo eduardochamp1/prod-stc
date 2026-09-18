@@ -42,8 +42,92 @@ function validateEquipe(body) {
   return errors;
 }
 
+/** Normaliza célula de planilha: string, sem espaço nas bordas, maiúscula. */
+function _norm(v) {
+  return String(v === null || v === undefined ? '' : v).trim().toUpperCase();
+}
+
+/**
+ * Decide o destino de cada linha da planilha. PURA.
+ *
+ * @param {Array}  linhas         [{ linhaPlanilha, sigla, tipo, placa }]
+ * @param {Array}  equipesAtuais  como o GET /admin/equipes devolve
+ * @param {object} opts           { regional, setor, tipoPadrao, reativar }
+ * @returns {{novas:Array, alteradas:Array, identicas:number,
+ *            inativas:Array, erros:Array}}
+ */
+function montarPlano(linhas, equipesAtuais, opts = {}) {
+  const { regional, setor, tipoPadrao, reativar = false } = opts;
+  const out = { novas: [], alteradas: [], identicas: 0, inativas: [], erros: [] };
+
+  const atuais = new Map();
+  (equipesAtuais || []).forEach(e => atuais.set(_norm(e.sigla), e));
+
+  const vistas = new Map();   // sigla → linhaPlanilha da 1ª ocorrência
+
+  for (const l of (linhas || [])) {
+    const linhaPlanilha = l && l.linhaPlanilha;
+    const siglaCrua = l && l.sigla;
+    const sigla     = _norm(siglaCrua);
+    const tipoCrua  = _norm(l && l.tipo);
+    const tipo      = tipoCrua || _norm(tipoPadrao);
+    const placaCrua = _norm(l && l.placa);
+    const placa     = placaCrua || null;
+
+    // Linha inteiramente vazia: planilha tem linha em branco no fim.
+    if (!sigla && !tipoCrua && !placaCrua) continue;
+
+    const erro = (campo, valor, motivo) =>
+      out.erros.push({ linhaPlanilha, siglaCrua: siglaCrua || null, campo, valor, motivo });
+
+    if (!RE_SIGLA.test(sigla)) {
+      erro('sigla', siglaCrua, `sigla precisa ter de 4 a 12 letras ou números (leu ${sigla.length})`);
+      continue;
+    }
+    if (vistas.has(sigla)) {
+      erro(null, null, `sigla repetida: já aparece na linha ${vistas.get(sigla)} desta planilha`);
+      continue;
+    }
+    vistas.set(sigla, linhaPlanilha);
+
+    if (!RE_TIPO.test(tipo)) {
+      erro('tipo', tipoCrua || tipoPadrao, 'tipo inválido (alfanumérico, máx 30)');
+      continue;
+    }
+    if (placa && !RE_PLACA.test(placa)) {
+      erro('placa', l && l.placa, `placa inválida (4 a 16 letras, números, espaço ou hífen — leu ${placa.length})`);
+      continue;
+    }
+
+    const atual = atuais.get(sigla);
+
+    if (!atual) {
+      out.novas.push({ linhaPlanilha, sigla, setor, regional, tipo, placa });
+      continue;
+    }
+
+    if (atual.ativo === false) out.inativas.push({ linhaPlanilha, sigla });
+
+    const mudancas = [];
+    const cmp = (campo, de, para) => {
+      if (de !== para) mudancas.push({ campo, de, para });
+    };
+    cmp('setor',    _norm(atual.setor)    || null, setor);
+    cmp('regional', _norm(atual.regional) || null, regional);
+    cmp('tipo',     _norm(atual.tipo)     || null, tipo);
+    cmp('placa',    _norm(atual.placa)    || null, placa);
+    if (reativar && atual.ativo === false) mudancas.push({ campo: 'ativo', de: false, para: true });
+
+    if (mudancas.length === 0) out.identicas++;
+    else out.alteradas.push({ linhaPlanilha, sigla, setor, regional, tipo, placa, mudancas });
+  }
+
+  return out;
+}
+
 module.exports = {
   validateEquipe,
+  montarPlano,
   MAX_LINHAS,
   RE_SIGLA, RE_TIPO, RE_PLACA, RE_REG, RE_SETOR, RE_TIME,
 };
