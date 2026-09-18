@@ -1971,7 +1971,18 @@ router.get('/admin/equipes', async (_req, res) => {
     // he_revisado) só existem depois de scripts/migrar-he-cadastro.js --apply.
     // Sem este fallback, subir o código antes de rodar a migration derruba a
     // tela de Admin inteira — e aqui não há staging pra pegar isso antes.
-    const _COLS_BASE = 'sigla, regional, tipo, placa, ativo, escala_inicio, escala_fim, '
+    // `setor` entrou em 17/09/2026: sem ele a coluna Setor da tabela mostrava
+    // "—" pra todas as equipes, e o formulário caía no fallback do
+    // index.html:9481 (`e.setor || (regional==='CAC' ? 'DESC' : 'DESG')`) e
+    // REESCREVIA o setor ao salvar — uma equipe DSSJ viraria DESG mantendo
+    // regional SJC. Armadilha LATENTE: medido na VM em 17/09, nenhuma linha
+    // estava corrompida (DESC|CAC 35, DESG|GUA 49, DSSJ|SJC 59), porque DEPT
+    // não tem equipe (o fallback acerta por sorte em GUA/CAC) e nenhuma SJC
+    // tinha passado por este formulário. Ver P2-50.
+    //
+    // Também é pré-requisito do montarPlano da importação em lote: sem o setor
+    // atual, toda equipe existente apareceria como "setor mudando" na prévia.
+    const _COLS_BASE = 'sigla, setor, regional, tipo, placa, ativo, escala_inicio, escala_fim, '
                      + 'created_at, updated_at';
     const _COLS_HE   = ', cidade, tipo_breve, servico, turno_cadastro, he_revisado';
     let { data, error } = await sb
