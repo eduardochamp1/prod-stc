@@ -763,9 +763,11 @@
           <div class="filter-group">
             <span class="filter-label">Tipo Equipe</span>
             <select class="filter-select" id="graf-tipo-select" onchange="loadGraficos()">
+              <!-- Preenchido por _montarOpcoesCategoria() a partir do catálogo
+                   CATEGORIAS_EQUIPE. Escrever as <option> à mão aqui foi o que
+                   espalhou a regra por 9 sítios. A opção "Todas" fica no HTML
+                   pro select não nascer vazio se o script falhar. -->
               <option value="TODAS">Todas</option>
-              <option value="COMERCIAL">Comercial (EC)</option>
-              <option value="PLANTAO">Plantão (EP)</option>
             </select>
           </div>
           <div class="filter-group">
@@ -1957,6 +1959,25 @@
     /** Chave da categoria → a entrada do catálogo (ou a do OPERACIONAL). */
     function _categoriaPorChave(chave) {
       return CATEGORIAS_EQUIPE.find(c => c.chave === chave) || CATEGORIA_OPERACIONAL;
+    }
+
+    /**
+     * Preenche o <select> de categoria a partir do catálogo. Chamado no boot,
+     * ANTES do MultiSelect.init — senão o componente guarda as opções velhas.
+     *
+     * "Operacional (outros)" entra de propósito: sem ela, equipe de prefixo
+     * desconhecido ficaria INALCANÇÁVEL por filtro — visível só em "Todas".
+     * Hoje esse balde está vazio; a opção existe para o dia em que a EDP criar
+     * um prefixo novo, e nesse dia a equipe aparece em vez de sumir.
+     */
+    function _montarOpcoesCategoria() {
+      const sel = document.getElementById('graf-tipo-select');
+      if (!sel) return;
+      sel.innerHTML =
+        `<option value="TODAS">Todas</option>` +
+        CATEGORIAS_EQUIPE.map(c =>
+          `<option value="${c.chave}">${c.rotulo} (${c.prefixo})</option>`).join('') +
+        `<option value="${CATEGORIA_OPERACIONAL.chave}">${CATEGORIA_OPERACIONAL.rotulo} (outros)</option>`;
     }
 
     // Espelha services/regionalGroups.js do backend. Mantenha em sincronia se adicionar grupos novos.
@@ -3719,12 +3740,23 @@
       if (!sel || !_grafAllEquipes) return;
       const scope   = new Set(_grafRegionaisEfetivas());
       const tipoSel = MultiSelect.getValues('graf-tipo-select') || [];
-      const tipoEq  = tipoSel.length === 1 ? tipoSel[0] : 'TODAS';
-      const prefixo = tipoEq === 'COMERCIAL' ? 'EC' : tipoEq === 'PLANTAO' ? 'EP' : null;
+      // Mesma lógica do backend (services/categoriasEquipe.js), alimentada pelo
+      // mesmo catálogo: monta o conjunto de prefixos aceitos e testa contra
+      // todos. Antes traduzia UMA categoria em UM prefixo, e ≥2 virava 'TODAS'.
+      const _semFiltro = tipoSel.length === 0 || tipoSel.includes('TODAS');
+      const _prefixos  = _semFiltro ? []
+        : tipoSel.map(k => (CATEGORIAS_EQUIPE.find(c => c.chave === k) || {}).prefixo).filter(Boolean);
+      const _querOp    = !_semFiltro && tipoSel.includes(CATEGORIA_OPERACIONAL.chave);
+      const _passa = (sigla) => {
+        if (_semFiltro) return true;
+        const u = String(sigla).toUpperCase();
+        if (_prefixos.some(p => u.startsWith(p))) return true;
+        return _querOp && !CATEGORIAS_EQUIPE.some(c => u.startsWith(c.prefixo));
+      };
 
       const eqs = _grafAllEquipes
         .filter(e => scope.has(e.regional))
-        .filter(e => !prefixo || String(e.sigla).toUpperCase().startsWith(prefixo))
+        .filter(e => _passa(e.sigla))
         .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
 
       sel.innerHTML = `<option value="ALL">Todas as equipes</option>` +
@@ -3742,6 +3774,9 @@
           loadGraficos();
         },
       });
+      // As <option> saem do catálogo, e ANTES do init — o MultiSelect guarda a
+      // lista de itens em memória no init (foi a causa do P1-50).
+      _montarOpcoesCategoria();
       MultiSelect.init('graf-tipo-select',     { onChange: () => { _grafRefiltrarEquipes(); loadGraficos(); } });
       MultiSelect.init('graf-equipe-select',   { onChange: () => loadGraficos() });
       _travarRegionalPorEscopo('graf-regional-select');
@@ -3924,8 +3959,8 @@
       const regionais = MultiSelect.getValues('graf-regional-select');
       const tipos     = MultiSelect.getValues('graf-tipo-select');
       const teams     = MultiSelect.getValues('graf-equipe-select');
-      // Regional/team: backend aceita CSV via IN. Tipo equipe (COMERCIAL/PLANTAO/TODAS)
-      // não tem semântica multi — quando ≥2, considera TODAS (igual desmarcar tudo).
+      // Regional/team: backend aceita CSV via IN. Tipo equipe também aceita CSV
+      // desde 18/09/2026 (?tipo=COMERCIAL,MOTO) — ver services/categoriasEquipe.js.
       // Sem seleção (vazio ou 'ALL') ⇒ manda todas as regionais permitidas ao user.
       // Backend aceita ?regionals=GUA,CAC (CSV). Expande grupos (ES → GUA,CAC) e
       // restringe ao userRegionals (defesa em profundidade — backend revalida).
@@ -3937,7 +3972,15 @@
       // ha multiplas regionais selecionadas (ou todas), usa o slot 'ALL'
       // (agregado). Quando uma só, usa a sigla específica.
       const regional = _grafExpanded.length === 1 ? _grafExpanded[0] : 'ALL';
-      const tipo     = tipos.length !== 1     ? 'TODAS' : tipos[0];
+      // 18/09/2026: antes, qualquer quantidade de categorias diferente de UMA
+      // colapsava em TODAS. Com 2 categorias isso era inofensivo (marcar as
+      // duas = marcar todas); com 4 virou defeito silencioso, que mostrava MAIS
+      // do que o usuário pediu. O backend agora aceita CSV.
+      //
+      // ⚠️ O comentário descreve o código antigo em vez de citá-lo: existe um
+      // teste-guarda (categoriasEquipe.test.js) que procura aquela expressão no
+      // arquivo, e reproduzi-la aqui o deixaria vermelho sem haver defeito.
+      const tipo     = tipos.length === 0 ? 'TODAS' : tipos.join(',');
       const team     = teams.length === 0     ? 'ALL'   : teams.join(',');
 
       const lbl = document.getElementById('graf-periodo-label');
@@ -4260,11 +4303,9 @@
       const maxMedia = equipes.length > 0 ? Math.max(...equipes.map(e => e.media)) : 1;
       const barRows  = equipes.slice(0, 50).map(e => {
         const pct   = maxMedia > 0 ? (e.media / maxMedia) * 100 : 0;
-        const tipoCls = e.tipo_equipe === 'COMERCIAL' ? 'tipo-comercial'
-                     : e.tipo_equipe === 'PLANTAO'    ? 'tipo-plantao'
-                     : 'tipo-operacional';
-        const badge   = e.tipo_equipe === 'COMERCIAL' ? 'EC'
-                     : e.tipo_equipe === 'PLANTAO'    ? 'EP' : 'OP';
+        const _cat    = _categoriaPorChave(e.tipo_equipe);
+        const tipoCls = _cat.cssBarra;
+        const badge   = _cat.badge;
         return `<div class="perf-bar-row">
   <div class="perf-bar-name" title="${e.team_name}">
     <span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}
@@ -4294,8 +4335,7 @@
 
       const tableHeaderCols = tiposCols.map(t => `<th title="${GRAF_TIPOS_SUBCATS[t]?.nome || t}">${t}</th>`).join('');
       const tableRows = equipes.slice(0, 30).map(e => {
-        const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC'
-                    : e.tipo_equipe === 'PLANTAO'   ? 'EP' : 'OP';
+        const badge = _categoriaPorChave(e.tipo_equipe).badge;
         const tipoCells = tiposCols.map(t => `<td style="text-align:center">${e.por_tipo?.[t] || '—'}</td>`).join('');
         return `<tr>
   <td><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
@@ -4350,7 +4390,7 @@
           ? `<td class="${cls}${/rej/.test(cls) ? ' mtx-rej-hot' : ''}">${v}</td>`
           : `<td class="${cls} mtx-zero">—</td>`;
         const bodyRows = eqs.map(e => {
-          const badge = e.tipo_equipe === 'COMERCIAL' ? 'EC' : e.tipo_equipe === 'PLANTAO' ? 'EP' : 'OP';
+          const badge = _categoriaPorChave(e.tipo_equipe).badge;
           const cells = [cell(e.total_exec, 'mtx-exec mtx-total'), cell(e.total_rej, 'mtx-rej mtx-total'),
             cell((e.total_exec || 0) + (e.total_rej || 0), 'mtx-soma mtx-total')]
             .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej'),

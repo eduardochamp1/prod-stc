@@ -237,3 +237,40 @@ test('o front também conhece o OPERACIONAL, com os mesmos rótulo e badge', () 
   ['chave', 'rotulo', 'badge', 'cssBarra'].forEach(campo =>
     assert.equal(front[campo], OPERACIONAL[campo], `campo "${campo}" difere`));
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A tela usa o catálogo
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('as <option> do filtro saem do catálogo, não são escritas à mão', () => {
+  const i = SRC.indexOf('id="graf-tipo-select"');
+  assert.ok(i > -1, 'não achei o select de tipo de equipe');
+  const bloco = SRC.slice(i, SRC.indexOf('</select>', i));
+
+  assert.ok(!bloco.includes('<option value="COMERCIAL">'),
+    'as <option> ainda estão hard-coded no HTML');
+  assert.ok(SRC.includes('function _montarOpcoesCategoria('),
+    'esperava a função que monta as <option> a partir do catálogo');
+});
+
+test('o envio do filtro não colapsa mais duas categorias em TODAS', () => {
+  // Era o defeito que 4 categorias tornaram real: marcar duas mostrava quatro.
+  assert.ok(!/tipos\.length\s*!==\s*1\s*\?\s*'TODAS'/.test(SRC),
+    'o colapso de ≥2 em TODAS voltou — marcar duas categorias mostraria todas');
+});
+
+test('não sobrou ternário de categoria hard-coded no index.html', () => {
+  assert.ok(!/tipo_equipe === 'COMERCIAL'/.test(SRC),
+    'voltou um ternário de categoria no front; ele tem de ler do catálogo');
+});
+
+test('o CSS tem badge e barra para as quatro categorias e o operacional', () => {
+  const CSS = fs.readFileSync(
+    path.join(__dirname, '..', 'public', 'css', 'app.css'), 'utf8');
+
+  ['EC', 'EP', 'ET', 'EB', 'OP'].forEach(b =>
+    assert.ok(CSS.includes(`.perf-tipo-badge.${b}`), `falta o badge .${b}`));
+
+  [...CATEGORIAS.map(c => c.cssBarra), OPERACIONAL.cssBarra].forEach(cls =>
+    assert.ok(CSS.includes(`.perf-bar-fill.${cls}`), `falta a barra .${cls}`));
+});

@@ -4362,6 +4362,8 @@
     .perf-bar-fill.tipo-comercial { background: var(--amarelo); }
     .perf-bar-fill.tipo-plantao   { background: #4a9fe0; }
     .perf-bar-fill.tipo-operacional { background: var(--verde); }
+    .perf-bar-fill.tipo-moto    { background: #d9534f; }
+    .perf-bar-fill.tipo-bt-zero { background: #7a5ea8; }
     .perf-bar-fill.tipo-todas     { background: var(--verde); }
     .perf-legend {
       display: flex;
@@ -4514,6 +4516,10 @@
     }
     .perf-tipo-badge.EC { background: #fff3cd; color: #856404; }
     .perf-tipo-badge.EP { background: #cce5ff; color: #004085; }
+    /* ET (Equipe Moto) e EB (BT Zero) nomeados em 18/09/2026 — antes caíam no
+       balde OP. Cores escolhidas pra não colidir com as três já em uso. */
+    .perf-tipo-badge.ET { background: #f8d7da; color: #721c24; }
+    .perf-tipo-badge.EB { background: #e2d9f3; color: #432874; }
     .perf-tipo-badge.OP { background: #d4edda; color: #155724; }
     .perf-tipo-tag {
       display: inline-block;
