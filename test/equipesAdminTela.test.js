@@ -171,3 +171,121 @@ test('_detectarCabecalho só olha as 10 primeiras linhas', () => {
   matriz.push(['Sigla', 'Tipo']);
   assert.equal(detectar(matriz).linhaCabecalho, -1);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A prévia — "tem que indicar quais linhas estão erradas" (José, 17/09/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** _renderPlanoImportacao depende de escapeHtml. */
+function carregarRenderPlano() {
+  return new Function(`
+    ${extrairFuncao('escapeHtml')}
+    ${extrairFuncao('_renderPlanoImportacao')}
+    return _renderPlanoImportacao;
+  `)();
+}
+
+function planoVazio(over = {}) {
+  return { novas: [], alteradas: [], identicas: 0, inativas: [], erros: [], ...over };
+}
+
+test('o bloco de erros mostra a linha do Excel, o valor lido e o motivo', () => {
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    erros: [{
+      linhaPlanilha: 7, siglaCrua: 'EBG', campo: 'sigla', valor: 'EBG',
+      motivo: 'sigla precisa ter de 4 a 12 letras ou números (leu 3)',
+    }],
+  }), false);
+
+  assert.match(html, />7</, 'a linha do Excel tem de aparecer');
+  assert.ok(html.includes('EBG'), 'o valor lido tem de aparecer');
+  assert.ok(html.includes('4 a 12'), 'o motivo tem de aparecer');
+});
+
+test('erro de LOTE (sem linha) não inventa número — mostra travessão', () => {
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    erros: [{
+      linhaPlanilha: null, siglaCrua: null, campo: null, valor: null,
+      motivo: 'regional do lote inválida (use GUA, CAC ou SJC)',
+    }],
+  }), false);
+
+  assert.ok(html.includes('regional do lote'));
+  assert.ok(!/>null</.test(html), 'null não pode vazar pra tela');
+});
+
+test('o botão declara o que vai gravar e o que vai ignorar', () => {
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    novas:  [{ linhaPlanilha: 2, sigla: 'ENOVA01', tipo: 'CS', placa: null }],
+    erros:  [{ linhaPlanilha: 7, siglaCrua: 'EBG', campo: 'sigla', valor: 'EBG', motivo: 'x' }],
+  }), false);
+
+  assert.match(html, /Gravar 1 equipe/);
+  assert.match(html, /1 linha\(s\) com erro ser(ão|ao) ignoradas/);
+});
+
+test('plano sem nada a gravar desabilita o botão', () => {
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({ identicas: 5 }), false);
+  assert.ok(html.includes('disabled'));
+  assert.ok(html.includes('Nada a gravar'));
+});
+
+test('alteradas mostram o de/para só dos campos que mudam', () => {
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    alteradas: [{
+      linhaPlanilha: 3, sigla: 'EBGPR62',
+      mudancas: [{ campo: 'placa', de: 'ABC-1234', para: 'NOV-0001' }],
+    }],
+  }), false);
+
+  assert.ok(html.includes('ABC-1234'));
+  assert.ok(html.includes('NOV-0001'));
+  assert.ok(!html.includes('tipo:'), 'campo que não mudou não pode aparecer');
+});
+
+test('inativas aparecem com o checkbox de reativar DESMARCADO por padrão', () => {
+  // Spec 3.3: reativar faz produção antiga voltar a contar (P2-20 ao
+  // contrário). É decisão, não efeito colateral.
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    inativas: [{ linhaPlanilha: 2, sigla: 'EMGPR70' }],
+  }), false);
+
+  assert.ok(html.includes('EMGPR70'));
+  assert.ok(html.includes('type="checkbox"'));
+  // Precisa ser o ATRIBUTO `checked` no input — um `includes('checked')` solto
+  // casaria com o `onchange="_pedirPlanoImportacao(this.checked)"` e passaria
+  // verde sempre.
+  assert.ok(!/<input type="checkbox"\s+checked/.test(html),
+    'o padrão tem de ser desmarcado');
+});
+
+test('inativas com reativar ligado trazem o checkbox marcado', () => {
+  // Contraste do teste acima: sem isto, a asserção de "desmarcado" passaria
+  // mesmo se o atributo nunca fosse emitido.
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    inativas: [{ linhaPlanilha: 2, sigla: 'EMGPR70' }],
+  }), true);
+
+  assert.ok(/<input type="checkbox"\s+checked/.test(html));
+});
+
+test('dado da planilha é escapado — apóstrofo não quebra a tela', () => {
+  // Furo do P2-4/P2-40: dado externo indo cru pro innerHTML.
+  const render = carregarRenderPlano();
+  const html = render(planoVazio({
+    erros: [{
+      linhaPlanilha: 4, siglaCrua: `<img src=x onerror=alert(1)>`,
+      campo: 'sigla', valor: `<img src=x onerror=alert(1)>`, motivo: 'inválida',
+    }],
+  }), false);
+
+  assert.ok(!html.includes('<img src=x'), 'HTML da planilha não pode ir cru pra tela');
+  assert.ok(html.includes('&lt;img'), 'tem de vir escapado');
+});

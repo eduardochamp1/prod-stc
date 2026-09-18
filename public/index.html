@@ -897,6 +897,38 @@
             </div>
             <div id="eq-tabela" style="display:none;max-height:340px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
             <div id="eq-form" style="display:none;margin-top:12px;padding:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px"></div>
+
+            <!-- Importação em lote (SPEC-import-equipes-2026-09-17) -->
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--cinza2)">
+              <div style="font-size:12px;font-weight:600;margin-bottom:6px">📥 Importar de planilha</div>
+              <div style="font-size:11px;color:var(--text2);margin-bottom:8px">
+                A planilha precisa ter uma coluna de sigla; tipo e placa são opcionais.
+                Regional, setor e tipo padrão valem para o lote inteiro.
+                <b>Nada é gravado antes de você conferir a prévia.</b>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+                <select id="eq-imp-regional" style="height:32px;padding:0 8px;border:1px solid var(--cinza2);border-radius:4px;font-size:12px">
+                  <option value="GUA">GUA</option>
+                  <option value="CAC">CAC</option>
+                  <option value="SJC">SJC</option>
+                </select>
+                <select id="eq-imp-setor" style="height:32px;padding:0 8px;border:1px solid var(--cinza2);border-radius:4px;font-size:12px">
+                  <option value="DESG">DESG</option>
+                  <option value="DEPT">DEPT</option>
+                  <option value="DESC">DESC</option>
+                  <option value="DSSJ">DSSJ</option>
+                </select>
+                <!-- Sem `list=`: o datalist `tipos-equipe-datalist` só existe
+                     DENTRO do HTML que _renderEquipeForm gera, então não existe
+                     até o formulário de equipe única ser aberto — o atributo
+                     apontaria pro nada. -->
+                <input id="eq-imp-tipo" placeholder="Tipo padrão (obrigatório)"
+                  style="height:32px;padding:0 8px;border:1px solid var(--cinza2);border-radius:4px;font-size:12px;text-transform:uppercase;min-width:190px" />
+                <input id="eq-imp-arquivo" type="file" accept=".xlsx,.xls,.csv"
+                  onchange="_importarPlanilhaEscolhida()" style="font-size:12px" />
+              </div>
+              <div id="eq-imp-plano"></div>
+            </div>
           </div>
 
           <!-- Valores/hora da Medição HE -->
@@ -9517,6 +9549,199 @@ ${matrizHTML}
         if (mapa.sigla !== undefined) return { linhaCabecalho: i, mapa };
       }
       return { linhaCabecalho: -1, mapa: {} };
+    }
+
+    let _impLinhas = [];   // linhas cruas lidas do arquivo
+
+    /**
+     * Lê o arquivo escolhido e pede a prévia ao servidor.
+     *
+     * O browser só extrai bytes: toda normalização, validação e diff acontece
+     * em services/equipesImport.js, onde é testável sem DOM.
+     */
+    async function _importarPlanilhaEscolhida() {
+      const alvo = document.getElementById('eq-imp-plano');
+      const arq  = document.getElementById('eq-imp-arquivo').files[0];
+      if (!arq) return;
+
+      alvo.innerHTML = '<div style="font-size:12px;color:var(--text2)">⏳ Lendo a planilha…</div>';
+      try {
+        const buf = await arq.arrayBuffer();
+        const wb  = XLSX.read(buf, { type: 'array' });
+        const ws  = wb.Sheets[wb.SheetNames[0]];
+
+        // `range` dá o número REAL da linha no Excel. Usar o índice do array
+        // faria o erro apontar pra linha errada quando a planilha tem título —
+        // e número que não bate com o arquivo é pior que nenhum número.
+        const range  = XLSX.utils.decode_range(ws['!ref']);
+        const matriz = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: null });
+
+        const { linhaCabecalho, mapa } = _detectarCabecalho(matriz);
+        if (linhaCabecalho < 0) {
+          alvo.innerHTML = '<div style="font-size:12px;color:var(--vermelho)">'
+            + '✗ Não achei uma coluna de sigla nas 10 primeiras linhas. '
+            + 'Confira se a planilha tem cabeçalho com "Sigla" (ou Equipe, Turma, Código).</div>';
+          return;
+        }
+
+        _impLinhas = matriz.slice(linhaCabecalho + 1).map((linha, i) => ({
+          // +1 porque o Excel conta a partir de 1, e o range começa onde a
+          // planilha realmente começa (pode não ser a linha 1).
+          linhaPlanilha: range.s.r + linhaCabecalho + 1 + i + 1,
+          sigla: mapa.sigla !== undefined ? linha[mapa.sigla] : null,
+          tipo:  mapa.tipo  !== undefined ? linha[mapa.tipo]  : null,
+          placa: mapa.placa !== undefined ? linha[mapa.placa] : null,
+        }));
+
+        await _pedirPlanoImportacao();
+      } catch (err) {
+        alvo.innerHTML = `<div style="font-size:12px;color:var(--vermelho)">✗ ${err.message}</div>`;
+      }
+    }
+
+    /** Monta o corpo comum das duas fases. */
+    function _corpoImportacao(dryRun, reativar) {
+      return {
+        dryRun,
+        regional:   document.getElementById('eq-imp-regional').value,
+        setor:      document.getElementById('eq-imp-setor').value,
+        tipoPadrao: document.getElementById('eq-imp-tipo').value.trim().toUpperCase(),
+        reativar:   !!reativar,
+        linhas:     _impLinhas,
+      };
+    }
+
+    /** Pede o plano ao servidor (dryRun) e renderiza. */
+    async function _pedirPlanoImportacao(reativar) {
+      const alvo = document.getElementById('eq-imp-plano');
+      if (_impLinhas.length === 0) {
+        alvo.innerHTML = '<div style="font-size:12px;color:var(--text2)">Escolha uma planilha primeiro.</div>';
+        return;
+      }
+      alvo.innerHTML = '<div style="font-size:12px;color:var(--text2)">⏳ Montando a prévia…</div>';
+      try {
+        const res  = await fetch(`${API}/admin/equipes/importar`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(_corpoImportacao(true, reativar)),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        alvo.innerHTML = _renderPlanoImportacao(data.plano, !!reativar);
+      } catch (err) {
+        alvo.innerHTML = `<div style="font-size:12px;color:var(--vermelho)">✗ ${err.message}</div>`;
+      }
+    }
+
+    /** Aplica o plano. Só aqui `dryRun: false`. */
+    async function _gravarImportacao(reativar) {
+      const alvo = document.getElementById('eq-imp-plano');
+      alvo.innerHTML = '<div style="font-size:12px;color:var(--text2)">⏳ Gravando…</div>';
+      try {
+        const res = await fetch(`${API}/admin/equipes/importar`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(_corpoImportacao(false, reativar)),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        alvo.innerHTML = `<div style="font-size:12px;color:var(--verde)">
+          ✓ Gravadas ${data.gravadas} — ${data.novas} novas, ${data.alteradas} alteradas,
+          ${data.identicas} sem mudança, ${data.ignoradas} ignoradas por erro.</div>`;
+        document.getElementById('eq-imp-arquivo').value = '';
+        _impLinhas = [];
+        await loadEquipesOficiais();
+      } catch (err) {
+        alvo.innerHTML = `<div style="font-size:12px;color:var(--vermelho)">✗ ${err.message}</div>`;
+      }
+    }
+
+    /** Monta o HTML do plano. Erros primeiro — é o que exige ação. */
+    function _renderPlanoImportacao(plano, reativar) {
+      if (!plano) return '';
+      const esc = s => escapeHtml(String(s === null || s === undefined ? '' : s));
+      const bloco = (titulo, corpo, cor) => `
+        <div style="margin-top:10px">
+          <div style="font-size:11px;font-weight:600;color:${cor || 'var(--text)'};margin-bottom:4px">${titulo}</div>
+          ${corpo}
+        </div>`;
+      const tabela = (cabs, linhas) => `
+        <div style="max-height:200px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:4px">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead style="background:var(--cinza1);position:sticky;top:0"><tr>
+              ${cabs.map(c => `<th style="padding:4px 8px;text-align:left">${c}</th>`).join('')}
+            </tr></thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>`;
+
+      let html = '';
+
+      if (plano.erros.length > 0) {
+        html += bloco(`✗ ${plano.erros.length} linha(s) com problema`,
+          tabela(['Linha', 'Sigla', 'Campo', 'Valor lido', 'Problema'],
+            plano.erros.map(e => `<tr style="border-top:1px solid var(--cinza2)">
+              <td style="padding:4px 8px;font-family:monospace">${e.linhaPlanilha === null || e.linhaPlanilha === undefined ? '—' : e.linhaPlanilha}</td>
+              <td style="padding:4px 8px;font-family:monospace">${esc(e.siglaCrua) || '—'}</td>
+              <td style="padding:4px 8px">${esc(e.campo) || '—'}</td>
+              <td style="padding:4px 8px;font-family:monospace">${esc(e.valor) || '—'}</td>
+              <td style="padding:4px 8px">${esc(e.motivo)}</td></tr>`).join('')),
+          'var(--vermelho)');
+      }
+
+      if (plano.novas.length > 0) {
+        html += bloco(`+ ${plano.novas.length} nova(s)`,
+          tabela(['Linha', 'Sigla', 'Tipo', 'Placa'],
+            plano.novas.map(n => `<tr style="border-top:1px solid var(--cinza2)">
+              <td style="padding:4px 8px;font-family:monospace">${n.linhaPlanilha}</td>
+              <td style="padding:4px 8px;font-family:monospace;font-weight:600">${esc(n.sigla)}</td>
+              <td style="padding:4px 8px">${esc(n.tipo)}</td>
+              <td style="padding:4px 8px;font-family:monospace">${esc(n.placa) || '—'}</td></tr>`).join('')),
+          'var(--verde)');
+      }
+
+      if (plano.alteradas.length > 0) {
+        html += bloco(`✎ ${plano.alteradas.length} alterada(s)`,
+          tabela(['Linha', 'Sigla', 'Mudanças'],
+            plano.alteradas.map(a => `<tr style="border-top:1px solid var(--cinza2)">
+              <td style="padding:4px 8px;font-family:monospace">${a.linhaPlanilha}</td>
+              <td style="padding:4px 8px;font-family:monospace;font-weight:600">${esc(a.sigla)}</td>
+              <td style="padding:4px 8px">${a.mudancas.map(m =>
+                `${esc(m.campo)}: <s style="color:var(--text2)">${esc(m.de) || '—'}</s> → <b>${esc(m.para) || '—'}</b>`
+              ).join('<br>')}</td></tr>`).join('')),
+          'var(--amarelo)');
+      }
+
+      if (plano.inativas.length > 0) {
+        html += bloco(`⚠ ${plano.inativas.length} sigla(s) da planilha estão INATIVAS no cadastro`,
+          `<div style="font-size:11px;color:var(--text2)">
+             ${plano.inativas.map(i => esc(i.sigla)).join(', ')}
+           </div>
+           <label style="font-size:11px;display:flex;gap:6px;align-items:center;margin-top:6px">
+             <input type="checkbox" ${reativar ? 'checked' : ''}
+               onchange="_pedirPlanoImportacao(this.checked)" />
+             Reativar essas ${plano.inativas.length} — elas voltam a contar no histórico
+           </label>`,
+          'var(--amarelo)');
+      }
+
+      if (plano.identicas > 0) {
+        html += `<div style="font-size:11px;color:var(--text2);margin-top:8px">
+          ${plano.identicas} sem nenhuma mudança — serão ignoradas.</div>`;
+      }
+
+      const grava = plano.novas.length + plano.alteradas.length;
+      const rotulo = grava === 0
+        ? 'Nada a gravar'
+        : `💾 Gravar ${grava} equipe(s)` + (plano.erros.length > 0
+            ? ` — ${plano.erros.length} linha(s) com erro serão ignoradas` : '');
+
+      html += `<button onclick="_gravarImportacao(${reativar})" class="btn-refresh"
+        ${grava === 0 ? 'disabled' : ''}
+        style="margin-top:12px;height:32px;padding:0 16px;font-size:12px;background:${grava === 0 ? 'var(--cinza2)' : 'var(--verde)'};color:#fff">
+        ${rotulo}</button>`;
+
+      return html;
     }
 
     function renderEquipesTabela(eqs) {
