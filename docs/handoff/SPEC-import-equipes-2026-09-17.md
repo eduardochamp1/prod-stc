@@ -1,6 +1,7 @@
 # SPEC — Importar equipes oficiais de planilha (com prévia) + busca na lista
 
-> Data: 2026-09-17 · Status: **especificado**, nada implementado.
+> Data: 2026-09-17 · Status: **implementado** em 18/09/2026 — falta confirmar
+> em produção. Ver P2-51 no BACKLOG e `PLANO-import-equipes-2026-09-17.md`.
 >
 > Incremento **1 de 2** do trabalho de otimizar o cadastro de equipes no Admin.
 > O incremento 2 (tabela editável no lugar da lista) tem spec própria e vem

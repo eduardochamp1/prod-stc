@@ -150,6 +150,8 @@
 | P1-49 | Conta de 2 regionais (`engelmig_es` = GUA+CAC) tinha o dropdown de regional TRAVADO em 4 abas — resíduo do P1-19, que foi corrigido só na Histórico | Frontend | **done** (16/09) — fonte única `_travarRegionalPorEscopo` em 6 abas; 9 testes; **confirmado em prod 16/09** |
 | P1-50 | Trocar de conta sem recarregar deixava os dropdowns com a regional da conta ANTERIOR → consulta com regional fora do escopo, 403, aba presa em "Carregando…" | Frontend | **done** (16/09) — guarda `window.MultiSelect` era código morto (3ª vez); 9 testes; **confirmado em prod 16/09** |
 | P1-51 | `getTeamsCurrent` quebrado desde a migração pro pgShim: jsonb path `data->>date` SEM aspas → `column "date" does not exist`. O painel de saúde ficou 4 meses cego (`0/138` + "sem dados" com a coleta perfeita) e o `/wpa/nota` não resolve número de OS | Dados/Ops | **done** (17/09) — aspas na chave + card exibe erro em vez de `0`; 13 testes; **falta confirmar em prod** |
+| P2-50 | `GET /admin/equipes` não devolvia `setor`: a coluna da tabela mostrava `—` pra todas e o formulário reescrevia o campo ao salvar. **Medido: zero linhas corrompidas** — a armadilha nunca disparou | Dados/Frontend | **done** (18/09) — `setor` no SELECT + DSSJ no seletor; latente, sem reparo a fazer |
+| P2-51 | Cadastrar equipes era uma a uma (o form fecha a cada save) e a lista de 143 não tinha busca — "adicionei equipes novas mas foi um processo bem complicado" | Produto/Frontend | **done** (18/09) — importação de planilha com prévia + busca/filtro; 38 testes; **falta confirmar em prod** |
 
 ---
 
@@ -5356,3 +5358,142 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   enquanto `0/138` usa o total COM SJC. Numerador e denominador são coerentes
   entre si (ambos incluem SJC); só o parêntese é incompleto. Cosmético, fora
   do escopo deste item.
+
+---
+
+## P2-50 — `GET /admin/equipes` não devolvia `setor`: armadilha latente, zero dano
+
+- **Categoria:** Dados / Frontend
+- **Status:** **done** (18/09/2026) — medido na VM, **nada a reparar**
+- **Severidade:** entrou como candidato a P1 e foi **rebaixado a P2 pela
+  medição**. O mecanismo é real, mas nunca disparou. Registrar a diferença
+  entre o que o código permite e o que de fato aconteceu é o ponto: sem a
+  medição, este item teria custado um reparo inexistente.
+- **Fonte:** achado em 17/09/2026 ao especificar a importação em lote
+  (`SPEC-import-equipes-2026-09-17.md`).
+- **Evidência:**
+  - `routes/index.js` — `_COLS_BASE` listava `sigla, regional, tipo, placa,
+    ativo, escala_inicio, escala_fim, created_at, updated_at`. **Sem `setor`.**
+  - A tabela renderiza `e.setor || '—'`, então a coluna "Setor" mostrava `—`
+    pra todas as equipes.
+  - O formulário caía no fallback
+    `e.setor || (e.regional === 'CAC' ? 'DESC' : 'DESG')`.
+  - `salvarEquipe` enviava esse palpite, e o `PUT` gravava sem questionar.
+- **Impacto potencial:** editar qualquer equipe pelo formulário reescrevia o
+  `setor`. Uma **DEPT** viraria **DESG**; uma **DSSJ** viraria **DESG** mantendo
+  `regional: SJC` — linha que passa nos dois CHECKs isolados e é incoerente. O
+  `setor` mapeia pro CSD da EDP (`REGIONAL_MAP` em `wpaService.js:1863`).
+- **Dano real: ZERO.** Medido na VM em 17/09/2026:
+
+  ```
+   setor | regional | count
+  -------+----------+-------
+   DESC  | CAC      |    35
+   DESG  | GUA      |    49
+   DSSJ  | SJC      |    59
+  ```
+
+  Duas coincidências seguraram:
+
+  1. **`DEPT` não tem nenhuma equipe.** Com DEPT vazio, o fallback acerta por
+     sorte: toda equipe GUA é mesmo DESG e toda CAC é mesmo DESC.
+  2. **Nenhuma equipe de SJC passou por este formulário.** As 59 seguem `DSSJ`;
+     tivessem passado, teriam virado `DESG`. Entraram por script/migração
+     quando o SJC foi adicionado, em 08/06/2026.
+
+  Aritmética que confere com o painel: 49+35+59 = **143 linhas**, contra **138**
+  na whitelist (que só conta ativas) — e como o card de saúde mostrava `GUA 44`,
+  as 5 inativas são todas de Guarapari.
+- **Por que consertar mesmo assim:** a armadilha dispara no **primeiro** edit de
+  equipe SJC, e o risco subiu agora — o `DSSJ` entrou nos seletores no P2-51, o
+  que torna editar equipe SJC pela tela algo que passa a acontecer.
+- **Ação:** `setor` entrou no `_COLS_BASE`. O `DSSJ` entrou no seletor e o
+  `_setorChanged` passou a usar o mapa dos quatro setores, que espelha o
+  `REGIONAL_MAP`.
+- **Aceite:**
+  - [x] `GET /admin/equipes` devolve `setor`; teste trava o SELECT.
+  - [x] Seletor oferece os 4 setores; teste executa `_setorChanged`.
+  - [x] **Medido:** nenhuma linha corrompida (saída acima, VM, 17/09/2026).
+  - [x] Nada a reparar.
+  - [ ] **Em produção:** editar uma equipe **SJC** e confirmar que o setor
+        continua `DSSJ` — é o caso que a armadilha quebrava, e o único que a
+        medição não pôde provar.
+- **Esforço:** 30min.
+- **Rollback:** `git revert` (`d03d4b8` e `ebf569e`). Nenhuma mudança de schema.
+- **Observação de cadastro:** `DEPT` está no CHECK do schema, no `REGIONAL_MAP`
+  e no seletor, mas **não tem nenhuma equipe**. Não é defeito — é setor da EDP
+  sem turma da Engelmig hoje. Fica registrado pra ninguém confundir "coluna
+  vazia" com "importação falhou" mais adiante.
+
+---
+
+## P2-51 — Cadastro de equipes era uma a uma, e a lista de 143 não tinha busca
+
+- **Categoria:** Produto / Frontend
+- **Status:** **done** (18/09/2026) — **falta confirmar em produção**
+- **Fonte:** relatado pelo José em 17/09/2026: *"temos que otimizar o campo de
+  admin que adicionamos equipes... adicionei equipes novas mas foi um processo
+  bem complicado"*.
+- **Evidência:**
+  - `salvarEquipe` fazia `display = 'none'` no formulário e recarregava a
+    tabela. **O formulário sumia a cada gravação.** Cadastrar 10 equipes eram
+    10 ciclos de: achar `+ Nova` → preencher 7 campos → salvar → o form
+    desaparece → repetir.
+  - `renderEquipesTabela` despejava todas as linhas, sem busca nem filtro.
+  - Perguntado o que pesou, o José marcou exatamente esses dois — e **não**
+    marcou "saber o que preencher" nem o problema do SJC.
+- **Ação:** importação de planilha `.xlsx` com prévia, mais busca e filtro na
+  lista. Desenho em `SPEC-import-equipes-2026-09-17.md`; execução em
+  `PLANO-import-equipes-2026-09-17.md`.
+  - `services/equipesImport.js` — módulo **puro** com `montarPlano` e
+    `linhasParaUpsert`, mais as regras de validação que saíram de
+    `routes/index.js` para não existirem em duplicata.
+  - `POST /api/admin/equipes/importar` — mesma porta pras duas fases
+    (`dryRun`), então a validação existe uma vez só. O plano é **sempre
+    recalculado no servidor**; o cliente não manda plano.
+  - Front: leitura com o `xlsx.full.min.js` já vendorizado (zero dependência
+    nova, e o Fortinet não é obstáculo), detecção de cabeçalho por sinônimos,
+    e a prévia.
+- **Decisões que protegem número já reportado à EDP:**
+  - **Nunca desativa.** Sigla no cadastro e ausente da planilha é ignorada.
+    Pelo **P2-20** a leitura do histórico usa a whitelist de HOJE — desativar
+    apagaria produção já reportada, e planilha chega incompleta por natureza.
+  - **Não reativa sozinha.** Equipe inativa que reaparece vira categoria própria
+    na prévia, com checkbox desmarcado. Reativar é o P2-20 ao contrário: faz
+    produção antiga voltar a contar. É decisão, não efeito colateral.
+- **Atomicidade sem transação:** o pgShim não tem `BEGIN`/`COMMIT` (é o P1-11,
+  ainda pendente). Não foi preciso: o `upsert` monta **um único**
+  `INSERT … ON CONFLICT (sigla) DO UPDATE`, atômico por definição. Há teste
+  travando isso — trocar por um laço de inserts quebraria o tudo-ou-nada em
+  silêncio.
+- **Armadilha do P3-14 tratada:** o `pgShim` monta as colunas pela **união** das
+  chaves e põe `null` onde falta; como `ativo` é `NOT NULL`, um lote misto
+  derrubaria o statement inteiro. Por isso `ativo` vai em **todas** as linhas ou
+  em **nenhuma**, com teste afirmando que todas têm exatamente as mesmas chaves.
+- **Erros apontam a linha** (exigência explícita do José): número do **Excel**
+  (via `decode_range`, não índice do array — planilha com título faria o número
+  não bater com o arquivo), valor cru lido ao lado, e sigla repetida citando a
+  primeira ocorrência. Linha ruim não derruba o lote; o botão declara
+  *"Gravar 38 equipes — 2 linhas com erro serão ignoradas"*.
+- **Aceite:**
+  - [x] Suíte verde: 1109 testes, 0 falhas (eram 1047 no início do trabalho).
+  - [x] 38 testes novos: 24 no módulo puro, 6+4 na rota, 15 na tela.
+  - [ ] **Em produção:** importar planilha com 1 nova, 1 existente com placa
+        diferente e 1 sigla curta → 1 nova, 1 alterada com `placa: X → Y`, 1
+        erro na linha certa do Excel.
+  - [ ] **Em produção:** reimportar a MESMA planilha → tudo em "idênticas",
+        nada gravado (idempotência).
+  - [ ] **Em produção:** buscar por parte de uma sigla filtra e o contador vira
+        "N de 143".
+- **Esforço:** ~4h (spec, plano e execução).
+- **Rollback:** `git revert`. Os commits são separados por camada — dá pra
+  reverter só o front mantendo o backend novo inerte, já que nenhuma rota nova
+  é chamada por ninguém. Nada aqui altera schema, cron ou caminho de leitura de
+  produção.
+- **Fora de escopo (registrado, não feito):**
+  - **Tabela editável no lugar** — incremento 2, escolhido pelo José junto com
+    a importação. Spec própria; herda a gravação em lote desta.
+  - **Validar a sigla contra o que a EDP conhece** — é o **P2-47**. Exige
+    decidir o que fazer quando planilha e EDP discordam: pergunta de negócio,
+    não de tela.
+  - **Escala início/fim na importação** — segue só no formulário de equipe única.
