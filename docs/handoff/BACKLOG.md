@@ -152,6 +152,7 @@
 | P1-51 | `getTeamsCurrent` quebrado desde a migração pro pgShim: jsonb path `data->>date` SEM aspas → `column "date" does not exist`. O painel de saúde ficou 4 meses cego (`0/138` + "sem dados" com a coleta perfeita) e o `/wpa/nota` não resolve número de OS | Dados/Ops | **done** (17/09) — aspas na chave + card exibe erro em vez de `0`; 13 testes; **falta confirmar em prod** |
 | P2-50 | `GET /admin/equipes` não devolvia `setor`: a coluna da tabela mostrava `—` pra todas e o formulário reescrevia o campo ao salvar. **Medido: zero linhas corrompidas** — a armadilha nunca disparou | Dados/Frontend | **done** (18/09) — `setor` no SELECT + DSSJ no seletor; latente, sem reparo a fazer |
 | P2-51 | Cadastrar equipes era uma a uma (o form fecha a cada save) e a lista de 143 não tinha busca — "adicionei equipes novas mas foi um processo bem complicado" | Produto/Frontend | **done** (18/09) — importação de planilha com prévia + busca/filtro; 38 testes; **falta confirmar em prod** |
+| P2-52 | Não havia como ler a perda por rejeição: a matriz por tipo tem os números espalhados, sem taxa, e com um Total único — não dava pra comparar equipes nem ver o acumulado da regional | Produto/Frontend | **done** (18/09) — tabela nova abaixo da matriz; 20 testes; **falta confirmar em prod** |
 
 ---
 
@@ -5497,3 +5498,52 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
     decidir o que fazer quando planilha e EDP discordam: pergunta de negócio,
     não de tela.
   - **Escala início/fim na importação** — segue só no formulário de equipe única.
+
+---
+
+## P2-52 — Tabela "Acumulado — Perda por Rejeição"
+
+- **Categoria:** Produto / Frontend
+- **Status:** **done** (18/09/2026) — **falta confirmar em produção**
+- **Fonte:** pedido do José em 18/09/2026: *"uma tabela que mede as perdas por
+  notas rejeitadas das equipes e o acumulado da regional também"*.
+- **Evidência do que faltava:** a matriz "Notas Atendidas por Tipo"
+  (`public/index.html`, seção `matrizHTML`) já tinha os números, mas — nas
+  palavras dele — *"dispersas e espalhadas"*: colunas repetidas por tipo de
+  nota, **sem taxa** (só contagem absoluta, então equipe grande e pequena não
+  se comparam) e com **um** Total no rodapé, sem subtotal por regional.
+- **Ação:** tabela nova ABAIXO da matriz, que **não foi alterada**. Colunas
+  `Equipe · Executadas · Rejeitadas · Atendidas · % Rejeição`, equipes
+  agrupadas sob a regional com o subtotal encabeçando o grupo, e total geral
+  no rodapé. Ordem: taxa decrescente.
+- **Custo:** zero no backend. O `_buildEquipeTipoMatrix` (`db/queries.js:1319`)
+  já devolvia `total_exec`, `total_rej` e `regional` por equipe — é
+  agrupamento sobre payload que já estava no browser.
+- **Decisões registradas (pra ninguém "consertar" depois):**
+  - **Taxa de regional é PONDERADA**, `soma(rej) ÷ soma(atendidas)`, nunca a
+    média das taxas das equipes. Uma equipe 1/2 (50%) e outra 10/1000 (1%)
+    dariam média 25,5% quando a perda real do grupo é 11/1002 = **1,1%**. Há
+    teste cravando esse caso exato, e negando explicitamente o 25,5%.
+  - **Sem corte de amostra mínima**, por decisão do José. Foi levantado que
+    ordenar só por taxa põe no topo a equipe de 3 notas com 33%; a coluna
+    "Atendidas" fica ao lado e denuncia o volume na própria linha. Foi escolha,
+    não esquecimento.
+  - **Ordem diferente da matriz de cima** (taxa × volume), de propósito: são
+    perguntas diferentes — "quem produz mais" e "quem perde mais
+    proporcionalmente".
+  - **Equipe sem regional** cai num grupo `—` em vez de sumir. Esconder dado é
+    contra a regra da casa.
+- **Aceite:**
+  - [x] 20 testes; as duas funções são puras e são EXECUTADAS no teste.
+  - [x] Suíte verde: 1129 testes, 0 falhas.
+  - [x] Sanidade do HTML gerado conferida fora do teste: tags balanceadas e a
+        aritmética fechando (6.050 + 1.260 = 7.310, taxa 17,2%).
+  - [ ] **Em produção:** a seção aparece abaixo da matriz e recolhe/expande.
+  - [ ] **Em produção:** conferir um subtotal de regional à mão contra a soma
+        das equipes do grupo.
+- **Esforço:** ~2h (spec, plano e execução).
+- **Rollback:** `git revert`. Só `public/index.html`, `public/css/app.css` e um
+  teste novo. Nada de schema, rota, cron ou caminho de leitura.
+- **Fora de escopo:** perda em R$ (não há fonte de valor por OS confirmada);
+  exportar a tabela nova pro XLSX (não pedido — o `_agruparPerdaPorRegional`
+  já entrega a estrutura pronta se vier).

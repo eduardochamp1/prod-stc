@@ -1,5 +1,26 @@
 # Acumulado — Perda por Rejeição — Plano de Implementação
 
+> **EXECUTADO em 18/09/2026.** As 4 tarefas foram concluídas em TDD. As caixas
+> `- [ ]` abaixo ficaram como estavam: o registro do que foi feito são os
+> commits. Suíte ao fim: **1129 testes, 0 falhas**.
+>
+> | Tarefa | Commit |
+> |---|---|
+> | 1 — `_agruparPerdaPorRegional` | `19a78bc` |
+> | 2 — `_renderAcumuladoRejeicao` | `663d9e8` |
+> | 3 — CSS e ligação na tela | `41e439a` |
+> | 4 — backlog e spec | (este commit) |
+>
+> **Sem desvios do plano.** A extração preguiçosa das funções nos testes provou
+> o valor na prática: na fase vermelha da Tarefa 2, os 7 testes novos falharam
+> e os 10 da Tarefa 1 seguiram verdes, em vez de o arquivo inteiro cair.
+>
+> Além dos testes, o HTML gerado foi conferido fora da suíte: tags balanceadas,
+> 7 linhas para 2 grupos e 3 equipes, e a aritmética fechando
+> (6.050 + 1.260 = 7.310, taxa 17,2%).
+>
+> Os aceites de **produção** seguem em aberto — ver P2-52 no BACKLOG.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Tabela nova na aba Gráficos, abaixo da matriz existente, mostrando por equipe e por regional quanto da produção atendida se perdeu em rejeição — em quantidade e em taxa.

@@ -1,6 +1,7 @@
 # SPEC — Tabela "Acumulado: perda por rejeição" (aba Gráficos)
 
-> Data: 2026-09-18 · Status: **especificado**, nada implementado.
+> Data: 2026-09-18 · Status: **implementado** — falta confirmar em produção.
+> Ver P2-52 no BACKLOG e `PLANO-acumulado-rejeicao-2026-09-18.md`.
 >
 > Tabela nova na aba Gráficos, **abaixo** da matriz "Notas Atendidas por Tipo".
 > A matriz existente **não é alterada** — ela permanece exatamente como está.
