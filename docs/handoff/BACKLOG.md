@@ -153,6 +153,7 @@
 | P2-50 | `GET /admin/equipes` não devolvia `setor`: a coluna da tabela mostrava `—` pra todas e o formulário reescrevia o campo ao salvar. **Medido: zero linhas corrompidas** — a armadilha nunca disparou | Dados/Frontend | **done** (18/09) — `setor` no SELECT + DSSJ no seletor; latente, sem reparo a fazer |
 | P2-51 | Cadastrar equipes era uma a uma (o form fecha a cada save) e a lista de 143 não tinha busca — "adicionei equipes novas mas foi um processo bem complicado" | Produto/Frontend | **done** (18/09) — importação de planilha com prévia + busca/filtro; 38 testes; **falta confirmar em prod** |
 | P2-52 | Não havia como ler a perda por rejeição: a matriz por tipo tem os números espalhados, sem taxa, e com um Total único — não dava pra comparar equipes nem ver o acumulado da regional | Produto/Frontend | **done** (18/09) — tabela nova abaixo da matriz; 20 testes; **falta confirmar em prod** |
+| P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
 
 ---
 
@@ -5547,3 +5548,70 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
 - **Fora de escopo:** perda em R$ (não há fonte de valor por OS confirmada);
   exportar a tabela nova pro XLSX (não pedido — o `_agruparPerdaPorRegional`
   já entrega a estrutura pronta se vier).
+
+---
+
+## P2-53 — Catálogo de categorias de equipe: Equipe Moto (ET) e BT Zero (EB)
+
+- **Categoria:** Produto / Backend
+- **Status:** **done** (18/09/2026) — **falta confirmar em produção**
+- **Fonte:** pedido do José em 18/09/2026: *"as equipes que começam no EC são
+  comerciais, as EP são plantão e as ET são Equipe Moto"*. O prefixo `EB`
+  apareceu na exploração e ele decidiu nomeá-lo **BT Zero**.
+- **Evidência:** as equipes já existiam sem nome — contagem de prefixos na
+  whitelist: `EC 31 · EP 26 · ET 14 · EB 4`. As 14 `ET` e as 4 `EB` caíam em
+  `OPERACIONAL`, com badge genérico `OP`.
+- **A duplicação:** a regra vivia em **9 sítios** — 4 em `db/queries.js`
+  (`getPerformanceEquipes` e `_buildEquipeTipoMatrix`, filtro e classificação
+  em cada) e 5 em `public/index.html` (as `<option>`, o filtro da lista de
+  equipes, e três sítios de badge). Acrescentar 2 categorias seriam **18
+  edições manuais** em ternários encadeados, com modo de errar silencioso:
+  esquecer um sítio de badge faz a mesma equipe aparecer como "Equipe Moto"
+  numa tabela e "OP" em outra. É o **P3-9** aparecendo na prática.
+- **Ação:** catálogo único em `services/categoriasEquipe.js`, espelhado numa
+  constante do `index.html` (dois runtimes, sem bundler). **Teste compara as
+  duas cópias campo a campo** — divergir deixa a suíte vermelha antes do push.
+  Sem esse teste, catálogo único vira dois catálogos parecidos, que é pior que
+  os 9 ternários porque parece seguro. Verificado que ele tem dentes: trocar
+  um rótulo de um lado só o deixou vermelho apontando índice, chave, campo e
+  os dois valores.
+- **O filtro multi entrou junto, e não por escopo solto:** o dropdown é
+  multi-select, mas o backend não aceitava múltiplos — o próprio código
+  documentava que ≥2 colapsava em `TODAS`. Com **2** categorias isso era
+  inofensivo (marcar as duas = marcar todas); com **4**, marcar duas passou a
+  mostrar quatro, em silêncio, com números maiores do que o usuário pediu.
+  Acrescentar categorias converteu uma esquisitice inócua num defeito real,
+  então o conserto pertencia a este item. `?tipo=` passou a aceitar CSV.
+- **"Operacional (outros)" virou opção do filtro.** Sem ela, equipe de prefixo
+  desconhecido ficaria inalcançável por filtro — visível só em "Todas". O balde
+  está vazio hoje; a opção existe pro dia em que a EDP criar um prefixo novo, e
+  nesse dia a equipe aparece em vez de sumir (P1-39, P2-19 são o histórico que
+  justifica o cuidado).
+- **Mudança de comportamento registrada:** `test/equipeTipoMatrix.test.js`
+  afirmava que `ETGPR15` era `OPERACIONAL`, e estava **certo na época**. A
+  expectativa foi atualizada com o porquê no comentário, e ganhou um caso
+  `EXGPR99` provando que o balde genérico continua existindo para prefixo que
+  ninguém nomeou.
+- **Nada foi persistido.** A categoria é derivada na leitura, então as ET e EB
+  aparecem classificadas no histórico inteiro, sem backfill e sem risco sobre
+  número já reportado à EDP. O campo `equipes_oficiais.tipo` do cadastro —
+  outra dimensão — não foi tocado.
+- **Aceite:**
+  - [x] 26 testes, incluindo o de acordo entre as duas cópias.
+  - [x] Verificado que o teste de acordo fica vermelho ao divergir um rótulo.
+  - [x] Suíte verde: 1155 testes, 0 falhas.
+  - [x] Verificado fora da suíte que as 6 `<option>` são geradas corretamente.
+  - [ ] **Em produção:** o filtro mostra Equipe Moto (ET) e BT Zero (EB), e as
+        equipes aparecem com o badge certo nas três tabelas.
+  - [ ] **Em produção:** marcar duas categorias mostra **só** essas duas.
+- **Esforço:** ~3h (spec, plano e execução).
+- **Rollback:** `git revert`. Sem schema, sem cron, sem caminho de escrita.
+  Commits separados por camada: catálogo (inerte sozinho), backend, front/CSS.
+- **Fora de escopo:** tornar a categoria editável no Admin (exigiria preencher
+  143 linhas e aceitar que cadastro e sigla divirjam); mexer em
+  `equipes_oficiais.tipo`.
+- **Armadilha registrada:** o teste-guarda que procura o padrão do colapso
+  antigo casa com **comentário** também. Por isso o comentário em
+  `public/index.html` **descreve** o código antigo em vez de citá-lo, e diz por
+  quê — para ninguém "restaurar" a citação e deixar a suíte vermelha sem haver
+  defeito.

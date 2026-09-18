@@ -1,6 +1,7 @@
 # SPEC — Categorias de equipe: catálogo único + Equipe Moto (ET) e BT Zero (EB)
 
-> Data: 2026-09-18 · Status: **especificado**, nada implementado.
+> Data: 2026-09-18 · Status: **implementado** — falta confirmar em produção.
+> Ver P2-53 no BACKLOG e `PLANO-categorias-equipe-2026-09-18.md`.
 
 ## 1. O pedido
 

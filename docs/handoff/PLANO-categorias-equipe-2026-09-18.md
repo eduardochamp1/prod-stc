@@ -1,5 +1,32 @@
 # Categorias de Equipe — Plano de Implementação
 
+> **EXECUTADO em 18/09/2026.** As 5 tarefas foram concluídas em TDD. Suíte ao
+> fim: **1155 testes, 0 falhas**.
+>
+> | Tarefa | Commit |
+> |---|---|
+> | 1 — catálogo e funções puras | `d4994f9` |
+> | 2 — backend usa o catálogo | `8fc05af` |
+> | 3 — catálogo espelhado + teste de acordo | `4cae22b` |
+> | 4 — front usa o catálogo, filtro multi | `b10b74e` |
+> | 5 — backlog e spec | (este commit) |
+>
+> **Três coisas que a execução revelou:**
+>
+> 1. **Um teste existente ficou vermelho, e estava certo.**
+>    `equipeTipoMatrix.test.js` afirmava `ETGPR15 → OPERACIONAL`, o que era
+>    verdade antes deste trabalho. Não era regressão: era a cobertura provando
+>    que é real. A expectativa foi atualizada com o porquê, e ganhou um caso
+>    `EXGPR99` provando que o balde genérico sobrevive.
+> 2. **O teste-guarda do colapso pegou uma segunda ocorrência do padrão — que
+>    era o próprio comentário citando o código antigo.** O comentário passou a
+>    DESCREVER em vez de CITAR, e diz por que está assim.
+> 3. **O teste de acordo foi verificado vermelho de propósito**, trocando
+>    'Equipe Moto' por 'Equipe Motocicleta' num lado só. A mensagem aponta
+>    índice, chave, campo e os dois valores.
+>
+> Os aceites de **produção** seguem em aberto — ver P2-53 no BACKLOG.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Nomear `ET` como "Equipe Moto" e `EB` como "BT Zero", tirando a regra de classificação dos 9 ternários espalhados e pondo num catálogo único por runtime — e fazer o filtro multi de tipo funcionar de verdade, porque com 4 categorias ele passa a mentir.
