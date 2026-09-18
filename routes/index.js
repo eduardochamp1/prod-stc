@@ -1853,27 +1853,17 @@ router.get('/admin/health', async (_req, res) => {
 // mutação aqui, chamamos forceRefresh() para garantir que o próximo lookup
 // reflita a mudança imediatamente.
 
-const _RE_SIGLA  = /^[A-Z0-9]{4,12}$/i;
-const _RE_TIPO   = /^[A-Z0-9 ÁÉÍÓÚÃÕÇ-]{1,30}$/i;  // tipo é livre (operacional)
-const _RE_PLACA  = /^[A-Z0-9 -]{4,16}$/i;
-const _RE_REG    = /^(GUA|CAC|SJC)$/;                // SJC adicionado 08/06/2026
-const _RE_SETOR  = /^(DESG|DEPT|DESC|DSSJ)$/;        // DSSJ = CSD São José
-
-function _validateEquipe(body) {
-  const errors = [];
-  if (!body || typeof body !== 'object') return ['body inválido'];
-  if (!_RE_SIGLA.test(body.sigla || ''))      errors.push('sigla inválida (4-12 alfanuméricos)');
-  if (!_RE_SETOR.test(body.setor || ''))      errors.push('setor deve ser DESG, DEPT, DESC ou DSSJ');
-  if (!_RE_REG.test(body.regional || ''))     errors.push('regional deve ser GUA, CAC ou SJC');
-  if (!_RE_TIPO.test(body.tipo || ''))        errors.push('tipo inválido (alfanumérico, máx 30)');
-  // placa é opcional agora
-  if (body.placa && !_RE_PLACA.test(body.placa)) errors.push('placa inválida');
-  // Escala opcional: aceita "HH:MM" ou "HH:MM:SS"
-  const _re_time = /^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
-  if (body.escala_inicio && !_re_time.test(String(body.escala_inicio))) errors.push('escala_inicio inválido (use HH:MM)');
-  if (body.escala_fim    && !_re_time.test(String(body.escala_fim)))    errors.push('escala_fim inválido (use HH:MM)');
-  return errors;
-}
+// As regras de validação de equipe moram em services/equipesImport.js desde
+// 17/09/2026 — a importação em lote precisa das MESMAS regras, e duas cópias
+// divergiriam. Os nomes locais ficam pra não mexer nos pontos que já os usam.
+const {
+  validateEquipe: _validateEquipe,
+  RE_SIGLA: _RE_SIGLA,
+  RE_TIPO:  _RE_TIPO,
+  RE_PLACA: _RE_PLACA,
+  RE_REG:   _RE_REG,
+  RE_SETOR: _RE_SETOR,
+} = require('../services/equipesImport');
 
 // ── VALORES/HORA DA MEDIÇÃO HE ──────────────────────────────────────────────
 // Preço de contrato por tipo de turma (A1/A2/A3/L0M/L1/L3). Editável sem
