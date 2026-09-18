@@ -4777,3 +4777,36 @@
 }
 .desloc-tbl td { padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, .04); }
 .desloc-tbl tr:hover td { background: rgba(255, 255, 255, .03); }
+
+    /* ── Acumulado — Perda por Rejeição ──────────────────────────────────────
+       Tabela da aba Gráficos que mede a perda por rejeição por equipe, com
+       subtotal por regional. Criada em 18/09/2026 (SPEC-acumulado-rejeicao). */
+    .acum-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .acum-table th, .acum-table td { padding: 6px 10px; text-align: right; }
+    .acum-table td.acum-team { text-align: left; }
+
+    .acum-table thead th {
+      position: sticky; top: 0; z-index: 1;
+      background: var(--verde); color: #fff;
+      font-size: 10px; font-weight: 700; letter-spacing: .05em;
+      text-transform: uppercase; white-space: nowrap;
+    }
+
+    /* Linha da regional: encabeça o grupo e carrega o subtotal. */
+    .acum-table tr.acum-grp td {
+      background: var(--cinza1); font-weight: 700;
+      border-top: 2px solid var(--verde);
+      text-transform: uppercase; letter-spacing: .03em;
+    }
+
+    .acum-table tbody tr td { border-bottom: 1px solid var(--cinza2); }
+    .acum-table td.acum-eq { padding-left: 24px; font-family: monospace; }
+    .acum-table td.acum-exec { color: var(--verde2); font-weight: 600; }
+    .acum-table td.acum-rej-hot { color: var(--vermelho); font-weight: 700; }
+    .acum-table td.acum-zero { color: var(--cinza3); opacity: .5; }
+    .acum-table td.acum-taxa { font-weight: 700; }
+
+    .acum-table tfoot tr.acum-foot td {
+      background: var(--cinza2); font-weight: 700;
+      border-top: 2px solid var(--preto);
+    }

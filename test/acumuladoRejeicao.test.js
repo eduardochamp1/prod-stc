@@ -229,3 +229,31 @@ test('a seção usa perf-section + perf-section-title (fica expansível de graç
   assert.ok(html.includes('class="perf-section"'));
   assert.ok(html.includes('class="perf-section-title"'));
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ligação na tela
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('a seção nova é renderizada DEPOIS da matriz existente', () => {
+  // O José pediu a tabela nova ABAIXO da matriz, que fica intocada.
+  const iMatriz = SRC.indexOf('${matrizHTML}');
+  const iAcum   = SRC.indexOf('${acumuladoHTML}');
+  assert.ok(iMatriz > -1, 'não achei ${matrizHTML} no template');
+  assert.ok(iAcum > -1, 'não achei ${acumuladoHTML} no template');
+  assert.ok(iAcum > iMatriz, 'a tabela nova tem de vir depois da matriz');
+});
+
+test('a ligação lê de matrizData.equipes, não da variável `equipes`', () => {
+  // São duas variáveis no mesmo escopo e só a primeira tem total_exec/
+  // total_rej/regional. Usar a errada dá tabela vazia, em silêncio.
+  const i = SRC.indexOf('const acumuladoHTML');
+  assert.ok(i > -1, 'não achei a atribuição de acumuladoHTML');
+  const bloco = SRC.slice(i, i + 220);
+  assert.ok(bloco.includes('matrizData'),
+    `a ligação tem de partir de matrizData.equipes. Bloco:\n${bloco}`);
+});
+
+test('a matriz existente continua intacta', () => {
+  assert.ok(SRC.includes('Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe'),
+    'o título da matriz existente sumiu — ela não devia ser tocada');
+});

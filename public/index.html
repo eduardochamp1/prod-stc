@@ -4353,6 +4353,12 @@
 </div>`;
       })();
 
+      // Tabela "Acumulado — Perda por Rejeição": mesma fonte da matriz acima
+      // (matrizData.equipes — NÃO a variável `equipes`, que não tem os totais).
+      // Vai ABAIXO da matriz; ela não é alterada.
+      const acumuladoHTML = _renderAcumuladoRejeicao(
+        _agruparPerdaPorRegional((matrizData && matrizData.equipes) || []));
+
       return `
 <div class="perf-section">
   ${kpisHTML}
@@ -4382,6 +4388,7 @@ ${equipes.length > 0 ? `<div class="perf-section">
   ${tipoTableHTML}
 </div>` : ''}
 ${matrizHTML}
+${acumuladoHTML}
 `;
     }
 
