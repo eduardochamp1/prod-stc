@@ -2039,6 +2039,78 @@ router.post('/admin/equipes', async (req, res) => {
   }
 });
 
+// POST /api/admin/equipes/importar — cadastro em lote a partir de planilha
+//
+// Serve as DUAS fases pela mesma porta: `dryRun: true` devolve o plano e para;
+// `dryRun: false` grava. Assim a validação existe uma vez só.
+//
+// Atomicidade: o pgShim não tem transação (nenhum BEGIN/COMMIT, nenhum
+// pool.connect — é por isso que o P1-11 segue pendente). Não precisamos: o
+// upsert monta UM único INSERT ... ON CONFLICT (sigla) DO UPDATE, e um
+// statement é atômico por definição no Postgres. O lote inteiro entra ou nada
+// entra. NÃO troque por um laço de inserts.
+//
+// Spec: docs/handoff/SPEC-import-equipes-2026-09-17.md
+router.post('/admin/equipes/importar', async (req, res) => {
+  try {
+    // Validação de forma ANTES da checagem de banco: é barata, e sem essa ordem
+    // um payload malformado responderia 503 em vez de 400 (e o teste de
+    // contrato HTTP, que roda em DATA_MODE=mock, não conseguiria distinguir).
+    const body = req.body || {};
+    const { dryRun, regional, setor, tipoPadrao, reativar, linhas } = body;
+    if (!Array.isArray(linhas)) {
+      return res.status(400).json({ error: 'linhas deve ser um array' });
+    }
+
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+
+    const { montarPlano, linhasParaUpsert } = require('../services/equipesImport');
+    const sb = require('../services/dbClient').getClient();
+
+    const { data: atuais, error } = await sb
+      .from('equipes_oficiais')
+      .select('sigla, setor, regional, tipo, placa, ativo');
+    if (error) throw error;
+
+    // Recalculado SEMPRE no servidor, nas duas fases. O cliente pode mandar
+    // qualquer coisa; a validação tem de estar do lado que grava.
+    const plano = montarPlano(linhas, atuais || [], {
+      regional, setor, tipoPadrao, reativar: !!reativar,
+    });
+
+    // Padrão seguro: só grava com `dryRun === false` explícito. Payload sem o
+    // campo cai na prévia.
+    if (dryRun !== false) return res.json({ plano });
+
+    const rows = linhasParaUpsert(plano, { reativar: !!reativar });
+    if (rows.length === 0) {
+      return res.json({ ok: true, gravadas: 0, ignoradas: plano.erros.length, plano });
+    }
+
+    const { error: upErr } = await sb
+      .from('equipes_oficiais')
+      .upsert(rows, { onConflict: 'sigla' });
+    if (upErr) throw upErr;
+
+    // Invalida o cache em memória (TTL de 60s), como o POST de equipe única faz.
+    const { forceRefresh } = require('../services/equipesOficiais');
+    await forceRefresh();
+
+    res.json({
+      ok: true,
+      gravadas:  rows.length,
+      novas:     plano.novas.length,
+      alteradas: plano.alteradas.length,
+      identicas: plano.identicas,
+      ignoradas: plano.erros.length,
+      plano,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT /api/admin/equipes/:sigla — atualiza tipo/placa/regional/ativo
 router.put('/admin/equipes/:sigla', async (req, res) => {
   const sigla = (req.params.sigla || '').toUpperCase().trim();

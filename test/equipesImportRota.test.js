@@ -30,3 +30,58 @@ test('GET /admin/equipes seleciona a coluna setor', () => {
     `_COLS_BASE precisa incluir "setor". Bloco atual:\n${bloco.slice(0, 200)}`
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /admin/equipes/importar — forma do handler
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('a rota de importação existe e fica sob /admin (requireAdmin)', () => {
+  assert.ok(
+    ROTAS.includes("router.post('/admin/equipes/importar'"),
+    'não achei POST /admin/equipes/importar em routes/index.js'
+  );
+  // O guard é o router.use('/admin', requireAdmin) — qualquer rota sob /admin
+  // herda. Este teste trava o prefixo: mudar pra /equipes/... tiraria a rota
+  // de baixo do guard sem ninguém notar.
+  assert.ok(ROTAS.includes("router.use('/admin', requireAdmin)"));
+});
+
+test('o apply RECALCULA o plano — não confia no que o cliente mandou', () => {
+  const i = ROTAS.indexOf("router.post('/admin/equipes/importar'");
+  const bloco = ROTAS.slice(i, i + 2600);
+  assert.ok(
+    bloco.includes('montarPlano('),
+    'o handler tem de chamar montarPlano no servidor, nas duas fases'
+  );
+  assert.ok(
+    !/req\.body\.plano/.test(bloco),
+    'o handler não pode usar um plano vindo do cliente'
+  );
+});
+
+test('dryRun é o padrão seguro: só grava com dryRun === false explícito', () => {
+  const i = ROTAS.indexOf("router.post('/admin/equipes/importar'");
+  const bloco = ROTAS.slice(i, i + 2600);
+  assert.ok(
+    /dryRun\s*!==\s*false/.test(bloco),
+    'payload sem dryRun tem de cair na prévia, nunca na gravação'
+  );
+});
+
+test('a gravação é UM upsert, não um laço de inserts', () => {
+  // É o que sustenta a atomicidade: o pgShim não tem transação (nenhum BEGIN,
+  // nenhum pool.connect), então o lote só é tudo-ou-nada por ser um statement
+  // único. Trocar por N inserts quebraria isso em silêncio.
+  const i = ROTAS.indexOf("router.post('/admin/equipes/importar'");
+  const bloco = ROTAS.slice(i, i + 2600);
+  assert.ok(bloco.includes(".upsert(rows, { onConflict: 'sigla' })"));
+  assert.ok(!/for\s*\(.*\)\s*\{[^}]*\.insert\(/s.test(bloco),
+    'não pode existir laço de insert por linha');
+});
+
+test('a importação chama forceRefresh depois de gravar', () => {
+  const i = ROTAS.indexOf("router.post('/admin/equipes/importar'");
+  const bloco = ROTAS.slice(i, i + 2600);
+  assert.ok(bloco.includes('forceRefresh'),
+    'sem isso o cache de 60s serve a whitelist velha depois da importação');
+});
