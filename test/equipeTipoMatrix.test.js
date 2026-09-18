@@ -73,14 +73,24 @@ test('tipos = união dos códigos presentes em EXEC e REJE', () => {
   assert.deepEqual([...r.tipos].sort(), ['DL', 'LN', 'SF']);
 });
 
-test('tipo_equipe derivado da sigla (EC/EP/OP)', () => {
+test('tipo_equipe derivado da sigla (EC/EP/ET/EB)', () => {
+  // 18/09/2026: `ETGPR15` afirmava 'OPERACIONAL' aqui, e estava certo na
+  // época — só EC e EP tinham nome, e todo o resto caía no balde genérico.
+  // O P2-53 nomeou ET como MOTO e EB como BT_ZERO, e a classificação passou a
+  // vir do catálogo em services/categoriasEquipe.js. Esta expectativa mudou
+  // porque o COMPORTAMENTO mudou de propósito — não é conserto de teste.
   const r = _buildEquipeTipoMatrix(
-    [exec('ECGPR53', 'LN', 1), exec('EPGPR31', 'PO', 1), exec('ETGPR15', 'SF', 1)],
+    [exec('ECGPR53', 'LN', 1), exec('EPGPR31', 'PO', 1),
+     exec('ETGPR15', 'SF', 1), exec('EBGPR62', 'LN', 1),
+     exec('EXGPR99', 'LN', 1)],
     [],
   );
   assert.equal(byName(r, 'ECGPR53').tipo_equipe, 'COMERCIAL');
   assert.equal(byName(r, 'EPGPR31').tipo_equipe, 'PLANTAO');
-  assert.equal(byName(r, 'ETGPR15').tipo_equipe, 'OPERACIONAL');
+  assert.equal(byName(r, 'ETGPR15').tipo_equipe, 'MOTO');
+  assert.equal(byName(r, 'EBGPR62').tipo_equipe, 'BT_ZERO');
+  // O balde genérico continua existindo, pra prefixo que ninguém nomeou.
+  assert.equal(byName(r, 'EXGPR99').tipo_equipe, 'OPERACIONAL');
 });
 
 test('filtro COMERCIAL mantém só EC* (EXEC e REJE)', () => {

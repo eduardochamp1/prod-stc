@@ -133,3 +133,60 @@ test('chave inventada não deixa passar tudo por engano', () => {
   assert.equal(passa('ECGPR53'), false);
   assert.equal(passa('EXGPR99'), false);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// O backend usa o catálogo — nada de ternário sobrevivendo
+// ─────────────────────────────────────────────────────────────────────────────
+
+const fs   = require('node:fs');
+const path = require('node:path');
+
+const QUERIES = fs.readFileSync(
+  path.join(__dirname, '..', 'db', 'queries.js'), 'utf8');
+
+test('db/queries.js não tem mais startsWith de prefixo solto', () => {
+  // Era a duplicação que este trabalho eliminou. Se voltar, o catálogo deixou
+  // de ser único sem ninguém perceber.
+  assert.ok(!/startsWith\(['"]E[CPTB]['"]\)/.test(QUERIES),
+    'voltou um startsWith de prefixo hard-coded em db/queries.js');
+});
+
+test('db/queries.js importa o catálogo', () => {
+  assert.ok(QUERIES.includes("require('../services/categoriasEquipe')"),
+    'db/queries.js tem de ler do módulo, não reimplementar');
+});
+
+test('_buildEquipeTipoMatrix classifica ET e EB', () => {
+  const { _buildEquipeTipoMatrix } = require('../db/queries');
+  const { equipes } = _buildEquipeTipoMatrix([
+    { team_name: 'ETGPR15', regional: 'GUA', sector_id: 'DESG', tipo_code: 'DL', count: 5 },
+    { team_name: 'EBGPR62', regional: 'GUA', sector_id: 'DESG', tipo_code: 'LN', count: 3 },
+  ], [], 'TODAS');
+
+  const porNome = Object.fromEntries(equipes.map(e => [e.team_name, e.tipo_equipe]));
+  assert.equal(porNome.ETGPR15, 'MOTO');
+  assert.equal(porNome.EBGPR62, 'BT_ZERO');
+});
+
+test('_buildEquipeTipoMatrix filtra por DUAS categorias', () => {
+  // O ganho concreto do filtro multi: antes, pedir duas devolvia todas.
+  const { _buildEquipeTipoMatrix } = require('../db/queries');
+  const rows = [
+    { team_name: 'ECGPR53', regional: 'GUA', sector_id: 'DESG', tipo_code: 'LN', count: 1 },
+    { team_name: 'EPGPR01', regional: 'GUA', sector_id: 'DESG', tipo_code: 'LN', count: 1 },
+    { team_name: 'ETGPR15', regional: 'GUA', sector_id: 'DESG', tipo_code: 'LN', count: 1 },
+  ];
+  const { equipes } = _buildEquipeTipoMatrix(rows, [], 'COMERCIAL,MOTO');
+
+  assert.deepEqual(equipes.map(e => e.team_name).sort(), ['ECGPR53', 'ETGPR15']);
+});
+
+test('_buildEquipeTipoMatrix com TODAS continua devolvendo tudo', () => {
+  const { _buildEquipeTipoMatrix } = require('../db/queries');
+  const rows = [
+    { team_name: 'ECGPR53', regional: 'GUA', sector_id: 'DESG', tipo_code: 'LN', count: 1 },
+    { team_name: 'EPGPR01', regional: 'GUA', sector_id: 'DESG', tipo_code: 'LN', count: 1 },
+  ];
+  const { equipes } = _buildEquipeTipoMatrix(rows, [], 'TODAS');
+  assert.equal(equipes.length, 2);
+});

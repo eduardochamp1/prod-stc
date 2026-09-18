@@ -690,7 +690,9 @@ router.get('/export/historico', async (req, res) => {
 });
 
 // GET /api/performance/equipes?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=ALL&tipo=TODAS
-// tipo: TODAS | COMERCIAL (EC*) | PLANTAO (EP*)
+// tipo: TODAS, ou CSV de categorias — COMERCIAL (EC*), PLANTAO (EP*),
+//       MOTO (ET*), BT_ZERO (EB*), OPERACIONAL (o resto).
+//       Ex.: ?tipo=COMERCIAL,MOTO  ·  catálogo em services/categoriasEquipe.js
 router.get('/performance/equipes', async (req, res) => {
   try {
     const sq = sbq();

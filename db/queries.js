@@ -35,6 +35,9 @@ const { getClient } = require('../services/dbClient');
 const { isOficial, SET_ALL: _SET_OFICIAIS } = require('../services/equipesOficiais');
 const { dateBRT } = require('../services/timeUtil');
 const { inRegionals, inRegionalsSql } = require('../services/regionals');
+// Catálogo único das categorias de equipe (derivadas do prefixo da sigla).
+// Antes de 18/09/2026 a regra vivia em 4 ternários encadeados só neste arquivo.
+const { categoriaDaSigla, filtroDeCategorias } = require('../services/categoriasEquipe');
 
 /** Valida `regionals[]` e lança se vier vazio/inválido. */
 function _assertRegionals(regionals, fnName) {
@@ -1263,11 +1266,12 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
   });
 
   const teams = {};
+  // Categoria vem do catálogo único (services/categoriasEquipe.js) desde
+  // 18/09/2026. `tipo` aceita CSV: 'COMERCIAL,MOTO'.
+  const passaCategoria = filtroDeCategorias(tipo);
   _onlyOficiais(data, 'team_name').forEach(row => {
     const name  = row.team_name;
-    const upper = name.toUpperCase();
-    if (tipo === 'COMERCIAL' && !upper.startsWith('EC')) return;
-    if (tipo === 'PLANTAO'   && !upper.startsWith('EP')) return;
+    if (!passaCategoria(name)) return;
     if (!teams[name]) {
       teams[name] = {
         team_name:  name,
@@ -1276,9 +1280,7 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
         total:      0,
         por_tipo:   {},
         dates:      [],   // valores DATE crus; dias distintos via _diasTrabalhados (bug 28/07/2026)
-        tipo_equipe: upper.startsWith('EC') ? 'COMERCIAL'
-                   : upper.startsWith('EP') ? 'PLANTAO'
-                   : 'OPERACIONAL',
+        tipo_equipe: categoriaDaSigla(name),
       };
     }
     teams[name].total += row.count;
@@ -1318,19 +1320,14 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
  */
 function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS') {
   const teams = {};
-  const passaTipo = (name) => {
-    const u = String(name).toUpperCase();
-    if (tipoEquipe === 'COMERCIAL' && !u.startsWith('EC')) return false;
-    if (tipoEquipe === 'PLANTAO'   && !u.startsWith('EP')) return false;
-    return true;
-  };
+  // Catálogo único desde 18/09/2026. `tipoEquipe` aceita CSV: 'COMERCIAL,MOTO'.
+  const passaTipo = filtroDeCategorias(tipoEquipe);
   const ensure = (name, regional, sector_id) => {
     if (!teams[name]) {
-      const u = String(name).toUpperCase();
       teams[name] = {
         team_name: name, regional, sector_id,
         exec: {}, rej: {}, total_exec: 0, total_rej: 0,
-        tipo_equipe: u.startsWith('EC') ? 'COMERCIAL' : u.startsWith('EP') ? 'PLANTAO' : 'OPERACIONAL',
+        tipo_equipe: categoriaDaSigla(name),
       };
     }
     return teams[name];
