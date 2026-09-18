@@ -190,3 +190,50 @@ test('_buildEquipeTipoMatrix com TODAS continua devolvendo tudo', () => {
   const { equipes } = _buildEquipeTipoMatrix(rows, [], 'TODAS');
   assert.equal(equipes.length, 2);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// As duas cópias não podem divergir
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SRC = fs.readFileSync(
+  path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+
+/** Extrai e executa o literal do catálogo que vive no index.html. */
+function catalogoDoFront() {
+  const marca = 'const CATEGORIAS_EQUIPE = [';
+  const ini = SRC.indexOf(marca);
+  assert.ok(ini > -1, `não achei "${marca}" no index.html`);
+  const fim = SRC.indexOf('];', ini);
+  assert.ok(fim > -1, 'o literal do catálogo não fechou');
+  const literal = SRC.slice(ini + marca.length - 1, fim + 1);
+  return new Function(`return ${literal};`)();
+}
+
+test('o catálogo do front tem as MESMAS entradas do backend, na mesma ordem', () => {
+  // Duas cópias existem porque são dois runtimes e o projeto não tem bundler.
+  // Este teste é o que impede as duas de divergirem em silêncio: acrescentar
+  // uma categoria de um lado só deixa a suíte vermelha antes do push.
+  const front = catalogoDoFront();
+
+  assert.equal(front.length, CATEGORIAS.length,
+    `front tem ${front.length} categorias e o backend tem ${CATEGORIAS.length}`);
+
+  CATEGORIAS.forEach((back, i) => {
+    ['prefixo', 'chave', 'rotulo', 'badge', 'cssBarra'].forEach(campo => {
+      assert.equal(front[i][campo], back[campo],
+        `categoria ${i} (${back.chave}): campo "${campo}" difere — ` +
+        `front="${front[i][campo]}" backend="${back[campo]}"`);
+    });
+  });
+});
+
+test('o front também conhece o OPERACIONAL, com os mesmos rótulo e badge', () => {
+  const i = SRC.indexOf('const CATEGORIA_OPERACIONAL');
+  assert.ok(i > -1, 'não achei CATEGORIA_OPERACIONAL no index.html');
+  const fim = SRC.indexOf('};', i);
+  const literal = SRC.slice(SRC.indexOf('{', i), fim + 1);
+  const front = new Function(`return ${literal};`)();
+
+  ['chave', 'rotulo', 'badge', 'cssBarra'].forEach(campo =>
+    assert.equal(front[campo], OPERACIONAL[campo], `campo "${campo}" difere`));
+});

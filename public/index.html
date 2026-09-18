@@ -1929,6 +1929,36 @@
       return REGIONAIS_NOMES[sigla] || sigla || '—';
     }
 
+    // ── CATEGORIAS DE EQUIPE (derivadas do PREFIXO da sigla) ──────────────────
+    //
+    // ⚠️ CÓPIA ESPELHADA de services/categoriasEquipe.js. São dois runtimes e
+    // o projeto não tem bundler, então a lista existe duas vezes.
+    // test/categoriasEquipe.test.js compara as duas CAMPO A CAMPO: mexeu aqui,
+    // mexa lá — senão a suíte fica vermelha antes do push.
+    //
+    // ⚠️ Não confundir com `_TIPOS_EQUIPE` (BTZERO, CS, COMERCIAL…), que é o
+    // tipo operacional do CADASTRO, editável no Admin. Outra dimensão. Por isso
+    // a chave do EB aqui é BT_ZERO, com underline: sem ele, um grep acha os
+    // dois conceitos misturados.
+    //
+    // Antes de 18/09/2026 esta regra vivia em 5 ternários encadeados só neste
+    // arquivo, mais 4 no backend.
+    const CATEGORIAS_EQUIPE = [
+      { prefixo: 'EC', chave: 'COMERCIAL', rotulo: 'Comercial',   badge: 'EC', cssBarra: 'tipo-comercial' },
+      { prefixo: 'EP', chave: 'PLANTAO',   rotulo: 'Plantão',     badge: 'EP', cssBarra: 'tipo-plantao'   },
+      { prefixo: 'ET', chave: 'MOTO',      rotulo: 'Equipe Moto', badge: 'ET', cssBarra: 'tipo-moto'      },
+      { prefixo: 'EB', chave: 'BT_ZERO',   rotulo: 'BT Zero',     badge: 'EB', cssBarra: 'tipo-bt-zero'   },
+    ];
+    const CATEGORIA_OPERACIONAL = {
+      prefixo: null, chave: 'OPERACIONAL', rotulo: 'Operacional',
+      badge: 'OP', cssBarra: 'tipo-operacional',
+    };
+
+    /** Chave da categoria → a entrada do catálogo (ou a do OPERACIONAL). */
+    function _categoriaPorChave(chave) {
+      return CATEGORIAS_EQUIPE.find(c => c.chave === chave) || CATEGORIA_OPERACIONAL;
+    }
+
     // Espelha services/regionalGroups.js do backend. Mantenha em sincronia se adicionar grupos novos.
     const REGIONAIS_GROUPS = { ES: ['GUA', 'CAC'] };
     function expandRegional(regional) {
