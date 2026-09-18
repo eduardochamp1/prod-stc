@@ -9473,6 +9473,52 @@ ${matrizHTML}
       });
     }
 
+    // ── IMPORTAÇÃO DE PLANILHA ────────────────────────────────────────────────
+    // Sinônimos de cabeçalho aceitos. Planilha corporativa não tem nome de
+    // coluna padronizado entre quem manda.
+    const _CAB_SINONIMOS = {
+      sigla: ['sigla', 'equipe', 'time', 'turma', 'cod', 'codigo'],
+      tipo:  ['tipo', 'tiposervico', 'servico', 'atividade'],
+      placa: ['placa', 'veiculo', 'carro'],
+    };
+
+    /** "Tipo Serviço" → "tiposervico" (minúscula, sem acento, sem espaço). */
+    function _normCabecalho(v) {
+      return String(v === null || v === undefined ? '' : v)
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    /**
+     * Acha a linha de cabeçalho e mapeia as colunas. PURO.
+     *
+     * Varre só as 10 primeiras linhas: planilha corporativa tem título, logo ou
+     * linha em branco antes da tabela, mas não 30. A detecção é chute educado —
+     * a prévia mostra o resultado pra você conferir.
+     *
+     * @returns {{ linhaCabecalho:number, mapa:{sigla?:number,tipo?:number,placa?:number} }}
+     *          linhaCabecalho é índice 0-based na matriz, ou -1 se não achou.
+     */
+    function _detectarCabecalho(matriz) {
+      const limite = Math.min((matriz || []).length, 10);
+      for (let i = 0; i < limite; i++) {
+        const linha = matriz[i] || [];
+        const mapa = {};
+        linha.forEach((celula, idx) => {
+          const n = _normCabecalho(celula);
+          if (!n) return;
+          Object.keys(_CAB_SINONIMOS).forEach(campo => {
+            if (mapa[campo] === undefined && _CAB_SINONIMOS[campo].includes(n)) {
+              mapa[campo] = idx;
+            }
+          });
+        });
+        // Sem a coluna de sigla não há tabela — é o único campo indispensável.
+        if (mapa.sigla !== undefined) return { linhaCabecalho: i, mapa };
+      }
+      return { linhaCabecalho: -1, mapa: {} };
+    }
+
     function renderEquipesTabela(eqs) {
       if (eqs.length === 0) return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhuma equipe cadastrada.</div>';
       const rows = eqs.map(e => {

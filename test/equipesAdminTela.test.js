@@ -118,3 +118,56 @@ test('_filtrarEquipes filtra por texto, regional e situação', () => {
     filtrar(eqs, { texto: 'gpr', regional: 'GUA', situacao: 'ATIVAS' }).map(e => e.sigla),
     ['EBGPR62']);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Importação — detecção do cabeçalho da planilha
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** _detectarCabecalho depende de _CAB_SINONIMOS e _normCabecalho. */
+function carregarDetector() {
+  const i = SRC.indexOf('const _CAB_SINONIMOS');
+  assert.ok(i > -1, 'não achei _CAB_SINONIMOS no index.html');
+  const sinonimos = SRC.slice(i, SRC.indexOf('};', i) + 2);
+  return new Function(`
+    ${sinonimos}
+    ${extrairFuncao('_normCabecalho')}
+    ${extrairFuncao('_detectarCabecalho')}
+    return _detectarCabecalho;
+  `)();
+}
+
+test('_detectarCabecalho acha a linha de cabeçalho e mapeia as colunas', () => {
+  const detectar = carregarDetector();
+
+  // Planilha real tem título e linha em branco antes da tabela.
+  const matriz = [
+    ['RELAÇÃO DE EQUIPES — SETEMBRO', null, null],
+    [null, null, null],
+    ['Sigla', 'Tipo', 'Placa'],
+    ['EBGPR62', 'BTZERO', 'ABC-1234'],
+  ];
+  const r = detectar(matriz);
+
+  assert.equal(r.linhaCabecalho, 2, 'índice 0-based da linha de cabeçalho');
+  assert.deepEqual(r.mapa, { sigla: 0, tipo: 1, placa: 2 });
+});
+
+test('_detectarCabecalho aceita sinônimos e ignora acento e caixa', () => {
+  const detectar = carregarDetector();
+  const r = detectar([['EQUIPE', 'SERVIÇO', 'VEÍCULO'], ['EBGPR62', 'CS', 'ABC-1234']]);
+  assert.deepEqual(r.mapa, { sigla: 0, tipo: 1, placa: 2 });
+});
+
+test('_detectarCabecalho devolve mapa vazio quando não acha sigla', () => {
+  const detectar = carregarDetector();
+  const r = detectar([['Coluna A', 'Coluna B'], ['x', 'y']]);
+  assert.equal(r.linhaCabecalho, -1);
+  assert.equal(r.mapa.sigla, undefined);
+});
+
+test('_detectarCabecalho só olha as 10 primeiras linhas', () => {
+  const detectar = carregarDetector();
+  const matriz = Array.from({ length: 12 }, () => ['lixo', 'lixo']);
+  matriz.push(['Sigla', 'Tipo']);
+  assert.equal(detectar(matriz).linhaCabecalho, -1);
+});
