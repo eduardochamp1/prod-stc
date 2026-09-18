@@ -154,3 +154,78 @@ test('equipe sem regional cai num grupo próprio, não some', () => {
   assert.equal(g.length, 1);
   assert.equal(g[0].equipes[0].team_name, 'ESEMREG');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _renderAcumuladoRejeicao — o HTML
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * _renderAcumuladoRejeicao depende de escapeHtml. Carregada sob demanda pelo
+ * mesmo motivo do `agrupar` acima: extração no escopo do módulo derrubaria o
+ * arquivo inteiro na fase vermelha.
+ */
+function render(...args) {
+  const fn = new Function(`
+    ${extrairFuncao('escapeHtml')}
+    ${extrairFuncao('_renderAcumuladoRejeicao')}
+    return _renderAcumuladoRejeicao;
+  `)();
+  return fn(...args);
+}
+
+test('a linha da regional vem ANTES das equipes dela', () => {
+  const html = render(agrupar([
+    eq('EBGPR62', 'GUA', 90, 10),
+    eq('ECGPR53', 'GUA', 80, 20),
+  ]));
+
+  const iReg = html.indexOf('GUA');
+  const iEq  = html.indexOf('ECGPR53');
+  assert.ok(iReg > -1 && iEq > -1);
+  assert.ok(iReg < iEq, 'o subtotal da regional tem de encabeçar o grupo');
+});
+
+test('o subtotal da regional aparece com os valores somados', () => {
+  const html = render(agrupar([
+    eq('EBGPR62', 'GUA', 90, 10),
+    eq('ECGPR53', 'GUA', 80, 20),
+  ]));
+
+  assert.ok(html.includes('170'), 'executadas somadas');
+  assert.ok(html.includes('200'), 'atendidas somadas');
+});
+
+test('o total geral no rodapé é a soma de todos os grupos', () => {
+  const html = render(agrupar([
+    eq('EBGPR62', 'GUA', 100, 10),
+    eq('ECACH50', 'CAC', 200, 20),
+  ]));
+
+  assert.ok(html.includes('TOTAL GERAL'));
+  assert.ok(html.includes('330'), 'atendidas totais = 110 + 220');
+});
+
+test('percentual com uma casa e vírgula (padrão pt-BR)', () => {
+  const html = render(agrupar([eq('EBGPR62', 'GUA', 75, 25)]));
+  assert.ok(html.includes('25,0%'), 'esperava 25,0% no HTML');
+  assert.ok(!html.includes('25.0%'), 'ponto decimal não é o padrão do painel');
+});
+
+test('sigla da equipe é escapada — dado da EDP não vai cru pro innerHTML', () => {
+  // Regra do P2-4. O team_name vem da EDP; um caractere de marcação quebraria
+  // a tabela em silêncio, ou pior.
+  const html = render(agrupar([eq('<img src=x onerror=alert(1)>', 'GUA', 1, 0)]));
+  assert.ok(!html.includes('<img src=x'), 'HTML cru vazou pra tela');
+  assert.ok(html.includes('&lt;img'), 'tem de vir escapado');
+});
+
+test('lista vazia não renderiza a seção', () => {
+  assert.equal(render([]), '');
+  assert.equal(render(null), '');
+});
+
+test('a seção usa perf-section + perf-section-title (fica expansível de graça)', () => {
+  const html = render(agrupar([eq('EBGPR62', 'GUA', 90, 10)]));
+  assert.ok(html.includes('class="perf-section"'));
+  assert.ok(html.includes('class="perf-section-title"'));
+});

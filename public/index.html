@@ -9805,6 +9805,73 @@ ${matrizHTML}
       return grupos;
     }
 
+    /**
+     * Monta a tabela "Acumulado — Perda por Rejeição". PURA.
+     *
+     * Estrutura: uma linha de subtotal por regional encabeçando as equipes
+     * dela, e o total geral no rodapé. O subtotal vai no CABEÇALHO do grupo
+     * (não num rodapé por grupo): uma linha em vez de duas, e o número aparece
+     * onde o olho já está ao trocar de regional.
+     */
+    function _renderAcumuladoRejeicao(grupos) {
+      if (!grupos || grupos.length === 0) return '';
+
+      const esc = s => escapeHtml(String(s === null || s === undefined ? '' : s));
+      const num = v => Number(v || 0).toLocaleString('pt-BR');
+      const pct = v => (Number(v || 0) * 100).toFixed(1).replace('.', ',') + '%';
+
+      const linhas = grupos.map(g => {
+        const cab = `<tr class="acum-grp">
+          <td class="acum-team">${esc(g.regional)}</td>
+          <td>${num(g.total_exec)}</td>
+          <td>${num(g.total_rej)}</td>
+          <td>${num(g.total_atend)}</td>
+          <td>${pct(g.taxa)}</td>
+        </tr>`;
+        const eqs = g.equipes.map(e => `<tr>
+          <td class="acum-team acum-eq">${esc(e.team_name)}</td>
+          <td class="acum-exec">${num(e.total_exec)}</td>
+          <td class="${e.total_rej > 0 ? 'acum-rej-hot' : 'acum-zero'}">${num(e.total_rej)}</td>
+          <td>${num(e.total_atend)}</td>
+          <td class="acum-taxa">${pct(e.taxa)}</td>
+        </tr>`).join('');
+        return cab + eqs;
+      }).join('');
+
+      const tExec  = grupos.reduce((s, g) => s + g.total_exec, 0);
+      const tRej   = grupos.reduce((s, g) => s + g.total_rej, 0);
+      const tAtend = tExec + tRej;
+      const tTaxa  = tAtend > 0 ? tRej / tAtend : 0;
+
+      return `
+<div class="perf-section">
+  <div class="perf-section-title">Acumulado — Perda por Rejeição (equipe e regional)</div>
+  <div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:560px">
+    <table class="acum-table">
+      <thead>
+        <tr>
+          <th style="text-align:left">Equipe</th>
+          <th>Executadas</th>
+          <th>Rejeitadas</th>
+          <th title="Executadas + Rejeitadas">Atendidas</th>
+          <th title="Rejeitadas ÷ Atendidas">% Rejeição</th>
+        </tr>
+      </thead>
+      <tbody>${linhas}</tbody>
+      <tfoot>
+        <tr class="acum-foot">
+          <td class="acum-team">TOTAL GERAL</td>
+          <td>${num(tExec)}</td>
+          <td>${num(tRej)}</td>
+          <td>${num(tAtend)}</td>
+          <td>${pct(tTaxa)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>`;
+    }
+
     function renderEquipesTabela(eqs) {
       if (eqs.length === 0) return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhuma equipe cadastrada.</div>';
       const rows = eqs.map(e => {
