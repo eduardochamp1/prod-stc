@@ -18,12 +18,30 @@ const path     = require('node:path');
 const SRC = fs.readFileSync(
   path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
 
-/** Extrai o corpo de uma função do index.html casando as chaves. */
+/**
+ * Extrai uma função do index.html casando as chaves.
+ *
+ * A lista de parâmetros é pulada casando os PARÊNTESES primeiro. Sem isso, um
+ * parâmetro desestruturado — `function f(a, { b, c })` — faz o casamento de
+ * chaves começar na chave do destructuring e terminar nela, devolvendo só a
+ * assinatura. O sintoma é um `SyntaxError: Unexpected token ';'` no
+ * `new Function`, que não diz nada sobre a causa.
+ */
 function extrairFuncao(nome) {
   const marca = `function ${nome}(`;
   const ini   = SRC.indexOf(marca);
   assert.ok(ini > -1, `não achei ${marca} no index.html`);
-  const abre = SRC.indexOf('{', ini);
+
+  // 1) Fecha a lista de parâmetros.
+  let paren = 0, fimParams = -1;
+  for (let i = ini + marca.length - 1; i < SRC.length; i++) {
+    if (SRC[i] === '(') paren++;
+    else if (SRC[i] === ')') { paren--; if (paren === 0) { fimParams = i; break; } }
+  }
+  assert.ok(fimParams > -1, `parênteses não fecharam em ${nome}`);
+
+  // 2) A partir daí, a primeira chave é a do CORPO.
+  const abre = SRC.indexOf('{', fimParams);
   let nivel = 0;
   for (let i = abre; i < SRC.length; i++) {
     if (SRC[i] === '{') nivel++;
@@ -59,4 +77,44 @@ test('_setorChanged deriva a regional dos QUATRO setores', () => {
   assert.equal(fn('DEPT'), 'GUA');
   assert.equal(fn('DESC'), 'CAC');
   assert.equal(fn('DSSJ'), 'SJC', 'DSSJ tem de derivar SJC, não GUA');
+});
+
+test('_filtrarEquipes filtra por texto, regional e situação', () => {
+  const filtrar = new Function(`${extrairFuncao('_filtrarEquipes')}; return _filtrarEquipes;`)();
+
+  const eqs = [
+    { sigla: 'EBGPR62', placa: 'ABC-1234', regional: 'GUA', ativo: true },
+    { sigla: 'ECACH50', placa: 'DEF-5678', regional: 'CAC', ativo: true },
+    { sigla: 'EMGPR70', placa: null,       regional: 'GUA', ativo: false },
+  ];
+
+  // Sem filtro: tudo
+  assert.equal(filtrar(eqs, { texto: '', regional: 'ALL', situacao: 'ALL' }).length, 3);
+
+  // Texto casa sigla, sem depender de caixa
+  assert.deepEqual(
+    filtrar(eqs, { texto: 'gpr', regional: 'ALL', situacao: 'ALL' }).map(e => e.sigla),
+    ['EBGPR62', 'EMGPR70']);
+
+  // Texto casa placa
+  assert.deepEqual(
+    filtrar(eqs, { texto: 'def', regional: 'ALL', situacao: 'ALL' }).map(e => e.sigla),
+    ['ECACH50']);
+
+  // Placa nula não quebra
+  assert.doesNotThrow(() => filtrar(eqs, { texto: 'zzz', regional: 'ALL', situacao: 'ALL' }));
+
+  // Regional
+  assert.equal(filtrar(eqs, { texto: '', regional: 'CAC', situacao: 'ALL' }).length, 1);
+
+  // Situação
+  assert.deepEqual(
+    filtrar(eqs, { texto: '', regional: 'ALL', situacao: 'INATIVAS' }).map(e => e.sigla),
+    ['EMGPR70']);
+  assert.equal(filtrar(eqs, { texto: '', regional: 'ALL', situacao: 'ATIVAS' }).length, 2);
+
+  // Combinado
+  assert.deepEqual(
+    filtrar(eqs, { texto: 'gpr', regional: 'GUA', situacao: 'ATIVAS' }).map(e => e.sigla),
+    ['EBGPR62']);
 });

@@ -878,6 +878,22 @@
                 + Nova
               </button>
               <span id="eq-status" style="font-size:11px;color:var(--text2)"></span>
+              <input id="eq-busca" type="search" placeholder="Buscar sigla ou placa…"
+                oninput="_aplicarFiltroEquipes()"
+                style="height:36px;padding:0 10px;border:1px solid var(--cinza2);border-radius:6px;font-size:12px;min-width:200px" />
+              <select id="eq-filtro-regional" onchange="_aplicarFiltroEquipes()"
+                style="height:36px;padding:0 8px;border:1px solid var(--cinza2);border-radius:6px;font-size:12px">
+                <option value="ALL">Todas as regionais</option>
+                <option value="GUA">GUA</option>
+                <option value="CAC">CAC</option>
+                <option value="SJC">SJC</option>
+              </select>
+              <select id="eq-filtro-situacao" onchange="_aplicarFiltroEquipes()"
+                style="height:36px;padding:0 8px;border:1px solid var(--cinza2);border-radius:6px;font-size:12px">
+                <option value="ALL">Todas</option>
+                <option value="ATIVAS">Ativas</option>
+                <option value="INATIVAS">Inativas</option>
+              </select>
             </div>
             <div id="eq-tabela" style="display:none;max-height:340px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
             <div id="eq-form" style="display:none;margin-top:12px;padding:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px"></div>
@@ -9404,21 +9420,57 @@ ${matrizHTML}
     }
 
     // ── EQUIPES OFICIAIS (whitelist editável) ─────────────────────────────────
+    // Lista completa do último GET. O filtro (busca/regional/situação) roda
+    // sobre ela no cliente — sem ida ao servidor a cada tecla.
+    let _eqCache = [];
+
     async function loadEquipesOficiais() {
       const cont = document.getElementById('eq-tabela');
-      const status = document.getElementById('eq-status');
       cont.style.display = 'block';
       cont.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text2)">⏳ Carregando…</div>';
       try {
         const res = await fetch(`${API}/admin/equipes`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'erro');
-        const eqs = data.equipes || [];
-        if (status) status.textContent = `${eqs.length} equipes (${eqs.filter(e => e.ativo).length} ativas)`;
-        cont.innerHTML = renderEquipesTabela(eqs);
+        _eqCache = data.equipes || [];
+        _aplicarFiltroEquipes();
       } catch (err) {
         cont.innerHTML = `<div style="padding:12px;color:var(--vermelho);font-size:12px">✗ ${err.message}</div>`;
       }
+    }
+
+    function _aplicarFiltroEquipes() {
+      const cont   = document.getElementById('eq-tabela');
+      const status = document.getElementById('eq-status');
+      if (!cont || cont.style.display === 'none') return;
+      const filtradas = _filtrarEquipes(_eqCache, {
+        texto:    document.getElementById('eq-busca')?.value || '',
+        regional: document.getElementById('eq-filtro-regional')?.value || 'ALL',
+        situacao: document.getElementById('eq-filtro-situacao')?.value || 'ALL',
+      });
+      if (status) {
+        status.textContent = filtradas.length === _eqCache.length
+          ? `${_eqCache.length} equipes (${_eqCache.filter(e => e.ativo).length} ativas)`
+          : `${filtradas.length} de ${_eqCache.length} equipes`;
+      }
+      cont.innerHTML = renderEquipesTabela(filtradas);
+    }
+
+    // Filtro da lista de equipes. PURO — por isso é testável
+    // (test/equipesAdminTela.test.js extrai e executa esta função).
+    // Roda no cliente sobre a lista que o GET já traz inteira: sem ida ao
+    // servidor a cada tecla.
+    function _filtrarEquipes(eqs, { texto, regional, situacao }) {
+      const t = String(texto || '').trim().toUpperCase();
+      return (eqs || []).filter(e => {
+        if (regional && regional !== 'ALL' && e.regional !== regional) return false;
+        if (situacao === 'ATIVAS'   && !e.ativo) return false;
+        if (situacao === 'INATIVAS' &&  e.ativo) return false;
+        if (!t) return true;
+        const sigla = String(e.sigla || '').toUpperCase();
+        const placa = String(e.placa || '').toUpperCase();
+        return sigla.includes(t) || placa.includes(t);
+      });
     }
 
     function renderEquipesTabela(eqs) {
