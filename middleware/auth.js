@@ -207,23 +207,112 @@ async function login(username, password) {
 
 // ── Middleware Express ────────────────────────────────────────────────────────
 
-function authMiddleware(req, res, next) {
-  const authHeader = req.headers['authorization'] || '';
-  if (!authHeader.startsWith('Bearer ')) {
+/**
+ * ⚠️ ASSÍNCRONO desde 21/09/2026. O corpo está em try/catch de propósito: o
+ * Express 4 não captura rejeição de middleware `async`, e não existe handler de
+ * `unhandledRejection` no projeto (P2-41) — uma promise solta derruba o
+ * processo.
+ *
+ * O PRINCÍPIO: o token prova QUEM você é; o banco diz O QUE você pode.
+ *
+ * Antes, `role` e `regionals` vinham do token e valiam pelas 8h de sessão —
+ * então desativar alguém às 9h, tendo a pessoa entrado às 8h59, a deixava
+ * usando o painel até as 16h59. Agora o middleware consulta o usuário (via
+ * cache de 30s) e SOBRESCREVE role/regionals com o que está no banco. De
+ * quebra, mudança de permissão também passa a valer na hora.
+ *
+ * A conta de emergência do `.env` não tem linha no banco: para ela valem os
+ * valores do `.env`, e ela nunca é negada por "não encontrada". Sem esta
+ * exceção, a chave reserva falharia justamente quando é necessária.
+ */
+async function authMiddleware(req, res, next) {
+  try {
+    const authHeader = req.headers['authorization'] || '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Não autenticado', code: 'NO_TOKEN' });
+    }
+
+    const payload = verifyToken(authHeader.slice(7));
+    if (!payload) {
+      return res.status(401).json({
+        error: 'Sessão expirada, inválida ou desatualizada',
+        code: 'EXPIRED',
+        relogin: true,
+      });
+    }
+
+    // Conta do .env (a de emergência): identidade e escopo vêm de lá, porque
+    // ela precisa funcionar com o banco fora.
+    const doEnv = _usuariosDoEnv().find(u => u.username === payload.username);
+    if (doEnv) {
+      // ⚠️ `pode_gerenciar` vem do BANCO, não do `.env`, e isso é deliberado.
+      //
+      // Dar a permissão a toda conta do `.env` parece inofensivo depois da
+      // migração (sobra uma conta só), mas DURANTE a transição o `.env` ainda
+      // tem as contas antigas — e todas virariam gestoras de uma vez, sem
+      // ninguém conceder. Escalonamento silencioso, na janela em que menos se
+      // está olhando.
+      //
+      // E, no sentido inverso: a conta que a migração marcou como gestora no
+      // banco é sombreada pela homônima do `.env` (o `.env` vence, §3.3), então
+      // sem esta consulta a tela nasceria inacessível justo para quem devia
+      // usá-la.
+      //
+      // Com o banco fora, `buscar` devolve null e a permissão fica false — o
+      // que não custa nada: gerenciar usuário exige banco de qualquer forma.
+      const { buscar } = require('../services/usuarios');
+      const linhaBanco = await buscar(payload.username);
+      req.user = {
+        ...payload,
+        role:           doEnv.role,
+        regionals:      doEnv.regionals,
+        pode_gerenciar: !!(linhaBanco && linhaBanco.ativo && linhaBanco.pode_gerenciar),
+      };
+      return next();
+    }
+
+    const { buscar } = require('../services/usuarios');
+    const atual = await buscar(payload.username);
+
+    // Não achou (inclusive: banco fora E sem cache) ⇒ NEGA. Fail-open aqui é
+    // o defeito que o P1-32 consertou no breaker de login.
+    if (!atual || !atual.ativo) {
+      return res.status(401).json({
+        error: 'Acesso revogado ou sessão inválida',
+        code: 'REVOKED',
+        relogin: true,
+      });
+    }
+
+    req.user = {
+      ...payload,
+      role:           atual.role,
+      regionals:      atual.regionals,
+      pode_gerenciar: atual.pode_gerenciar,
+    };
+    next();
+  } catch (err) {
+    console.error('[auth] erro no authMiddleware:', err.message);
+    return res.status(500).json({ error: 'Falha na autenticação' });
+  }
+}
+
+/**
+ * Exige a permissão de GERENCIAR usuários — separada de role='admin'.
+ * `admin` abre o /admin inteiro; esta diz quem mexe em quem entra.
+ *
+ * Use DEPOIS de authMiddleware, que é quem popula `pode_gerenciar`.
+ */
+function requireGerenciarUsuarios(req, res, next) {
+  if (!req.user) {
     return res.status(401).json({ error: 'Não autenticado', code: 'NO_TOKEN' });
   }
-
-  const token   = authHeader.slice(7);
-  const payload = verifyToken(token);
-  if (!payload) {
-    return res.status(401).json({
-      error: 'Sessão expirada, inválida ou desatualizada',
-      code: 'EXPIRED',
-      relogin: true,
+  if (!req.user.pode_gerenciar) {
+    return res.status(403).json({
+      error: 'Você não tem permissão para gerenciar usuários',
+      code: 'FORBIDDEN',
     });
   }
-
-  req.user = payload;
   next();
 }
 
@@ -290,7 +379,7 @@ function hashPassword(password) {
 }
 
 module.exports = {
-  login, authMiddleware, requireAdmin, verifyToken, getUsers,
+  login, authMiddleware, requireAdmin, requireGerenciarUsuarios, verifyToken, getUsers,
   // `_usuariosDoEnv` é a parte SÍNCRONA (só parsing do .env). Exposta porque o
   // test/auth.test.js cobre exatamente isso, e `getUsers` virou assíncrono em
   // 21/09/2026 ao passar a ler do banco.
