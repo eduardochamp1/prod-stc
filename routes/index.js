@@ -122,7 +122,12 @@ function _contarErro(chave, now) {
 }
 
 // POST /api/auth/login  — única rota pública
-router.post('/auth/login', (req, res) => {
+// ⚠️ ASSÍNCRONO desde 21/09/2026: o `authLogin` passou a ler do banco. O corpo
+// está em try/catch de propósito — o Express 4 não captura rejeição de handler
+// `async`, e não existe handler de `unhandledRejection` no projeto (P2-41), então
+// uma promise solta aqui derruba o processo inteiro.
+router.post('/auth/login', async (req, res) => {
+ try {
   const { username, password } = req.body || {};
   if (!username || !password)
     return res.status(400).json({ error: 'username e password obrigatórios' });
@@ -145,7 +150,7 @@ router.post('/auth/login', (req, res) => {
     });
   }
 
-  const result = authLogin(username, password);
+  const result = await authLogin(username, password);
   if (!result) {
     _contarErro(key, now);
     _contarErro(keyUser, now);
@@ -163,6 +168,11 @@ router.post('/auth/login', (req, res) => {
     regionals: result.regionals,
     exp:       result.exp,
   });
+ } catch (err) {
+  // Nunca vaza o motivo pro cliente (P1-10) — vai só pro log do servidor.
+  console.error('[auth/login] erro inesperado:', err.message);
+  res.status(500).json({ error: 'Falha ao autenticar' });
+ }
 });
 
 // Protege TODAS as rotas abaixo com JWT

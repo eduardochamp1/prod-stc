@@ -62,7 +62,14 @@ function verifyToken(token) {
 //            (role só controla acesso a /admin; qualquer valor != 'admin' bloqueia)
 // Regionais: lista de siglas reais separadas por '|'. Sem 'ALL', sem grupos.
 
-function getUsers() {
+/**
+ * Só os usuários do `.env`. Desde 21/09/2026 isto é a CONTA DE EMERGÊNCIA —
+ * os demais vivem na tabela `usuarios`. Ver `getUsers` logo abaixo.
+ *
+ * Continua SÍNCRONA de propósito: é só parsing de variável de ambiente, e é o
+ * que o `test/auth.test.js` cobre.
+ */
+function _usuariosDoEnv() {
   const raw = process.env.AUTH_USERS || '';
   return raw.split(',').filter(Boolean).map(entry => {
     const parts = entry.trim().split(':');
@@ -98,6 +105,44 @@ function getUsers() {
     }
     return { username, passwordHash, role, regionals };
   });
+}
+
+/**
+ * Usuários do `.env` (conta de emergência) UNIDOS aos do banco.
+ *
+ * A conta do `.env` é a chave reserva: com o Postgres fora, é a única que
+ * entra. Em 09/07/2026 o Postgres caiu em produção (P0-0, ainda aberto: a VM
+ * segue sem swap) — sem ela, um repeteco tranca todo mundo pra fora, inclusive
+ * de descobrir que o banco caiu.
+ *
+ * ⚠️ Em colisão de nome, a entrada do `.env` VENCE, e o banco recusa criar
+ * usuário com nome do `.env` (services/usuarios.js). Sem as duas regras, quem
+ * gerencia criaria um homônimo e qual das duas responde viraria detalhe de
+ * implementação decidindo quem entra.
+ *
+ * Banco fora ⇒ devolve só a conta de emergência. Não é fail-open: o usuário
+ * comum simplesmente não é encontrado, e o login falha.
+ */
+async function getUsers() {
+  const doEnv = _usuariosDoEnv();
+  const reservados = new Set(doEnv.map(u => u.username));
+
+  let doBanco = [];
+  try {
+    const { listarDoBanco } = require('../services/usuarios');
+    doBanco = (await listarDoBanco())
+      .filter(u => u.ativo)                       // desativado não loga
+      .filter(u => !reservados.has(u.username))   // o .env vence a colisão
+      .map(u => ({
+        username:     u.username,
+        passwordHash: u.senha_hash,
+        role:         u.role,
+        regionals:    u.regionals,
+      }));
+  } catch (err) {
+    console.warn('[auth] banco indisponível; só a conta de emergência pode entrar:', err.message);
+  }
+  return [...doEnv, ...doBanco];
 }
 
 function sha256(str) {
@@ -143,8 +188,8 @@ function _verifyPassword(password, stored) {
 
 // ── Login ─────────────────────────────────────────────────────────────────────
 
-function login(username, password) {
-  const users = getUsers();
+async function login(username, password) {
+  const users = await getUsers();
   const user  = users.find(u => u.username === username);
   if (!user || !_verifyPassword(password, user.passwordHash)) return null;
 
@@ -246,6 +291,10 @@ function hashPassword(password) {
 
 module.exports = {
   login, authMiddleware, requireAdmin, verifyToken, getUsers,
+  // `_usuariosDoEnv` é a parte SÍNCRONA (só parsing do .env). Exposta porque o
+  // test/auth.test.js cobre exatamente isso, e `getUsers` virou assíncrono em
+  // 21/09/2026 ao passar a ler do banco.
+  _usuariosDoEnv,
   applyScope, compatRegionalParam,
   hashPassword, _verifyPassword,
 };
