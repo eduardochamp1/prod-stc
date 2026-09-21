@@ -154,6 +154,7 @@
 | P2-51 | Cadastrar equipes era uma a uma (o form fecha a cada save) e a lista de 143 não tinha busca — "adicionei equipes novas mas foi um processo bem complicado" | Produto/Frontend | **done** (18/09) — importação de planilha com prévia + busca/filtro; 38 testes; **falta confirmar em prod** |
 | P2-52 | Não havia como ler a perda por rejeição: a matriz por tipo tem os números espalhados, sem taxa, e com um Total único — não dava pra comparar equipes nem ver o acumulado da regional | Produto/Frontend | **done** (18/09) — tabela nova abaixo da matriz; 20 testes; **falta confirmar em prod** |
 | P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
+| P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **código done** (21/09) — usuários no banco + tela + revogação imediata + auditoria; 65 testes novos; **falta migrar e confirmar em prod** |
 
 ---
 
@@ -5615,3 +5616,78 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   `public/index.html` **descreve** o código antigo em vez de citá-lo, e diz por
   quê — para ninguém "restaurar" a citação e deixar a suíte vermelha sem haver
   defeito.
+
+---
+
+## P0-1a — Gestão de usuários: conceder e retirar acesso pela tela
+
+- **Categoria:** Governança / Segurança
+- **Status:** **código done** (21/09/2026) — **falta aplicar a migration, rodar
+  a migração e confirmar em produção**
+- **Relação com o P0-1:** é uma fatia dele. Não resolve o bus factor inteiro
+  (senhas da EDP, Cloudflare e o `.env` seguem só com o José), mas tira do
+  caminho crítico a única operação que **impedia outra pessoa de entrar no
+  painel**. E reduz de cinco para **uma** as credenciais de login que precisam
+  sobreviver num cofre.
+- **Fonte:** pedido do José em 21/09/2026: *"quero montar uma estrutura de
+  fornecer acesso aos usuários, e no caso teríamos acesso a retirar acessos
+  também."*
+- **O que existia:** usuários só na variável `AUTH_USERS` do `.env` da VM.
+  Nenhuma tabela de usuário no banco. Conceder acesso = SSH + editar arquivo +
+  `pm2 delete && pm2 start`.
+- **Ação:** tabelas `usuarios` e `usuarios_log`; o login passa a ler do banco;
+  sete rotas sob guarda dupla; tela no Admin; script de migração idempotente.
+- **Decisões registradas:**
+  - **A migração copia HASHES, não senhas.** As senhas em texto puro não
+    existem em lugar nenhum, e o `_verifyPassword` já aceitava os dois
+    formatos. Ninguém precisa saber a senha de ninguém.
+  - **Conta de emergência no `.env`.** O login passou a depender do Postgres, e
+    em 09/07/2026 ele caiu em produção (P0-0 segue aberto, VM sem swap). Sem a
+    chave reserva, um repeteco trancaria todo mundo para fora — inclusive de
+    descobrir que o banco caiu. Todo username no `AUTH_USERS` é reservado, e em
+    colisão o `.env` vence.
+  - **"O token prova quem você é; o banco diz o que você pode."** Desativar tem
+    efeito em até 30s (o TTL do cache), não em até 8h. De quebra, mudança de
+    permissão também passa a valer na hora.
+  - **Banco fora: vale o cache; sem cache, NEGA.** É o oposto do fail-open que
+    o P1-32 consertou no breaker de login.
+  - **`pode_gerenciar` é separada de `role=admin`.** Admin abre o `/admin`
+    inteiro; gerenciar usuário é permissão à parte — decisão explícita do José
+    ("só você, por enquanto"), e é como uma segunda pessoa entra depois sem
+    refazer nada.
+- **Dois achados durante a implementação, nenhum vindo de teste vermelho:**
+  1. **Escalonamento de privilégio na janela da migração.** A primeira versão
+     dava `pode_gerenciar` a toda conta do `.env`. Inofensivo *depois* da
+     migração (sobra uma conta), mas **durante** a transição o `.env` ainda tem
+     as cinco antigas — e todas virariam gestoras de uma vez, sem ninguém
+     conceder. E no sentido inverso: a conta marcada como gestora pela migração
+     é sombreada pela homônima do `.env`, então a tela nasceria inacessível
+     justo para quem devia usá-la. Agora `pode_gerenciar` vem **sempre do
+     banco**, inclusive para as contas do `.env`.
+  2. **`gerarSenha` dependia de sorte.** Com sorteio uniforme sobre o alfabeto,
+     uma senha de 20 caracteres pode sair sem nenhum dígito. Agora garante
+     maiúscula, minúscula e dígito por construção. Verificado em 5000 senhas.
+  - Um terceiro, menor: o pool fake do teste HTTP não distinguia tabela, e o
+    teste de vazamento acusava a rota de log por estar recebendo linhas de
+    usuário do próprio mock. Mock que não distingue tabela transforma teste de
+    vazamento em teatro.
+- **Aceite:**
+  - [x] Suíte verde: 1221 testes, 0 falhas (eram 1196 antes desta tarefa).
+  - [x] Testes HTTP das sete rotas: 401 sem token, 403 para admin sem gestão.
+  - [x] Teste varrendo o JSON de todas as rotas atrás de `senha_hash` e
+        `scrypt$` — verificado que acusa quando o filtro é removido.
+  - [x] Teste de que, com o banco fora e sem cache, o acesso é **negado**.
+  - [ ] **Migration aplicada na VM** (`psql -f migrations/add_usuarios.sql`).
+  - [ ] **`migrar-usuarios.js --dry-run` conferido**, depois rodado.
+  - [ ] **Login de CADA conta testado** antes de limpar o `.env`.
+  - [ ] `.env` reduzido à conta de emergência, e reiniciado.
+  - [ ] **Em produção:** criar um usuário de teste, entrar com ele, desativar, e
+        confirmar que ele cai em menos de 30s.
+- **Rollback:** `git revert` + restaurar o `AUTH_USERS` completo no `.env`. A
+  tabela pode ficar: sem o código novo, ninguém a lê. **O que `git` não desfaz**
+  é a senha de quem for criado depois da migração — essas contas só existem no
+  banco, e reverter tira o acesso delas.
+- **Fora de escopo:** troca obrigatória de senha no 1º login (incremento 2);
+  autoatendimento de senha; recuperação por e-mail (não há envio no projeto);
+  perfis/grupos de permissão (com 5 contas, `role` + `regionals` +
+  `pode_gerenciar` bastam).

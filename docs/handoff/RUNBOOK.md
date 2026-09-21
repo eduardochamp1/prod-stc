@@ -739,3 +739,27 @@ quebrar.
 Este runbook começa incompleto. **Todo incidente novo deve ser registrado
 aqui com "sintoma → causa → como resolvi"** pra próxima pessoa não repetir
 o diagnóstico. Não é pra ficar bonito, é pra ficar útil.
+
+## Dar ou tirar acesso ao painel
+
+Desde 21/09/2026 (P0-1a) os usuários vivem na tabela `usuarios`, não no `.env`.
+
+**Pelo painel:** Admin → Usuários do Painel. Criar gera a senha e a mostra
+**uma vez** — copie na hora, ela não é guardada em lugar nenhum. Desativar tem
+efeito em **até 30 segundos** (o TTL do cache), não no próximo login.
+
+**Se o painel estiver fora do ar**, entre com a conta de emergência do `.env`
+(a única que resta lá). Ela funciona mesmo com o Postgres fora — é a razão de
+existir. Repare que, com o banco fora, ela entra mas **não gerencia**: gerenciar
+usuário exige banco de qualquer forma.
+
+**Se NEM a conta de emergência entrar**, o problema não é de acesso: é o
+processo ou o `.env`. Ver a seção de reinício.
+
+⚠️ **Não acrescente usuário comum no `AUTH_USERS`.** Todo nome listado lá é
+reservado e não pode ser criado pela tela — e, em colisão, o `.env` vence, o
+que produz uma conta que a tela mostra mas que não é a que entra.
+
+**A trilha de auditoria** (quem concedeu ou retirou o quê, e quando) está em
+Admin → Usuários → 📜 Auditoria. Ela é só leitura: não há como editar nem
+apagar registro pela aplicação.

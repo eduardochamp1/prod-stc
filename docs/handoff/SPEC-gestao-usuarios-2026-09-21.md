@@ -1,6 +1,8 @@
 # SPEC — Gestão de usuários: conceder e retirar acesso pela tela
 
-> Data: 2026-09-21 · Status: **especificado**, nada implementado.
+> Data: 2026-09-21 · Status: **código implementado** — falta aplicar a
+> migration, rodar a migração e confirmar em produção. Ver P0-1a no BACKLOG e
+> `PLANO-gestao-usuarios-2026-09-21.md`.
 >
 > Incremento **1 de 2**. O incremento 2 — troca obrigatória de senha no
 > primeiro login — tem spec própria e vem depois, ver §11.

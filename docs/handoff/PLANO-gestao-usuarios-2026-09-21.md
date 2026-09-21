@@ -1,5 +1,40 @@
 # Gestão de Usuários — Plano de Implementação
 
+> **EXECUTADO em 21/09/2026** — o código. A implantação (migration, migração,
+> redução do `.env`) é do José e está na última seção. Suíte ao fim:
+> **1221 testes, 0 falhas** (eram 1196).
+>
+> | Tarefa | Commit |
+> |---|---|
+> | 1 — tabelas | `6a18051` |
+> | 2 — travas puras | `f37bf3d` |
+> | 3 — leitura do banco + cache | `0a1d26a` |
+> | 4 — login lê do banco | `f30c5e8` |
+> | 5 — revogação imediata | `3d27ca2` |
+> | 6 — as sete rotas | `c3c7349` |
+> | 7 — script de migração | `8503210` |
+> | 8 — a tela | `0e6b335` |
+> | 9 — documentação | (este commit) |
+>
+> **Três achados durante a execução, e NENHUM veio de teste vermelho:**
+>
+> 1. **Escalonamento de privilégio na janela da migração.** Dar
+>    `pode_gerenciar` a toda conta do `.env` é inofensivo *depois* da migração
+>    e perigoso *durante* — as cinco contas antigas virariam gestoras de uma
+>    vez. E no sentido inverso, a conta marcada como gestora pela migração é
+>    sombreada pela homônima do `.env`, deixando a tela inacessível para quem
+>    devia usá-la. Veio de olhar o código e perguntar "o que isso faz **durante**
+>    a migração, não depois dela".
+> 2. **`gerarSenha` dependia de sorte** para ter dígito. O teste probabilístico
+>    acusou; a correção foi na implementação, não no teste.
+> 3. **O pool fake não distinguia tabela**, e o teste de vazamento acusava a
+>    rota de log por estar recebendo linhas de usuário do próprio mock.
+>
+> Dois testes foram verificados **vermelhos de propósito**: o de vazamento de
+> `senha_hash` (removendo o filtro da rota) e os de trava.
+>
+> Os aceites de **produção** seguem em aberto — ver P0-1a no BACKLOG.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Conceder e retirar acesso ao painel pela tela, em vez de editar o `.env` na VM por SSH — com efeito imediato e trilha de auditoria.
