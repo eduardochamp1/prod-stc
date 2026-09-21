@@ -933,6 +933,26 @@
             </div>
           </div>
 
+          <!-- Usuários do painel (SPEC-gestao-usuarios-2026-09-21) -->
+          <div>
+            <div class="modal-section-title">👤 Usuários do Painel</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Conceder e retirar acesso. Desativar tem efeito <b>em até 30 segundos</b> —
+              a pessoa cai na ação seguinte, não precisa esperar a sessão expirar.
+              A conta de emergência do servidor não aparece aqui de propósito.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+              <button class="btn-refresh" onclick="loadUsuarios()" style="height:36px;padding:0 16px;font-size:12px">↻ Listar</button>
+              <button class="btn-refresh" onclick="abrirNovoUsuario()" style="height:36px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">+ Novo</button>
+              <button class="btn-refresh" onclick="loadUsuariosLog()" style="height:36px;padding:0 16px;font-size:12px">📜 Auditoria</button>
+              <span id="usr-status" style="font-size:11px;color:var(--text2)"></span>
+            </div>
+            <div id="usr-tabela" style="display:none;max-height:340px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
+            <div id="usr-form" style="display:none;margin-top:12px;padding:12px;background:var(--cinza1);border:1px solid var(--cinza2);border-radius:6px"></div>
+            <div id="usr-senha" style="display:none;margin-top:12px"></div>
+            <div id="usr-log" style="display:none;margin-top:12px;max-height:280px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
+          </div>
+
           <!-- Valores/hora da Medição HE -->
           <div>
             <div class="modal-section-title">⏱ Valores/hora — Medição HE</div>
@@ -9526,6 +9546,271 @@ ${acumuladoHTML}
       } catch (err) {
         out.textContent = `✗ Falha ao executar: ${err.message}`;
       }
+    }
+
+
+    // ── USUÁRIOS DO PAINEL ────────────────────────────────────────────────────
+    // Conceder e retirar acesso pela tela. Ver
+    // docs/handoff/SPEC-gestao-usuarios-2026-09-21.md
+    let _usrCache = [];
+
+    async function loadUsuarios() {
+      const cont = document.getElementById('usr-tabela');
+      cont.style.display = 'block';
+      cont.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text2)">⏳ Carregando…</div>';
+      try {
+        const res  = await fetch(`${API}/admin/usuarios`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        _usrCache = data.usuarios || [];
+        const st = document.getElementById('usr-status');
+        if (st) st.textContent =
+          `${_usrCache.length} usuários (${_usrCache.filter(u => u.ativo).length} ativos)`;
+        cont.innerHTML = _renderUsuarios(_usrCache);
+      } catch (err) {
+        cont.innerHTML = `<div style="padding:12px;color:var(--vermelho);font-size:12px">✗ ${err.message}</div>`;
+      }
+    }
+
+    /** PURA — por isso é testável (test/usuariosTela.test.js extrai e executa). */
+    function _renderUsuarios(usrs) {
+      if (!usrs || usrs.length === 0) {
+        return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhum usuário cadastrado.</div>';
+      }
+      const esc = s => escapeHtml(String(s === null || s === undefined ? '' : s));
+      const linhas = usrs.map(u => `<tr style="${u.ativo ? '' : 'opacity:.45'};border-top:1px solid var(--cinza2)">
+        <td style="padding:6px 8px;font-family:monospace;font-weight:600">${esc(u.username)}</td>
+        <td style="padding:6px 8px;font-size:11px">${esc(u.role)}</td>
+        <td style="padding:6px 8px;font-size:11px">${(u.regionals || []).map(esc).join(', ')}</td>
+        <td style="padding:6px 8px;font-size:11px">${u.pode_gerenciar ? '✓ gestor' : '—'}</td>
+        <td style="padding:6px 8px;font-size:11px">${u.ativo
+          ? '<span style="color:var(--verde)">Ativo</span>'
+          : '<span style="color:var(--vermelho)">Inativo</span>'}</td>
+        <td style="padding:6px 8px;text-align:right;white-space:nowrap">
+          <button onclick="editarUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Editar">✎</button>
+          <button onclick="resetarSenhaUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Gerar nova senha">🔑</button>
+          <button onclick="alternarUsuarioAtivo('${esc(u.username)}', ${!u.ativo})" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer">${u.ativo ? '↓ Desativar' : '↑ Ativar'}</button>
+        </td></tr>`).join('');
+
+      return `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="background:var(--cinza1);position:sticky;top:0">
+          <tr style="text-transform:uppercase;letter-spacing:.04em;color:var(--text2);font-size:10px">
+            <th style="padding:6px 8px;text-align:left">Usuário</th>
+            <th style="padding:6px 8px;text-align:left">Papel</th>
+            <th style="padding:6px 8px;text-align:left">Regionais</th>
+            <th style="padding:6px 8px;text-align:left">Gestão</th>
+            <th style="padding:6px 8px;text-align:left">Situação</th>
+            <th style="padding:6px 8px;text-align:right">Ações</th>
+          </tr>
+        </thead><tbody>${linhas}</tbody></table>`;
+    }
+
+    /**
+     * Mostra a senha gerada. UMA vez — não fica guardada em lugar nenhum.
+     * O aviso é explícito de propósito: esquecida, o caminho é gerar outra.
+     */
+    function _mostrarSenhaGerada(username, senha) {
+      const el = document.getElementById('usr-senha');
+      el.style.display = 'block';
+      el.innerHTML = `
+        <div style="padding:12px;border:2px solid var(--amarelo);border-radius:6px;background:#fff8e1">
+          <div style="font-size:12px;font-weight:700;margin-bottom:6px">
+            🔑 Senha de <span style="font-family:monospace">${escapeHtml(username)}</span>
+          </div>
+          <div style="font-family:monospace;font-size:16px;font-weight:700;letter-spacing:.05em;
+                      padding:8px;background:#fff;border:1px solid var(--cinza2);border-radius:4px;
+                      user-select:all">${escapeHtml(senha)}</div>
+          <div style="font-size:11px;color:var(--text2);margin-top:8px">
+            <b>Copie agora.</b> Ela não será mostrada de novo e não fica guardada em lugar
+            nenhum — se perder, o caminho é gerar outra.
+          </div>
+          <button class="btn-refresh" onclick="document.getElementById('usr-senha').style.display='none'"
+            style="margin-top:8px;height:28px;padding:0 12px;font-size:11px">Já copiei</button>
+        </div>`;
+    }
+
+    function abrirNovoUsuario() {
+      const form = document.getElementById('usr-form');
+      form.style.display = 'block';
+      form.innerHTML = `
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px">Novo usuário</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:8px;margin-bottom:8px">
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Usuário</label>
+            <input id="usr-f-username" placeholder="nome_de_usuario"
+              style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px" />
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Papel</label>
+            <select id="usr-f-role" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Regionais</label>
+            <div style="display:flex;gap:10px;padding-top:6px">
+              ${REGIONAIS_ATIVAS.map(r => `<label style="font-size:12px;display:flex;gap:4px;align-items:center">
+                <input type="checkbox" class="usr-f-reg" value="${r}" />${r}</label>`).join('')}
+            </div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:8px">
+          A senha é gerada pelo sistema e mostrada uma única vez ao salvar.
+          A permissão de gerenciar usuários se concede depois, editando.
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="salvarNovoUsuario()" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">Criar</button>
+          <button onclick="document.getElementById('usr-form').style.display='none'" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px">Cancelar</button>
+          <span id="usr-f-msg" style="font-size:11px;align-self:center"></span>
+        </div>`;
+    }
+
+    async function salvarNovoUsuario() {
+      const msg = document.getElementById('usr-f-msg');
+      const corpo = {
+        username:  document.getElementById('usr-f-username').value.trim().toLowerCase(),
+        role:      document.getElementById('usr-f-role').value,
+        regionals: [...document.querySelectorAll('.usr-f-reg:checked')].map(c => c.value),
+      };
+      msg.textContent = '⏳ Criando…';
+      msg.style.color = 'var(--text2)';
+      try {
+        const res  = await fetch(`${API}/admin/usuarios`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(corpo),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        document.getElementById('usr-form').style.display = 'none';
+        _mostrarSenhaGerada(data.username, data.senha);
+        await loadUsuarios();
+      } catch (err) {
+        msg.textContent = '✗ ' + err.message;
+        msg.style.color = 'var(--vermelho)';
+      }
+    }
+
+    function editarUsuario(username) {
+      const u = _usrCache.find(x => x.username === username);
+      if (!u) return;
+      const form = document.getElementById('usr-form');
+      form.style.display = 'block';
+      form.innerHTML = `
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px">Editar ${escapeHtml(username)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:8px;margin-bottom:8px">
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Papel</label>
+            <select id="usr-e-role" style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
+              <option value="user" ${u.role === 'user' ? 'selected' : ''}>user</option>
+              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>admin</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Regionais</label>
+            <div style="display:flex;gap:10px;padding-top:6px">
+              ${REGIONAIS_ATIVAS.map(r => `<label style="font-size:12px;display:flex;gap:4px;align-items:center">
+                <input type="checkbox" class="usr-e-reg" value="${r}" ${(u.regionals || []).includes(r) ? 'checked' : ''} />${r}</label>`).join('')}
+            </div>
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Gestão</label>
+            <label style="font-size:12px;display:flex;gap:6px;align-items:center;padding-top:6px">
+              <input type="checkbox" id="usr-e-gerenciar" ${u.pode_gerenciar ? 'checked' : ''} />
+              pode gerenciar usuários
+            </label>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onclick="salvarEdicaoUsuario('${escapeHtml(username)}')" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">Salvar</button>
+          <button onclick="document.getElementById('usr-form').style.display='none'" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px">Cancelar</button>
+          <span id="usr-e-msg" style="font-size:11px;align-self:center"></span>
+        </div>`;
+    }
+
+    async function salvarEdicaoUsuario(username) {
+      const msg = document.getElementById('usr-e-msg');
+      msg.textContent = '⏳ Salvando…';
+      msg.style.color = 'var(--text2)';
+      try {
+        const res = await fetch(`${API}/admin/usuarios/${encodeURIComponent(username)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            role:           document.getElementById('usr-e-role').value,
+            regionals:      [...document.querySelectorAll('.usr-e-reg:checked')].map(c => c.value),
+            pode_gerenciar: document.getElementById('usr-e-gerenciar').checked,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        document.getElementById('usr-form').style.display = 'none';
+        await loadUsuarios();
+      } catch (err) {
+        msg.textContent = '✗ ' + err.message;
+        msg.style.color = 'var(--vermelho)';
+      }
+    }
+
+    async function alternarUsuarioAtivo(username, novoAtivo) {
+      const acao = novoAtivo ? 'REATIVAR' : 'DESATIVAR';
+      if (!confirm(`${acao} o acesso de ${username}?`)) return;
+      try {
+        const res = await fetch(
+          `${API}/admin/usuarios/${encodeURIComponent(username)}/${novoAtivo ? 'reativar' : 'desativar'}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        await loadUsuarios();
+      } catch (err) { alert('✗ ' + err.message); }
+    }
+
+    async function resetarSenhaUsuario(username) {
+      if (!confirm(`Gerar uma senha NOVA para ${username}? A atual deixa de funcionar.`)) return;
+      try {
+        const res = await fetch(`${API}/admin/usuarios/${encodeURIComponent(username)}/senha`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        _mostrarSenhaGerada(data.username, data.senha);
+      } catch (err) { alert('✗ ' + err.message); }
+    }
+
+    async function loadUsuariosLog() {
+      const el = document.getElementById('usr-log');
+      el.style.display = 'block';
+      el.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text2)">⏳ Carregando…</div>';
+      try {
+        const res  = await fetch(`${API}/admin/usuarios/log`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        el.innerHTML = _renderUsuariosLog(data.log || []);
+      } catch (err) {
+        el.innerHTML = `<div style="padding:12px;color:var(--vermelho);font-size:12px">✗ ${err.message}</div>`;
+      }
+    }
+
+    /** PURA — a trilha é só leitura, nunca editável pela tela. */
+    function _renderUsuariosLog(linhas) {
+      if (!linhas || linhas.length === 0) {
+        return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhum registro ainda.</div>';
+      }
+      const esc = s => escapeHtml(String(s === null || s === undefined ? '' : s));
+      return `<table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead style="background:var(--cinza1);position:sticky;top:0">
+          <tr style="text-transform:uppercase;letter-spacing:.04em;color:var(--text2);font-size:10px">
+            <th style="padding:6px 8px;text-align:left">Quando</th>
+            <th style="padding:6px 8px;text-align:left">Quem</th>
+            <th style="padding:6px 8px;text-align:left">Ação</th>
+            <th style="padding:6px 8px;text-align:left">Em quem</th>
+            <th style="padding:6px 8px;text-align:left">Detalhe</th>
+          </tr></thead>
+        <tbody>${linhas.map(l => `<tr style="border-top:1px solid var(--cinza2)">
+          <td style="padding:4px 8px;white-space:nowrap">${esc(new Date(l.ts).toLocaleString('pt-BR'))}</td>
+          <td style="padding:4px 8px;font-family:monospace">${esc(l.ator)}</td>
+          <td style="padding:4px 8px">${esc(l.acao)}</td>
+          <td style="padding:4px 8px;font-family:monospace">${esc(l.alvo)}</td>
+          <td style="padding:4px 8px;color:var(--text2)">${l.detalhe ? esc(JSON.stringify(l.detalhe)) : '—'}</td>
+        </tr>`).join('')}</tbody></table>`;
     }
 
     // ── EQUIPES OFICIAIS (whitelist editável) ─────────────────────────────────
