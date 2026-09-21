@@ -193,3 +193,51 @@ test('gerarSenha evita caracteres ambíguos', () => {
   ['O', '0', 'l', '1', 'I'].forEach(c =>
     assert.ok(!amostra.includes(c), `caractere ambíguo "${c}" apareceu`));
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cache — o TTL é o teto de quanto tempo um acesso retirado sobrevive
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { _cache, CACHE_TTL_MS } = require('../services/usuarios');
+
+test('o TTL do cache é 30s — é o teto do "na hora"', () => {
+  assert.equal(CACHE_TTL_MS, 30_000);
+});
+
+test('cache guarda e devolve dentro do TTL', () => {
+  _cache.limpar();
+  _cache.por('fulano', { username: 'fulano', ativo: true });
+  assert.equal(_cache.ler('fulano').ativo, true);
+});
+
+test('cache expira depois do TTL', () => {
+  _cache.limpar();
+  _cache.por('fulano', { username: 'fulano', ativo: true });
+  _cache.envelhecer('fulano', CACHE_TTL_MS + 1);
+  assert.equal(_cache.ler('fulano'), null);
+});
+
+test('cache expirado ainda pode ser lido como ÚLTIMO CONHECIDO', () => {
+  // É o que sustenta a §3.5 do spec: com o banco fora, vale a última entrada
+  // conhecida. Sem isso, banco fora = todo mundo cai, que é pior que hoje.
+  _cache.limpar();
+  _cache.por('fulano', { username: 'fulano', ativo: true });
+  _cache.envelhecer('fulano', CACHE_TTL_MS + 1);
+  assert.equal(_cache.ler('fulano'), null, 'leitura normal respeita o TTL');
+  assert.equal(_cache.ultimoConhecido('fulano').ativo, true, 'o fallback ignora o TTL');
+});
+
+test('sem entrada, ultimoConhecido devolve null — e quem chama NEGA', () => {
+  // Fail-open é proibido. É o defeito que o P1-32 consertou no breaker.
+  _cache.limpar();
+  assert.equal(_cache.ultimoConhecido('nunca_visto'), null);
+});
+
+test('invalidar apaga na hora — é o que faz a revogação valer antes dos 30s', () => {
+  _cache.limpar();
+  _cache.por('fulano', { username: 'fulano', ativo: true });
+  _cache.invalidar('fulano');
+  assert.equal(_cache.ler('fulano'), null);
+  assert.equal(_cache.ultimoConhecido('fulano'), null,
+    'invalidar tem de apagar de verdade, não só expirar');
+});

@@ -169,7 +169,107 @@ function podeAlterar(payload, alvo, ator, todos) {
   return { ok: true };
 }
 
+/**
+ * Cache de usuário em memória.
+ *
+ * TTL de 30s: é o TETO de quanto tempo um acesso retirado pode sobreviver.
+ * Meio minuto é curto o bastante pra "na hora" ser verdade, e longo o bastante
+ * pra o painel não consultar o banco a cada clique.
+ *
+ * `ler` respeita o TTL. `ultimoConhecido` ignora o TTL de propósito: é o
+ * fallback de quando o banco está fora (spec §3.5). Sem entrada nenhuma, os
+ * dois devolvem null — e quem chama NEGA. Fail-open é proibido aqui; é o
+ * defeito que o P1-32 consertou no breaker de login.
+ */
+const CACHE_TTL_MS = 30_000;
+
+const _mapa = new Map();   // username → { dados, ts }
+
+const _cache = {
+  por(username, dados) { _mapa.set(username, { dados, ts: Date.now() }); },
+  ler(username) {
+    const e = _mapa.get(username);
+    if (!e) return null;
+    return (Date.now() - e.ts) > CACHE_TTL_MS ? null : e.dados;
+  },
+  ultimoConhecido(username) {
+    const e = _mapa.get(username);
+    return e ? e.dados : null;
+  },
+  /** Apaga de verdade — é o que faz a revogação valer ANTES dos 30s. */
+  invalidar(username) { _mapa.delete(username); },
+  limpar() { _mapa.clear(); },
+  /** Só pra teste: empurra a entrada pro passado. */
+  envelhecer(username, ms) {
+    const e = _mapa.get(username);
+    if (e) e.ts -= ms;
+  },
+};
+
+/** Linha da tabela → objeto de usuário, com regionals já em array. */
+function _daLinha(row) {
+  if (!row) return null;
+  return {
+    username:       row.username,
+    senha_hash:     row.senha_hash,
+    role:           row.role,
+    regionals:      _regs(row.regionals),
+    ativo:          row.ativo,
+    pode_gerenciar: row.pode_gerenciar,
+    criado_em:      row.criado_em,
+    criado_por:     row.criado_por,
+  };
+}
+
+const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, criado_em, criado_por';
+
+/** Todos os usuários do banco. Lança se o banco estiver fora. */
+async function listarDoBanco() {
+  const sb = require('./dbClient').getClient();
+  const { data, error } = await sb.from('usuarios').select(_COLS).order('username');
+  if (error) throw error;
+  return (data || []).map(_daLinha);
+}
+
+/**
+ * Um usuário, pelo cache quando possível.
+ *
+ * Com o banco fora, cai no último conhecido. Sem último conhecido, devolve
+ * null — e quem chama NEGA.
+ */
+async function buscar(username) {
+  const doCache = _cache.ler(username);
+  if (doCache) return doCache;
+
+  try {
+    const sb = require('./dbClient').getClient();
+    const { data, error } = await sb.from('usuarios').select(_COLS).eq('username', username);
+    if (error) throw error;
+    const achado = _daLinha((data || [])[0]);
+    if (achado) _cache.por(username, achado);
+    return achado;
+  } catch (err) {
+    console.warn('[usuarios] banco indisponível, usando último conhecido:', err.message);
+    return _cache.ultimoConhecido(username);
+  }
+}
+
+/** Registra na trilha. NUNCA recebe senha nem hash em `detalhe`. */
+async function registrarLog(ator, acao, alvo, detalhe) {
+  try {
+    const sb = require('./dbClient').getClient();
+    const { error } = await sb.from('usuarios_log')
+      .insert({ ator, acao, alvo, detalhe: detalhe || null });
+    if (error) throw error;
+  } catch (err) {
+    // A trilha não pode derrubar a operação, mas o silêncio também não serve.
+    console.error('[usuarios] FALHA ao gravar auditoria:', { ator, acao, alvo }, err.message);
+  }
+}
+
 module.exports = {
   validarNovoUsuario, podeDesativar, podeAlterar, gerarSenha,
+  listarDoBanco, buscar, registrarLog,
+  _cache, CACHE_TTL_MS,
   RE_USERNAME, ROLES,
 };
