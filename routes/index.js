@@ -62,7 +62,8 @@ function _checkJanela(req, res, de, ate) {
   return true;
 }
 
-const { login: authLogin, authMiddleware, requireAdmin, compatRegionalParam, applyScope } = require('../middleware/auth');
+const { login: authLogin, authMiddleware, requireAdmin, requireGerenciarUsuarios,
+        hashPassword, compatRegionalParam, applyScope } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -186,6 +187,195 @@ router.use(applyScope);
 // Todas as rotas /admin/* exigem role=admin (defesa em profundidade — frontend
 // também esconde botões pra não-admin, mas a API rejeita por sua conta).
 router.use('/admin', requireAdmin);
+
+// ── USUÁRIOS DO PAINEL ───────────────────────────────────────────────────────
+//
+// Conceder e retirar acesso pela tela, em vez de editar o .env por SSH.
+//
+// ⚠️ Guarda DUPLA: `requireAdmin` (herdado do router.use('/admin') acima) mais
+// `requireGerenciarUsuarios`. role=admin abre o /admin inteiro; gerenciar
+// usuário é permissão à parte — foi decisão explícita do José em 21/09
+// ("só você, por enquanto").
+//
+// `senha_hash` NUNCA sai daqui. Há teste varrendo o JSON das sete rotas.
+//
+// Spec: docs/handoff/SPEC-gestao-usuarios-2026-09-21.md
+const _usuariosSvc = require('../services/usuarios');
+
+/** Tira senha_hash do objeto antes de ele virar resposta. */
+function _semSegredo(u) {
+  if (!u) return null;
+  const { senha_hash, ...resto } = u;   // eslint-disable-line no-unused-vars
+  return resto;
+}
+
+/** Usernames do .env — reservados, e não gerenciáveis pela tela. */
+function _reservados() {
+  return new Set(String(process.env.AUTH_USERS || '')
+    .split(',').map(e => e.trim().split(':')[0]).filter(Boolean));
+}
+
+/** Array ou CSV → 'GUA|CAC', que é o formato da coluna. */
+function _regsParaColuna(v) {
+  return (Array.isArray(v) ? v : [v])
+    .map(r => String(r || '').trim().toUpperCase()).filter(Boolean).join('|');
+}
+
+router.get('/admin/usuarios', requireGerenciarUsuarios, async (_req, res) => {
+  try {
+    const todos = await _usuariosSvc.listarDoBanco();
+    res.json({ usuarios: todos.map(_semSegredo), count: todos.length });
+  } catch (err) {
+    res.status(503).json({ error: 'Banco indisponível: ' + err.message });
+  }
+});
+
+router.post('/admin/usuarios', requireGerenciarUsuarios, async (req, res) => {
+  try {
+    const erros = _usuariosSvc.validarNovoUsuario(req.body, req.user, _reservados());
+    if (erros.length) return res.status(400).json({ error: erros.join('; ') });
+
+    const sb = require('../services/dbClient').getClient();
+    const username = String(req.body.username).trim().toLowerCase();
+    const senha = _usuariosSvc.gerarSenha();
+
+    const { error } = await sb.from('usuarios').insert({
+      username,
+      senha_hash:     hashPassword(senha),
+      role:           req.body.role,
+      regionals:      _regsParaColuna(req.body.regionals),
+      // Nunca na criação: concede-se depois, e a concessão fica no log.
+      pode_gerenciar: false,
+      criado_por:     req.user.username,
+    });
+    if (error) {
+      if (/duplicate|unique/i.test(error.message)) {
+        return res.status(409).json({ error: `usuário "${username}" já existe` });
+      }
+      throw error;
+    }
+
+    await _usuariosSvc.registrarLog(req.user.username, 'criar', username,
+      { role: req.body.role, regionals: _regsParaColuna(req.body.regionals) });
+
+    // A senha vai na resposta UMA vez. Não fica guardada em lugar nenhum.
+    res.status(201).json({ ok: true, username, senha });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/admin/usuarios/:username', requireGerenciarUsuarios, async (req, res) => {
+  try {
+    const username = String(req.params.username || '').toLowerCase();
+    if (_reservados().has(username)) {
+      return res.status(400).json({ error: 'a conta de emergência não é gerenciável pela tela' });
+    }
+    const todos = await _usuariosSvc.listarDoBanco();
+    const alvo  = todos.find(u => u.username === username);
+    if (!alvo) return res.status(404).json({ error: 'usuário não encontrado' });
+
+    const r = _usuariosSvc.podeAlterar(req.body, alvo, req.user, todos);
+    if (!r.ok) return res.status(400).json({ error: r.motivo });
+
+    const upd = { atualizado_em: new Date().toISOString() };
+    if (req.body.role !== undefined)           upd.role = req.body.role;
+    if (req.body.pode_gerenciar !== undefined) upd.pode_gerenciar = !!req.body.pode_gerenciar;
+    if (req.body.regionals !== undefined)      upd.regionals = _regsParaColuna(req.body.regionals);
+
+    const sb = require('../services/dbClient').getClient();
+    const { error } = await sb.from('usuarios').update(upd).eq('username', username);
+    if (error) throw error;
+
+    _usuariosSvc._cache.invalidar(username);
+    await _usuariosSvc.registrarLog(req.user.username, 'alterar', username, {
+      de:   { role: alvo.role, regionals: alvo.regionals.join('|'), pode_gerenciar: alvo.pode_gerenciar },
+      para: { role: upd.role, regionals: upd.regionals, pode_gerenciar: upd.pode_gerenciar },
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** desativar e reativar compartilham o corpo; só muda o valor e a trava. */
+async function _mudarAtivo(req, res, novoAtivo) {
+  try {
+    const username = String(req.params.username || '').toLowerCase();
+    if (_reservados().has(username)) {
+      return res.status(400).json({ error: 'a conta de emergência não é gerenciável pela tela' });
+    }
+    const todos = await _usuariosSvc.listarDoBanco();
+
+    if (!novoAtivo) {
+      const r = _usuariosSvc.podeDesativar(username, req.user, todos);
+      if (!r.ok) return res.status(400).json({ error: r.motivo });
+    } else if (!todos.some(u => u.username === username)) {
+      return res.status(404).json({ error: 'usuário não encontrado' });
+    }
+
+    const sb = require('../services/dbClient').getClient();
+    const { error } = await sb.from('usuarios')
+      .update({ ativo: novoAtivo, atualizado_em: new Date().toISOString() })
+      .eq('username', username);
+    if (error) throw error;
+
+    // Invalidar o cache é o que faz a revogação valer ANTES dos 30s de TTL.
+    _usuariosSvc._cache.invalidar(username);
+    await _usuariosSvc.registrarLog(
+      req.user.username, novoAtivo ? 'reativar' : 'desativar', username, null);
+    res.json({ ok: true, ativo: novoAtivo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+}
+
+router.post('/admin/usuarios/:username/desativar', requireGerenciarUsuarios,
+  (req, res) => _mudarAtivo(req, res, false));
+router.post('/admin/usuarios/:username/reativar', requireGerenciarUsuarios,
+  (req, res) => _mudarAtivo(req, res, true));
+
+router.post('/admin/usuarios/:username/senha', requireGerenciarUsuarios, async (req, res) => {
+  try {
+    const username = String(req.params.username || '').toLowerCase();
+    if (_reservados().has(username)) {
+      return res.status(400).json({ error: 'a conta de emergência não é gerenciável pela tela' });
+    }
+    const todos = await _usuariosSvc.listarDoBanco();
+    if (!todos.some(u => u.username === username)) {
+      return res.status(404).json({ error: 'usuário não encontrado' });
+    }
+
+    const senha = _usuariosSvc.gerarSenha();
+    const sb = require('../services/dbClient').getClient();
+    const { error } = await sb.from('usuarios')
+      .update({ senha_hash: hashPassword(senha), atualizado_em: new Date().toISOString() })
+      .eq('username', username);
+    if (error) throw error;
+
+    _usuariosSvc._cache.invalidar(username);
+    // O log registra QUE houve reset — nunca a senha nem o hash.
+    await _usuariosSvc.registrarLog(req.user.username, 'resetar_senha', username, null);
+    res.json({ ok: true, username, senha });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/usuarios/log', requireGerenciarUsuarios, async (req, res) => {
+  try {
+    const sb = require('../services/dbClient').getClient();
+    const { data, error } = await sb.from('usuarios_log')
+      .select('id, ts, ator, acao, alvo, detalhe')
+      .order('ts', { ascending: false })
+      .limit(Math.min(Number(req.query.limit) || 200, 500));
+    if (error) throw error;
+    res.json({ log: data || [] });
+  } catch (err) {
+    res.status(503).json({ error: 'Banco indisponível: ' + err.message });
+  }
+});
+
 
 // /debug/* também (P1-38, 25/08/2026). São 5 rotas de inspeção que aceitam
 // ?sectorId= livre e devolvem payload BRUTO da WPA (sessões, carteira, notas do
