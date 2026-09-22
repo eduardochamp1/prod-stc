@@ -37,6 +37,28 @@
     </div>
   </div>
 
+  <!-- Troca de senha (SPEC-troca-senha-2026-09-22). Serve nos dois casos:
+       obrigatória no 1º acesso (sem botão de fechar) e voluntária depois. -->
+  <div id="senha-overlay" style="display:none">
+    <div class="login-card">
+      <div class="lc-title">Defina sua senha</div>
+      <div class="lc-sub" id="senha-sub">
+        A senha atual foi gerada pelo sistema. Escolha uma que você lembre.
+      </div>
+      <input type="password" id="senha-atual" placeholder="Senha atual"
+        autocomplete="current-password">
+      <input type="password" id="senha-nova" placeholder="Nova senha (mínimo 8)"
+        autocomplete="new-password">
+      <input type="password" id="senha-conf" placeholder="Repita a nova senha"
+        autocomplete="new-password"
+        onkeydown="if(event.key==='Enter') doTrocarSenha()">
+      <div class="login-error" id="senha-error"></div>
+      <button class="btn-login" id="btn-senha" onclick="doTrocarSenha()">Salvar senha</button>
+      <button class="btn-login" id="btn-senha-cancelar" style="display:none;background:transparent;color:inherit"
+        onclick="fecharTrocaSenha()">Cancelar</button>
+    </div>
+  </div>
+
   <header>
     <div class="header-left">
       <!-- Logo Engelmig Energia — imagem original da empresa (embutida) -->
@@ -53,6 +75,12 @@
         <div class="live-dot"></div>
         <span id="sync-label">Carregando...</span>
       </div>
+      <!-- Trocar senha fica FORA do chip de sair, e não dentro dele: um clique
+           errado no lugar errado ou desloga sem querer, ou abre troca de senha
+           quando a pessoa só queria sair. -->
+      <div id="btn-trocar-senha" onclick="abrirTrocaSenha(false)"
+           title="Trocar minha senha"
+           style="cursor:pointer;padding:6px 10px;border-radius:6px;font-size:12px;user-select:none">🔑</div>
       <div id="user-chip" onclick="logout()" title="Clique para sair">
         👤 <span id="user-chip-name"></span> &middot; Sair
       </div>
@@ -1444,12 +1472,84 @@
         saveSession(data);
         applyUserPermissions(data);
         hideLogin();
+        // Senha provisória: abre a troca em vez do painel. Sem isto o painel
+        // tentaria carregar e tomaria 423 em toda chamada — o bloqueio real é
+        // do servidor, isto é só pra pessoa não ver uma tela de erros.
+        if (data.senha_provisoria) { abrirTrocaSenha(true); return; }
         init();
       } catch (err) {
         errEl.textContent = 'Erro de conexão. Tente novamente.';
       } finally {
         btnEl.disabled = false;
         btnEl.textContent = 'Entrar';
+      }
+    }
+
+
+    // ── TROCA DE SENHA ────────────────────────────────────────────────────────
+    // Serve nos dois casos: obrigatória no 1º acesso (sem cancelar) e
+    // voluntária depois. Ver docs/handoff/SPEC-troca-senha-2026-09-22.md
+    let _senhaObrigatoria = false;
+
+    function abrirTrocaSenha(obrigatoria) {
+      _senhaObrigatoria = !!obrigatoria;
+      const ov = document.getElementById('senha-overlay');
+      ov.style.display = 'flex';
+      document.getElementById('senha-sub').textContent = _senhaObrigatoria
+        ? 'A senha atual foi gerada pelo sistema. Escolha uma que você lembre.'
+        : 'Informe a senha atual e escolha uma nova.';
+      // Sem cancelar quando é obrigatória: o servidor tranca de qualquer forma,
+      // e um botão que não leva a lugar nenhum só frustra.
+      document.getElementById('btn-senha-cancelar').style.display =
+        _senhaObrigatoria ? 'none' : 'block';
+      ['senha-atual', 'senha-nova', 'senha-conf'].forEach(id => {
+        document.getElementById(id).value = '';
+      });
+      document.getElementById('senha-error').textContent = '';
+      document.getElementById('senha-atual').focus();
+    }
+
+    function fecharTrocaSenha() {
+      if (_senhaObrigatoria) return;   // não há saída sem trocar
+      document.getElementById('senha-overlay').style.display = 'none';
+    }
+
+    async function doTrocarSenha() {
+      const err = document.getElementById('senha-error');
+      const btn = document.getElementById('btn-senha');
+      const atual = document.getElementById('senha-atual').value;
+      const nova  = document.getElementById('senha-nova').value;
+      const conf  = document.getElementById('senha-conf').value;
+
+      // A confirmação é só do lado do cliente: o servidor não tem como saber
+      // que a pessoa digitou errado duas vezes o que queria digitar.
+      if (nova !== conf) { err.textContent = 'A nova senha e a repetição não conferem.'; return; }
+
+      err.textContent = '';
+      btn.disabled = true;
+      btn.textContent = 'Salvando…';
+      try {
+        const res = await fetch(`${API}/auth/senha`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ atual, nova }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) { err.textContent = data.error || 'Não foi possível trocar a senha.'; return; }
+
+        document.getElementById('senha-overlay').style.display = 'none';
+        if (_senhaObrigatoria) {
+          // Primeiro acesso: agora o painel pode carregar.
+          _senhaObrigatoria = false;
+          init();
+        } else {
+          alert('Senha alterada.');
+        }
+      } catch (e) {
+        err.textContent = 'Erro de conexão. Tente novamente.';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Salvar senha';
       }
     }
 

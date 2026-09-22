@@ -109,6 +109,49 @@ function validarNovoUsuario(payload, ator, reservados) {
   return erros;
 }
 
+/**
+ * Comprimento mínimo da senha que a PESSOA escolhe.
+ *
+ * 8, sem exigência de maiúscula, número ou símbolo — decisão explícita do José
+ * em 22/09/2026. Fica registrado que a recomendação foi 12 sem composição: a
+ * orientação atual é que comprimento supera composição, e regras de composição
+ * produzem "Senha@2026" repetida em todo lugar.
+ *
+ * O painel fica em rede interna e tem rate limit por IP e por usuário (P1-42),
+ * o que atenua — não elimina.
+ */
+const SENHA_MIN = 8;
+
+/**
+ * Valida a troca da PRÓPRIA senha.
+ *
+ * As duas checagens além do comprimento NÃO são política de força; são o que
+ * faz o fluxo significar alguma coisa:
+ *
+ *  - exigir a senha ATUAL: sem isso, quem pegar uma sessão aberta troca a
+ *    senha sem saber a antiga;
+ *  - recusar nova IGUAL à atual: sem isso, a pessoa "troca" para a mesma
+ *    sequência provisória, a marca de provisória some, e nada mudou.
+ *
+ * @returns string[]  vazio = válido
+ */
+function validarTrocaSenha(payload) {
+  const erros = [];
+  const p = payload || {};
+  const atual = String(p.atual === null || p.atual === undefined ? '' : p.atual);
+  const nova  = String(p.nova  === null || p.nova  === undefined ? '' : p.nova);
+
+  if (!atual.trim()) erros.push('informe a senha atual');
+  if (!nova.trim()) {
+    erros.push('informe a senha nova');
+  } else if (nova.length < SENHA_MIN) {
+    erros.push(`a senha nova precisa ter ao menos ${SENHA_MIN} caracteres`);
+  } else if (nova === atual) {
+    erros.push('a senha nova precisa ser diferente da atual');
+  }
+  return erros;
+}
+
 /** Quantos gestores ATIVOS sobrariam se `mudanca` fosse aplicada. */
 function _gestoresAtivos(todos, excluir, tirarGerenciaDe) {
   return (todos || []).filter(u =>
@@ -216,12 +259,14 @@ function _daLinha(row) {
     regionals:      _regs(row.regionals),
     ativo:          row.ativo,
     pode_gerenciar: row.pode_gerenciar,
+    // Incremento 2: com isto true, o authMiddleware tranca tudo menos a troca.
+    senha_provisoria: row.senha_provisoria === true,
     criado_em:      row.criado_em,
     criado_por:     row.criado_por,
   };
 }
 
-const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, criado_em, criado_por';
+const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, senha_provisoria, criado_em, criado_por';
 
 /** Todos os usuários do banco. Lança se o banco estiver fora. */
 async function listarDoBanco() {
@@ -269,6 +314,7 @@ async function registrarLog(ator, acao, alvo, detalhe) {
 
 module.exports = {
   validarNovoUsuario, podeDesativar, podeAlterar, gerarSenha,
+  validarTrocaSenha, SENHA_MIN,
   listarDoBanco, buscar, registrarLog,
   _cache, CACHE_TTL_MS,
   RE_USERNAME, ROLES,

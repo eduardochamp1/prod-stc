@@ -63,7 +63,7 @@ function _checkJanela(req, res, de, ate) {
 }
 
 const { login: authLogin, authMiddleware, requireAdmin, requireGerenciarUsuarios,
-        hashPassword, compatRegionalParam, applyScope } = require('../middleware/auth');
+        hashPassword, _verifyPassword, compatRegionalParam, applyScope } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -168,6 +168,9 @@ router.post('/auth/login', async (req, res) => {
     role:      result.role,
     regionals: result.regionals,
     exp:       result.exp,
+    // Pro frontend ja abrir na tela de troca, em vez de tentar carregar o
+    // painel e tomar 423 em toda chamada.
+    senha_provisoria: result.senha_provisoria === true,
   });
  } catch (err) {
   // Nunca vaza o motivo pro cliente (P1-10) — vai só pro log do servidor.
@@ -178,6 +181,63 @@ router.post('/auth/login', async (req, res) => {
 
 // Protege TODAS as rotas abaixo com JWT
 router.use(authMiddleware);
+
+// POST /api/auth/senha — a pessoa troca a PRÓPRIA senha
+//
+// Fica logo abaixo do authMiddleware (exige estar logado) e é a ÚNICA saída do
+// bloqueio de senha provisória — ver _ehSaidaDaTrocaDeSenha em middleware/auth.
+//
+// ⚠️ Troca a senha de `req.user.username`, NUNCA de outro. Não aceita
+// `username` no corpo de propósito: aceitar seria um caminho paralelo ao
+// /admin/usuarios/:username/senha, sem a guarda de gestão.
+//
+// Spec: docs/handoff/SPEC-troca-senha-2026-09-22.md
+router.post('/auth/senha', async (req, res) => {
+  try {
+    const erros = _usuariosSvc.validarTrocaSenha(req.body);
+    if (erros.length) return res.status(400).json({ error: erros.join('; ') });
+
+    const username = req.user.username;
+
+    // A conta de emergência vive no .env e não tem linha no banco. Sem esta
+    // recusa, a troca gravaria numa linha inexistente — ou criaria uma — e a
+    // pessoa acharia que funcionou.
+    if (_reservados().has(username)) {
+      return res.status(400).json({
+        error: 'a senha da conta de emergência se altera no .env do servidor, não por aqui',
+      });
+    }
+
+    const atual = await _usuariosSvc.buscar(username);
+    if (!atual) return res.status(404).json({ error: 'usuário não encontrado' });
+
+    if (!_verifyPassword(req.body.atual, atual.senha_hash)) {
+      return res.status(400).json({ error: 'senha atual incorreta' });
+    }
+
+    const sb = require('../services/dbClient').getClient();
+    const { error } = await sb.from('usuarios').update({
+      senha_hash:       hashPassword(req.body.nova),
+      senha_provisoria: false,
+      atualizado_em:    new Date().toISOString(),
+    }).eq('username', username);
+    if (error) throw error;
+
+    // Invalidar o cache é o que faz o bloqueio sumir na hora, em vez de esperar
+    // os 30s de TTL — senão a pessoa troca a senha e continua trancada.
+    _usuariosSvc._cache.invalidar(username);
+
+    // O log registra QUE houve troca. Nunca a senha, nunca o hash. E o ator é a
+    // própria pessoa — é troca, não reset por gestor.
+    await _usuariosSvc.registrarLog(username, 'trocar_senha', username, null);
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[auth/senha] erro:', err.message);
+    res.status(500).json({ error: 'Falha ao trocar a senha' });
+  }
+});
+
 
 // Compat: aceita ?regional=XX legado e normaliza pra req.scope.regionals
 router.use(compatRegionalParam);
@@ -246,6 +306,9 @@ router.post('/admin/usuarios', requireGerenciarUsuarios, async (req, res) => {
       regionals:      _regsParaColuna(req.body.regionals),
       // Nunca na criação: concede-se depois, e a concessão fica no log.
       pode_gerenciar: false,
+      // A senha nasce provisória: são 20 caracteres aleatórios que ninguém
+      // decora, e a pessoa escolhe a dela no primeiro acesso.
+      senha_provisoria: true,
       criado_por:     req.user.username,
     });
     if (error) {
@@ -349,7 +412,9 @@ router.post('/admin/usuarios/:username/senha', requireGerenciarUsuarios, async (
     const senha = _usuariosSvc.gerarSenha();
     const sb = require('../services/dbClient').getClient();
     const { error } = await sb.from('usuarios')
-      .update({ senha_hash: hashPassword(senha), atualizado_em: new Date().toISOString() })
+      // Reset também marca como provisória: senão o gestor gera uma senha
+      // nova e a pessoa fica com a sequência aleatória pra sempre.
+      .update({ senha_hash: hashPassword(senha), senha_provisoria: true, atualizado_em: new Date().toISOString() })
       .eq('username', username);
     if (error) throw error;
 

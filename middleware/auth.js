@@ -138,6 +138,10 @@ async function getUsers() {
         passwordHash: u.senha_hash,
         role:         u.role,
         regionals:    u.regionals,
+        // Vai só pra RESPOSTA do login, nunca pro token — ver comentário em
+        // `login`. É estado mutável; congelá-lo por 8h seria o oposto do
+        // princípio de que o banco diz o que você pode.
+        senha_provisoria: u.senha_provisoria === true,
       }));
   } catch (err) {
     console.warn('[auth] banco indisponível; só a conta de emergência pode entrar:', err.message);
@@ -202,10 +206,33 @@ async function login(username, password) {
     iat:       now,
     exp:       now + SESSION_SECS,
   };
-  return { token: signToken(payload), ...payload };
+  // ⚠️ `senha_provisoria` vai na RESPOSTA, mas NÃO no token.
+  //
+  // É estado mutável: a pessoa troca a senha e ele muda. Dentro do JWT ficaria
+  // congelado por 8h, e valeria o oposto do princípio do incremento 1 — o
+  // banco é que diz o que você pode. Aqui ele serve só pro frontend já abrir
+  // na tela certa; quem TRANCA é o authMiddleware, lendo do banco a cada
+  // requisição.
+  return {
+    token: signToken(payload),
+    ...payload,
+    senha_provisoria: user.senha_provisoria === true,
+  };
 }
 
 // ── Middleware Express ────────────────────────────────────────────────────────
+
+/**
+ * As ÚNICAS rotas liberadas enquanto a senha for provisória.
+ *
+ * `req.path` aqui é relativo ao mount do router (`/api`), então a rota de
+ * troca chega como `/auth/senha`. A comparação é por sufixo pra não depender
+ * de onde o router foi montado.
+ */
+function _ehSaidaDaTrocaDeSenha(req) {
+  const p = String(req.path || '');
+  return p.endsWith('/auth/senha') || p.endsWith('/auth/logout');
+}
 
 /**
  * ⚠️ ASSÍNCRONO desde 21/09/2026. O corpo está em try/catch de propósito: o
@@ -286,10 +313,33 @@ async function authMiddleware(req, res, next) {
 
     req.user = {
       ...payload,
-      role:           atual.role,
-      regionals:      atual.regionals,
-      pode_gerenciar: atual.pode_gerenciar,
+      role:             atual.role,
+      regionals:        atual.regionals,
+      pode_gerenciar:   atual.pode_gerenciar,
+      senha_provisoria: atual.senha_provisoria === true,
     };
+
+    // ── Senha provisória: tranca tudo menos a saída ──────────────────────────
+    //
+    // A senha gerada tem 20 caracteres aleatórios e ninguém decora. Enquanto a
+    // pessoa não escolher a dela, o painel não abre.
+    //
+    // O bloqueio é AQUI, no servidor, e não só na tela: fazer só no frontend
+    // seria incoerente com "o banco diz o que você pode" e contornável
+    // chamando a API direto.
+    //
+    // 423 em vez de 403 de propósito: 403 já significa "você não tem permissão"
+    // no painel, e reusá-lo faria a tela de troca competir com a de acesso
+    // negado. O frontend decide pelo `code`, não pelo número.
+    //
+    // A conta de emergência do .env não passa por aqui — ela retorna antes,
+    // acima. Se este fluxo quebrar, ela continua entrando.
+    if (req.user.senha_provisoria && !_ehSaidaDaTrocaDeSenha(req)) {
+      return res.status(423).json({
+        error: 'Defina uma senha antes de usar o painel',
+        code:  'SENHA_PROVISORIA',
+      });
+    }
     next();
   } catch (err) {
     console.error('[auth] erro no authMiddleware:', err.message);

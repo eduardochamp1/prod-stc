@@ -43,7 +43,10 @@ CREATE TABLE IF NOT EXISTS usuarios_log (
   -- NUNCA contém senha nem hash.
   detalhe  jsonb,
   CONSTRAINT usuarios_log_acao_check CHECK (
-    acao IN ('criar','desativar','reativar','alterar','resetar_senha'))
+    -- 'trocar_senha' acrescentado em 22/09/2026 pelo add_senha_provisoria.sql.
+    -- Fica aqui tambem pra migration ser REPLAYABLE num banco novo com a lista
+    -- completa, sem depender da ordem de aplicacao.
+    acao IN ('criar','desativar','reativar','alterar','resetar_senha','trocar_senha'))
 );
 
 CREATE INDEX IF NOT EXISTS usuarios_log_ts_idx   ON usuarios_log (ts DESC);

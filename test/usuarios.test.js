@@ -241,3 +241,58 @@ test('invalidar apaga na hora — é o que faz a revogação valer antes dos 30s
   assert.equal(_cache.ultimoConhecido('fulano'), null,
     'invalidar tem de apagar de verdade, não só expirar');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// validarTrocaSenha — incremento 2 (SPEC-troca-senha-2026-09-22)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { validarTrocaSenha, SENHA_MIN } = require('../services/usuarios');
+
+test('o mínimo é 8 — escolha do José em 22/09', () => {
+  assert.equal(SENHA_MIN, 8);
+});
+
+test('aceita uma senha nova válida', () => {
+  assert.deepEqual(validarTrocaSenha({ atual: 'abc', nova: 'minhasenha' }), []);
+});
+
+test('recusa senha nova curta demais', () => {
+  const erros = validarTrocaSenha({ atual: 'abc', nova: '1234567' });
+  assert.ok(erros.some(e => /8/.test(e)), `esperava citar o mínimo; veio: ${erros}`);
+});
+
+test('aceita exatamente 8 — o limite é inclusivo', () => {
+  assert.deepEqual(validarTrocaSenha({ atual: 'abc', nova: '12345678' }), []);
+});
+
+test('recusa nova IGUAL à atual', () => {
+  // Não é regra de força: sem isto, a pessoa "troca" para a mesma sequência
+  // provisória, a marca de provisória some, e nada mudou. É a diferença entre
+  // o fluxo funcionar e ser teatro.
+  const erros = validarTrocaSenha({ atual: 'mesmasenha', nova: 'mesmasenha' });
+  assert.ok(erros.some(e => /igual|diferente/i.test(e)));
+});
+
+test('recusa nova vazia, nula ou ausente', () => {
+  [undefined, null, '', '   '].forEach(nova => {
+    const erros = validarTrocaSenha({ atual: 'abc', nova });
+    assert.ok(erros.length > 0, `nova=${JSON.stringify(nova)} devia ser recusada`);
+  });
+});
+
+test('recusa quando a senha atual não é informada', () => {
+  // Sem conferir a atual, quem pegar uma sessão aberta troca a senha sem
+  // saber a antiga.
+  const erros = validarTrocaSenha({ nova: 'minhasenha' });
+  assert.ok(erros.some(e => /atual/i.test(e)));
+});
+
+test('NÃO exige maiúscula, número nem símbolo', () => {
+  // Decisão explícita do José. Registrado que recomendei 12 sem composição.
+  assert.deepEqual(validarTrocaSenha({ atual: 'x', nova: 'somenteminusculas' }), []);
+});
+
+test('payload ausente não estoura', () => {
+  assert.ok(validarTrocaSenha(undefined).length > 0);
+  assert.ok(validarTrocaSenha(null).length > 0);
+});

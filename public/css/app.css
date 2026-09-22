@@ -3481,11 +3481,16 @@
       margin-bottom: 20px;
     }
 
+    /* 21/09/2026 — "os balões ficam da cor do fundo e somente, não vemos os
+       limites visuais dele": o #f7f7f4 sobre a box branca + borda #ececea
+       sumia na tela do gestor. Fundo e borda ganharam contraste e o card
+       ficou com sombra própria, pra ler como caixa dentro da box. */
     .prod-item {
-      background: #f7f7f4;
-      border: 1px solid #ececea;
+      background: #f2f1ec;
+      border: 1px solid #d8d6ce;
       border-radius: 10px;
       padding: 12px 14px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 2px rgba(35, 31, 32, 0.05);
       transition: all 0.18s;
     }
 
@@ -4816,3 +4821,20 @@
       background: var(--cinza2); font-weight: 700;
       border-top: 2px solid var(--preto);
     }
+
+    /* ── Overlay de troca de senha (SPEC-troca-senha-2026-09-22) ─────────────
+       Reusa o .login-card. O posicionamento é igual ao do #login-overlay, mas
+       a visibilidade é controlada por style inline (display:flex/none) em vez
+       da classe .show — porque este overlay abre em dois momentos diferentes
+       (obrigatório no 1º acesso e voluntário depois) e o JS já decide qual. */
+    #senha-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: linear-gradient(135deg, var(--verde) 0%, var(--verde2) 100%);
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    #senha-overlay .login-card { gap: 10px; }
+    #btn-senha-cancelar { border: 1px solid rgba(0,0,0,.15) !important; }
