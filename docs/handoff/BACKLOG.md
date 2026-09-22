@@ -154,7 +154,7 @@
 | P2-51 | Cadastrar equipes era uma a uma (o form fecha a cada save) e a lista de 143 não tinha busca — "adicionei equipes novas mas foi um processo bem complicado" | Produto/Frontend | **done** (18/09) — importação de planilha com prévia + busca/filtro; 38 testes; **falta confirmar em prod** |
 | P2-52 | Não havia como ler a perda por rejeição: a matriz por tipo tem os números espalhados, sem taxa, e com um Total único — não dava pra comparar equipes nem ver o acumulado da regional | Produto/Frontend | **done** (18/09) — tabela nova abaixo da matriz; 20 testes; **falta confirmar em prod** |
 | P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
-| P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **código done** (21/09) — usuários no banco + tela + revogação imediata + auditoria; 65 testes novos; **falta migrar e confirmar em prod** |
+| P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **done** (22/09) — migrado e verificado em prod: 5 contas no banco, `.env` reduzido a UMA. Falta só o teste de revogação |
 
 ---
 
@@ -5677,12 +5677,47 @@ as equipes utilizam para apontar retorno a base"), que levou ao diag.
   - [x] Teste varrendo o JSON de todas as rotas atrás de `senha_hash` e
         `scrypt$` — verificado que acusa quando o filtro é removido.
   - [x] Teste de que, com o banco fora e sem cache, o acesso é **negado**.
-  - [ ] **Migration aplicada na VM** (`psql -f migrations/add_usuarios.sql`).
-  - [ ] **`migrar-usuarios.js --dry-run` conferido**, depois rodado.
-  - [ ] **Login de CADA conta testado** antes de limpar o `.env`.
-  - [ ] `.env` reduzido à conta de emergência, e reiniciado.
-  - [ ] **Em produção:** criar um usuário de teste, entrar com ele, desativar, e
-        confirmar que ele cai em menos de 30s.
+  - [x] **Migration aplicada na VM** em 22/09/2026 — exigiu `ALTER ... OWNER TO
+        wpa_app` (ver "o que a implantação ensinou").
+  - [x] **`migrar-usuarios.js --dry-run` conferido**, e ele **pegou um defeito
+        antes de gravar** (o `role` do `.env`). Rodado depois do conserto: 5
+        usuários migrados.
+  - [x] **Login das 5 contas testado** com o `.env` ainda completo — 200 em
+        todas.
+  - [x] `.env` reduzido à conta de emergência (`admin`) e reiniciado em
+        22/09/2026.
+  - [x] **Login das 5 contas testado DE NOVO**, agora com 4 delas vindo
+        puramente do banco — 200 em todas. **É a prova de que os hashes
+        copiados autenticam e de que ninguém perdeu acesso.**
+  - [ ] **Em produção:** criar um usuário de teste pela tela, entrar com ele,
+        desativar, e confirmar que ele cai em menos de 30s. *(único aceite em
+        aberto — prova a revogação imediata contra o sistema real)*
+
+### O que a implantação ensinou (22/09/2026)
+
+Dois defeitos meus, ambos pegos **antes** de causar dano, por etapas que o plano
+previa justamente para isso:
+
+1. **`OWNER` faltando na migration.** A tabela nasce do usuário do shell (peer
+   auth); a aplicação conecta como `wpa_app` e levou `permission denied` na
+   primeira leitura. Eu tinha isso como **nota no plano** em vez de dentro do
+   `.sql` — e nota num documento de 2400 linhas não protege ninguém: quem
+   executa roda o arquivo, não lê a nota. Corrigido no `add_usuarios.sql`, e
+   também no `add_notas_monitor.sql`, que tinha o mesmo furo e por isso **não
+   era replayable** num banco novo (importa pro P0-2).
+
+2. **`role` do `.env` fora do domínio do CHECK.** O `.env` real guarda `gua`,
+   `cac`, `sjc`, `es` nesse campo — nunca `user`. Sempre funcionou porque o
+   sistema só pergunta se é `'admin'`. Mas a tabela tem
+   `CHECK (role IN ('admin','user'))`, e gravar assim teria falhado no meio da
+   migração, com quatro linhas dentro. **O `--dry-run` pegou.** A conversão
+   agora é explícita no relatório (`role=user (era "gua")`), porque converter
+   calado seria pior que converter.
+
+**A lição que vale guardar:** a informação do segundo defeito estava disponível
+— a própria documentação do projeto registra que roles não têm semântica além
+de `admin`. Escrevi o CHECK assumindo um formato que o `.env` nunca teve. O que
+salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Rollback:** `git revert` + restaurar o `AUTH_USERS` completo no `.env`. A
   tabela pode ficar: sem o código novo, ninguém a lê. **O que `git` não desfaz**
   é a senha de quem for criado depois da migração — essas contas só existem no
