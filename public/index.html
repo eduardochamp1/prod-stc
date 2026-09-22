@@ -1429,6 +1429,20 @@
           showLogin('Sessão expirada. Faça login novamente.');
           throw new Error('401');
         }
+        // 423: a senha virou provisória DURANTE a sessão — acontece quando um
+        // gestor reseta a senha de alguém que está com o painel aberto. Sem
+        // isto, a pessoa veria a tela encher de erros sem explicação nenhuma.
+        //
+        // O overlay já pode estar aberto (várias chamadas em paralelo tomam
+        // 423 juntas), por isso a guarda: reabrir limparia o que ela digitou.
+        if (res.status === 423) {
+          const corpo = await res.clone().json().catch(() => ({}));
+          if (corpo.code === 'SENHA_PROVISORIA') {
+            const ov = document.getElementById('senha-overlay');
+            if (ov && ov.style.display !== 'flex') abrirTrocaSenha(true);
+            throw new Error('423');
+          }
+        }
         return res;
       };
     })();

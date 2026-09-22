@@ -72,3 +72,27 @@ test('a tela avisa o mínimo de 8 caracteres', () => {
   assert.ok(/m[íi]nimo 8/i.test(SRC),
     'sem isso a pessoa descobre o limite por tentativa e erro');
 });
+
+test('qualquer chamada que devolva 423 SENHA_PROVISORIA abre a tela', () => {
+  // Cenário real: um gestor reseta a senha de alguém que está com o painel
+  // ABERTO. Sem isto, a pessoa veria a tela encher de erros sem explicação.
+  //
+  // Era o §5.4 do spec, e eu só tinha implementado o caminho do login — a
+  // lacuna apareceu ao conferir o que estava servido em produção.
+  const i = SRC.indexOf('window.fetch = async function');
+  assert.ok(i > -1, 'não achei o interceptador de fetch');
+  const bloco = SRC.slice(i, i + 1600);
+
+  assert.ok(/res\.status === 423/.test(bloco), 'o 423 não é tratado');
+  assert.ok(/SENHA_PROVISORIA/.test(bloco), 'tem de decidir pelo code, não pelo número');
+  assert.ok(/abrirTrocaSenha\(true\)/.test(bloco), 'tem de abrir a tela de troca');
+});
+
+test('o 423 não reabre a tela se ela já estiver aberta', () => {
+  // Várias chamadas em paralelo tomam 423 juntas; reabrir limparia o que a
+  // pessoa já digitou.
+  const i = SRC.indexOf('window.fetch = async function');
+  const bloco = SRC.slice(i, i + 1600);
+  assert.ok(/display !== 'flex'/.test(bloco),
+    'falta a guarda contra reabrir e limpar os campos');
+});
