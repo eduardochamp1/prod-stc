@@ -763,3 +763,21 @@ que produz uma conta que a tela mostra mas que não é a que entra.
 **A trilha de auditoria** (quem concedeu ou retirou o quê, e quando) está em
 Admin → Usuários → 📜 Auditoria. Ela é só leitura: não há como editar nem
 apagar registro pela aplicação.
+
+### Troca de senha (desde 22/09/2026)
+
+Senha criada ou resetada pela tela nasce **provisória**: a pessoa entra e o
+painel só abre depois que ela escolher a dela. O bloqueio é do servidor —
+qualquer rota devolve `423` com `code: SENHA_PROVISORIA` até a troca.
+
+Para trocar voluntariamente, o botão 🔑 ao lado do "Sair". Mínimo 8 caracteres,
+sem exigência de maiúscula ou símbolo.
+
+⚠️ **A conta de emergência não entra nisso.** Ela não tem linha no banco, então
+nunca é provisória, e a senha dela se altera **no `.env`** — a tela recusa e
+explica isso. É de propósito: se o fluxo de troca quebrar, ela continua
+entrando.
+
+Os 5 usuários migrados em 22/09 **não** foram marcados como provisórios: a
+senha deles nunca foi gerada pelo sistema, e forçar troca seria atrito sem
+motivo.
