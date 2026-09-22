@@ -48,3 +48,18 @@ CREATE TABLE IF NOT EXISTS usuarios_log (
 
 CREATE INDEX IF NOT EXISTS usuarios_log_ts_idx   ON usuarios_log (ts DESC);
 CREATE INDEX IF NOT EXISTS usuarios_log_alvo_idx ON usuarios_log (alvo, ts DESC);
+
+-- ⚠️ OWNER — sem isto, a aplicação levanta "permission denied for table
+-- usuarios" e o script de migração para antes de começar.
+--
+-- O `psql -d wpa_monitor` da VM entra por peer auth como `usr_jose`, então a
+-- tabela nasce dele. A aplicação conecta como `wpa_app` (via DATABASE_URL do
+-- .env), que é outro papel e não herda nada.
+--
+-- Aconteceu de verdade em 21/09/2026, com esta migration: as tabelas foram
+-- criadas, e o migrar-usuarios.js recusou na primeira linha.
+--
+-- `ALTER ... OWNER TO` é idempotente: rodar de novo não faz mal.
+ALTER TABLE    usuarios            OWNER TO wpa_app;
+ALTER TABLE    usuarios_log        OWNER TO wpa_app;
+ALTER SEQUENCE usuarios_log_id_seq OWNER TO wpa_app;

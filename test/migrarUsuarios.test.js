@@ -74,3 +74,52 @@ test('nenhuma linha do plano carrega senha em texto puro', () => {
   assert.ok(texto.includes('scrypt$'), 'os hashes têm de estar lá');
   assert.ok(!/senha(?!_hash)/i.test(texto), 'não pode haver campo de senha crua');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Normalização de role — achado do --dry-run em 21/09/2026
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('role fora de admin|user vira "user" — o .env real usa gua/cac/sjc/es', () => {
+  // O dry-run em produção mostrou role=gua, role=cac, role=sjc, role=es. Isso
+  // sempre funcionou porque o sistema só pergunta se o valor é 'admin'. Mas a
+  // tabela tem CHECK (role IN ('admin','user')), e gravar assim falharia no
+  // meio da migração.
+  const AUTH_REAL = [
+    'admin:scrypt$a$b:admin:GUA|CAC|SJC',
+    'guarapari:scrypt$c$d:gua:GUA',
+    'cachoeiro:scrypt$e$f:cac:CAC',
+    'engelmig_es:scrypt$g$h:es:GUA|CAC',
+  ].join(',');
+
+  const p = planejarMigracao(AUTH_REAL, 'admin', []);
+  assert.deepEqual(p.erros, []);
+
+  const porNome = Object.fromEntries(p.inserir.map(u => [u.username, u.role]));
+  assert.equal(porNome.admin,       'admin', 'admin continua admin');
+  assert.equal(porNome.guarapari,   'user');
+  assert.equal(porNome.cachoeiro,   'user');
+  assert.equal(porNome.engelmig_es, 'user');
+});
+
+test('toda linha do plano tem role aceito pelo CHECK da tabela', () => {
+  // A afirmação que impede a migração de morrer no meio.
+  const AUTH_ESQUISITO = 'a_user:h:QUALQUER_COISA:GUA,b_user:h:ADMIN:CAC,c_user:h::SJC';
+  const p = planejarMigracao('admin:h:admin:GUA,' + AUTH_ESQUISITO, 'admin', []);
+  p.inserir.forEach(u =>
+    assert.ok(['admin', 'user'].includes(u.role),
+      `role "${u.role}" de ${u.username} violaria o CHECK da tabela`));
+});
+
+test('role "ADMIN" em maiúscula continua sendo admin', () => {
+  const p = planejarMigracao('chefe:h:ADMIN:GUA', 'chefe', []);
+  assert.deepEqual(p.erros, [], `esperava aceitar; veio: ${p.erros}`);
+  assert.equal(p.inserir[0].role, 'admin');
+});
+
+test('o valor original do role é preservado pro relatório do dry-run', () => {
+  // Converter em silêncio seria pior que converter.
+  const p = planejarMigracao('admin:h:admin:GUA,fulano:h:es:CAC', 'admin', []);
+  const fulano = p.inserir.find(u => u.username === 'fulano');
+  assert.equal(fulano._roleCruo, 'es');
+  assert.equal(fulano.role, 'user');
+});
