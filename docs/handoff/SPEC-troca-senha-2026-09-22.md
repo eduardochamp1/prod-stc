@@ -1,6 +1,13 @@
 # SPEC — Troca de senha: obrigatória no 1º acesso, e voluntária depois
 
-> Data: 2026-09-22 · Status: **especificado**, nada implementado.
+> Data: 2026-09-22 · Status: **implementado** em 22/09/2026 (`11aede6` +
+> `c4b066e`) — **falta confirmar em produção**. Acompanhamento: **P0-1b** no
+> `BACKLOG.md`.
+>
+> ⚠️ Desvio do §6: o `test/trocaSenhaFluxo.test.js` (fluxo completo) **não foi
+> escrito**. Os casos dele estão cobertos por partes nos testes HTTP e de tela,
+> mas o encadeamento criar → 423 → trocar → relogin com a nova só é provado
+> pelo teste em produção do P0-1b.
 >
 > Incremento **2 de 2** da gestão de usuários. O incremento 1 (P0-1a) está no ar
 > e verificado desde 22/09/2026.

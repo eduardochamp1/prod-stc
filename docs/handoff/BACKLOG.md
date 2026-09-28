@@ -155,6 +155,7 @@
 | P2-52 | Não havia como ler a perda por rejeição: a matriz por tipo tem os números espalhados, sem taxa, e com um Total único — não dava pra comparar equipes nem ver o acumulado da regional | Produto/Frontend | **done** (18/09) — tabela nova abaixo da matriz; 20 testes; **falta confirmar em prod** |
 | P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
 | P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **done** (22/09) — migrado e verificado em prod: 5 contas no banco, `.env` reduzido a UMA. Falta só o teste de revogação |
+| P0-1b | Senha gerada pela tela (20 caracteres aleatórios) não tinha como ser trocada — "essa senha gerada é facilmente esquecida". Incremento 2 do P0-1a | Governança/Segurança | **código done** (22/09) — troca obrigatória no 1º acesso (`423 SENHA_PROVISORIA`) e voluntária; 22 testes; **falta confirmar em prod** |
 
 ---
 
@@ -5722,7 +5723,78 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   tabela pode ficar: sem o código novo, ninguém a lê. **O que `git` não desfaz**
   é a senha de quem for criado depois da migração — essas contas só existem no
   banco, e reverter tira o acesso delas.
-- **Fora de escopo:** troca obrigatória de senha no 1º login (incremento 2);
+- **Fora de escopo:** troca obrigatória de senha no 1º login (incremento 2 —
+  virou o **P0-1b**);
   autoatendimento de senha; recuperação por e-mail (não há envio no projeto);
   perfis/grupos de permissão (com 5 contas, `role` + `regionals` +
   `pode_gerenciar` bastam).
+
+## P0-1b — Troca de senha: obrigatória no 1º acesso, e voluntária depois
+
+- **Categoria:** Governança / Segurança
+- **Status:** **código done** (22/09/2026, `11aede6` + `c4b066e`) — **falta
+  confirmar em produção**
+- **Relação com o P0-1a:** é o incremento 2 dele, separado de propósito para não
+  empilhar duas mudanças de autenticação no mesmo spec.
+- **Spec:** `docs/handoff/SPEC-troca-senha-2026-09-22.md`.
+- **Fonte:** José, 22/09/2026, usando a tela do P0-1a: *"deu certo criar, ele
+  gera uma senha aleatória, porém não tem opção de mudar a senha no primeiro
+  acesso ou mudar a senha só, logo essa senha gerada é facilmente esquecida."*
+- **Impacto:** sem troca, quem recebe acesso ou anota 20 caracteres num papel,
+  ou pede reset toda vez — e o reset volta a cair no colo do José, que é o
+  bus factor que o P0-1a queria tirar do caminho.
+- **Ação:** coluna `usuarios.senha_provisoria` (`migrations/add_senha_provisoria.sql`);
+  rota `POST /api/auth/senha`; bloqueio no `authMiddleware`; overlay no painel,
+  obrigatório no 1º acesso e voluntário pelo botão 🔑 ao lado do "Sair".
+- **Decisões registradas** (detalhe no spec §3):
+  - **O bloqueio é no servidor.** Com senha provisória, qualquer rota devolve
+    `423` com `code: SENHA_PROVISORIA`; só a troca e o logout passam.
+  - **`423`, não `403`** — `403` já significa "sem permissão" no painel.
+  - **Criar e resetar marcam como provisória.** Os 5 usuários migrados em 22/09
+    **não** (`DEFAULT false`): a senha deles nunca foi gerada pelo sistema.
+  - **`senha_provisoria` vai na resposta do login, não no token** — é estado
+    mutável e dentro do JWT ficaria congelado por 8h.
+  - **Regra: mínimo 8, e mais nada** — decisão do José (recomendei 12).
+    Sanidade, não política: a nova não pode ser igual à atual, e a atual é
+    conferida antes de gravar.
+  - **A conta de emergência fica de fora**: não tem linha no banco, recusa a
+    troca pela tela e explica que é no `.env`. Se o fluxo quebrar, ela entra.
+- **Dois achados durante a implementação:**
+  1. **A trilha perderia o registro em silêncio.** A rota grava `trocar_senha`,
+     mas o CHECK de `usuarios_log.acao` só aceitava cinco ações; e o
+     `registrarLog` engole erro de propósito. A troca funcionaria e a auditoria
+     sumiria. Corrigido na própria migration, e há teste comparando o que a
+     rota grava com o que a migration permite (o pool fake não valida CHECK).
+  2. **O 423 só era tratado no login** (`c4b066e`). O spec §5.4 pedia também
+     "qualquer chamada" — cenário real: gestor reseta a senha de quem está com
+     o painel aberto. Entrou no interceptador central de fetch, decidindo pelo
+     `code`, com guarda para não reabrir o overlay a cada chamada paralela.
+     **Pego conferindo o `index.html` servido em produção**, não lendo código.
+- **Desvio do spec:** o `test/trocaSenhaFluxo.test.js` (spec §6, fluxo completo)
+  **não foi escrito**. Os passos estão cobertos separadamente em
+  `test/trocaSenhaHttp.test.js`, `test/trocaSenhaTela.test.js` e
+  `test/usuarios.test.js` (`validarTrocaSenha`), mas o encadeamento só fica
+  provado pelo teste em produção abaixo.
+- **Aceite:**
+  - [x] Suíte verde: 1258 testes, 0 falhas (medido em 28/09/2026).
+  - [x] Testes HTTP: 423 com senha provisória, a rota de troca passa, 400 para
+        atual errada / nova curta / nova igual (e nada é gravado), troca só da
+        própria senha, senha nova e hash ausentes das respostas, conta de
+        emergência nunca trancada.
+  - [x] Verificado que o teste do bloqueio fica vermelho ao desligá-lo.
+  - [ ] **Migration `add_senha_provisoria.sql` aplicada na VM** — sem registro
+        de que foi. Sem ela a coluna não existe e o login quebra na leitura.
+  - [ ] **Em produção:** criar usuário pela tela → 1º login abre a troca e o
+        painel não carrega → trocar → painel abre sem relogin → sair e entrar
+        com a NOVA (200) e com a gerada (401) → conferir `trocar_senha` em
+        `usuarios_log`.
+  - [ ] **Em produção:** com a pessoa logada, resetar a senha dela pela tela e
+        confirmar que o painel aberto vira a tela de troca (não uma cascata de
+        erros).
+  - *Os testes de produção podem usar o mesmo usuário do aceite em aberto do
+    P0-1a (desativar e confirmar a queda em < 30s) e fechar os dois itens de
+    uma vez.*
+- **Rollback:** `git revert` + `ALTER TABLE usuarios DROP COLUMN
+  senha_provisoria`. Ninguém perde acesso; quem já trocou fica com a senha nova.
+- **Fora de escopo:** recuperação por e-mail, histórico de senhas, expiração
+  periódica, forçar os 5 migrados a trocar (spec §8).
