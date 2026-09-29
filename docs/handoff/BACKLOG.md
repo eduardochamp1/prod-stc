@@ -5803,8 +5803,14 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P0-1c — Excluir usuário (excluir = ocultar)
 
 - **Categoria:** Governança / Segurança
-- **Status:** **código done** (29/09/2026) — **falta aplicar a migration e
-  confirmar em produção**
+- **Status:** **código done** (29/09/2026, `f13f572`) — **falta aplicar a
+  migration e confirmar em produção**
+- ⚠️ **Sobre o `f13f572`:** a mensagem diz `docs:`, mas o commit contém **o
+  código inteiro** (migration, serviço, rota, tela e testes) junto com a
+  documentação. O commit de código falhou por causa das aspas na mensagem
+  (PowerShell 5.1), e os arquivos já estavam no stage, então foram junto com o
+  de docs. Já tinha sido enviado quando se percebeu; não foi reescrito para
+  não forçar push. Quem fizer `git log -- services/usuarios.js` cai nele.
 - **Relação com o P0-1a:** complemento da tela de gestão. Não mexe no login
   além do filtro (excluído nunca entra).
 - **Fonte:** José, 29/09/2026: *"vamos adicionar a opção de excluir usuario
