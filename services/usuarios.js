@@ -179,6 +179,35 @@ function podeDesativar(alvoUsername, ator, todos) {
 }
 
 /**
+ * TRAVA 5 na exclusão. Excluir = OCULTAR (decisão do José em 29/09/2026): a
+ * linha fica no banco, some da lista, e o username nunca volta a ser usável.
+ *
+ * Só quem JÁ ESTÁ desativado pode ser excluído. São dois passos de propósito:
+ * a desativação é o que corta o acesso (e passa pelas travas 1 e 2), e é
+ * reversível pela tela; a exclusão só tira da lista, e não é. Assim nenhum
+ * clique único faz o que não se desfaz pela tela.
+ *
+ * Como o alvo tem de estar inativo, as travas 1 e 2 valem por tabela: você não
+ * está inativo (está logado), e um gestor inativo já não conta como gestor.
+ *
+ * @param todos  a lista de `listarDoBanco` — que já não traz os excluídos, então
+ *               excluir de novo cai em "não existe"
+ * @returns {{ok: boolean, motivo?: string}}
+ */
+function podeExcluir(alvoUsername, ator, todos) {
+  const alvo = (todos || []).find(u => u.username === alvoUsername);
+  if (!alvo) return { ok: false, motivo: `usuário "${alvoUsername}" não existe` };
+
+  if (ator && alvo.username === ator.username) {
+    return { ok: false, motivo: 'você não pode excluir a si mesmo' };
+  }
+  if (alvo.ativo) {
+    return { ok: false, motivo: 'desative o usuário antes de excluir' };
+  }
+  return { ok: true };
+}
+
+/**
  * TRAVAS 1b, 2b, 3 e 4b na alteração.
  * @returns {{ok: boolean, motivo?: string}}
  */
@@ -252,12 +281,17 @@ const _cache = {
 /** Linha da tabela → objeto de usuário, com regionals já em array. */
 function _daLinha(row) {
   if (!row) return null;
+  const excluido = !!row.excluido_em;
   return {
     username:       row.username,
     senha_hash:     row.senha_hash,
     role:           row.role,
     regionals:      _regs(row.regionals),
-    ativo:          row.ativo,
+    // Excluído é SEMPRE inativo, mesmo que a linha diga o contrário (alguém
+    // mexendo direto no banco). Defesa em profundidade: o acesso depende só de
+    // `ativo`, então é aqui que a exclusão não pode ter brecha.
+    ativo:          excluido ? false : row.ativo,
+    excluido,
     pode_gerenciar: row.pode_gerenciar,
     // Incremento 2: com isto true, o authMiddleware tranca tudo menos a troca.
     senha_provisoria: row.senha_provisoria === true,
@@ -266,14 +300,33 @@ function _daLinha(row) {
   };
 }
 
-const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, senha_provisoria, criado_em, criado_por';
+// ⚠️ `excluido_em` exige o add_usuario_excluido.sql aplicado ANTES do deploy.
+const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, senha_provisoria, excluido_em, criado_em, criado_por';
 
-/** Todos os usuários do banco. Lança se o banco estiver fora. */
+/**
+ * Todos os usuários do banco, MENOS os excluídos. Lança se o banco estiver fora.
+ *
+ * O filtro é aqui, e não em cada rota, de propósito: para a tela e para todas as
+ * travas, excluído é "não existe" (404 em editar, resetar, reativar). Uma rota
+ * nova herda isso sem precisar lembrar — que é como as travas foram parar num
+ * lugar só (ver o cabeçalho).
+ */
 async function listarDoBanco() {
   const sb = require('./dbClient').getClient();
   const { data, error } = await sb.from('usuarios').select(_COLS).order('username');
   if (error) throw error;
-  return (data || []).map(_daLinha);
+  return (data || []).map(_daLinha).filter(u => !u.excluido);
+}
+
+/**
+ * O username já existiu e foi excluído? Só para a mensagem do 409 ao criar:
+ * "já existe" confundiria quem não vê o nome na lista.
+ */
+async function foiExcluido(username) {
+  const sb = require('./dbClient').getClient();
+  const { data, error } = await sb.from('usuarios').select('excluido_em').eq('username', username);
+  if (error) return false;
+  return !!((data || [])[0] || {}).excluido_em;
 }
 
 /**
@@ -313,9 +366,9 @@ async function registrarLog(ator, acao, alvo, detalhe) {
 }
 
 module.exports = {
-  validarNovoUsuario, podeDesativar, podeAlterar, gerarSenha,
+  validarNovoUsuario, podeDesativar, podeAlterar, podeExcluir, gerarSenha,
   validarTrocaSenha, SENHA_MIN,
-  listarDoBanco, buscar, registrarLog,
+  listarDoBanco, foiExcluido, buscar, registrarLog,
   _cache, CACHE_TTL_MS,
   RE_USERNAME, ROLES,
 };

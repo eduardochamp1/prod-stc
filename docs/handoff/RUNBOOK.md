@@ -781,3 +781,23 @@ entrando.
 Os 5 usuários migrados em 22/09 **não** foram marcados como provisórios: a
 senha deles nunca foi gerada pelo sistema, e forçar troca seria atrito sem
 motivo.
+
+### Excluir usuário (desde 29/09/2026)
+
+**Excluir tira da lista; quem corta o acesso é o Desativar.** O botão 🗑 Excluir
+só aparece em usuário **inativo** — desative primeiro. A linha continua no banco
+(nada é apagado): a trilha de auditoria fica íntegra e o nome **não pode ser
+criado de novo** — a tela avisa isso se alguém tentar.
+
+**Desfazer uma exclusão** não tem botão, de propósito. Pelo banco:
+
+```bash
+psql -d wpa_monitor -c "UPDATE usuarios SET excluido_em = NULL WHERE username = 'NOME';"
+```
+
+O usuário volta à lista como **inativo**; reativar é pela tela. Ver quem está
+excluído: `SELECT username, excluido_em FROM usuarios WHERE excluido_em IS NOT NULL;`
+
+⚠️ **Deploy:** aplique `migrations/add_usuario_excluido.sql` **antes** do `git
+pull`. O código novo lê a coluna `excluido_em`; sem ela, a leitura de usuários
+falha e só a conta de emergência entra.

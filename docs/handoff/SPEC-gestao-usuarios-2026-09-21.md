@@ -137,6 +137,14 @@ Não há envio de e-mail no projeto — a entrega é na mão, pelo José.
 auditoria e em `criado_por` de outras contas; apagar a linha deixaria a
 auditoria apontando para o nada.
 
+> **Acréscimo de 29/09/2026 — excluir (P0-1c).** O José pediu a opção de
+> excluir usuário, e escolheu **excluir = ocultar**: a regra acima continua de
+> pé, não há `DELETE`. Coluna nova `excluido_em timestamptz` (NULL = não
+> excluído), via `migrations/add_usuario_excluido.sql`; ação `excluir` na
+> trilha. Só exclui quem já está desativado; o excluído some da lista e de
+> todas as rotas (404), nunca entra, e o nome não pode ser recriado (a PK
+> impede). Desfazer é pelo banco. Ver o P0-1c no `BACKLOG.md`.
+
 ### 4.2 `usuarios_log` — a trilha
 
 | coluna | tipo |

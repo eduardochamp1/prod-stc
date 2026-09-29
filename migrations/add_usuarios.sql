@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
   criado_em       timestamptz NOT NULL DEFAULT now(),
   criado_por      text,
   atualizado_em   timestamptz NOT NULL DEFAULT now(),
+  -- Acrescentado em 29/09/2026 pelo add_usuario_excluido.sql (excluir = ocultar,
+  -- a linha fica). Repetido aqui pra migration ser replayable num banco novo.
+  excluido_em     timestamptz,
   CONSTRAINT usuarios_role_check      CHECK (role IN ('admin', 'user')),
   CONSTRAINT usuarios_username_check  CHECK (username ~ '^[a-z0-9_]{3,32}$')
 );
@@ -46,7 +49,8 @@ CREATE TABLE IF NOT EXISTS usuarios_log (
     -- 'trocar_senha' acrescentado em 22/09/2026 pelo add_senha_provisoria.sql.
     -- Fica aqui tambem pra migration ser REPLAYABLE num banco novo com a lista
     -- completa, sem depender da ordem de aplicacao.
-    acao IN ('criar','desativar','reativar','alterar','resetar_senha','trocar_senha'))
+    -- 'excluir' acrescentado em 29/09/2026 pelo add_usuario_excluido.sql.
+    acao IN ('criar','desativar','reativar','alterar','resetar_senha','trocar_senha','excluir'))
 );
 
 CREATE INDEX IF NOT EXISTS usuarios_log_ts_idx   ON usuarios_log (ts DESC);

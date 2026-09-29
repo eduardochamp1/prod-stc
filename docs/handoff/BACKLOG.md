@@ -156,6 +156,7 @@
 | P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
 | P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **done** (22/09) — migrado e verificado em prod: 5 contas no banco, `.env` reduzido a UMA. Falta só o teste de revogação |
 | P0-1b | Senha gerada pela tela (20 caracteres aleatórios) não tinha como ser trocada — "essa senha gerada é facilmente esquecida". Incremento 2 do P0-1a | Governança/Segurança | **código done** (22/09) — troca obrigatória no 1º acesso (`423 SENHA_PROVISORIA`) e voluntária; 22 testes; **falta confirmar em prod** |
+| P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; **falta migration + confirmar em prod** |
 
 ---
 
@@ -5798,3 +5799,75 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   senha_provisoria`. Ninguém perde acesso; quem já trocou fica com a senha nova.
 - **Fora de escopo:** recuperação por e-mail, histórico de senhas, expiração
   periódica, forçar os 5 migrados a trocar (spec §8).
+
+## P0-1c — Excluir usuário (excluir = ocultar)
+
+- **Categoria:** Governança / Segurança
+- **Status:** **código done** (29/09/2026) — **falta aplicar a migration e
+  confirmar em produção**
+- **Relação com o P0-1a:** complemento da tela de gestão. Não mexe no login
+  além do filtro (excluído nunca entra).
+- **Fonte:** José, 29/09/2026: *"vamos adicionar a opção de excluir usuario
+  também"*.
+- **Conflito com decisão anterior, resolvido pelo José:** a spec de 21/09
+  (`SPEC-gestao-usuarios` §4.1) decidiu "desativar é soft, nunca DELETE". Foram
+  oferecidas as duas opções — ocultar, ou DELETE só de inativos — e ele escolheu
+  **ocultar**. A regra de 21/09 fica de pé; a spec ganhou um acréscimo datado.
+- **Ação:**
+  - `migrations/add_usuario_excluido.sql`: coluna `usuarios.excluido_em
+    timestamptz` (NULL = não excluído) e `'excluir'` no CHECK de
+    `usuarios_log.acao`. O `add_usuarios.sql` foi atualizado junto, para
+    continuar replayable.
+  - `services/usuarios.js`: trava `podeExcluir`; `listarDoBanco` **não devolve**
+    excluídos; `_daLinha` força `ativo=false` em excluído.
+  - `POST /api/admin/usuarios/:username/excluir` (guarda dupla, como as outras).
+  - Tela: botão 🗑 Excluir **só em inativos**, com confirmação que avisa que o
+    nome não volta.
+- **Decisões registradas:**
+  - **Sem DELETE.** A linha fica: a trilha e o `criado_por` de outras contas
+    continuam apontando para alguém que existe, e a PK impede reusar o nome — um
+    `fulano` novo não herda o histórico do antigo numa auditoria da EDP.
+  - **Só exclui quem já está desativado (trava 5).** Desativar corta o acesso e
+    se desfaz pela tela; excluir só tira da lista e não se desfaz. Dois passos
+    para nenhum clique único fazer o irreversível. De tabela, as travas 1 e 2
+    (a si mesmo, último gestor) já valem: quem está logado está ativo, e gestor
+    inativo não conta como gestor.
+  - **O filtro vive no `listarDoBanco`, não nas rotas.** Para todas as rotas o
+    excluído é "não existe" (404), inclusive **reativar** — senão a exclusão se
+    desfaria pela tela. Rota nova herda sem precisar lembrar.
+  - **Excluído é sempre inativo, mesmo que a linha diga `ativo=true`.** O acesso
+    depende só de `ativo`; alguém mexendo direto no banco não reabre a conta
+    virando essa coluna. A rota também grava `ativo=false` junto.
+  - **Recriar o nome → 409 explicando que ele foi excluído**, e não o "já
+    existe" genérico, que deixaria a pessoa caçando um usuário que não vê.
+  - **Desfazer é pelo banco** (`UPDATE usuarios SET excluido_em = NULL ...`,
+    no RUNBOOK). O usuário volta como inativo.
+- **Aceite:**
+  - [x] Suíte verde: 1271 testes, 0 falhas (eram 1258; 13 novos).
+  - [x] A rota nova está no ROTAS dos testes de portão: 401 sem token, 403
+        para admin sem gestão, sem `senha_hash` na resposta.
+  - [x] HTTP: ativo → 400 e nada gravado; inativo → 200, grava `excluido_em` e
+        `ativo`, **nenhum DELETE**, e registra na trilha; excluído some da
+        lista; 404 em editar/resetar/reativar/excluir de novo; excluído não
+        loga nem com `ativo=true`; token de excluído → 401 `REVOKED`; conta de
+        emergência → 400.
+  - [x] O teste do CHECK da trilha agora confere a migration nova **e** o
+        `add_usuarios.sql`.
+  - [x] **Verificado que os testes mordem:** desligar o filtro do
+        `listarDoBanco`, a trava de inativo ou o "excluído é inativo" deixa a
+        suíte vermelha (2, 2 e 1 falhas).
+  - [ ] **Migration `add_usuario_excluido.sql` aplicada na VM ANTES do pull.**
+        Sem a coluna, a leitura de usuários falha e só a conta de emergência
+        entra. (Se o `add_senha_provisoria.sql` do P0-1b ainda não foi
+        aplicado, ele vem antes — o código já lê aquela coluna também.)
+  - [ ] **Em produção:** com o usuário de teste do P0-1a/P0-1b já desativado,
+        excluir → some da lista → aparece `excluir` na 📜 Auditoria → tentar
+        criar de novo com o mesmo nome dá o 409 explicativo.
+- **Não coberto por teste:** o 409 explicativo ao recriar — o pool fake aceita
+  todo INSERT e não simula a violação da PK. Fica pelo aceite em produção.
+- **Rollback:** `git revert`. A coluna pode ficar: sem o código novo ninguém a
+  lê — **mas aí os excluídos voltam a aparecer na lista, como inativos** (nunca
+  como ativos: a exclusão gravou `ativo=false`). Para tirar a coluna:
+  `ALTER TABLE usuarios DROP COLUMN excluido_em`.
+- **Fora de escopo:** botão de desfazer exclusão; DELETE de verdade; excluir
+  registro da trilha (continua proibido).

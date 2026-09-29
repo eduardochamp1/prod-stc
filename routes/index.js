@@ -257,7 +257,8 @@ router.use('/admin', requireAdmin);
 // usuário é permissão à parte — foi decisão explícita do José em 21/09
 // ("só você, por enquanto").
 //
-// `senha_hash` NUNCA sai daqui. Há teste varrendo o JSON das sete rotas.
+// `senha_hash` NUNCA sai daqui. Há teste varrendo o JSON de todas as rotas
+// (eram sete; a oitava, excluir, entrou em 29/09/2026).
 //
 // Spec: docs/handoff/SPEC-gestao-usuarios-2026-09-21.md
 const _usuariosSvc = require('../services/usuarios');
@@ -313,6 +314,13 @@ router.post('/admin/usuarios', requireGerenciarUsuarios, async (req, res) => {
     });
     if (error) {
       if (/duplicate|unique/i.test(error.message)) {
+        // Excluído não aparece na lista; "já existe" deixaria a pessoa caçando
+        // um usuário que ela não vê. O nome não volta de propósito (ver a rota
+        // de excluir).
+        if (await _usuariosSvc.foiExcluido(username)) {
+          return res.status(409).json({
+            error: `o usuário "${username}" já existiu e foi excluído; o nome não pode ser reutilizado` });
+        }
         return res.status(409).json({ error: `usuário "${username}" já existe` });
       }
       throw error;
@@ -397,6 +405,46 @@ router.post('/admin/usuarios/:username/desativar', requireGerenciarUsuarios,
   (req, res) => _mudarAtivo(req, res, false));
 router.post('/admin/usuarios/:username/reativar', requireGerenciarUsuarios,
   (req, res) => _mudarAtivo(req, res, true));
+
+/**
+ * Excluir = OCULTAR (José, 29/09/2026). A linha fica: some da lista e de todas
+ * as rotas (o filtro é no listarDoBanco), mas a trilha e o `criado_por` de
+ * outras contas continuam apontando para alguém que existe — e o PRIMARY KEY
+ * impede reusar o nome. Um DELETE liberaria o username, e numa auditoria da
+ * EDP o histórico do antigo se confundiria com as ações do novo.
+ *
+ * Só exclui quem JÁ ESTÁ desativado (trava 5, services/usuarios.js).
+ * Desfazer é pelo banco, de propósito — ver add_usuario_excluido.sql.
+ */
+router.post('/admin/usuarios/:username/excluir', requireGerenciarUsuarios, async (req, res) => {
+  try {
+    const username = String(req.params.username || '').toLowerCase();
+    if (_reservados().has(username)) {
+      return res.status(400).json({ error: 'a conta de emergência não é gerenciável pela tela' });
+    }
+    const todos = await _usuariosSvc.listarDoBanco();
+    if (!todos.some(u => u.username === username)) {
+      return res.status(404).json({ error: 'usuário não encontrado' });
+    }
+    const r = _usuariosSvc.podeExcluir(username, req.user, todos);
+    if (!r.ok) return res.status(400).json({ error: r.motivo });
+
+    const agora = new Date().toISOString();
+    const sb = require('../services/dbClient').getClient();
+    const { error } = await sb.from('usuarios')
+      // `ativo: false` de novo, por garantia: a trava já exige inativo, mas o
+      // acesso depende SÓ dessa coluna, e ela não pode depender de ordem.
+      .update({ excluido_em: agora, ativo: false, atualizado_em: agora })
+      .eq('username', username);
+    if (error) throw error;
+
+    _usuariosSvc._cache.invalidar(username);
+    await _usuariosSvc.registrarLog(req.user.username, 'excluir', username, null);
+    res.json({ ok: true, username });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/admin/usuarios/:username/senha', requireGerenciarUsuarios, async (req, res) => {
   try {

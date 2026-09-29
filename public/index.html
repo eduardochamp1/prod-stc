@@ -9704,6 +9704,7 @@ ${acumuladoHTML}
           <button onclick="editarUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Editar">✎</button>
           <button onclick="resetarSenhaUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Gerar nova senha">🔑</button>
           <button onclick="alternarUsuarioAtivo('${esc(u.username)}', ${!u.ativo})" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer">${u.ativo ? '↓ Desativar' : '↑ Ativar'}</button>
+          ${u.ativo ? '' : `<button onclick="excluirUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--vermelho);color:var(--vermelho);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:4px" title="Tirar da lista (só inativos)">🗑 Excluir</button>`}
         </td></tr>`).join('');
 
       return `<table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -9871,6 +9872,23 @@ ${acumuladoHTML}
       try {
         const res = await fetch(
           `${API}/admin/usuarios/${encodeURIComponent(username)}/${novoAtivo ? 'reativar' : 'desativar'}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'erro');
+        await loadUsuarios();
+      } catch (err) { alert('✗ ' + err.message); }
+    }
+
+    /**
+     * Excluir = ocultar (29/09/2026). O botão só aparece em inativos — quem
+     * corta o acesso é o Desativar; isto só tira da lista. O texto do confirm
+     * diz o que NÃO se desfaz pela tela, e que o nome não volta.
+     */
+    async function excluirUsuario(username) {
+      if (!confirm(`EXCLUIR ${username}?\n\nEle some da lista e não pode ser reativado pela tela. ` +
+                   `O histórico na auditoria é mantido, e o nome "${username}" não poderá ser usado de novo.`)) return;
+      try {
+        const res = await fetch(`${API}/admin/usuarios/${encodeURIComponent(username)}/excluir`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'erro');

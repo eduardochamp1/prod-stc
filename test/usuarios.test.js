@@ -136,6 +136,40 @@ test('desativar quem não existe é recusado, não ignorado', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// podeExcluir — excluir = ocultar (29/09/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const { podeExcluir } = require('../services/usuarios');
+
+test('TRAVA 5: só exclui quem JÁ está desativado', () => {
+  // Dois passos de propósito: desativar corta o acesso e se desfaz pela tela;
+  // excluir só tira da lista, e não se desfaz. Nenhum clique único faz as duas.
+  const ativo = u({ username: 'fulano', ativo: true });
+  const r = podeExcluir('fulano', JOSE, [JOSE, ativo]);
+  assert.equal(r.ok, false);
+  assert.match(r.motivo, /desative/i);
+});
+
+test('excluir um usuário inativo é permitido', () => {
+  const inativo = u({ username: 'fulano', ativo: false });
+  assert.equal(podeExcluir('fulano', JOSE, [JOSE, inativo]).ok, true);
+});
+
+test('não pode excluir a si mesmo', () => {
+  // Inalcançável na prática (quem está logado está ativo), mas a trava não
+  // pode depender disso.
+  const eu = u({ username: 'jose', ativo: false, pode_gerenciar: true });
+  const r = podeExcluir('jose', eu, [eu]);
+  assert.equal(r.ok, false);
+  assert.match(r.motivo, /si mesmo/);
+});
+
+test('excluir quem não existe (ou já foi excluído) é recusado', () => {
+  // listarDoBanco não traz excluídos, então excluir de novo cai aqui.
+  assert.equal(podeExcluir('fantasma', JOSE, [JOSE]).ok, false);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // podeAlterar
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -82,6 +82,22 @@ test('usuário inativo aparece esmaecido e com o botão de Ativar', () => {
   assert.ok(html.includes('opacity:.45'));
 });
 
+test('o botão de Excluir só aparece para INATIVOS', () => {
+  // 29/09/2026: desativar corta o acesso; excluir só tira da lista. A tela não
+  // oferece o segundo passo antes do primeiro.
+  const render = carregar('_renderUsuarios');
+  assert.ok(!render([usr({ ativo: true })]).includes('excluirUsuario'),
+    'um usuário ativo não pode ter o botão de excluir');
+  assert.ok(render([usr({ ativo: false })]).includes("excluirUsuario('fulano')"));
+});
+
+test('a confirmação da exclusão avisa que o nome não volta', () => {
+  const fonte = extrairFuncao('excluirUsuario');
+  assert.ok(/n[ãa]o poder[áa] ser usado de novo/.test(fonte),
+    'sem esse aviso, alguém exclui e depois tenta recriar o mesmo nome');
+  assert.ok(/confirm\(/.test(fonte), 'exclusão sem confirmação');
+});
+
 test('lista vazia não quebra', () => {
   const render = carregar('_renderUsuarios');
   assert.ok(render([]).includes('Nenhum usuário'));

@@ -54,9 +54,15 @@ const LOG_FAKE = [{
   acao: 'criar', alvo: 'fulano', detalhe: { role: 'user' },
 }];
 
+/** A última escrita, pra conferir O QUE a rota grava (e não só o status). */
+let _escritas = [];
+
 _setPool({
-  query: async (sql) => {
-    if (/^\s*(insert|update|delete)/i.test(sql)) return { rows: [], rowCount: 1 };
+  query: async (sql, params) => {
+    if (/^\s*(insert|update|delete)/i.test(sql)) {
+      _escritas.push({ sql, params });
+      return { rows: [], rowCount: 1 };
+    }
     if (/usuarios_log/i.test(sql)) return { rows: LOG_FAKE, rowCount: LOG_FAKE.length };
     return { rows: _linhas, rowCount: _linhas.length };
   },
@@ -102,7 +108,7 @@ async function loginAs(u, p) {
   return json.token;
 }
 
-/** As sete rotas, com método e um corpo mínimo. */
+/** Todas as rotas, com método e um corpo mínimo. Eram sete; `excluir` entrou em 29/09/2026. */
 const ROTAS = [
   ['GET',  '/api/admin/usuarios',                  null],
   ['POST', '/api/admin/usuarios',                  { username: 'novo_user', role: 'user', regionals: ['GUA'] }],
@@ -110,17 +116,18 @@ const ROTAS = [
   ['POST', '/api/admin/usuarios/fulano/desativar', {}],
   ['POST', '/api/admin/usuarios/fulano/reativar',  {}],
   ['POST', '/api/admin/usuarios/fulano/senha',     {}],
+  ['POST', '/api/admin/usuarios/fulano/excluir',   {}],
   ['GET',  '/api/admin/usuarios/log',              null],
 ];
 
-test('sem token → 401 nas SETE rotas', async () => {
+test('sem token → 401 em TODAS as rotas', async () => {
   for (const [metodo, caminho, corpo] of ROTAS) {
     const { status } = await req(metodo, caminho, null, corpo);
     assert.equal(status, 401, `${metodo} ${caminho} devia ser 401`);
   }
 });
 
-test('admin SEM pode_gerenciar → 403 nas SETE rotas', async () => {
+test('admin SEM pode_gerenciar → 403 em TODAS as rotas', async () => {
   // role=admin abre o /admin inteiro, mas NÃO mexe em quem entra. É a
   // separação que o José pediu ("só você, por enquanto").
   _cache.limpar();
@@ -220,4 +227,113 @@ test('a conta do .env não é gerenciável pela tela', async () => {
     const { status } = await req(metodo, caminho, token, {});
     assert.equal(status, 400, `${metodo} ${caminho} devia recusar`);
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Excluir = ocultar (29/09/2026). A linha fica; o nome nunca volta.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EXCLUIDO_EM = '2026-09-29T12:00:00.000Z';
+
+test('excluir um usuário ATIVO → 400 pedindo para desativar antes, e nada é gravado', async () => {
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR]);
+  const token = await loginAs('gestor', SENHA_GESTOR);
+
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR, linhaUsuario({ ativo: true })]);
+  _escritas = [];
+  const { status, json } = await req('POST', '/api/admin/usuarios/fulano/excluir', token, {});
+
+  assert.equal(status, 400);
+  assert.match(json.error, /desative/i);
+  assert.equal(_escritas.filter(e => /update\s+"?usuarios"?\s/i.test(e.sql)).length, 0,
+    'recusou, mas gravou mesmo assim');
+});
+
+test('excluir um usuário inativo → 200, grava excluido_em E ativo=false, e registra na trilha', async () => {
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR]);
+  const token = await loginAs('gestor', SENHA_GESTOR);
+
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR, linhaUsuario({ ativo: false })]);
+  _escritas = [];
+  const { status, json } = await req('POST', '/api/admin/usuarios/fulano/excluir', token, {});
+
+  assert.equal(status, 200, JSON.stringify(json));
+  const upd = _escritas.find(e => /^\s*update/i.test(e.sql) && /excluido_em/i.test(e.sql));
+  assert.ok(upd, 'não gravou excluido_em');
+  assert.match(upd.sql, /ativo/i, 'a exclusão tem de reafirmar ativo=false');
+  assert.ok(!_escritas.some(e => /^\s*delete/i.test(e.sql)),
+    'excluir é OCULTAR — um DELETE libera o nome e apaga a referência da auditoria');
+  assert.ok(_escritas.some(e => /insert/i.test(e.sql) && /usuarios_log/i.test(e.sql)),
+    'a exclusão tem de ir para a trilha');
+});
+
+test('excluído some da lista', async () => {
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR]);
+  const token = await loginAs('gestor', SENHA_GESTOR);
+
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR, linhaUsuario({ ativo: false, excluido_em: EXCLUIDO_EM })]);
+  const { status, json } = await req('GET', '/api/admin/usuarios', token);
+
+  assert.equal(status, 200);
+  assert.deepEqual(json.usuarios.map(u => u.username), ['gestor']);
+});
+
+test('excluído é "não existe" para editar, resetar, reativar e excluir de novo → 404', async () => {
+  // O filtro vive no listarDoBanco; este teste é o que prova que nenhuma rota
+  // o contorna. Reativar em especial: sem isto, a exclusão se desfaria pela tela.
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR]);
+  const token = await loginAs('gestor', SENHA_GESTOR);
+
+  for (const [metodo, caminho] of [
+    ['PUT',  '/api/admin/usuarios/fulano'],
+    ['POST', '/api/admin/usuarios/fulano/senha'],
+    ['POST', '/api/admin/usuarios/fulano/reativar'],
+    ['POST', '/api/admin/usuarios/fulano/excluir'],
+  ]) {
+    _cache.limpar();
+    setLinhas([LINHA_GESTOR, linhaUsuario({ ativo: false, excluido_em: EXCLUIDO_EM })]);
+    const { status } = await req(metodo, caminho, token, { role: 'user' });
+    assert.equal(status, 404, `${metodo} ${caminho} alcançou um usuário excluído (${status})`);
+  }
+});
+
+test('excluído NÃO entra, mesmo que a linha diga ativo=true', async () => {
+  // Defesa em profundidade: alguém mexendo direto no banco não pode reabrir o
+  // acesso de um excluído só virando o `ativo`.
+  _cache.limpar();
+  setLinhas([linhaUsuario({ ativo: true, excluido_em: EXCLUIDO_EM })]);
+  const { status } = await req('POST', '/api/auth/login', null,
+    { username: 'fulano', password: SENHA_SIMPLES });
+  assert.notEqual(status, 200, 'um usuário excluído conseguiu logar');
+});
+
+test('token de quem foi excluído deixa de valer', async () => {
+  _cache.limpar();
+  setLinhas([linhaUsuario()]);
+  const token = await loginAs('fulano', SENHA_SIMPLES);
+  assert.ok(token, 'esperava login antes da exclusão');
+
+  _cache.limpar();
+  setLinhas([linhaUsuario({ ativo: true, excluido_em: EXCLUIDO_EM })]);
+  const { status, json } = await req('GET', '/api/metas', token);
+  assert.equal(status, 401);
+  assert.equal(json.code, 'REVOKED');
+});
+
+test('a conta de emergência não é excluível pela tela', async () => {
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR]);
+  const token = await loginAs('gestor', SENHA_GESTOR);
+
+  _cache.limpar();
+  setLinhas([LINHA_GESTOR]);
+  const { status } = await req('POST', '/api/admin/usuarios/adminsimples/excluir', token, {});
+  assert.equal(status, 400);
 });

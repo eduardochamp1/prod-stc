@@ -265,10 +265,14 @@ test('a ação gravada na trilha é aceita pelo CHECK da tabela', () => {
   const acoes = [...ROTAS.matchAll(/registrarLog\([^,]+,\s*'([a-z_]+)'/g)].map(m => m[1]);
   assert.ok(acoes.length > 0, 'não achei nenhuma chamada a registrarLog');
 
-  const permitidas = leia('migrations/add_senha_provisoria.sql')
-    .match(/acao IN \(([^)]+)\)/);
-  assert.ok(permitidas, 'não achei o CHECK na migration');
+  // A migration MAIS RECENTE que redefine o CHECK (29/09/2026: a exclusão
+  // trouxe 'excluir'), e o add_usuarios.sql, que precisa estar em dia pra ser
+  // replayable num banco novo.
+  for (const arq of ['migrations/add_usuario_excluido.sql', 'migrations/add_usuarios.sql']) {
+    const permitidas = leia(arq).match(/acao IN \(([^)]+)\)/);
+    assert.ok(permitidas, `não achei o CHECK em ${arq}`);
 
-  acoes.forEach(a => assert.ok(permitidas[1].includes(`'${a}'`),
-    `a rota grava "${a}", mas o CHECK da tabela não aceita`));
+    acoes.forEach(a => assert.ok(permitidas[1].includes(`'${a}'`),
+      `a rota grava "${a}", mas o CHECK de ${arq} não aceita`));
+  }
 });
