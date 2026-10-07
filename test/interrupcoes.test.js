@@ -140,3 +140,17 @@ describe('_janelaInterrupcoes — só a partir do início da coleta (07/10/2026)
     assert.deepEqual(_janelaInterrupcoes('2026-10-08', '2026-10-08'), { de: '2026-10-08', ate: '2026-10-08' });
   });
 });
+
+describe('deveColetarDoDetalhe — 2º caminho (MD concluída/rejeitada com interrupção)', () => {
+  // 045006455506 (EBGPR63, 07/10/2026): interrompida 12:12, retomada 12:33,
+  // concluída 12:57 — nunca vista em ExecutionStatus 3 pelo ciclo.
+  test('MD com Interruptions[] preenchido → coleta', () => {
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD', Interruptions: [{ Id: 'x' }] }), true);
+  });
+  test('MD sem interrupção, ou outro tipo → não gasta GET', () => {
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD', Interruptions: [] }), false);
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD' }), false);
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'PO', Interruptions: [{ Id: 'x' }] }), false);
+    assert.equal(svc.deveColetarDoDetalhe(null), false);
+  });
+});

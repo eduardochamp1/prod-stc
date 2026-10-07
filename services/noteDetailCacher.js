@@ -60,6 +60,22 @@ async function cachearNota(c) {
     const processed = processarNota(raw, { incluirFotos: false, subcat });
     await sq.setNoteDetailCache(raw.Id, raw.Number, raw.Type, c.sectorId, processed);
 
+    // 07/10/2026 — MD concluída/rejeitada que teve interrupção: grava o
+    // histórico em note_interrupcoes. Cobre a interrupção que foi retomada
+    // entre dois ciclos e nunca foi vista em ExecutionStatus 3. Mesmo contrato
+    // do PO abaixo: falha aqui NÃO marca a nota como falha.
+    const intSvc = require('./interrupcaoService');
+    if (intSvc.deveColetarDoDetalhe(raw)) {
+      try {
+        await intSvc.coletarDaNota({
+          note_id: raw.Id, numero: raw.Number || null,
+          tipo: String(raw.Type).toUpperCase(), sector_id: c.sectorId || null,
+        });
+      } catch (errInt) {
+        log.warn('interrupcoes_do_detalhe_falhou', { note: raw.Number, msg: errInt.message });
+      }
+    }
+
     // 30/08/2026 — nota PO ganha uma 2ª chamada, pro "Horário do Reparo".
     // Ele NÃO existe no details/optimized (123 chaves, nenhuma de reparo);
     // a única fonte é /api/notes/po. Só PO: ~91 notas/dia, custo baixo.

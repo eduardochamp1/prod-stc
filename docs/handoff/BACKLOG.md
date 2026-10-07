@@ -5898,7 +5898,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - `GET /api/Notes/{id}/completeInterruptions` traz equipe (`TeamName`), data **em BRT**, motivo (no campo `RejectionReasonId`!) e observação. O `_normalizeNoteInterruptions` anexava Z ao Date — corrigido antes do 1º chamador.
   - Gatilho: MD com `ExecutionStatus 3` no teamsstatus/V2 que já buscamos (custo zero); só quando a nota ENTRA em 3 é feito 1 GET. Ver P2-55.
   - Na nota rejeitada medida (040008325551) não havia registro de interrupção: rejeição e interrupção são coisas separadas.
-- **Lacunas:** sem retroativo (snapshot guardava só o status traduzido); interrupção retomada em < 15 min não é vista.
+- **Lacunas:** sem retroativo (snapshot guardava só o status traduzido). Interrupção retomada entre dois ciclos não é vista em 3 — **fechada em 07/10/2026 para notas que terminam**: o cache de detalhes (`noteDetailCacher`) vê `Interruptions[]` no payload de toda MD concluída/rejeitada e chama `coletarDaNota`. Resta só a nota interrompida rapidamente que segue aberta: entra quando for interrompida de novo ou quando terminar. MD já cacheadas antes do deploy: `scripts/backfill-interrupcoes.js --desde 2026-10-07`.
 - **Rollback:** reverter o commit; a tabela `note_interrupcoes` pode ficar (ninguém mais lê).
 
 ---
@@ -5906,7 +5906,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P2-55 — ExecutionStatus 3 pode ser "interrompida", e o Monitor trata como "em andamento"
 
 - **Categoria:** Dados/Frontend
-- **Status:** pending — hipótese reforçada em 07/10/2026: com `--so-v2` em DESG, 045006462967, 045006463152 (ECGPR82) e 045006475673 (ECMRT50), as três vistas como interrompidas no portal, estavam em 3. A 045006455506 (EBGPR63), do filtro "Interrompidas" das 12:49, NÃO estava — retomada depois, ou interrompida fora da carteira de equipe logada (caso que a coleta do P2-54 não pegaria). A conferir.
+- **Status:** pending — hipótese reforçada em 07/10/2026: com `--so-v2` em DESG, 045006462967, 045006463152 (ECGPR82) e 045006475673 (ECMRT50), as três vistas como interrompidas no portal, estavam em 3. A 045006455506 (EBGPR63), do filtro "Interrompidas" das 12:49, NÃO estava: os checkpoints mostram tentativa 1 parada às 12:12, tentativa 2 iniciada às 12:33 e Fim do Trabalho às 12:57 — já tinha sido retomada. Não contradiz a hipótese, mas mostra que o filtro do portal inclui nota JÁ retomada, e que interrupção curta escapa do gatilho (coberta pelo 2º caminho do P2-54).
 - **Evidência:** `services/wpaService.js` `STATUS_V2`: `3: 'executada' // em andamento`. A nota 105293301 (PO, EPMFL30), com status "Em Campo interrompida" no portal em 07/10/2026, veio em `Downloaded` com `ExecutionStatus 3`. O Gestão Online mostra "Interromp." na coluna Status de execução (045006462967, ECGPR82).
 - **Impacto:** se confirmado, o card da equipe e o contador de andamento contam nota parada como se estivesse sendo trabalhada. Não afeta produção (concluídas).
 - **Ação:** 1) `node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG` e comparar a lista de código 3 com o filtro "Interrompidas" do portal; 2) se bater, decidir com o José como o Monitor deve mostrar (bucket próprio?). A coleta do P2-54 já depende desta hipótese.

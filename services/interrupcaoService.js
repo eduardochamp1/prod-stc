@@ -120,7 +120,59 @@ function montarLinhas(cand, interrupcoes, getRegional = () => null) {
   return linhas;
 }
 
+/**
+ * FUNÇÃO PURA (testável): o payload CRU do details/optimized indica que vale
+ * buscar o histórico? Só MD com `Interruptions[]` não vazio.
+ */
+function deveColetarDoDetalhe(raw) {
+  return !!(raw && TIPOS_COLETADOS.has(String(raw.Type || '').toUpperCase())
+    && Array.isArray(raw.Interruptions) && raw.Interruptions.length > 0);
+}
+
 let _avisouSemTabela = false;
+
+/**
+ * Upsert idempotente em note_interrupcoes. Devolve { ok, semTabela }.
+ */
+async function _gravar(sb, linhas) {
+  if (linhas.length === 0) return { ok: true, semTabela: false };
+  const { error } = await sb.from('note_interrupcoes')
+    .upsert(linhas.map(l => ({ ...l, updated_at: new Date().toISOString() })),
+      { onConflict: 'interrupcao_id' });
+  if (!error) return { ok: true, semTabela: false };
+  // Tabela ausente = migration não aplicada. Avisa uma vez.
+  if (/note_interrupcoes|does not exist|relation/i.test(error.message || '')) {
+    if (!_avisouSemTabela) {
+      log.warn('interrupcoes_sem_tabela', { msg: 'aplique migrations/add_note_interrupcoes.sql' });
+      _avisouSemTabela = true;
+    }
+    return { ok: false, semTabela: true };
+  }
+  log.warn('interrupcoes_upsert_falhou', { msg: error.message });
+  return { ok: false, semTabela: false };
+}
+
+/**
+ * Coleta o histórico de interrupções de UMA nota (1 GET) e grava.
+ * `cand` = { note_id, numero, tipo, sector_id, regional? }. Lança em falha de rede.
+ *
+ * 2º caminho (07/10/2026): a nota 045006455506 (EBGPR63) foi interrompida às
+ * 12:12, retomada às 12:33 e concluída às 12:57 — o gatilho por ExecutionStatus
+ * 3 do ciclo só a veria se um snapshot caísse nesses ~21 min. Toda MD concluída
+ * ou rejeitada passa pelo cache de detalhes (noteDetailCacher), cujo payload já
+ * traz `Interruptions[]`: quando ele vem preenchido, chamamos isto. Custo extra
+ * só para as notas que de fato tiveram interrupção.
+ */
+async function coletarDaNota(cand) {
+  const { getClient } = require('./dbClient');
+  const sb = getClient();
+  if (!sb) return 0;
+  const { getNoteInterruptions } = require('./wpaService');
+  const { getRegional } = require('./equipesOficiais');
+  const linhas = montarLinhas(cand, await getNoteInterruptions(cand.note_id), getRegional);
+  const r = await _gravar(sb, linhas);
+  return r.ok ? linhas.length : 0;
+}
 
 async function runColetaInterrupcoes(teams) {
   if (process.env.DATA_MODE === 'mock') return;
@@ -154,25 +206,13 @@ async function runColetaInterrupcoes(teams) {
     }));
   }
 
-  if (linhas.length > 0) {
-    const { error } = await sb.from('note_interrupcoes')
-      .upsert(linhas.map(l => ({ ...l, updated_at: new Date().toISOString() })),
-        { onConflict: 'interrupcao_id' });
-    if (error) {
-      // Tabela ausente = migration não aplicada. Avisa uma vez e não marca nada
-      // como visto, pra coletar tudo quando a tabela existir.
-      if (/note_interrupcoes|does not exist|relation/i.test(error.message || '')) {
-        if (!_avisouSemTabela) {
-          log.warn('interrupcoes_sem_tabela', { msg: 'aplique migrations/add_note_interrupcoes.sql' });
-          _avisouSemTabela = true;
-        }
-      } else {
-        log.warn('interrupcoes_upsert_falhou', { msg: error.message });
-      }
-      candidatas.forEach(c => falharam.add(c.note_id));
-      proximo();
-      return;
-    }
+  const r = await _gravar(sb, linhas);
+  if (!r.ok) {
+    // Não marca nada como visto: coleta tudo de novo no próximo ciclo
+    // (ou quando a tabela existir).
+    candidatas.forEach(c => falharam.add(c.note_id));
+    proximo();
+    return;
   }
   proximo();
   log.info('interrupcoes_ok', {
@@ -180,7 +220,7 @@ async function runColetaInterrupcoes(teams) {
 }
 
 module.exports = {
-  runColetaInterrupcoes,
-  selecionarCandidatas, montarLinhas,
+  runColetaInterrupcoes, coletarDaNota,
+  selecionarCandidatas, montarLinhas, deveColetarDoDetalhe,
   _resetMemoria: () => { _ultimoES = new Map(); _avisouSemTabela = false; },
 };
