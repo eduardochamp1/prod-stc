@@ -1929,7 +1929,13 @@ async function getRejeicoesTotais(de, ate, regionals, opts = {}) {
       .gte('date', de)
       .lte('date', ate);
     q = inRegionals(q, regionals);
-    if (opts.team && opts.team !== 'ALL') q = q.eq('team_name', opts.team);
+    // 07/10/2026 (P2-57): antes só olhava `opts.team`, que a rota preenche
+    // apenas com UMA equipe. Com 2+ equipes marcadas o numerador (rejeições)
+    // vinha filtrado por `teams` em _fetchRejeicoes e o denominador NÃO —
+    // executadas da regional inteira → % de rejeição saía baixo. Achado ao
+    // ligar o filtro de Supervisor, que sempre manda várias siglas.
+    if (Array.isArray(opts.teams) && opts.teams.length > 0) q = q.in('team_name', opts.teams);
+    else if (opts.team && opts.team !== 'ALL') q = q.eq('team_name', opts.team);
     return q;
   });
   let executadas = 0;
