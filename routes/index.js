@@ -731,19 +731,32 @@ router.get('/equipes', async (req, res) => {
     const sq = sbq();
     if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
     const sb = require('../services/dbClient').getClient();
-    let q = sb
-      .from('equipes_oficiais')
-      .select('sigla, regional, tipo, ativo')
-      .eq('ativo', true)
-      .order('regional')
-      .order('sigla');
-    // Não-admin → só sua(s) regional(is). Expande grupos (ES → GUA,CAC).
-    // Defesa em profundidade — middleware já força regional na query.
-    if (req.scope && req.scope.regionals) {
-      q = inRegionals(q, req.scope.regionals);
+    // `supervisor_id` entrou em 07/10/2026 (migration 015). Mesmo molde de
+    // fallback do GET /admin/equipes: subir o código antes de aplicar a
+    // migration não pode derrubar os dropdowns de 6 abas.
+    const _monta = (cols) => {
+      let q = sb
+        .from('equipes_oficiais')
+        .select(cols)
+        .eq('ativo', true)
+        .order('regional')
+        .order('sigla');
+      // Não-admin → só sua(s) regional(is). Expande grupos (ES → GUA,CAC).
+      // Defesa em profundidade — middleware já força regional na query.
+      if (req.scope && req.scope.regionals) {
+        q = inRegionals(q, req.scope.regionals);
+      }
+      return q;
+    };
+    let { data, error } = await _monta('sigla, regional, tipo, ativo, supervisor_id');
+    if (error && _ehColunaAusente(error)) {
+      ({ data, error } = await _monta('sigla, regional, tipo, ativo'));
     }
-    const { data, error } = await q;
     if (error) throw error;
+    // O nome vai junto pro filtro de Supervisor do front: a lista de
+    // supervisores que cada usuário vê sai DAQUI, já recortada pela regional
+    // dele — um supervisor só aparece se tem equipe no escopo do usuário.
+    await _anexarSupervisorNome(sb, data || []);
     res.json({ equipes: data || [], count: (data || []).length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2265,6 +2278,195 @@ router.put('/admin/he-valores', async (req, res) => {
   }
 });
 
+// ── SUPERVISORES (07/10/2026, migration 015) ─────────────────────────────────
+//
+// Catálogo + vínculo da equipe + histórico com vigência. As regras puras moram
+// em services/supervisores.js (testadas); aqui fica só o I/O.
+//
+// ⚠️ Toda leitura daqui tolera a migration NÃO aplicada (coluna/tabela
+// ausente → segue sem supervisor). Sem staging, subir o código antes do
+// `scripts/migrar-supervisores.js --apply` não pode derrubar o painel.
+
+function _ehColunaAusente(error) {
+  return /(column|relation) .* does not exist|undefined (column|table)/i.test((error && error.message) || '');
+}
+
+/** Map id → {id, nome, ativo}; Map vazio se a tabela ainda não existe. */
+async function _lerSupervisores(sb) {
+  const { data, error } = await sb.from('supervisores').select('id, nome, ativo').order('nome');
+  if (error) {
+    if (_ehColunaAusente(error)) return new Map();
+    throw error;
+  }
+  return new Map((data || []).map(s => [Number(s.id), s]));
+}
+
+/** Acrescenta `supervisor_nome` às linhas que têm `supervisor_id`. Muta in-place. */
+async function _anexarSupervisorNome(sb, linhas) {
+  if (!linhas.some(e => e.supervisor_id !== null && e.supervisor_id !== undefined)) return;
+  const sups = await _lerSupervisores(sb);
+  for (const e of linhas) {
+    const s = e.supervisor_id === null || e.supervisor_id === undefined
+      ? null : sups.get(Number(e.supervisor_id));
+    e.supervisor_nome = s ? s.nome : null;
+  }
+}
+
+/**
+ * Valida o `supervisor_id` vindo do body. Retorna {ok, valor} ou {erro}.
+ * `null`/'' = desvincular. Supervisor INATIVO não pode receber equipe nova —
+ * mas equipe que já está com ele continua (não mexemos em quem não foi salvo).
+ */
+async function _validarSupervisorId(sb, bruto) {
+  if (bruto === null || bruto === '') return { ok: true, valor: null };
+  const id = Number(bruto);
+  if (!Number.isInteger(id) || id <= 0) return { erro: 'supervisor_id inválido' };
+  const sups = await _lerSupervisores(sb);
+  const s = sups.get(id);
+  if (!s) return { erro: `supervisor ${id} não existe` };
+  if (s.ativo === false) return { erro: `supervisor "${s.nome}" está inativo` };
+  return { ok: true, valor: id };
+}
+
+function _hojeBRTRotas() {
+  return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Troca o supervisor da equipe: coluna atual + linha de vigência NA MESMA
+ * TRANSAÇÃO. Separadas, uma falha no meio deixaria o cadastro dizendo um
+ * supervisor e o histórico outro — e o histórico é o que a métrica futura lê.
+ * O pgShim não tem transação, por isso o pool direto (como o
+ * scripts/migrar-he-cadastro.js).
+ *
+ * Retorna false se a sigla não existe. Salvar sem mudar o supervisor não grava
+ * vigência (ver linhaHistorico).
+ */
+async function _trocarSupervisor(sigla, idNovo, usuario) {
+  const { linhaHistorico } = require('../services/supervisores');
+  const { _getPool } = require('../services/pgShim');
+  const client = await _getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT supervisor_id FROM equipes_oficiais WHERE sigla = $1 FOR UPDATE', [sigla]);
+    if (rows.length === 0) { await client.query('ROLLBACK'); return false; }
+    const linha = linhaHistorico({
+      sigla, idAtual: rows[0].supervisor_id, idNovo, hojeISO: _hojeBRTRotas(), usuario,
+    });
+    if (linha) {
+      await client.query(
+        'UPDATE equipes_oficiais SET supervisor_id = $2, updated_at = now() WHERE sigla = $1',
+        [sigla, idNovo]);
+      await client.query(
+        `INSERT INTO equipe_supervisor_historico (sigla, desde, supervisor_id, registrado_por, registrado_em)
+         VALUES ($1, $2, $3, $4, now())
+         ON CONFLICT (sigla, desde) DO UPDATE
+           SET supervisor_id = EXCLUDED.supervisor_id,
+               registrado_por = EXCLUDED.registrado_por,
+               registrado_em  = EXCLUDED.registrado_em`,
+        [linha.sigla, linha.desde, linha.supervisor_id, linha.registrado_por]);
+    }
+    await client.query('COMMIT');
+    return true;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* conexão já caiu */ }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// GET /api/admin/supervisores — catálogo inteiro (inclui inativos) + nº de equipes
+router.get('/admin/supervisores', async (_req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.status(503).json({ error: 'Supabase indisponível' });
+    const sb = require('../services/dbClient').getClient();
+    const sups = await _lerSupervisores(sb);
+    const { data: eqs, error } = await sb
+      .from('equipes_oficiais').select('sigla, supervisor_id').eq('ativo', true);
+    if (error && !_ehColunaAusente(error)) throw error;
+    const n = new Map();
+    for (const e of eqs || []) {
+      if (e.supervisor_id === null || e.supervisor_id === undefined) continue;
+      n.set(Number(e.supervisor_id), (n.get(Number(e.supervisor_id)) || 0) + 1);
+    }
+    const supervisores = [...sups.values()].map(s => ({ ...s, equipes: n.get(Number(s.id)) || 0 }));
+    res.json({ supervisores, count: supervisores.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/supervisores — {nome}
+router.post('/admin/supervisores', async (req, res) => {
+  const { normalizarNome, validarNome } = require('../services/supervisores');
+  const erros = validarNome((req.body || {}).nome);
+  if (erros.length) return res.status(400).json({ error: erros.join('; ') });
+  const nome = normalizarNome(req.body.nome);
+  try {
+    const sb = require('../services/dbClient').getClient();
+    const { data, error } = await sb.from('supervisores').insert({ nome }).select();
+    if (error) {
+      if (/duplicate|unique/i.test(error.message)) {
+        return res.status(409).json({ error: `Supervisor "${nome}" já existe.` });
+      }
+      throw error;
+    }
+    res.status(201).json({ ok: true, supervisor: data && data[0] });
+  } catch (err) {
+    _responderErroSupervisor(res, err);
+  }
+});
+
+// Lição do P0-1d (07/10/2026): erro de schema tem de NOMEAR a migration
+// pendente, não sair como "relation does not exist" cru.
+const _MSG_MIGRATION_015 = 'supervisores ainda não disponível — rode scripts/migrar-supervisores.js --apply';
+function _responderErroSupervisor(res, err) {
+  if (_ehColunaAusente(err)) {
+    console.warn(`[supervisores] ${_MSG_MIGRATION_015} (${err.message})`);
+    return res.status(503).json({ error: _MSG_MIGRATION_015 });
+  }
+  res.status(500).json({ error: err.message });
+}
+
+// PUT /api/admin/supervisores/:id — {nome?, ativo?}
+// Renomear corrige grafia SEM quebrar o histórico (ele aponta pro id, não pro
+// nome). Inativar tira do dropdown de cadastro; nunca apaga.
+router.put('/admin/supervisores/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
+  const { normalizarNome, validarNome } = require('../services/supervisores');
+  const body = req.body || {};
+  const upd = {};
+  if (body.nome !== undefined) {
+    const erros = validarNome(body.nome);
+    if (erros.length) return res.status(400).json({ error: erros.join('; ') });
+    upd.nome = normalizarNome(body.nome);
+  }
+  if (body.ativo !== undefined) {
+    if (typeof body.ativo !== 'boolean') return res.status(400).json({ error: 'ativo deve ser boolean' });
+    upd.ativo = body.ativo;
+  }
+  if (Object.keys(upd).length === 0) return res.status(400).json({ error: 'nenhum campo para atualizar' });
+  upd.updated_at = new Date().toISOString();
+  try {
+    const sb = require('../services/dbClient').getClient();
+    const { data, error } = await sb.from('supervisores').update(upd).eq('id', id).select();
+    if (error) {
+      if (/duplicate|unique/i.test(error.message)) {
+        return res.status(409).json({ error: `Supervisor "${upd.nome}" já existe.` });
+      }
+      throw error;
+    }
+    if (!data || data.length === 0) return res.status(404).json({ error: `Supervisor ${id} não encontrado.` });
+    res.json({ ok: true, supervisor: data[0] });
+  } catch (err) {
+    _responderErroSupervisor(res, err);
+  }
+});
+
 // GET /api/admin/equipes — lista todas (incluindo inativas)
 router.get('/admin/equipes', async (_req, res) => {
   try {
@@ -2290,11 +2492,21 @@ router.get('/admin/equipes', async (_req, res) => {
     const _COLS_BASE = 'sigla, setor, regional, tipo, placa, ativo, escala_inicio, escala_fim, '
                      + 'created_at, updated_at';
     const _COLS_HE   = ', cidade, tipo_breve, servico, turno_cadastro, he_revisado';
+    // supervisor_id: migration 015 (07/10/2026). Tentado primeiro; se a coluna
+    // não existe ainda, cai pra seleção anterior sem perder o cadastro HE.
+    const _COLS_SUP  = ', supervisor_id';
     let { data, error } = await sb
       .from('equipes_oficiais')
-      .select(_COLS_BASE + _COLS_HE)
+      .select(_COLS_BASE + _COLS_HE + _COLS_SUP)
       .order('regional')
       .order('sigla');
+    if (error && _ehColunaAusente(error)) {
+      ({ data, error } = await sb
+        .from('equipes_oficiais')
+        .select(_COLS_BASE + _COLS_HE)
+        .order('regional')
+        .order('sigla'));
+    }
     if (error && /column .* does not exist|undefined column/i.test(error.message || '')) {
       console.warn('[admin/equipes] cadastro HE ausente no schema — '
         + 'rode scripts/migrar-he-cadastro.js --apply');
@@ -2311,6 +2523,7 @@ router.get('/admin/equipes', async (_req, res) => {
       if (e.escala_inicio) e.escala_inicio = String(e.escala_inicio).slice(0, 5);
       if (e.escala_fim)    e.escala_fim    = String(e.escala_fim).slice(0, 5);
     });
+    await _anexarSupervisorNome(sb, data || []);
     res.json({ equipes: data || [], count: (data || []).length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2344,11 +2557,23 @@ router.post('/admin/equipes', async (req, res) => {
       throw error;
     }
 
+    // Supervisor (07/10/2026) é opcional na criação. Vai DEPOIS do insert,
+    // pelo mesmo caminho do PUT, pra equipe nova já nascer com vigência.
+    // Validação falhando aqui não desfaz a equipe: ela existe, sem supervisor,
+    // e o aviso volta na resposta.
+    let avisoSupervisor = null;
+    const supBruto = (req.body || {}).supervisor_id;
+    if (supBruto !== undefined && supBruto !== null && supBruto !== '') {
+      const v = await _validarSupervisorId(sb, supBruto);
+      if (v.erro) avisoSupervisor = v.erro;
+      else await _trocarSupervisor(sigla, v.valor, req.user && req.user.username);
+    }
+
     // Invalida cache do whitelist em memória
     const { forceRefresh } = require('../services/equipesOficiais');
     await forceRefresh();
 
-    res.status(201).json({ ok: true, sigla });
+    res.status(201).json({ ok: true, sigla, avisoSupervisor });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2520,11 +2745,28 @@ router.put('/admin/equipes/:sigla', async (req, res) => {
       return res.status(400).json({ error: 'escala_fim inválido (use HH:MM)' });
     }
   }
-  if (Object.keys(upd).length === 0) return res.status(400).json({ error: 'nenhum campo para atualizar' });
+  // supervisor_id (07/10/2026): não entra no `upd` — vai por _trocarSupervisor,
+  // que grava coluna + vigência numa transação só.
+  const trocaSup = body.supervisor_id !== undefined;
+  if (Object.keys(upd).length === 0 && !trocaSup) return res.status(400).json({ error: 'nenhum campo para atualizar' });
   upd.updated_at = new Date().toISOString();
 
   try {
     const sb = require('../services/dbClient').getClient();
+    if (trocaSup) {
+      const v = await _validarSupervisorId(sb, body.supervisor_id);
+      if (v.erro) return res.status(400).json({ error: v.erro });
+      let achou;
+      try {
+        achou = await _trocarSupervisor(sigla, v.valor, req.user && req.user.username);
+      } catch (e) {
+        if (_ehColunaAusente(e)) {
+          return res.status(503).json({ error: 'supervisor ainda não disponível — rode scripts/migrar-supervisores.js --apply' });
+        }
+        throw e;
+      }
+      if (!achou) return res.status(404).json({ error: `Equipe "${sigla}" não encontrada.` });
+    }
     const { data, error } = await sb
       .from('equipes_oficiais')
       .update(upd)

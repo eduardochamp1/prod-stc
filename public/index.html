@@ -144,6 +144,14 @@
               <option value="ALL">Todas as equipes</option>
             </select>
           </div>
+          <div class="filter-group">
+            <span class="filter-label">Supervisor</span>
+            <!-- 07/10/2026. Estreita o dropdown de Equipe e a lista exibida. -->
+            <select class="filter-select" id="mon-supervisor-select"
+              onchange="_monRefiltrarEquipes(); renderAll()" style="min-width:150px">
+              <option value="ALL">Todos</option>
+            </select>
+          </div>
           <div class="tipos-filter-wrap" id="tipos-filter-wrap">
             <button class="tipos-filter-btn" id="tipos-filter-btn" onclick="toggleTiposPanel(event)">
               🔧 Tipos <span class="tipos-filter-badge" id="tipos-badge"></span>
@@ -336,6 +344,12 @@
             </select>
           </div>
           <div class="filter-group">
+            <span class="filter-label">Supervisor</span>
+            <select class="filter-select" id="rej-supervisor-select" onchange="loadRejeicoes()" style="min-width:150px">
+              <option value="ALL">Todos</option>
+            </select>
+          </div>
+          <div class="filter-group">
             <span class="filter-label">Tipo</span>
             <select class="filter-select" id="rej-tipo-select" onchange="loadRejeicoes()" style="min-width:140px">
               <option value="ALL">Todos</option>
@@ -410,6 +424,12 @@
               <option value="SJC">São José dos Campos</option>
             </select>
           </div>
+          <div class="filter-group">
+            <span class="filter-label">Supervisor</span>
+            <select class="filter-select" id="ranking-supervisor-select" onchange="loadRanking()" style="min-width:150px">
+              <option value="ALL">Todos</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -454,6 +474,16 @@
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
               <option value="SJC">São José dos Campos</option>
+            </select>
+          </div>
+
+          <!-- Supervisor (07/10/2026): no Mapa só estreita o dropdown de equipe —
+               o mapa é de UMA equipe por vez. -->
+          <div class="filter-group">
+            <span class="filter-label">Supervisor</span>
+            <select class="filter-select" id="mapa-supervisor-select"
+              onchange="_mapaTeamHighlight = -1; _renderMapaTeamOptions()" style="min-width:150px">
+              <option value="ALL">Todos</option>
             </select>
           </div>
 
@@ -724,6 +754,13 @@
             </select>
           </div>
           <div class="filter-group">
+            <span class="filter-label">Supervisor</span>
+            <select class="filter-select" id="hist-supervisor-select"
+              onchange="popularHistTeamSelect(_histDias); applyHistoricoFilters()" style="min-width:150px">
+              <option value="ALL">Todos</option>
+            </select>
+          </div>
+          <div class="filter-group">
             <span class="filter-label">Colaborador</span>
             <input type="text" class="hist-filter-colab" id="hist-colab-input" placeholder="Nome ou matrícula…"
               oninput="applyHistoricoFilters()" />
@@ -802,6 +839,13 @@
             <span class="filter-label">Equipe</span>
             <select class="filter-select" id="graf-equipe-select" onchange="loadGraficos()" style="min-width:160px">
               <option value="ALL">Todas as equipes</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Supervisor</span>
+            <select class="filter-select" id="graf-supervisor-select"
+              onchange="_grafRefiltrarEquipes(); loadGraficos()" style="min-width:150px">
+              <option value="ALL">Todos</option>
             </select>
           </div>
         </div>
@@ -893,6 +937,28 @@
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:20px">
 
+          <!-- Supervisores (catálogo — migration 015, 07/10/2026) -->
+          <div>
+            <div class="modal-section-title">Supervisores</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+              Catálogo usado no cadastro das equipes e no filtro de Supervisor das abas.
+              Renomear corrige a grafia sem perder o histórico; supervisor nunca é
+              apagado, só inativado.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+              <button class="btn-refresh" onclick="loadSupervisoresAdmin()" style="height:36px;padding:0 16px;font-size:12px">
+                ↻ Listar
+              </button>
+              <input id="sup-novo-nome" placeholder="Nome do novo supervisor"
+                style="height:36px;padding:0 10px;border:1px solid var(--cinza2);border-radius:6px;font-size:12px;min-width:240px;text-transform:uppercase" />
+              <button class="btn-refresh" onclick="criarSupervisor()" style="height:36px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">
+                + Novo
+              </button>
+              <span id="sup-msg" style="font-size:11px;color:var(--text2)"></span>
+            </div>
+            <div id="sup-tabela" style="display:none;max-height:240px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
+          </div>
+
           <!-- Equipes Oficiais (whitelist) -->
           <div>
             <div class="modal-section-title">Equipes Oficiais</div>
@@ -923,6 +989,10 @@
                 <option value="ALL">Todas</option>
                 <option value="ATIVAS">Ativas</option>
                 <option value="INATIVAS">Inativas</option>
+              </select>
+              <select id="eq-filtro-supervisor" onchange="_aplicarFiltroEquipes()"
+                style="height:36px;padding:0 8px;border:1px solid var(--cinza2);border-radius:6px;font-size:12px">
+                <option value="ALL">Todos os supervisores</option>
               </select>
             </div>
             <div id="eq-tabela" style="display:none;max-height:340px;overflow-y:auto;border:1px solid var(--cinza2);border-radius:6px"></div>
@@ -2578,6 +2648,7 @@
             _rejEquipesPopuladas = true;
           }
         } catch (e) {}
+        try { await _supPopularSelect('rej-supervisor-select'); } catch (_) { /* segue sem */ }
       }
       // Multi-select nos filtros (lazy init — só uma vez)
       if (!_rejMultiInited) {
@@ -2626,6 +2697,16 @@
       loadRejeicoes();
     }
 
+    // Equipes efetivas (Set) = marcadas ∩ supervisor; null = sem filtro.
+    function _rejEquipesEfetivas(teams, regionais) {
+      const reg = new Set(regionais && regionais.length ? regionais : userRegionals);
+      const sup = _supSiglasDoSelect('rej-supervisor-select');
+      const supReg = sup && new Set((_supEquipes || [])
+        .filter(e => reg.has(e.regional) && sup.has(String(e.sigla).toUpperCase()))
+        .map(e => String(e.sigla).toUpperCase()));
+      return _supIntersect(teams && teams.length ? new Set(teams) : null, supReg);
+    }
+
     function rejFiltersQuery() {
       const { de, ate } = rejRange();
       // Multi-select: getValues() retorna [] = "Todas", senão array de valores.
@@ -2640,7 +2721,11 @@
         ? [...userRegionals]
         : regionais.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
       qp.set('regionals', (_rejExp.length ? _rejExp : [...userRegionals]).join(','));
-      if (teams.length > 0)   qp.set('team',   teams.join(','));
+      // Supervisor (07/10/2026): interseção com as equipes marcadas, recortada
+      // às regionais escolhidas, no mesmo `team=` — totais, % e lista saem
+      // filtrados pelo servidor. Conjunto vazio é barrado em loadRejeicoes.
+      const _ef = _rejEquipesEfetivas(teams, _rejExp);
+      if (_ef && _ef.size > 0) qp.set('team', [..._ef].join(','));
       if (tipos.length > 0)   qp.set('tipos',  tipos.join(','));
       if (motivos.length > 0) qp.set('motivos', motivos.join(','));
       if (document.getElementById('rej-incluir-conta-paga')?.checked) {
@@ -2693,6 +2778,18 @@
       if (!content) return;
       _setRejPeriodoLabel();
       content.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando rejeições...</div>';
+      // Supervisor sem equipe no recorte → vazio. Sem esta guarda o `team=`
+      // sairia ausente e a tela mostraria TODAS as equipes.
+      {
+        const _regs = MultiSelect.getValues('rej-regional-select');
+        const _exp  = _regs.length === 0 ? [...userRegionals]
+          : _regs.flatMap(r => expandRegional(r) || [r]).filter(r => userRegionals.includes(r));
+        const _ef = _rejEquipesEfetivas(MultiSelect.getValues('rej-equipe-select'), _exp);
+        if (_ef && _ef.size === 0) {
+          content.innerHTML = '<div class="empty-state">Nenhuma equipe deste supervisor no filtro atual.</div>';
+          return;
+        }
+      }
       try {
         const qs = rejFiltersQuery();
         // Catálogo de motivos em paralelo (atualiza dropdown se mudou
@@ -3854,6 +3951,7 @@
         }
       }
       _grafEnsureMultiSelect();
+      await _supPopularSelect('graf-supervisor-select');
       _grafRefiltrarEquipes();
     }
 
@@ -3888,9 +3986,11 @@
         return _querOp && !CATEGORIAS_EQUIPE.some(c => u.startsWith(c.prefixo));
       };
 
+      const _sup = _supSiglasDoSelect('graf-supervisor-select');
       const eqs = _grafAllEquipes
         .filter(e => scope.has(e.regional))
         .filter(e => _passa(e.sigla))
+        .filter(e => !_sup || _sup.has(String(e.sigla).toUpperCase()))
         .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
 
       sel.innerHTML = `<option value="ALL">Todas as equipes</option>` +
@@ -4115,12 +4215,28 @@
       // teste-guarda (categoriasEquipe.test.js) que procura aquela expressão no
       // arquivo, e reproduzi-la aqui o deixaria vermelho sem haver defeito.
       const tipo     = tipos.length === 0 ? 'TODAS' : tipos.join(',');
-      const team     = teams.length === 0     ? 'ALL'   : teams.join(',');
+      // Supervisor (07/10/2026): vira CSV de siglas no MESMO `team=` — assim os
+      // 4 fetches (gauges, KPIs, matriz, acumulado) saem filtrados juntos pelo
+      // servidor. Recortado às regionais escolhidas, e interseção com as
+      // equipes marcadas.
+      const _regSet  = new Set(_grafExpanded);
+      const _supSet  = _supSiglasDoSelect('graf-supervisor-select');
+      const _supReg  = _supSet && new Set((_supEquipes || [])
+        .filter(e => _regSet.has(e.regional) && _supSet.has(String(e.sigla).toUpperCase()))
+        .map(e => String(e.sigla).toUpperCase()));
+      const _teamsEf = _supIntersect(teams.length ? new Set(teams) : null, _supReg);
+      const team     = !_teamsEf ? 'ALL' : [..._teamsEf].join(',');
 
       const lbl = document.getElementById('graf-periodo-label');
       if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
 
       const cont = document.getElementById('graf-content');
+      // Supervisor sem equipe no recorte: conjunto VAZIO. Não pode virar 'ALL'
+      // (mostraria todas as equipes sob o nome do supervisor).
+      if (_teamsEf && _teamsEf.size === 0) {
+        cont.innerHTML = `<div class="empty-state">Nenhuma equipe deste supervisor no filtro atual.</div>`;
+        return;
+      }
       cont.innerHTML = `<div class="empty-state"><div class="spinner"></div><br>Carregando gráficos…</div>`;
 
       try {
@@ -5153,11 +5269,17 @@ ${acumuladoHTML}
         '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
 
       try {
+        await _supPopularSelect('ranking-supervisor-select');
         const url = `${API}/ranking/equipes?m=${ym}&regionals=${regionalsCsv}`;
         const data = await fetch(url).then(r => r.json());
         let ranking = data.ranking || [];
         // Multi-regional (2 de 3): backend trouxe tudo, filtra aqui
         if (clientFilter) ranking = ranking.filter(r => clientFilter.has(_regOfRow(r)));
+        // Supervisor (07/10/2026): cada linha já é o total de UMA equipe vindo
+        // do servidor, então recortar no cliente não distorce número nenhum —
+        // só a posição passa a ser entre as equipes do supervisor.
+        const _sup = _supSiglasDoSelect('ranking-supervisor-select');
+        if (_sup) ranking = ranking.filter(r => _sup.has(String(r.team_name || '').toUpperCase()));
         renderRanking(ranking);
       } catch (err) {
         document.getElementById('ranking-content').innerHTML =
@@ -5191,6 +5313,10 @@ ${acumuladoHTML}
         const j = await fetch(`${API}/carteira/equipes?de=${de}&ate=${ate}&regionals=${regionalsCsv}`)
           .then(r => r.json());
         _carteiraRaw = j.rows || [];
+        // Supervisor (07/10/2026): recorta as linhas cruas (dia × equipe) ANTES
+        // de agregar — a tabela e o XLSX (que lê _carteiraRaw) saem iguais.
+        const _sup = _supSiglasDoSelect('ranking-supervisor-select');
+        if (_sup) _carteiraRaw = _carteiraRaw.filter(r => _sup.has(String(r.team_name || '').toUpperCase()));
         renderCarteiraAproveitamento(_carteiraRaw);
       } catch (err) {
         cont.innerHTML = `<div class="empty-state" style="font-size:12px">Erro: ${err.message}</div>`;
@@ -6590,6 +6716,7 @@ ${acumuladoHTML}
           return;
         }
         _histDias = data.dias || [];
+        await _supPopularSelect('hist-supervisor-select');
         popularHistTeamSelect(_histDias);
         applyHistoricoFilters();
       } catch (err) {
@@ -6600,20 +6727,29 @@ ${acumuladoHTML}
 
     function popularHistTeamSelect(dias) {
       // Respeita filtro multi-regional: não inclui equipes de regionais não selecionadas
+      const _sup = _supSiglasDoSelect('hist-supervisor-select');
       const teams = [...new Set(dias.flatMap(d => (d.equipes || [])
         .filter(e => !_histRegionalClientFilter || _histRegionalClientFilter.has(_regOfRow(e)))
+        .filter(e => !_sup || _sup.has(String(e.team_name || '').toUpperCase()))
         .map(e => e.team_name)))].sort();
       const sel = document.getElementById('hist-team-select');
       if (!sel) return;
       const prev = sel.value;
       sel.innerHTML = '<option value="ALL">Todas as equipes</option>'
         + teams.map(t => `<option value="${t}" ${t === prev ? 'selected' : ''}>${t}</option>`).join('');
-      if (prev && prev !== 'ALL') sel.value = prev;
+      // Só restaura se a equipe ainda está na lista: com o filtro de Supervisor
+      // ela pode ter saído, e `sel.value` inexistente vira '' — que o
+      // applyHistoricoFilters leria como "filtrar pela equipe vazia" (tela zerada).
+      if (prev && prev !== 'ALL' && teams.includes(prev)) sel.value = prev;
+      else sel.value = 'ALL';
     }
 
     function applyHistoricoFilters() {
       const teamFilter = document.getElementById('hist-team-select')?.value || 'ALL';
       const colabFilter = (document.getElementById('hist-colab-input')?.value || '').trim().toLowerCase();
+      // Supervisor (07/10/2026). Só a sub-aba Sessões: as de subcategorias e HE
+      // vêm agregadas por regional do servidor, sem dimensão de equipe.
+      const supFilter = _supSiglasDoSelect('hist-supervisor-select');
 
       // Filtra e achata linhas
       const rows = [];
@@ -6621,6 +6757,7 @@ ${acumuladoHTML}
         (d.equipes || []).forEach(e => {
           if (_histRegionalClientFilter && !_histRegionalClientFilter.has(_regOfRow(e))) return;
           if (teamFilter !== 'ALL' && e.team_name !== teamFilter) return;
+          if (supFilter && !supFilter.has(String(e.team_name || '').toUpperCase())) return;
           if (colabFilter) {
             const match = (e.collaborators || []).some(c =>
               (c.nome || '').toLowerCase().includes(colabFilter) ||
@@ -7448,6 +7585,92 @@ ${acumuladoHTML}
       renderAll();
     }
 
+    // ── FILTRO DE SUPERVISOR (07/10/2026, migration 015) ─────────────────────
+    // Um select por aba (Monitor, Gráficos, Rejeições, Ranking, Histórico,
+    // Mapa), todos montados daqui. O supervisor vira um CONJUNTO DE SIGLAS —
+    // e cada aba já sabe filtrar por sigla, então ele entra pelo mesmo caminho
+    // do filtro de Equipe (interseção com o que estiver marcado lá).
+    //
+    // A lista vem do /api/equipes, que já sai recortado pela regional do
+    // usuário: supervisor sem equipe no escopo dele não aparece.
+    //
+    // ⚠️ Filtra pelo supervisor ATUAL da equipe. A atribuição por data (equipe
+    // que trocou de supervisor no meio do período) é da futura métrica de
+    // produtividade por supervisor e mora em equipe_supervisor_historico —
+    // ver services/supervisores.js#supervisorVigente.
+    //
+    // var (não let): hoisted, sem TDZ — os loaders das abas podem chamar antes.
+    var _supEquipes = null;
+    var _supEquipesPromise = null;
+
+    function _supCarregarEquipes() {
+      if (_supEquipes) return Promise.resolve(_supEquipes);
+      if (!_supEquipesPromise) {
+        _supEquipesPromise = fetch(`${API}/equipes`)
+          .then(r => r.ok ? r.json() : { equipes: [] })
+          .then(d => { _supEquipes = (d.equipes || []).filter(e => e.ativo); return _supEquipes; })
+          .catch(() => { _supEquipesPromise = null; return []; });
+      }
+      return _supEquipesPromise;
+    }
+
+    // Supervisores distintos presentes na lista, por nome. PURA (testada).
+    function _supOpcoes(eqs) {
+      const m = new Map();
+      for (const e of eqs || []) {
+        if (e.supervisor_id === null || e.supervisor_id === undefined) continue;
+        m.set(String(e.supervisor_id), e.supervisor_nome || ('#' + e.supervisor_id));
+      }
+      return [...m.entries()].map(([id, nome]) => ({ id, nome }))
+        .sort((a, b) => a.nome.localeCompare(b.nome));
+    }
+
+    // valor 'ALL'/vazio → null (sem filtro); 'NONE' → equipes sem supervisor;
+    // id → equipes daquele supervisor. Sempre Set de siglas. PURA (testada).
+    function _supSiglas(eqs, valor) {
+      if (!valor || valor === 'ALL') return null;
+      const out = new Set();
+      for (const e of eqs || []) {
+        const temSup = e.supervisor_id !== null && e.supervisor_id !== undefined;
+        if (valor === 'NONE' ? !temSup : (temSup && String(e.supervisor_id) === String(valor))) {
+          out.add(String(e.sigla).toUpperCase());
+        }
+      }
+      return out;
+    }
+
+    // a ∩ b, onde null = "sem filtro". PURA (testada).
+    function _supIntersect(a, b) {
+      if (!b) return a;
+      if (!a) return b;
+      return new Set([...a].filter(x => b.has(x)));
+    }
+
+    async function _supPopularSelect(selId) {
+      const sel = document.getElementById(selId);
+      if (!sel) return;
+      const eqs = await _supCarregarEquipes();
+      const atual = sel.value || 'ALL';
+      const ops = _supOpcoes(eqs);
+      sel.innerHTML = '<option value="ALL">Todos</option>'
+        + ops.map(o => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.nome)}</option>`).join('')
+        + '<option value="NONE">— Sem supervisor —</option>';
+      sel.value = [...sel.options].some(o => o.value === atual) ? atual : 'ALL';
+    }
+
+    // Siglas do supervisor escolhido no select; null = todos. Blindado como o
+    // _monEquipesSelecionadas: filtro de apresentação não derruba a aba.
+    function _supSiglasDoSelect(selId) {
+      try {
+        const sel = document.getElementById(selId);
+        if (!sel || !_supEquipes) return null;
+        return _supSiglas(_supEquipes, sel.value);
+      } catch (e) {
+        console.warn('[supervisor] filtro ignorado:', e && e.message);
+        return null;
+      }
+    }
+
     // ── FILTRO DE EQUIPES DO MONITOR (multi-select com checkbox + busca) ────
     // Mesmo componente MultiSelect das outras abas. A lista respeita o filtro
     // de REGIONAL (equipe fora do escopo não aparece). Só apresentação: filtra
@@ -7474,6 +7697,7 @@ ${acumuladoHTML}
         MultiSelect.init('mon-equipe-select', { onChange: () => renderAll() });
         _monEquipeMSInit = true;
       }
+      await _supPopularSelect('mon-supervisor-select');
       _monRefiltrarEquipes();
     }
 
@@ -7483,8 +7707,10 @@ ${acumuladoHTML}
       const sel = document.getElementById('mon-equipe-select');
       if (!sel || !_monAllEquipes || !_monEquipeMSInit) return;
       const escopo = new Set(selectedRegionals.length ? selectedRegionals : userRegionals);
+      const sup = _supSiglasDoSelect('mon-supervisor-select');
       const eqs = _monAllEquipes
         .filter(e => escopo.has(e.regional))
+        .filter(e => !sup || sup.has(String(e.sigla).toUpperCase()))
         .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
       sel.innerHTML = `<option value="ALL">Todas as equipes</option>` +
         regionalOptgroups(eqs, e => `<option value="${e.sigla}">${e.sigla} (${e.tipo})</option>`, true);
@@ -7496,9 +7722,12 @@ ${acumuladoHTML}
       // Blindado: este filtro é APRESENTAÇÃO. Qualquer falha aqui não pode
       // impedir o Monitor de renderizar (incidente 30/07/2026) → null = todas.
       try {
-        if (!_monEquipeMSInit) return null;
+        // Supervisor (07/10/2026) entra como interseção: "equipes do supervisor
+        // X" ∩ "equipes marcadas". Conta no mesmo corte `equipe` do funil.
+        const sup = _supSiglasDoSelect('mon-supervisor-select');
+        if (!_monEquipeMSInit) return sup;
         const vals = MultiSelect.getValues('mon-equipe-select') || [];
-        return vals.length ? new Set(vals) : null;   // [] = todas
+        return _supIntersect(vals.length ? new Set(vals) : null, sup);   // [] = todas
       } catch (e) {
         console.warn('[monitor] filtro de equipes ignorado:', e && e.message);
         return null;
@@ -9987,6 +10216,10 @@ ${acumuladoHTML}
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'erro');
         _eqCache = data.equipes || [];
+        // Catálogo de supervisores pro formulário (07/10/2026). Falha aqui não
+        // impede listar equipes — só o campo Supervisor fica vazio.
+        try { await _carregarSupCatalogo(); } catch (_) { _supCatalogo = []; }
+        _popularFiltroSupervisorAdmin();
         _aplicarFiltroEquipes();
       } catch (err) {
         cont.innerHTML = `<div style="padding:12px;color:var(--vermelho);font-size:12px">✗ ${err.message}</div>`;
@@ -10001,6 +10234,7 @@ ${acumuladoHTML}
         texto:    document.getElementById('eq-busca')?.value || '',
         regional: document.getElementById('eq-filtro-regional')?.value || 'ALL',
         situacao: document.getElementById('eq-filtro-situacao')?.value || 'ALL',
+        supervisor: document.getElementById('eq-filtro-supervisor')?.value || 'ALL',
       });
       if (status) {
         status.textContent = filtradas.length === _eqCache.length
@@ -10014,17 +10248,121 @@ ${acumuladoHTML}
     // (test/equipesAdminTela.test.js extrai e executa esta função).
     // Roda no cliente sobre a lista que o GET já traz inteira: sem ida ao
     // servidor a cada tecla.
-    function _filtrarEquipes(eqs, { texto, regional, situacao }) {
+    function _filtrarEquipes(eqs, { texto, regional, situacao, supervisor }) {
       const t = String(texto || '').trim().toUpperCase();
       return (eqs || []).filter(e => {
         if (regional && regional !== 'ALL' && e.regional !== regional) return false;
         if (situacao === 'ATIVAS'   && !e.ativo) return false;
         if (situacao === 'INATIVAS' &&  e.ativo) return false;
+        // supervisor: 'ALL' | 'NONE' (sem supervisor) | id. 07/10/2026.
+        if (supervisor === 'NONE' && e.supervisor_id != null) return false;
+        if (supervisor && supervisor !== 'ALL' && supervisor !== 'NONE'
+            && String(e.supervisor_id) !== String(supervisor)) return false;
         if (!t) return true;
         const sigla = String(e.sigla || '').toUpperCase();
         const placa = String(e.placa || '').toUpperCase();
-        return sigla.includes(t) || placa.includes(t);
+        const sup   = String(e.supervisor_nome || '').toUpperCase();
+        return sigla.includes(t) || placa.includes(t) || sup.includes(t);
       });
+    }
+
+    // ── SUPERVISORES (catálogo — 07/10/2026, migration 015) ──────────────────
+    // `_supCatalogo` = GET /admin/supervisores (inclui inativos). Só o Admin usa;
+    // as abas montam o filtro a partir do /api/equipes, já recortado por regional.
+    let _supCatalogo = [];
+
+    async function _carregarSupCatalogo() {
+      const res  = await fetch(`${API}/admin/supervisores`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      _supCatalogo = data.supervisores || [];
+    }
+
+    function _popularFiltroSupervisorAdmin() {
+      const sel = document.getElementById('eq-filtro-supervisor');
+      if (!sel) return;
+      const atual = sel.value || 'ALL';
+      sel.innerHTML = '<option value="ALL">Todos os supervisores</option>'
+        + '<option value="NONE">— Sem supervisor —</option>'
+        + _supCatalogo.map(s => `<option value="${s.id}">${escapeHtml(s.nome)}${s.ativo === false ? ' (inativo)' : ''}</option>`).join('');
+      sel.value = [...sel.options].some(o => o.value === atual) ? atual : 'ALL';
+    }
+
+    async function loadSupervisoresAdmin() {
+      const cont = document.getElementById('sup-tabela');
+      cont.style.display = 'block';
+      cont.innerHTML = '<div style="padding:12px;font-size:12px;color:var(--text2)">⏳ Carregando…</div>';
+      try {
+        await _carregarSupCatalogo();
+        cont.innerHTML = _renderSupervisoresTabela(_supCatalogo);
+      } catch (err) {
+        cont.innerHTML = `<div style="padding:12px;color:var(--vermelho);font-size:12px">✗ ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function _renderSupervisoresTabela(sups) {
+      if (!sups.length) return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhum supervisor cadastrado.</div>';
+      const btn = 'background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px';
+      const rows = sups.map(s => `<tr style="${s.ativo === false ? 'opacity:.4;' : ''}border-top:1px solid var(--cinza2)">
+          <td style="padding:6px 8px;font-weight:600">${escapeHtml(s.nome)}</td>
+          <td style="padding:6px 8px;font-size:11px;text-align:right">${s.equipes || 0}</td>
+          <td style="padding:6px 8px;font-size:11px">${s.ativo === false ? '<span style="color:var(--vermelho)">Inativo</span>' : '<span style="color:var(--verde)">Ativo</span>'}</td>
+          <td style="padding:6px 8px;text-align:right;white-space:nowrap">
+            <button onclick="renomearSupervisor(${s.id})" style="${btn}">✎</button>
+            <button onclick="alternarSupervisorAtivo(${s.id}, ${s.ativo === false})" style="${btn}">${s.ativo === false ? '↑ Ativar' : '↓ Inativar'}</button>
+          </td>
+        </tr>`).join('');
+      return `<table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead style="background:var(--cinza1);position:sticky;top:0">
+          <tr style="text-transform:uppercase;letter-spacing:.04em;color:var(--text2);font-size:10px">
+            <th style="padding:6px 8px;text-align:left">Nome</th>
+            <th style="padding:6px 8px;text-align:right">Equipes ativas</th>
+            <th style="padding:6px 8px;text-align:left">Status</th>
+            <th style="padding:6px 8px;text-align:right">Ação</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+
+    async function _supRequest(url, method, body) {
+      const res  = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    async function criarSupervisor() {
+      const inp = document.getElementById('sup-novo-nome');
+      const msg = document.getElementById('sup-msg');
+      try {
+        await _supRequest(`${API}/admin/supervisores`, 'POST', { nome: inp.value });
+        inp.value = '';
+        msg.textContent = '✓ Criado'; msg.style.color = 'var(--verde)';
+        await loadSupervisoresAdmin();
+      } catch (err) {
+        msg.textContent = '✗ ' + err.message; msg.style.color = 'var(--vermelho)';
+      }
+    }
+
+    async function renomearSupervisor(id) {
+      const s = _supCatalogo.find(x => Number(x.id) === Number(id));
+      const nome = prompt('Novo nome do supervisor (o histórico das equipes é mantido):', s ? s.nome : '');
+      if (nome === null) return;
+      try {
+        await _supRequest(`${API}/admin/supervisores/${id}`, 'PUT', { nome });
+        await loadSupervisoresAdmin();
+      } catch (err) { alert('✗ ' + err.message); }
+    }
+
+    async function alternarSupervisorAtivo(id, novoAtivo) {
+      const s = _supCatalogo.find(x => Number(x.id) === Number(id));
+      if (!novoAtivo && s && s.equipes > 0
+          && !confirm(`${s.nome} ainda tem ${s.equipes} equipe(s). Inativar só impede vincular equipe NOVA — as atuais continuam com ele. Continuar?`)) return;
+      try {
+        await _supRequest(`${API}/admin/supervisores/${id}`, 'PUT', { ativo: novoAtivo });
+        await loadSupervisoresAdmin();
+      } catch (err) { alert('✗ ' + err.message); }
     }
 
     // ── IMPORTAÇÃO DE PLANILHA ────────────────────────────────────────────────
@@ -10406,6 +10744,7 @@ ${acumuladoHTML}
           <td style="padding:6px 8px"><span style="background:${e.regional === 'GUA' ? '#fec40e22' : '#08673822'};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">${e.regional}</span></td>
           <td style="padding:6px 8px;font-size:11px">${e.tipo}</td>
           <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2)">${placaTxt}</td>
+          <td style="padding:6px 8px;font-size:11px">${e.supervisor_nome ? escapeHtml(e.supervisor_nome) : '<span style="color:var(--cinza3)">—</span>'}</td>
           <td style="padding:6px 8px;font-size:11px">${inativo ? '<span style="color:var(--vermelho)">Inativa</span>' : '<span style="color:var(--verde)">Ativa</span>'}</td>
           <td style="padding:6px 8px;text-align:right;white-space:nowrap">
             <button onclick="editarEquipe('${e.sigla}', ${JSON.stringify(e).replace(/"/g, '&quot;')})"
@@ -10425,6 +10764,7 @@ ${acumuladoHTML}
             <th style="padding:6px 8px;text-align:left">Reg</th>
             <th style="padding:6px 8px;text-align:left">Tipo</th>
             <th style="padding:6px 8px;text-align:left">Placa</th>
+            <th style="padding:6px 8px;text-align:left">Supervisor</th>
             <th style="padding:6px 8px;text-align:left">Status</th>
             <th style="padding:6px 8px;text-align:right">Ação</th>
           </tr>
@@ -10433,7 +10773,10 @@ ${acumuladoHTML}
       </table>`;
     }
 
-    function abrirNovaEquipe() {
+    async function abrirNovaEquipe() {
+      // "+ Nova" pode vir antes de "↻ Listar" — sem isto o select de Supervisor
+      // nasceria vazio.
+      if (!_supCatalogo.length) { try { await _carregarSupCatalogo(); } catch (_) { /* segue sem */ } }
       _renderEquipeForm({ sigla: '', setor: 'DESG', regional: 'GUA', tipo: 'COMERCIAL', placa: '', ativo: true }, true);
     }
 
@@ -10488,6 +10831,19 @@ ${acumuladoHTML}
             <input id="eq-form-placa" value="${e.placa || ''}"
               style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-family:monospace;font-size:13px;text-transform:uppercase" />
           </div>
+        </div>
+        <!-- Supervisor (07/10/2026). Trocar grava vigência a partir de HOJE: a
+             produção anterior continua do supervisor anterior. Supervisor inativo
+             só aparece se já é o desta equipe. -->
+        <div style="margin-bottom:8px;max-width:420px">
+          <label style="font-size:10px;color:var(--text2);text-transform:uppercase">Supervisor</label>
+          <select id="eq-form-supervisor" data-original="${e.supervisor_id == null ? '' : e.supervisor_id}"
+            style="width:100%;padding:6px;border:1px solid var(--cinza2);border-radius:4px;font-size:13px">
+            <option value="">— sem supervisor —</option>
+            ${_supCatalogo
+              .filter(s => s.ativo !== false || String(s.id) === String(e.supervisor_id))
+              .map(s => `<option value="${s.id}" ${String(s.id) === String(e.supervisor_id) ? 'selected' : ''}>${escapeHtml(s.nome)}${s.ativo === false ? ' (inativo)' : ''}</option>`).join('')}
+          </select>
         </div>
         <!-- Escala (horário de entrada/saída esperado) — usada pro indicador de atraso no Monitor -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;max-width:280px">
@@ -10544,6 +10900,12 @@ ${acumuladoHTML}
         escala_inicio: escIniRaw || null,
         escala_fim:    escFimRaw || null,
       };
+      // Supervisor só vai no body se MUDOU: salvar a placa não pode re-datar a
+      // vigência, e com a migration 015 ainda não aplicada o campo nem existe.
+      const supSel = document.getElementById('eq-form-supervisor');
+      if (supSel && supSel.value !== supSel.dataset.original) {
+        body.supervisor_id = supSel.value === '' ? null : Number(supSel.value);
+      }
       msg.textContent = '⏳ Salvando…';
       msg.style.color = 'var(--text2)';
       try {
@@ -11127,24 +11489,35 @@ ${acumuladoHTML}
         _mapaTeamLista = (equipes || []).filter(e => e.ativo)
           .sort((a, b) => a.regional.localeCompare(b.regional) || a.sigla.localeCompare(b.sigla));
         _mapaTeamLoaded = true;
+        await _supPopularSelect('mapa-supervisor-select');
         _renderMapaTeamOptions();
       } catch {}
     }
 
-    function _renderMapaTeamOptions() {
-      const box = document.getElementById('mapa-team-options');
-      if (!box) return;
+    // Equipes visíveis no dropdown, NA ORDEM EM QUE APARECEM (agrupadas por
+    // REGIONAIS_ATIVAS). Fonte única pra render e teclado — 07/10/2026: antes o
+    // mapaTeamDDKeydown refazia a lista sem o filtro de regional e na ordem
+    // alfabética de regional, então ↓/Enter podia escolher uma equipe diferente
+    // da destacada. Com o filtro de Supervisor seriam três filtros a manter em
+    // dois lugares.
+    function _mapaTeamVisiveis() {
       const q = (_mapaTeamFiltro || '').toLowerCase().trim();
-
       // Aplica filtro de regional ANTES do filtro de busca.
       // Array vazio = "todas" (igual outros tabs); preenchido = subset.
       const porRegional = (!_mapaRegionalFilter || _mapaRegionalFilter.length === 0)
         ? _mapaTeamLista
         : _mapaTeamLista.filter(e => _mapaRegionalFilter.includes(e.regional));
+      const sup = _supSiglasDoSelect('mapa-supervisor-select');
+      const filtrados = porRegional
+        .filter(e => !sup || sup.has(String(e.sigla).toUpperCase()))
+        .filter(e => !q || e.sigla.toLowerCase().includes(q) || (e.tipo || '').toLowerCase().includes(q));
+      return REGIONAIS_ATIVAS.flatMap(reg => filtrados.filter(e => e.regional === reg));
+    }
 
-      const filtrados = porRegional.filter(e =>
-        !q || e.sigla.toLowerCase().includes(q) || (e.tipo || '').toLowerCase().includes(q)
-      );
+    function _renderMapaTeamOptions() {
+      const box = document.getElementById('mapa-team-options');
+      if (!box) return;
+      const filtrados = _mapaTeamVisiveis();
 
       if (filtrados.length === 0) {
         box.innerHTML = '<div class="mapa-team-empty">Nenhuma equipe encontrada</div>';
@@ -11231,10 +11604,7 @@ ${acumuladoHTML}
     function mapaTeamDDKeydown(e) {
       const panel = document.getElementById('mapa-team-panel');
       if (!panel || panel.hasAttribute('hidden')) return;
-      const opts = [..._mapaTeamLista].filter(x => {
-        const q = (_mapaTeamFiltro || '').toLowerCase().trim();
-        return !q || x.sigla.toLowerCase().includes(q) || (x.tipo || '').toLowerCase().includes(q);
-      });
+      const opts = _mapaTeamVisiveis();
       if (e.key === 'ArrowDown') { e.preventDefault(); _mapaTeamHighlight = Math.min(_mapaTeamHighlight + 1, opts.length - 1); _renderMapaTeamOptions(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); _mapaTeamHighlight = Math.max(_mapaTeamHighlight - 1, 0); _renderMapaTeamOptions(); }
       else if (e.key === 'Enter') {

@@ -156,6 +156,8 @@
 | P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
 | P2-54 | Matriz "Notas Atendidas por Tipo" sem % de rejeição e sem como ver as INTERRUPÇÕES de MD (status "Em Campo interrompida" do portal, que não existia pra nós) | Produto/Dados | **código done** (07/10) — %REJ em todos os grupos + INTERR no MD (Obsoleto/TL11); migration aplicada e coleta gravando em prod (07/10: 13 interrupções de 7 notas); conta só a partir de 07/10/2026 |
 | P2-55 | Monitor pode estar mostrando nota INTERROMPIDA como "em andamento": `STATUS_V2` junta 3/6/7 em `executada`, e a única nota interrompida medida veio com 3 | Dados/Frontend | pending — **hipótese reforçada** (07/10): as 3 notas MD que o portal mostrava interrompidas estavam em 3; 1 do filtro do portal (045006455506) não estava — a conferir |
+| P2-56 | Não havia supervisor no cadastro de equipes — sem como filtrar as abas por supervisor nem, no futuro, medir produtividade por supervisor | Produto/Dados | **código done** (07/10) — catálogo + vínculo + histórico com vigência (migration 015) e filtro nas 6 abas; 14 testes; **migration ANTES do pull** (`scripts/migrar-supervisores.js --apply`); falta confirmar em prod |
+| P2-57 | `% rejeição` da aba Rejeições saía BAIXO com 2+ equipes marcadas: numerador filtrado pelas equipes, denominador (executadas) da regional inteira | Dados | **código done** (07/10) — denominador usa `opts.teams`; achado ao ligar o filtro de Supervisor (P2-56), que sempre manda várias siglas; falta deploy |
 | P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **done** (22/09) — migrado e verificado em prod: 5 contas no banco, `.env` reduzido a UMA. Falta só o teste de revogação |
 | P0-1b | Senha gerada pela tela (20 caracteres aleatórios) não tinha como ser trocada — "essa senha gerada é facilmente esquecida". Incremento 2 do P0-1a | Governança/Segurança | **código done** (22/09) — troca obrigatória no 1º acesso (`423 SENHA_PROVISORIA`) e voluntária; 22 testes; **falta confirmar em prod** |
 | P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; migration aplicada 07/10 (tarde — P0-1d); **falta confirmar em prod** |
@@ -5912,6 +5914,93 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Impacto:** se confirmado, o card da equipe e o contador de andamento contam nota parada como se estivesse sendo trabalhada. Não afeta produção (concluídas).
 - **Ação:** 1) `node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG` e comparar a lista de código 3 com o filtro "Interrompidas" do portal; 2) se bater, decidir com o José como o Monitor deve mostrar (bucket próprio?). A coleta do P2-54 já depende desta hipótese.
 - **Relacionado:** P2-54.
+
+
+## P2-56 — Supervisor da equipe: cadastro com vigência + filtro nas abas
+
+- **Categoria:** Produto/Dados
+- **Status:** **código done** (07/10/2026) — falta aplicar a migration e confirmar em prod.
+- **Pedido do José (07/10/2026):** *"criar uma coluna na lista de equipes onde
+  vamos adicionar o supervisor da equipe [...] adicionar mais um filtro de
+  supervisor [...] e futuramente medir a produtividade por supervisor."*
+- **Decisões dele (perguntadas antes de codar):**
+  1. **Vigência:** quando a equipe troca de supervisor, a produção anterior
+     continua do anterior → tabela `equipe_supervisor_historico` (grão dia).
+  2. **Catálogo** de supervisores (não texto livre) → tabela `supervisores`,
+     seção própria no Admin. Renomear não quebra histórico (aponta pro id);
+     nunca apaga, só inativa.
+  3. Filtro em **todas** as abas com filtro de equipe: Monitor, Gráficos,
+     Rejeições, Ranking, Histórico, Mapa.
+- **O que foi feito:**
+  - `supabase/migrations/015_supervisores.sql` + `scripts/migrar-supervisores.js`
+    (aplica pelo pool da app, porque `ALTER TABLE equipes_oficiais` exige ser
+    dono — wpa_app — e o psql da VM roda como usr_jose).
+  - `services/supervisores.js` (puro): normalização do nome,
+    `supervisorVigente(historico, sigla, data)` — a regra que a métrica futura
+    vai usar — e `linhaHistorico` (salvar sem trocar não re-data a vigência).
+  - Rotas: `GET/POST/PUT /admin/supervisores`; `PUT /admin/equipes/:sigla`
+    aceita `supervisor_id` e grava coluna + vigência **numa transação**;
+    `GET /equipes` e `/admin/equipes` devolvem `supervisor_id`/`supervisor_nome`.
+    Todas as leituras toleram a 015 ausente (lição do P0-1d); as escritas
+    respondem 503 nomeando o script.
+  - Front: coluna Supervisor + filtro na lista do Admin, campo no formulário;
+    select de Supervisor nas 6 abas. O supervisor vira conjunto de siglas e
+    entra pelo caminho do filtro de Equipe (interseção):
+    **Gráficos e Rejeições** pelo `team=` do servidor (gauges, KPIs, matriz,
+    %, lista saem filtrados juntos); **Ranking e Histórico (Sessões)** no
+    cliente sobre linhas por equipe; **Mapa** só estreita o dropdown.
+- **Limites conhecidos (deliberados nesta entrega):**
+  - O filtro usa o supervisor **ATUAL**. Período que atravessa uma troca mostra
+    a equipe inteira sob o supervisor de hoje. A atribuição por data é da
+    métrica futura (`supervisorVigente`), e o histórico está sendo gravado
+    desde a 1ª atribuição.
+  - **Monitor:** como o filtro de Equipe que já existia, é só apresentação — os
+    KPIs ao vivo (`summary.dia`, `/totais/subcat`, esperadas) continuam da
+    regional inteira. Fazer os cards seguirem o filtro é item próprio.
+  - **Histórico:** sub-abas de subcategorias e HE são agregadas por regional
+    no servidor; o filtro só vale para Sessões.
+  - Antes da 1ª atribuição a equipe não tem supervisor **conhecido**
+    (`supervisorVigente` → null). Não retroagimos o atual pro passado.
+- **Achado de carona:** P2-57 (denominador do % de rejeição). E no Mapa, o
+  teclado (↓/Enter) usava lista sem o filtro de regional e em outra ordem que
+  a exibida — unificado em `_mapaTeamVisiveis()`.
+- **Testes:** `test/supervisores.test.js` (7), `test/supervisorFiltro.test.js` (7).
+- **Deploy — ORDEM IMPORTA (ver P0-1d):**
+  ```bash
+  cd ~/prod-stc && git pull
+  node scripts/migrar-supervisores.js            # dry-run: mostra o estado
+  node scripts/migrar-supervisores.js --apply
+  pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
+  ```
+  (O código tolera a 015 ausente, então o pull antes da migration não tranca
+  nada — mas o campo Supervisor só funciona depois do `--apply`.)
+- **Critério de aceite:** cadastrar 1 supervisor, vincular 2 equipes, ver a
+  coluna no Admin, filtrar por ele em Gráficos e conferir que os números batem
+  com marcar as 2 equipes no filtro de Equipe; `SELECT * FROM
+  equipe_supervisor_historico` com 2 linhas datadas de hoje.
+- **Rollback:** `git revert` do commit. As tabelas/coluna novas podem ficar —
+  nada as lê sem o código.
+- **Próximo passo natural:** produtividade por supervisor (produção diária de
+  `team_daily_totals` atribuída via `supervisorVigente` por dia).
+
+
+## P2-57 — `% rejeição` saía baixo com 2+ equipes no filtro de Rejeições
+
+- **Categoria:** Dados
+- **Status:** **código done** (07/10/2026) — falta deploy.
+- **Evidência:** `db/queries.js` `getRejeicoesTotais` — o denominador
+  (executadas, de `team_daily_totals`) filtrava só `opts.team`, que a rota
+  (`_parseRejeicoesFilters` em `routes/index.js`) preenche **apenas com UMA
+  equipe**. O numerador vem de `_fetchRejeicoes`, que filtra por `opts.teams`.
+- **Impacto:** com 2+ equipes marcadas, `executadasNoPeriodo` e
+  `percentualGeral` usavam as executadas da regional inteira → % de rejeição
+  menor que o real. Afetava quem já usava multi-seleção de equipe; com o filtro
+  de Supervisor (P2-56) seria TODA consulta filtrada. O % por equipe
+  (`porEquipe[].executadas`) não era afetado — o mapa é por `team_name`.
+- **Correção:** `if (opts.teams?.length) q.in('team_name', opts.teams) else if (opts.team) q.eq(...)`.
+- **Não verificado:** quanto o número exibido divergia em produção (depende de
+  quem usou multi-seleção). Conferir: mesma consulta com 2 equipes, antes e
+  depois do deploy.
 
 
 ## P0-1d — Incidente 07/10/2026: migration pendente trancou o login
