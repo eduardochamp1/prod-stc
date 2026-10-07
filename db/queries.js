@@ -1378,6 +1378,21 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows
   return { equipes, tipos: [...tipos] };
 }
 
+// Início da coleta de interrupções (deploy de 07/10/2026). O completeInterruptions
+// devolve o histórico INTEIRO da nota, então entram dias anteriores — mas só das
+// notas que estavam interrompidas no momento da coleta. Esses dias ficam
+// incompletos (nota interrompida em 24/09 e já concluída nunca é consultada).
+// Decisão do José em 07/10/2026: ignorar antes desta data, pra não exibir número
+// parcial que a EDP possa questionar. As linhas continuam gravadas.
+const INICIO_COLETA_INTERR = '2026-10-07';
+
+/** FUNÇÃO PURA: janela efetiva da leitura de interrupções, ou null se vazia. */
+function _janelaInterrupcoes(de, ate) {
+  const ini = !de || de < INICIO_COLETA_INTERR ? INICIO_COLETA_INTERR : de;
+  if (ate && ate < ini) return null;
+  return { de: ini, ate: ate || null };
+}
+
 // Subcategorias de MD cujas interrupções a matriz conta (José, 07/10/2026):
 // Subs Obsoleto e Subs TL11 (sub_code de classifierService.classificarMD).
 const _SUBCODES_INTERR = new Set(['OBSOLETO', 'TL11']);
@@ -1434,12 +1449,13 @@ async function getEquipeTipoMatrix(de, ate, regionals, tipo, team) {
   // interrupção e equipe que interrompeu. Tabela ausente (migration não
   // aplicada) não derruba a matriz: a coluna sai vazia.
   let intRows = [];
+  const jan = _janelaInterrupcoes(de, ate);
   try {
-    const brutas = await _selectAll(() => {
+    const brutas = !jan ? [] : await _selectAll(() => {
       let q = sb.from('note_interrupcoes')
         .select('interrupcao_id, note_id, team_name, regional, sector_id, tipo, dia');
-      if (de)                          q = q.gte('dia', de);
-      if (ate)                         q = q.lte('dia', ate);
+      q = q.gte('dia', jan.de);
+      if (jan.ate)                     q = q.lte('dia', jan.ate);
       q = inRegionals(q, regionals);
       if (teamsArr)                    q = q.in('team_name', teamsArr);
       else if (team && team !== 'ALL') q = q.eq('team_name', team);
@@ -2045,7 +2061,7 @@ module.exports = {
   getTeamSessionHistory,
   getDailySubcatTotals,
   getPerformanceEquipes,
-  getEquipeTipoMatrix, _buildEquipeTipoMatrix, _filtrarInterrupcoesPorSubcat,
+  getEquipeTipoMatrix, _buildEquipeTipoMatrix, _filtrarInterrupcoesPorSubcat, _janelaInterrupcoes,
   getDeslogadasUltimaSessao, _reconstruirDeslogada,
   getExportData,
   getNotasIndividuais,

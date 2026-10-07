@@ -125,3 +125,18 @@ describe('front — coluna INTERR só no grupo MD', () => {
     assert.ok(SRC.includes('.filter(e => !(!e.total_exec && !e.total_rej && e.total_interr > 0))'));
   });
 });
+
+describe('_janelaInterrupcoes — só a partir do início da coleta (07/10/2026)', () => {
+  const { _janelaInterrupcoes } = require('../db/queries');
+  // Decisão do José em 07/10/2026: dias antes do deploy estão incompletos
+  // (só têm o histórico das notas interrompidas NO MOMENTO da coleta).
+  test('período inteiro antes de 07/10 → nada', () => {
+    assert.equal(_janelaInterrupcoes('2026-09-01', '2026-09-30'), null);
+  });
+  test('período que atravessa 07/10 → começa em 07/10', () => {
+    assert.deepEqual(_janelaInterrupcoes('2026-10-01', '2026-10-31'), { de: '2026-10-07', ate: '2026-10-31' });
+  });
+  test('período depois de 07/10 → intacto', () => {
+    assert.deepEqual(_janelaInterrupcoes('2026-10-08', '2026-10-08'), { de: '2026-10-08', ate: '2026-10-08' });
+  });
+});
