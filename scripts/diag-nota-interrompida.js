@@ -23,6 +23,14 @@
  *     --id ab7836cc-954f-4c6f-b847-c90448135afd --setor DESG
  *
  * ⚠️ 3 requisições GET à API da WPA. Não faz login novo se o token estiver válido.
+ *
+ * Modo --so-v2 (07/10/2026): pula 1 e 2 e faz SÓ o teamsstatus/V2 (1 GET),
+ * listando toda nota com ExecutionStatus 3. Hipótese levantada pelos prints do
+ * portal: a coluna "Status de execução" do Gestão Online mostra "Interromp." e a
+ * nota interrompida 105293301 veio com ExecutionStatus 3 — que o STATUS_V2 trata
+ * como "executada (em andamento)". Compare a lista com o filtro "Interrompidas"
+ * do portal (Notes/Geral).
+ *   node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG
  */
 
 function arg(nome, padrao = null) {
@@ -33,6 +41,7 @@ function arg(nome, padrao = null) {
 
 const ID    = arg('id', 'ab7836cc-954f-4c6f-b847-c90448135afd');  // 105293301, PO, print de 07/10/2026
 const SETOR = arg('setor', 'DESG');
+const SO_V2 = process.argv.includes('--so-v2');
 
 /** Varre o objeto e devolve [caminho, valor] das chaves que casam com a regex. */
 function caçar(obj, regex, caminho = '', achados = [], prof = 0) {
@@ -56,6 +65,11 @@ async function getJson(wpaFetch, path) {
 async function main() {
   const { wpaFetch } = require('../services/wpaService');
 
+  if (!SO_V2) await detalheECompleteInterruptions(wpaFetch);
+  await teamsStatusV2(wpaFetch);
+}
+
+async function detalheECompleteInterruptions(wpaFetch) {
   // ── 1. Detalhe cru ──────────────────────────────────────────────────────────
   console.log(`\n═══ 1. details/optimized — ${ID} (${SETOR}) ═══`);
   const det = await getJson(wpaFetch, `/api/Notes/${ID}/details/optimized?sectorId=${SETOR}`);
@@ -81,6 +95,9 @@ async function main() {
   console.log(`HTTP ${ci.status}`);
   console.log(JSON.stringify(ci.json ?? ci.txt.slice(0, 500), null, 2).slice(0, 2000));
 
+}
+
+async function teamsStatusV2(wpaFetch) {
   // ── 3. teamsstatus/V2 do setor ─────────────────────────────────────────────
   console.log(`\n═══ 3. teamsstatus/V2 — ${SETOR} ═══`);
   const v2 = await getJson(wpaFetch, `/api/teamsstatus/V2?sectorId=${SETOR}&filterByExhibitionSector=true`);
@@ -89,6 +106,7 @@ async function main() {
   const contagem = {};        // `${lista}:${ExecutionStatus}` → n
   const exemplos = {};        // ExecutionStatus fora de 1-7/9 → até 3 exemplos
   let achou = false;
+  const status3 = [];         // notas com ExecutionStatus 3 (hipótese: interrompidas)
   for (const eq of equipes) {
     const nomeEq = eq?.Session?.Team?.Name || eq?.Team?.Name || '?';
     for (const lista of ['Assigned', 'Downloaded', 'Executed', 'Concluded', 'Rejected']) {
@@ -100,7 +118,8 @@ async function main() {
           (exemplos[es] = exemplos[es] || []);
           if (exemplos[es].length < 3) exemplos[es].push(`${nomeEq} ${n?.Type} ${n?.Number} (${lista})`);
         }
-        if (n?.Id === ID) {
+        if (es === 3) status3.push(`${nomeEq.padEnd(9)} ${String(n?.Type).padEnd(3)} ${n?.Number}  Status=${n?.Status}  (${lista})`);
+        if (!SO_V2 && n?.Id === ID) {
           achou = true;
           console.log(`  ➜ nota encontrada: equipe ${nomeEq}, lista ${lista}, ExecutionStatus ${es}`);
           console.log('    ', JSON.stringify(n).slice(0, 800));
@@ -108,9 +127,11 @@ async function main() {
       }
     }
   }
-  if (!achou) console.log('  (nota NÃO está em nenhuma lista do V2 deste setor agora)');
+  if (!SO_V2 && !achou) console.log('  (nota NÃO está em nenhuma lista do V2 deste setor agora)');
   console.log('\n  Contagem lista:ExecutionStatus no setor:');
   for (const [k, n] of Object.entries(contagem).sort()) console.log(`    ${k.padEnd(16)} ${n}`);
+  console.log(`\n  Notas com ExecutionStatus 3 (${status3.length}) — conferir contra o filtro "Interrompidas" do portal:`);
+  for (const l of status3.sort()) console.log(`    ${l}`);
   if (Object.keys(exemplos).length) {
     console.log('\n  ⚠️ ExecutionStatus FORA do mapa STATUS_V2 (hoje viram "baixada"):');
     for (const [es, ex] of Object.entries(exemplos)) console.log(`    ${es}: ${ex.join(' | ')}`);
