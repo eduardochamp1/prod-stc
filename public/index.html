@@ -4500,8 +4500,10 @@
       // Dados do endpoint /performance/equipes-matriz (matrizData). Colunas de
       // tipo em ordem canônica (PROD_LINHAS top-level) + quaisquer extras
       // presentes no período (ex.: SM/VL). EXEC = concluídas; REJE = rejeitadas
-      // cruas. Três sub-colunas por grupo — EXEC, REJE e SOMA (= EXEC + REJE) —
-      // começando pelo TOTAL.
+      // cruas. Quatro sub-colunas por grupo — EXEC, REJE, SOMA (= EXEC + REJE) e
+      // %REJ (= REJE ÷ SOMA, mesma fórmula do "% Rejeição" do Acumulado) —
+      // começando pelo TOTAL. %REJ pedida pelo José em 07/10/2026, no TOTAL e em
+      // cada tipo. É derivada das duas colunas ao lado, nunca de outra fonte.
       const matrizHTML = (() => {
         const eqs = (matrizData && matrizData.equipes) || [];
         if (eqs.length === 0) return '';
@@ -4512,23 +4514,34 @@
           ...[...presentes].filter(t => !ORDEM.includes(t)).sort(),
         ];
         // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL (destacado) + um grupo por tipo.
-        const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="3" title="Soma de todos os tipos">TOTAL</th>']
-          .concat(tipos.map(t => `<th class="mtx-grp" colspan="3">${t}</th>`)).join('');
-        // 2ª linha: EXEC/REJE/SOMA repetido por grupo (o trio do TOTAL leva mtx-total).
+        const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="4" title="Soma de todos os tipos">TOTAL</th>']
+          .concat(tipos.map(t => `<th class="mtx-grp" colspan="4">${t}</th>`)).join('');
+        // 2ª linha: EXEC/REJE/SOMA/%REJ repetido por grupo (o do TOTAL leva mtx-total).
         // SOMA = EXEC + REJE do próprio grupo (notas atendidas).
-        const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th><th class="mtx-soma mtx-total" title="EXEC + REJE">SOMA</th>']
-          .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th><th class="mtx-soma" title="EXEC + REJE">SOMA</th>')).join('');
+        const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th><th class="mtx-soma mtx-total" title="EXEC + REJE">SOMA</th><th class="mtx-pct mtx-total" title="REJE ÷ SOMA">%REJ</th>']
+          .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th><th class="mtx-soma" title="EXEC + REJE">SOMA</th><th class="mtx-pct" title="REJE ÷ SOMA">%REJ</th>')).join('');
         // Célula: número real, ou "—" bem apagado (classe mtx-zero) quando vazio.
         // REJE > 0 ganha mtx-rej-hot pra saltar (vermelho da marca).
         const cell = (v, cls) => v
           ? `<td class="${cls}${/rej/.test(cls) ? ' mtx-rej-hot' : ''}">${v}</td>`
           : `<td class="${cls} mtx-zero">—</td>`;
+        // %REJ = REJE ÷ (EXEC + REJE). Sem nota atendida no grupo → "—" (não 0%:
+        // 0% afirmaria que houve atendimento sem rejeição). Com atendimento e zero
+        // rejeição → "0,0%", que é informação real.
+        const pctCell = (ex, rj, cls) => {
+          const soma = (ex || 0) + (rj || 0);
+          if (!soma) return `<td class="${cls} mtx-zero">—</td>`;
+          const pct = ((rj || 0) / soma * 100).toFixed(1).replace('.', ',');
+          return `<td class="${cls}">${pct}%</td>`;
+        };
         const bodyRows = eqs.map(e => {
           const badge = _categoriaPorChave(e.tipo_equipe).badge;
           const cells = [cell(e.total_exec, 'mtx-exec mtx-total'), cell(e.total_rej, 'mtx-rej mtx-total'),
-            cell((e.total_exec || 0) + (e.total_rej || 0), 'mtx-soma mtx-total')]
+            cell((e.total_exec || 0) + (e.total_rej || 0), 'mtx-soma mtx-total'),
+            pctCell(e.total_exec, e.total_rej, 'mtx-pct mtx-total')]
             .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej'),
-              cell((e.exec?.[t] || 0) + (e.rej?.[t] || 0), 'mtx-soma')])).join('');
+              cell((e.exec?.[t] || 0) + (e.rej?.[t] || 0), 'mtx-soma'),
+              pctCell(e.exec?.[t], e.rej?.[t], 'mtx-pct')])).join('');
           return `<tr>
   <td class="mtx-team"><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
   ${cells}
@@ -4538,9 +4551,11 @@
         const somaExec = (t) => eqs.reduce((s, e) => s + (t ? (e.exec?.[t] || 0) : e.total_exec), 0);
         const somaRej  = (t) => eqs.reduce((s, e) => s + (t ? (e.rej?.[t]  || 0) : e.total_rej), 0);
         const footCells = [cell(somaExec(null), 'mtx-exec mtx-total'), cell(somaRej(null), 'mtx-rej mtx-total'),
-          cell(somaExec(null) + somaRej(null), 'mtx-soma mtx-total')]
+          cell(somaExec(null) + somaRej(null), 'mtx-soma mtx-total'),
+          pctCell(somaExec(null), somaRej(null), 'mtx-pct mtx-total')]
           .concat(tipos.flatMap(t => [cell(somaExec(t), 'mtx-exec'), cell(somaRej(t), 'mtx-rej'),
-            cell(somaExec(t) + somaRej(t), 'mtx-soma')])).join('');
+            cell(somaExec(t) + somaRej(t), 'mtx-soma'),
+            pctCell(somaExec(t), somaRej(t), 'mtx-pct')])).join('');
         return `
 <div class="perf-section">
   <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe</div>

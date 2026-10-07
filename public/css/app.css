@@ -4504,6 +4504,11 @@
     .mtx-table thead tr:nth-child(2) th.mtx-soma {
       background: #cfcfc6; color: var(--preto);
     }
+    /* %REJ (07/10/2026): fecha cada grupo, logo após a SOMA. Vermelho da marca
+       em tom de texto (não negrito) pra ler como derivada da REJE, não como
+       contagem nova. */
+    .mtx-table td.mtx-pct { color: var(--vermelho); font-size: 11px; white-space: nowrap; }
+    .mtx-table td.mtx-pct.mtx-zero { color: var(--cinza3); }
 
     /* Responsivo: aperta fonte/padding em telas estreitas (mantém scroll horizontal). */
     @media (max-width: 900px) {
