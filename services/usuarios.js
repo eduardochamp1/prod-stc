@@ -300,8 +300,85 @@ function _daLinha(row) {
   };
 }
 
-// ⚠️ `excluido_em` exige o add_usuario_excluido.sql aplicado ANTES do deploy.
-const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, senha_provisoria, excluido_em, criado_em, criado_por';
+const _COLS_BASE = ['username', 'senha_hash', 'role', 'regionals', 'ativo',
+  'pode_gerenciar', 'criado_em', 'criado_por'];
+
+/**
+ * Colunas que vieram DEPOIS da tabela, cada uma com a migration que a cria.
+ *
+ * INCIDENTE 07/10/2026, 16:22–17:03: o pull do INTERR trouxe junto o código da
+ * exclusão (f13f572), que lia `excluido_em`, sem o add_usuario_excluido.sql
+ * aplicado. A leitura de usuários falhou inteira e, por ~40 min, SÓ a conta de
+ * emergência entrava — e ela não listava usuários. Reporte do José: "as contas
+ * além de admin não conseguem acessar, e a conta admin não está com acesso para
+ * listar a lista de usuários". O aviso de "aplicar ANTES do pull" estava no
+ * commit, no RUNBOOK e no backlog. Aviso em documento não segura um git pull.
+ *
+ * Por que tolerar a falta destas é SEGURO, e não fail-open: as duas só são
+ * gravadas por código que exige a própria coluna. Se ela não existe, ninguém
+ * PODE ter sido marcado — o default (não excluído, senha não provisória) é a
+ * verdade, não um palpite. Coluna da tabela original (ativo, pode_gerenciar…)
+ * NÃO entra aqui: a falta dela continua negando.
+ */
+const _COLS_OPCIONAIS = {
+  senha_provisoria: 'migrations/add_senha_provisoria.sql',
+  excluido_em:      'migrations/add_usuario_excluido.sql',
+};
+
+/** A coluna que o Postgres disse não existir (42703 = undefined_column), ou null. */
+function _colunaFaltando(error) {
+  if (!error) return null;
+  const m = /column "?(?:\w+\.)?(\w+)"? does not exist/i.exec(error.message || '');
+  if (error.code !== '42703' && !m) return null;
+  return m ? m[1] : null;
+}
+
+/**
+ * Descreve uma falha de leitura SEM mentir sobre a causa. Até 07/10/2026 todo
+ * erro saía como "banco indisponível" — e no incidente o banco estava no ar,
+ * faltava uma coluna. Quem lesse o log sem contexto ia investigar o Postgres.
+ */
+function descreverFalha(error) {
+  const col = _colunaFaltando(error);
+  if (col) {
+    const mig = _COLS_OPCIONAIS[col];
+    return `coluna "${col}" não existe no banco — migration pendente` +
+      (mig ? `: aplique ${mig}` : '') + ` (o banco está NO AR; ${error.message})`;
+  }
+  return `banco indisponível: ${error && error.message}`;
+}
+
+/** Avisa UMA vez por coluna por processo — no incidente foram centenas de linhas iguais. */
+const _jaAvisou = new Set();
+
+/**
+ * SELECT em `usuarios` que sobrevive a migration pendente.
+ *
+ * Tenta com todas as colunas; se o Postgres disser que falta uma OPCIONAL, tira
+ * ela e tenta de novo, com um console.error alto e uma vez só. Falta de coluna
+ * que não é opcional sobe como erro, como antes.
+ *
+ * @param montar  (sb, cols) => query — recebe as colunas como string
+ */
+async function _selecionar(montar) {
+  const sb = require('./dbClient').getClient();
+  const cols = [..._COLS_BASE, ...Object.keys(_COLS_OPCIONAIS)];
+  for (let tentativa = 0; tentativa <= Object.keys(_COLS_OPCIONAIS).length; tentativa++) {
+    const { data, error } = await montar(sb, cols.join(', '));
+    if (!error) return data || [];
+
+    const col = _colunaFaltando(error);
+    if (!col || !_COLS_OPCIONAIS[col] || !cols.includes(col)) throw error;
+
+    if (!_jaAvisou.has(col)) {
+      _jaAvisou.add(col);
+      console.error(`[usuarios] ⚠️ MIGRATION PENDENTE: ${descreverFalha(error)}. ` +
+        'O login segue funcionando sem ela, mas a funcionalidade da coluna fica desligada.');
+    }
+    cols.splice(cols.indexOf(col), 1);
+  }
+  throw new Error('[usuarios] colunas opcionais esgotadas sem leitura válida');
+}
 
 /**
  * Todos os usuários do banco, MENOS os excluídos. Lança se o banco estiver fora.
@@ -312,10 +389,9 @@ const _COLS = 'username, senha_hash, role, regionals, ativo, pode_gerenciar, sen
  * lugar só (ver o cabeçalho).
  */
 async function listarDoBanco() {
-  const sb = require('./dbClient').getClient();
-  const { data, error } = await sb.from('usuarios').select(_COLS).order('username');
-  if (error) throw error;
-  return (data || []).map(_daLinha).filter(u => !u.excluido);
+  const data = await _selecionar((sb, cols) =>
+    sb.from('usuarios').select(cols).order('username'));
+  return data.map(_daLinha).filter(u => !u.excluido);
 }
 
 /**
@@ -340,14 +416,13 @@ async function buscar(username) {
   if (doCache) return doCache;
 
   try {
-    const sb = require('./dbClient').getClient();
-    const { data, error } = await sb.from('usuarios').select(_COLS).eq('username', username);
-    if (error) throw error;
-    const achado = _daLinha((data || [])[0]);
+    const data = await _selecionar((sb, cols) =>
+      sb.from('usuarios').select(cols).eq('username', username));
+    const achado = _daLinha(data[0]);
     if (achado) _cache.por(username, achado);
     return achado;
   } catch (err) {
-    console.warn('[usuarios] banco indisponível, usando último conhecido:', err.message);
+    console.warn(`[usuarios] falha ao ler "${username}" (${descreverFalha(err)}); usando último conhecido`);
     return _cache.ultimoConhecido(username);
   }
 }
@@ -368,7 +443,7 @@ async function registrarLog(ator, acao, alvo, detalhe) {
 module.exports = {
   validarNovoUsuario, podeDesativar, podeAlterar, podeExcluir, gerarSenha,
   validarTrocaSenha, SENHA_MIN,
-  listarDoBanco, foiExcluido, buscar, registrarLog,
+  listarDoBanco, foiExcluido, buscar, registrarLog, descreverFalha,
   _cache, CACHE_TTL_MS,
   RE_USERNAME, ROLES,
 };

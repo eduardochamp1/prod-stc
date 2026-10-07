@@ -158,7 +158,8 @@
 | P2-55 | Monitor pode estar mostrando nota INTERROMPIDA como "em andamento": `STATUS_V2` junta 3/6/7 em `executada`, e a única nota interrompida medida veio com 3 | Dados/Frontend | pending — **hipótese reforçada** (07/10): as 3 notas MD que o portal mostrava interrompidas estavam em 3; 1 do filtro do portal (045006455506) não estava — a conferir |
 | P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **done** (22/09) — migrado e verificado em prod: 5 contas no banco, `.env` reduzido a UMA. Falta só o teste de revogação |
 | P0-1b | Senha gerada pela tela (20 caracteres aleatórios) não tinha como ser trocada — "essa senha gerada é facilmente esquecida". Incremento 2 do P0-1a | Governança/Segurança | **código done** (22/09) — troca obrigatória no 1º acesso (`423 SENHA_PROVISORIA`) e voluntária; 22 testes; **falta confirmar em prod** |
-| P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; **falta migration + confirmar em prod** |
+| P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; migration aplicada 07/10 (tarde — P0-1d); **falta confirmar em prod** |
+| P0-1d | **Incidente 07/10, 16:22–17:03:** pull com código lendo `excluido_em` antes da migration → só a conta de emergência entrava, e nem ela listava usuários. Log dizia "banco indisponível" com o banco no ar | Governança/Ops | **done** (07/10) — resolvido aplicando a migration; código agora tolera coluna opcional faltando e o log nomeia a migration pendente; 7 testes; **falta deploy** |
 
 ---
 
@@ -5785,8 +5786,9 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
         própria senha, senha nova e hash ausentes das respostas, conta de
         emergência nunca trancada.
   - [x] Verificado que o teste do bloqueio fica vermelho ao desligá-lo.
-  - [ ] **Migration `add_senha_provisoria.sql` aplicada na VM** — sem registro
-        de que foi. Sem ela a coluna não existe e o login quebra na leitura.
+  - [x] **Migration `add_senha_provisoria.sql` aplicada na VM** — confirmado
+        em 07/10/2026: `\d usuarios` mostra `senha_provisoria` (conferido
+        durante o incidente do P0-1d). A data da aplicação não ficou registrada.
   - [ ] **Em produção:** criar usuário pela tela → 1º login abre a troca e o
         painel não carrega → trocar → painel abre sem relogin → sair e entrar
         com a NOVA (200) e com a gerada (401) → conferir `trocar_senha` em
@@ -5864,10 +5866,9 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - [x] **Verificado que os testes mordem:** desligar o filtro do
         `listarDoBanco`, a trava de inativo ou o "excluído é inativo" deixa a
         suíte vermelha (2, 2 e 1 falhas).
-  - [ ] **Migration `add_usuario_excluido.sql` aplicada na VM ANTES do pull.**
-        Sem a coluna, a leitura de usuários falha e só a conta de emergência
-        entra. (Se o `add_senha_provisoria.sql` do P0-1b ainda não foi
-        aplicado, ele vem antes — o código já lê aquela coluna também.)
+  - [x] **Migration `add_usuario_excluido.sql` aplicada na VM** — em
+        07/10/2026 ~17:03, mas **DEPOIS** do pull, não antes. Derrubou o login
+        de todos menos a conta de emergência por ~40 min: ver **P0-1d**.
   - [ ] **Em produção:** com o usuário de teste do P0-1a/P0-1b já desativado,
         excluir → some da lista → aparece `excluir` na 📜 Auditoria → tentar
         criar de novo com o mesmo nome dá o 409 explicativo.
@@ -5912,3 +5913,69 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Ação:** 1) `node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG` e comparar a lista de código 3 com o filtro "Interrompidas" do portal; 2) se bater, decidir com o José como o Monitor deve mostrar (bucket próprio?). A coleta do P2-54 já depende desta hipótese.
 - **Relacionado:** P2-54.
 
+
+## P0-1d — Incidente 07/10/2026: migration pendente trancou o login
+
+- **Categoria:** Governança / Ops
+- **Status:** **done** (07/10/2026) — incidente resolvido em produção; a
+  correção de código está no repo, **falta deploy**
+- **Duração:** 16:22:41 (primeiro erro, logo após o restart) → ~17:03 (última
+  linha de erro às 17:03:23; migration aplicada em seguida). **~40 minutos.**
+- **Reporte do José:** *"as contas além de admin não conseguem acessar, e a
+  conta admin não está com acesso para listar a lista de usuários"*.
+- **Causa:** o pull do INTERR (`e87dc03`) trouxe junto o código do P0-1c
+  (`f13f572`), que passou a SELECIONAR `usuarios.excluido_em`. O
+  `add_usuario_excluido.sql` não tinha sido aplicado. A leitura de usuários
+  falhava inteira com `column "excluido_em" does not exist`, e:
+  1. o login caía para **só a conta de emergência** do `.env`;
+  2. a permissão de gerenciar (que vem sempre do banco) virava `false`, então
+     nem a conta de emergência listava usuários (403).
+- **Evidência:** `pm2 logs` com centenas de `[usuarios] banco indisponível,
+  usando último conhecido: column "excluido_em" does not exist` e `[auth] banco
+  indisponível; só a conta de emergência pode entrar`; `\d usuarios` mostrando
+  `senha_provisoria` e **sem** `excluido_em`.
+- **Resolução em produção:** `psql -d wpa_monitor -f
+  migrations/add_usuario_excluido.sql` (5× `ALTER TABLE`), sem restart. Nenhum
+  erro depois das 17:03:23; login das demais contas e listagem confirmados
+  pelo José.
+- **Por que aconteceu, honestamente:** o aviso "aplique ANTES do pull" estava
+  no commit, no RUNBOOK e no backlog do P0-1c. É a mesma lição registrada no
+  P0-1a em 22/09 ("nota num documento não protege ninguém: quem executa roda o
+  arquivo, não lê a nota") — e foi repetida. Agravante: o código do P0-1c
+  entrou num commit com mensagem `docs:` (ver P0-1c), então nada no `git pull`
+  sugeria que aquele deploy mexia em autenticação.
+- **Achado 2 — o log mentia sobre a causa.** Todo erro de leitura saía como
+  "banco indisponível". O banco estava no ar; faltava uma coluna. Sem contexto,
+  quem lesse ia investigar o Postgres.
+- **Ação (código):**
+  - `services/usuarios.js`: o SELECT de usuários passa por `_selecionar`, que,
+    se o Postgres responder `42703` (coluna inexistente) para uma coluna
+    **opcional** (`senha_provisoria`, `excluido_em`), tira a coluna e tenta de
+    novo, com um `console.error` "MIGRATION PENDENTE" **uma vez por coluna por
+    processo**, nomeando o arquivo a aplicar.
+  - `descreverFalha(err)` separa "coluna X não existe — aplique
+    migrations/…sql (o banco está NO AR)" de "banco indisponível". Usado no
+    `buscar` e no `getUsers` (`middleware/auth.js`).
+- **Por que tolerar não é fail-open:** as colunas opcionais só são gravadas por
+  código que exige a própria coluna. Se ela não existe, **ninguém pode ter sido
+  marcado** — "não excluído" e "senha não provisória" são a verdade, não um
+  palpite. Coluna da tabela original (`ativo`, `pode_gerenciar`…) **não** é
+  opcional: faltando, continua negando — há teste para isso.
+- **Aceite:**
+  - [x] Teste reproduzindo o incidente (`test/usuariosMigrationPendente.test.js`,
+        pool que responde `42703` como o node-postgres): usuário do banco
+        entra; conta de emergência lista usuários; sem as duas opcionais ainda
+        entra; sem `ativo` **nega**; o aviso sai uma vez, com o arquivo, e não
+        diz "banco indisponível".
+  - [x] **Verificado que o teste morde:** com a nova tentativa desligada
+        (comportamento do incidente), 4 dos 7 ficam vermelhos.
+  - [x] Suíte verde: 1298 testes, 0 falhas.
+  - [ ] Deploy (`git pull` + restart). Nenhuma migration nova.
+- **O que isto NÃO resolve:** a rota de excluir ainda precisa da coluna — com a
+  migration pendente ela devolve 500. Aceitável: é a funcionalidade nova que
+  fica desligada, não o acesso de todos.
+- **Lição para o próximo commit com migration:** o problema não é falta de
+  aviso, é o código depender de o aviso ser lido. Coluna nova lida no caminho
+  do login tem de ser tolerada por construção, desde o primeiro commit.
+- **Rollback:** `git revert` — volta ao comportamento anterior (sem
+  tolerância), que hoje é inofensivo porque as duas migrations estão aplicadas.

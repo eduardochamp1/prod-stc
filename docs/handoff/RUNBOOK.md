@@ -799,5 +799,13 @@ O usuário volta à lista como **inativo**; reativar é pela tela. Ver quem est�
 excluído: `SELECT username, excluido_em FROM usuarios WHERE excluido_em IS NOT NULL;`
 
 ⚠️ **Deploy:** aplique `migrations/add_usuario_excluido.sql` **antes** do `git
-pull`. O código novo lê a coluna `excluido_em`; sem ela, a leitura de usuários
-falha e só a conta de emergência entra.
+pull`. Em 07/10/2026 ela ficou para depois e, por ~40 min, só a conta de
+emergência entrava (P0-1d). Desde então o login **tolera** a coluna faltando:
+todos entram, só a exclusão fica desligada, e o log avisa uma vez.
+
+**Se aparecer `MIGRATION PENDENTE` no `pm2 logs`**, a própria linha diz qual
+arquivo aplicar. O banco está no ar; não é para investigar o Postgres:
+
+```bash
+pm2 logs wpa-monitor --lines 500 --nostream | grep "MIGRATION PENDENTE"
+```

@@ -144,7 +144,11 @@ async function getUsers() {
         senha_provisoria: u.senha_provisoria === true,
       }));
   } catch (err) {
-    console.warn('[auth] banco indisponível; só a conta de emergência pode entrar:', err.message);
+    // A causa vem de descreverFalha: até 07/10/2026 dizia sempre "banco
+    // indisponível", inclusive no incidente em que o banco estava no ar e só
+    // faltava uma coluna.
+    const { descreverFalha } = require('../services/usuarios');
+    console.warn(`[auth] ${descreverFalha(err)}; só a conta de emergência pode entrar`);
   }
   return [...doEnv, ...doBanco];
 }
