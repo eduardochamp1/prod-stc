@@ -154,6 +154,8 @@
 | P2-51 | Cadastrar equipes era uma a uma (o form fecha a cada save) e a lista de 143 não tinha busca — "adicionei equipes novas mas foi um processo bem complicado" | Produto/Frontend | **done** (18/09) — importação de planilha com prévia + busca/filtro; 38 testes; **falta confirmar em prod** |
 | P2-52 | Não havia como ler a perda por rejeição: a matriz por tipo tem os números espalhados, sem taxa, e com um Total único — não dava pra comparar equipes nem ver o acumulado da regional | Produto/Frontend | **done** (18/09) — tabela nova abaixo da matriz; 20 testes; **falta confirmar em prod** |
 | P2-53 | Só EC e EP tinham nome: as 14 equipes ET e as 4 EB caíam num balde genérico "OP". E a regra vivia em 9 ternários duplicados, onde acrescentar 2 categorias seriam 18 edições manuais | Produto/Backend | **done** (18/09) — catálogo único + Equipe Moto e BT Zero + filtro multi de verdade; 26 testes; **falta confirmar em prod** |
+| P2-54 | Matriz "Notas Atendidas por Tipo" sem % de rejeição e sem como ver as INTERRUPÇÕES de MD (status "Em Campo interrompida" do portal, que não existia pra nós) | Produto/Dados | **código done** (07/10) — %REJ em todos os grupos + INTERR no MD (Obsoleto/TL11); 15 testes; **falta migration + confirmar ExecutionStatus 3 + conferir em prod** |
+| P2-55 | Monitor pode estar mostrando nota INTERROMPIDA como "em andamento": `STATUS_V2` junta 3/6/7 em `executada`, e a única nota interrompida medida veio com 3 | Dados/Frontend | pending — **hipótese**, confirmar com `diag-nota-interrompida.js --so-v2` |
 | P0-1a | Conceder e retirar acesso exigia SSH na VM, editar o `.env` e reiniciar — só o José fazia. Nenhum usuário existia no banco. **Fatia do P0-1** | Governança/Segurança | **done** (22/09) — migrado e verificado em prod: 5 contas no banco, `.env` reduzido a UMA. Falta só o teste de revogação |
 | P0-1b | Senha gerada pela tela (20 caracteres aleatórios) não tinha como ser trocada — "essa senha gerada é facilmente esquecida". Incremento 2 do P0-1a | Governança/Segurança | **código done** (22/09) — troca obrigatória no 1º acesso (`423 SENHA_PROVISORIA`) e voluntária; 22 testes; **falta confirmar em prod** |
 | P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; **falta migration + confirmar em prod** |
@@ -5877,3 +5879,35 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   `ALTER TABLE usuarios DROP COLUMN excluido_em`.
 - **Fora de escopo:** botão de desfazer exclusão; DELETE de verdade; excluir
   registro da trilha (continua proibido).
+
+---
+
+## P2-54 — %REJ e coluna INTERR (MD Obsoleto/TL11) na matriz por tipo
+
+- **Categoria:** Produto/Dados
+- **Status:** **código done** (07/10/2026) — %REJ: 2f0a817; INTERR: ver git log. Falta aplicar `migrations/add_note_interrupcoes.sql`, confirmar o gatilho (P2-55) e conferir números contra o portal.
+- **Pedido (José, 07/10/2026):** (1) coluna de % das rejeitadas, no TOTAL e em cada tipo; (2) coluna de notas interrompidas no grupo MD, "afunilando" para Subs Obsoleto e Subs TL11.
+- **Regras decididas pelo José:**
+  - %REJ = REJE ÷ SOMA (mesma fórmula do Acumulado). Grupo sem atendida → "—".
+  - Interrupção conta no **dia da interrupção** e na **equipe que interrompeu**.
+  - Interrupção **não é produção**: fora da SOMA e do %REJ. Se a nota for concluída depois, conta também como EXEC.
+  - Nota interrompida 2× em dias diferentes (ex.: 045006463152, ECGPR82, 28/09 e 07/10) → 2 interrupções, cada uma no seu dia. *(Default adotado — o José não escolheu entre "por evento" e "por nota"; mudar é trocar a contagem em `_buildEquipeTipoMatrix`.)*
+- **De onde vem o dado** (investigação em `scripts/diag-nota-interrompida.js`):
+  - "Interrompida" não é status nosso — snapshots só têm baixada/executada/concluida/rejeitada.
+  - `GET /api/Notes/{id}/completeInterruptions` traz equipe (`TeamName`), data **em BRT**, motivo (no campo `RejectionReasonId`!) e observação. O `_normalizeNoteInterruptions` anexava Z ao Date — corrigido antes do 1º chamador.
+  - Gatilho: MD com `ExecutionStatus 3` no teamsstatus/V2 que já buscamos (custo zero); só quando a nota ENTRA em 3 é feito 1 GET. Ver P2-55.
+  - Na nota rejeitada medida (040008325551) não havia registro de interrupção: rejeição e interrupção são coisas separadas.
+- **Lacunas:** sem retroativo (snapshot guardava só o status traduzido); interrupção retomada em < 15 min não é vista.
+- **Rollback:** reverter o commit; a tabela `note_interrupcoes` pode ficar (ninguém mais lê).
+
+---
+
+## P2-55 — ExecutionStatus 3 pode ser "interrompida", e o Monitor trata como "em andamento"
+
+- **Categoria:** Dados/Frontend
+- **Status:** pending — hipótese
+- **Evidência:** `services/wpaService.js` `STATUS_V2`: `3: 'executada' // em andamento`. A nota 105293301 (PO, EPMFL30), com status "Em Campo interrompida" no portal em 07/10/2026, veio em `Downloaded` com `ExecutionStatus 3`. O Gestão Online mostra "Interromp." na coluna Status de execução (045006462967, ECGPR82).
+- **Impacto:** se confirmado, o card da equipe e o contador de andamento contam nota parada como se estivesse sendo trabalhada. Não afeta produção (concluídas).
+- **Ação:** 1) `node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG` e comparar a lista de código 3 com o filtro "Interrompidas" do portal; 2) se bater, decidir com o José como o Monitor deve mostrar (bucket próprio?). A coleta do P2-54 já depende desta hipótese.
+- **Relacionado:** P2-54.
+

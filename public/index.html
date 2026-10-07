@@ -4513,13 +4513,19 @@
           ...ORDEM.filter(t => presentes.has(t)),
           ...[...presentes].filter(t => !ORDEM.includes(t)).sort(),
         ];
+        // INTERR (07/10/2026, pedido do José): 5ª sub-coluna SÓ no grupo MD —
+        // interrupções de MD Subs Obsoleto/TL11, no dia e na equipe que
+        // interrompeu. Interrupção não é produção: fica DEPOIS do %REJ e fora da
+        // SOMA e do %REJ. Fonte: note_interrupcoes (services/interrupcaoService.js).
+        const COM_INTERR = new Set(['MD']);
         // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL (destacado) + um grupo por tipo.
         const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="4" title="Soma de todos os tipos">TOTAL</th>']
-          .concat(tipos.map(t => `<th class="mtx-grp" colspan="4">${t}</th>`)).join('');
+          .concat(tipos.map(t => `<th class="mtx-grp" colspan="${COM_INTERR.has(t) ? 5 : 4}">${t}</th>`)).join('');
         // 2ª linha: EXEC/REJE/SOMA/%REJ repetido por grupo (o do TOTAL leva mtx-total).
         // SOMA = EXEC + REJE do próprio grupo (notas atendidas).
         const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th><th class="mtx-soma mtx-total" title="EXEC + REJE">SOMA</th><th class="mtx-pct mtx-total" title="REJE ÷ SOMA">%REJ</th>']
-          .concat(tipos.map(() => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th><th class="mtx-soma" title="EXEC + REJE">SOMA</th><th class="mtx-pct" title="REJE ÷ SOMA">%REJ</th>')).join('');
+          .concat(tipos.map(t => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th><th class="mtx-soma" title="EXEC + REJE">SOMA</th><th class="mtx-pct" title="REJE ÷ SOMA">%REJ</th>'
+            + (COM_INTERR.has(t) ? '<th class="mtx-interr" title="Interrupções de MD Subs Obsoleto e TL11 — não é produção, fora da SOMA">INTERR</th>' : ''))).join('');
         // Célula: número real, ou "—" bem apagado (classe mtx-zero) quando vazio.
         // REJE > 0 ganha mtx-rej-hot pra saltar (vermelho da marca).
         const cell = (v, cls) => v
@@ -4541,7 +4547,8 @@
             pctCell(e.total_exec, e.total_rej, 'mtx-pct mtx-total')]
             .concat(tipos.flatMap(t => [cell(e.exec?.[t], 'mtx-exec'), cell(e.rej?.[t], 'mtx-rej'),
               cell((e.exec?.[t] || 0) + (e.rej?.[t] || 0), 'mtx-soma'),
-              pctCell(e.exec?.[t], e.rej?.[t], 'mtx-pct')])).join('');
+              pctCell(e.exec?.[t], e.rej?.[t], 'mtx-pct'),
+              ...(COM_INTERR.has(t) ? [cell(e.interr?.[t], 'mtx-interr')] : [])])).join('');
           return `<tr>
   <td class="mtx-team"><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
   ${cells}
@@ -4550,12 +4557,14 @@
         // Linha de total (rodapé): soma por coluna.
         const somaExec = (t) => eqs.reduce((s, e) => s + (t ? (e.exec?.[t] || 0) : e.total_exec), 0);
         const somaRej  = (t) => eqs.reduce((s, e) => s + (t ? (e.rej?.[t]  || 0) : e.total_rej), 0);
+        const somaInterr = (t) => eqs.reduce((s, e) => s + (e.interr?.[t] || 0), 0);
         const footCells = [cell(somaExec(null), 'mtx-exec mtx-total'), cell(somaRej(null), 'mtx-rej mtx-total'),
           cell(somaExec(null) + somaRej(null), 'mtx-soma mtx-total'),
           pctCell(somaExec(null), somaRej(null), 'mtx-pct mtx-total')]
           .concat(tipos.flatMap(t => [cell(somaExec(t), 'mtx-exec'), cell(somaRej(t), 'mtx-rej'),
             cell(somaExec(t) + somaRej(t), 'mtx-soma'),
-            pctCell(somaExec(t), somaRej(t), 'mtx-pct')])).join('');
+            pctCell(somaExec(t), somaRej(t), 'mtx-pct'),
+            ...(COM_INTERR.has(t) ? [cell(somaInterr(t), 'mtx-interr')] : [])])).join('');
         return `
 <div class="perf-section">
   <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe</div>
@@ -4575,8 +4584,12 @@
       // Tabela "Acumulado — Perda por Rejeição": mesma fonte da matriz acima
       // (matrizData.equipes — NÃO a variável `equipes`, que não tem os totais).
       // Vai ABAIXO da matriz; ela não é alterada.
+      // 07/10/2026: equipe que só aparece na matriz por INTERRUPÇÃO (sem EXEC nem
+      // REJE no período) não entra aqui — o Acumulado é sobre atendidas, e a
+      // linha sairia 0/0/0, coisa que esta tabela não mostrava antes.
       const acumuladoHTML = _renderAcumuladoRejeicao(
-        _agruparPerdaPorRegional((matrizData && matrizData.equipes) || []));
+        _agruparPerdaPorRegional(((matrizData && matrizData.equipes) || [])
+          .filter(e => !(!e.total_exec && !e.total_rej && e.total_interr > 0))));
 
       return `
 <div class="perf-section">

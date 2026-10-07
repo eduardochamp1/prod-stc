@@ -68,10 +68,36 @@ describe('_normalizeNoteInterruptions — interrupções da execução (P1-33)',
     assert.equal(r.length, 1);
     assert.equal(r[0].id, 'int-1');
     assert.equal(r[0].equipe, 'EBGPR62');
-    assert.equal(r[0].instante, '2026-08-21T14:43:00Z');
+    // 07/10/2026: era '...Z'. O Date deste endpoint vem em BRT (ver o
+    // comentário de _normalizeNoteInterruptions) — Z adiantava 3h.
+    assert.equal(r[0].instante, '2026-08-21T14:43:00-03:00');
+    assert.equal(r[0].dia, '2026-08-21');
     assert.equal(r[0].motivo, 'SUSPENSO PARA OUTROS SERVIÇOS');
     assert.equal(r[0].motivoId, '0101|0031');
     assert.equal(r[0].texto, 'cliente ausente, retornar amanhã');
+  });
+
+  test('payload REAL de 07/10/2026 (105293301): motivo em RejectionReasonId, Date em BRT', () => {
+    const r = wpa._normalizeNoteInterruptions({
+      Data: [{
+        TeamName: 'EPMFL30', Id: '4b4cb359-0cf2-49c0-910b-35a474bc604a',
+        Date: '2026-10-07T06:58:53', Date2: null,
+        NoteId: '00000000-0000-0000-0000-000000000000',
+        Notes: 'Suspenso para ordem com bloco de 202 clientes sem energia', Try: 0,
+        NoteInterruptionReasonId: null, RejectionReasonId: 'SUSPENSO PARA OUTROS SERVIÇOS',
+      }],
+      Error: null,
+    });
+    assert.equal(r[0].equipe, 'EPMFL30');
+    assert.equal(r[0].instante, '2026-10-07T06:58:53-03:00');
+    assert.equal(r[0].dia, '2026-10-07');
+    assert.equal(r[0].motivo, 'SUSPENSO PARA OUTROS SERVIÇOS');
+  });
+
+  test('interrupção às 22h BRT fica no MESMO dia (com Z cairia no seguinte)', () => {
+    const r = wpa._normalizeNoteInterruptions({ Data: [{ Id: 'i', Date: '2026-10-07T22:10:00' }] });
+    assert.equal(r[0].dia, '2026-10-07');
+    assert.equal(new Date(r[0].instante).toISOString(), '2026-10-08T01:10:00.000Z');
   });
 
   test('Try vem sempre 0 e é preservado como 0 — NÃO serve de chave de tentativa', () => {

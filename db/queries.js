@@ -1314,11 +1314,17 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
  * @param execRows  linhas de team_daily_totals {team_name, regional, sector_id, tipo_code, count}
  * @param rejRows   linhas de note_rejections {team_name, regional, sector_id, tipo} (1 linha = 1 rejeição)
  * @param tipoEquipe 'TODAS' | 'COMERCIAL' (EC*) | 'PLANTAO' (EP*)
+ * @param intRows   linhas de note_interrupcoes {team_name, regional, sector_id, tipo}
+ *                  (1 linha = 1 interrupção), JÁ filtradas por subcategoria e whitelist
  * @returns {{ equipes: Array, tipos: string[] }}
- *   equipes: [{ team_name, regional, sector_id, tipo_equipe, exec:{tipo:n}, rej:{tipo:n}, total_exec, total_rej }]
- *   tipos: união dos códigos de tipo presentes (EXEC ∪ REJE)
+ *   equipes: [{ team_name, regional, sector_id, tipo_equipe, exec:{tipo:n}, rej:{tipo:n},
+ *               interr:{tipo:n}, total_exec, total_rej, total_interr }]
+ *   tipos: união dos códigos de tipo presentes (EXEC ∪ REJE ∪ INTERR)
+ *
+ * INTERR (07/10/2026) é contador PARALELO: não entra em total_exec/total_rej,
+ * logo não entra na SOMA nem no %REJ. Interrupção não é produção (José).
  */
-function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS') {
+function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows = []) {
   const teams = {};
   // Catálogo único desde 18/09/2026. `tipoEquipe` aceita CSV: 'COMERCIAL,MOTO'.
   const passaTipo = filtroDeCategorias(tipoEquipe);
@@ -1326,7 +1332,7 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS') {
     if (!teams[name]) {
       teams[name] = {
         team_name: name, regional, sector_id,
-        exec: {}, rej: {}, total_exec: 0, total_rej: 0,
+        exec: {}, rej: {}, interr: {}, total_exec: 0, total_rej: 0, total_interr: 0,
         tipo_equipe: categoriaDaSigla(name),
       };
     }
@@ -1350,6 +1356,14 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS') {
     t.rej[code] = (t.rej[code] || 0) + 1;
     t.total_rej += 1;
   }
+  // intRows: cada linha é 1 interrupção (ver note_interrupcoes).
+  for (const r of (intRows || [])) {
+    if (!r || !r.team_name || !passaTipo(r.team_name)) continue;
+    const t = ensure(r.team_name, r.regional, r.sector_id);
+    const code = r.tipo || '—';
+    t.interr[code] = (t.interr[code] || 0) + 1;
+    t.total_interr += 1;
+  }
 
   const equipes = Object.values(teams).sort((a, b) =>
     (b.total_exec + b.total_rej) - (a.total_exec + a.total_rej) ||
@@ -1359,8 +1373,26 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS') {
   for (const t of equipes) {
     Object.keys(t.exec).forEach(k => tipos.add(k));
     Object.keys(t.rej).forEach(k => tipos.add(k));
+    Object.keys(t.interr).forEach(k => tipos.add(k));
   }
   return { equipes, tipos: [...tipos] };
+}
+
+// Subcategorias de MD cujas interrupções a matriz conta (José, 07/10/2026):
+// Subs Obsoleto e Subs TL11 (sub_code de classifierService.classificarMD).
+const _SUBCODES_INTERR = new Set(['OBSOLETO', 'TL11']);
+
+/**
+ * FUNÇÃO PURA (testável): mantém só as interrupções de notas com subcategoria
+ * contada. Nota ainda SEM classificação fica de fora: não dá pra afirmar que é
+ * Obsoleto/TL11, e o classificador roda a cada ciclo — ela entra quando for
+ * classificada (a leitura é sempre ao vivo, nada é congelado).
+ */
+function _filtrarInterrupcoesPorSubcat(intRows, subcatsById) {
+  return (intRows || []).filter(r => {
+    const s = r && subcatsById && subcatsById[r.note_id];
+    return !!(s && _SUBCODES_INTERR.has(s.sub_code));
+  });
 }
 
 /**
@@ -1398,7 +1430,31 @@ async function getEquipeTipoMatrix(de, ate, regionals, tipo, team) {
     teams: teamsArr || undefined,
   });
 
-  const { equipes, tipos } = _buildEquipeTipoMatrix(_onlyOficiais(execRows, 'team_name'), rejRows, tipo);
+  // INTERR (07/10/2026): interrupções de MD Obsoleto/TL11, por dia BRT da
+  // interrupção e equipe que interrompeu. Tabela ausente (migration não
+  // aplicada) não derruba a matriz: a coluna sai vazia.
+  let intRows = [];
+  try {
+    const brutas = await _selectAll(() => {
+      let q = sb.from('note_interrupcoes')
+        .select('interrupcao_id, note_id, team_name, regional, sector_id, tipo, dia');
+      if (de)                          q = q.gte('dia', de);
+      if (ate)                         q = q.lte('dia', ate);
+      q = inRegionals(q, regionals);
+      if (teamsArr)                    q = q.in('team_name', teamsArr);
+      else if (team && team !== 'ALL') q = q.eq('team_name', team);
+      return q;
+    }, 1000, 'interrupcao_id');
+    if (brutas.length > 0) {
+      const { getSubcategoriasByIds } = require('./subcategoriasQueries');
+      const subcats = await getSubcategoriasByIds([...new Set(brutas.map(r => r.note_id))]);
+      intRows = _onlyOficiais(_filtrarInterrupcoesPorSubcat(brutas, subcats), 'team_name');
+    }
+  } catch (err) {
+    console.warn('[equipes-matriz] interrupções indisponíveis:', err.message);
+  }
+
+  const { equipes, tipos } = _buildEquipeTipoMatrix(_onlyOficiais(execRows, 'team_name'), rejRows, tipo, intRows);
   return { equipes, tipos, de, ate };
 }
 
@@ -1989,7 +2045,7 @@ module.exports = {
   getTeamSessionHistory,
   getDailySubcatTotals,
   getPerformanceEquipes,
-  getEquipeTipoMatrix, _buildEquipeTipoMatrix,
+  getEquipeTipoMatrix, _buildEquipeTipoMatrix, _filtrarInterrupcoesPorSubcat,
   getDeslogadasUltimaSessao, _reconstruirDeslogada,
   getExportData,
   getNotasIndividuais,

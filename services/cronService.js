@@ -286,6 +286,13 @@ async function runSnapshot() {
       log.error('classify_rejections_failed', { msg: err.message })
     );
 
+    // Interrupções de MD (07/10/2026) → note_interrupcoes. Só equipes REAIS:
+    // as fantasma vêm do _acc, que não guarda o executionStatus usado como
+    // gatilho. Não bloqueia o snapshot. Ver services/interrupcaoService.js.
+    require('./interrupcaoService').runColetaInterrupcoes(teams).catch(err =>
+      log.error('coleta_interrupcoes_failed', { msg: err.message })
+    );
+
     // Sincroniza escala (ShiftType do WPA) → equipes_oficiais.escala_inicio.
     // Não bloqueia o snapshot. Só grava quando o valor muda (idempotente).
     runSyncEscalas(teams).catch(err =>

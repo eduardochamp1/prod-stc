@@ -4509,6 +4509,12 @@
        contagem nova. */
     .mtx-table td.mtx-pct { color: var(--vermelho); font-size: 11px; white-space: nowrap; }
     .mtx-table td.mtx-pct.mtx-zero { color: var(--cinza3); }
+    /* INTERR (07/10/2026): só no grupo MD, depois do %REJ. Laranja e borda
+       tracejada pra NÃO ler como parte da SOMA — interrupção não é produção. */
+    .mtx-table td.mtx-interr, .mtx-table thead tr:nth-child(2) th.mtx-interr {
+      border-left: 1px dashed var(--cinza3);
+    }
+    .mtx-table td.mtx-interr { color: var(--laranja, #c60); font-weight: 600; }
 
     /* Responsivo: aperta fonte/padding em telas estreitas (mantém scroll horizontal). */
     @media (max-width: 900px) {

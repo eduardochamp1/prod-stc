@@ -992,18 +992,39 @@ async function getNoteHistoric(noteId) {
  *
  * O `Id` é metade da chave composta que o P0-8 precisa pra representar "nota
  * rejeitada por 2 equipes"; por isso linha sem Id é descartada.
+ *
+ * ⚠️ FUSO (corrigido em 07/10/2026, antes do 1º chamador): o `Date` DESTE
+ * endpoint já vem em BRT, sem marcador. Nota 105293301: completeInterruptions
+ * deu `2026-10-07T06:58:53`, o `Interruptions[].Date` do details/optimized deu
+ * `09:58:53` (UTC) para o MESMO Id, e o portal mostra o horário BRT. O
+ * `_instanteWpa` anexava Z — erro de 3h, e notas interrompidas entre 21h e
+ * 23h59 cairiam no dia seguinte. Agora anexa -03:00, como o presentationTime.
+ *
+ * ⚠️ MOTIVO: no payload real o texto do motivo vem em `RejectionReasonId`
+ * ("SUSPENSO PARA OUTROS SERVIÇOS"), não em `Reason` (ausente). O nome do
+ * campo engana: na nota interrompida o details/optimized traz
+ * `RejectionReasonId: null` e `NoteInterruptionReasonId` preenchido.
  */
 function _normalizeNoteInterruptions(payload) {
   return _comoLista(payload?.Data)
-    .map(i => ({
-      id:        i?.Id || null,
-      equipe:    i?.TeamName || null,
-      instante:  _instanteWpa(i?.Date),
-      tentativa: i?.Try === undefined || i?.Try === null ? null : i.Try,
-      texto:     i?.Notes || null,
-      motivo:    i?.Reason || null,
-      motivoId:  i?.RejectionReasonId || null,
-    }))
+    .map(i => {
+      const bruto = i?.Date ? String(i.Date).trim() : null;
+      const valido = bruto && !bruto.startsWith('0001-01-01');
+      const instante = !valido ? null
+        : (/[Zz]|[+-]\d{2}:?\d{2}$/.test(bruto) ? bruto : `${bruto}-03:00`);
+      return {
+        id:        i?.Id || null,
+        equipe:    i?.TeamName || null,
+        instante,
+        // Dia BRT da interrupção — é o dia em que ela conta (regra do José,
+        // 07/10/2026). Do texto cru, sem passar por Date/fuso do servidor.
+        dia:       valido && /^\d{4}-\d{2}-\d{2}/.test(bruto) ? bruto.slice(0, 10) : null,
+        tentativa: i?.Try === undefined || i?.Try === null ? null : i.Try,
+        texto:     i?.Notes || null,
+        motivo:    i?.Reason || i?.RejectionReasonId || null,
+        motivoId:  i?.RejectionReasonId || null,
+      };
+    })
     .filter(i => i.id);
 }
 
@@ -1912,6 +1933,12 @@ function normalizarNotaV2(n, statusForcado) {
     tipoCode:       n.Type || '??',
     tipoNome:       n.Type || '??',
     status:         statusForcado || STATUS_V2[n.ExecutionStatus] || 'baixada',
+    // Código CRU da EDP, guardado em 07/10/2026. O `status` acima junta 3/6/7
+    // em 'executada' e perde a distinção — e o Gestão Online do portal mostra
+    // "Interromp." numa nota que veio com ExecutionStatus 3 (105293301). A
+    // coleta de interrupções (services/interrupcaoService.js) usa isto como
+    // gatilho. NÃO muda a classificação: `status` continua igual.
+    executionStatus: n.ExecutionStatus ?? null,
     conclusionDate,
   };
 }
@@ -2449,4 +2476,6 @@ module.exports = {
   _normalizeNoteHistoric, _normalizeNoteInterruptions, _normalizeSessionBreaks,
   // Exportados pra teste — busca de nota pelo número humano.
   _isNoteNumber, _normalizeSearchNote,
+  // Exportado pra teste — executionStatus cru (interrupções, 07/10/2026).
+  _normalizarNotaV2: normalizarNotaV2,
 };
