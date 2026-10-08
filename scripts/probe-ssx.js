@@ -99,6 +99,8 @@ async function login() {
         continue;
       }
       BASE = b;
+      // ExpiresIn NÃO é duração: na VM (08/10/2026) veio 639271048011557000,
+      // que tem a cara de DateTime.Ticks do .NET (instante absoluto, 2026).
       console.log(`  ${b}: OK — token de ${j.AccessToken.length} chars, ExpiresIn=${j.ExpiresIn}`);
       return j.AccessToken;
     } catch (e) {
@@ -133,9 +135,15 @@ async function historico(token, filtros) {
   return { status: 429, erro: '429 após 4 tentativas', lista: [] };
 }
 
+// Valor da placa como a SSX grava — descoberto no passo 2. 1ª rodada na VM
+// (08/10/2026): "TIO2G36" deu 204 em TODOS os dias, inclusive D-1; o GSEQ
+// assume placa com hífen ("ABC-1234", tracking-backfill.ts:81).
+let PLACA_SSX = PLACA;
+const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
 function filtrosDia(dia) {
   return [
-    { PropertyName: 'Plate',     Condition: '=',  Value: PLACA },
+    { PropertyName: 'Plate',     Condition: '=',  Value: PLACA_SSX },
     { PropertyName: 'EventDate', Condition: '>=', Value: `${dia}T00:00:00` },
     { PropertyName: 'EventDate', Condition: '<=', Value: `${dia}T23:59:59` },
   ];
@@ -163,8 +171,47 @@ function resumo(lista) {
   const token = await login();
   if (!token) { console.log('\nSem login — pare aqui e me mande a saída acima.'); process.exit(1); }
 
-  // ── 2. Fuso ──
-  console.log(`\n2. Fuso — posições de HOJE (${diaBRT(0)}) da placa`);
+  // ── 2. Formato da placa na SSX ──
+  // Amostra de 5 min de ontem, SEM filtro de placa: mostra como a SSX escreve
+  // Plate/TrackedUnit e se o filtro de data funciona sozinho.
+  const d1 = diaBRT(1);
+  console.log(`\n2. Formato da placa — amostra de ${d1} 10:00–10:05, sem filtro de placa`);
+  let amostra = { lista: [] };
+  for (const suf of ['', 'Z']) {
+    amostra = await historico(token, [
+      { PropertyName: 'EventDate', Condition: '>=', Value: `${d1}T10:00:00${suf}` },
+      { PropertyName: 'EventDate', Condition: '<=', Value: `${d1}T10:05:00${suf}` },
+    ]);
+    console.log(`   data "${d1}T10:00:00${suf}": HTTP ${amostra.status}, ${amostra.lista.length} posições${amostra.erro ? ' — ' + amostra.erro : ''}`);
+    if (amostra.lista.length) break;
+    await sleep(PAUSA_MS);
+  }
+  const unid = new Map();   // Plate → TrackedUnit (sem motorista/CPF)
+  for (const p of amostra.lista) unid.set(p.Plate || '∅', p.TrackedUnit || '∅');
+  if (unid.size) {
+    console.log(`   ${unid.size} veículos distintos. Exemplos (Plate → TrackedUnit):`);
+    for (const [pl, tu] of [...unid].slice(0, 12)) console.log(`     ${JSON.stringify(pl)} → ${JSON.stringify(tu)}`);
+    const achou = amostra.lista.find(p => norm(p.Plate) === PLACA || norm(p.TrackedUnit).includes(PLACA));
+    if (achou) {
+      PLACA_SSX = achou.Plate || PLACA_SSX;
+      console.log(`   ✔ ${PLACA} está na amostra como Plate=${JSON.stringify(achou.Plate)}, TrackedUnit=${JSON.stringify(achou.TrackedUnit)}`);
+    } else {
+      console.log(`   ${PLACA} não apareceu nesses 5 min (pode estar parado) — testando variantes`);
+    }
+  }
+  if (PLACA_SSX === PLACA) {
+    for (const v of [PLACA, PLACA.slice(0, 3) + '-' + PLACA.slice(3)]) {
+      await sleep(PAUSA_MS);
+      PLACA_SSX = v;
+      const r = await historico(token, filtrosDia(d1));
+      console.log(`   Plate = ${JSON.stringify(v)} em ${d1}: HTTP ${r.status}, ${r.lista.length} posições`);
+      if (r.lista.length) break;
+    }
+  }
+  console.log(`   → seguindo com Plate = ${JSON.stringify(PLACA_SSX)}`);
+
+  // ── 3. Fuso ──
+  console.log(`\n3. Fuso — posições de HOJE (${diaBRT(0)}) da placa`);
   const hoje = await historico(token, filtrosDia(diaBRT(0)));
   if (hoje.erro) console.log(`   HTTP ${hoje.status}: ${hoje.erro}`);
   const rh = resumo(hoje.lista);
@@ -188,8 +235,8 @@ function resumo(lista) {
     console.log('   → confirme no portal SSX: a posição desse endereço tem que mostrar a mesma hora.');
   }
 
-  // ── 3. Retenção ──
-  console.log('\n3. Retenção — mesma placa em dias passados');
+  // ── 4. Retenção ──
+  console.log('\n4. Retenção — mesma placa em dias passados');
   console.log('   dias  data        status  pontos  primeiro → último                         ign  gpsInv');
   for (const d of DIAS_ATRAS) {
     await sleep(PAUSA_MS);
