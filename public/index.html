@@ -7646,14 +7646,31 @@ ${acumuladoHTML}
       return new Set([...a].filter(x => b.has(x)));
     }
 
+    // 08/10/2026: a lista era carregada UMA vez por página. Vincular equipe a
+    // supervisor no Admin não chegava aos filtros até dar F5 — o José relatou
+    // "adicionei os supervisores, porém o filtro não está funcionando".
+    // Chamada após salvar equipe/renomear supervisor: descarta o cache e
+    // remonta os 6 selects que já estão no DOM.
+    const _SUP_SELECTS = ['mon', 'graf', 'rej', 'ranking', 'hist', 'mapa'].map(p => `${p}-supervisor-select`);
+    async function _supInvalidar() {
+      _supEquipes = null;
+      _supEquipesPromise = null;
+      for (const id of _SUP_SELECTS) {
+        try { await _supPopularSelect(id); } catch (_) { /* aba sem o select */ }
+      }
+    }
+
     async function _supPopularSelect(selId) {
       const sel = document.getElementById(selId);
       if (!sel) return;
       const eqs = await _supCarregarEquipes();
       const atual = sel.value || 'ALL';
       const ops = _supOpcoes(eqs);
+      // Sem nenhuma equipe vinculada o select ficava só com "Todos" e parecia
+      // quebrado (08/10/2026). O aviso diz o que falta fazer.
       sel.innerHTML = '<option value="ALL">Todos</option>'
-        + ops.map(o => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.nome)}</option>`).join('')
+        + (ops.length ? ops.map(o => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.nome)}</option>`).join('')
+          : '<option value="" disabled>(vincule equipes no Admin)</option>')
         + '<option value="NONE">— Sem supervisor —</option>';
       sel.value = [...sel.options].some(o => o.value === atual) ? atual : 'ALL';
     }
@@ -10352,6 +10369,7 @@ ${acumuladoHTML}
       try {
         await _supRequest(`${API}/admin/supervisores/${id}`, 'PUT', { nome });
         await loadSupervisoresAdmin();
+        await _supInvalidar();   // o nome novo tem de chegar aos filtros
       } catch (err) { alert('✗ ' + err.message); }
     }
 
@@ -10922,6 +10940,7 @@ ${acumuladoHTML}
         msg.style.color = 'var(--verde)';
         document.getElementById('eq-form').style.display = 'none';
         await loadEquipesOficiais();
+        if (body.supervisor_id !== undefined) await _supInvalidar();
       } catch (err) {
         msg.textContent = '✗ ' + err.message;
         msg.style.color = 'var(--vermelho)';

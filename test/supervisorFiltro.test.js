@@ -105,6 +105,16 @@ test('Gráficos e Rejeições barram conjunto vazio em vez de cair em "todas"', 
   assert.match(rej, /_ef && _ef\.size === 0/);
 });
 
+test('salvar vínculo no Admin atualiza os filtros sem F5 (08/10/2026)', () => {
+  // Bug relatado: a lista do filtro era carregada uma vez por página, então
+  // vincular equipe a supervisor não chegava às abas até recarregar.
+  const inval = extrairFuncao('_supInvalidar');
+  assert.match(inval, /_supEquipes = null/);
+  assert.match(inval, /_supEquipesPromise = null/);
+  assert.match(extrairFuncao('salvarEquipe'), /_supInvalidar\(\)/);
+  assert.match(extrairFuncao('renomearSupervisor'), /_supInvalidar\(\)/);
+});
+
 test('formulário só manda supervisor_id quando mudou', () => {
   const salvar = extrairFuncao('salvarEquipe');
   assert.match(salvar, /supSel\.value !== supSel\.dataset\.original/);
