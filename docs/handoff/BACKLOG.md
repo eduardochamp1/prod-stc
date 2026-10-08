@@ -162,6 +162,10 @@
 | P0-1b | Senha gerada pela tela (20 caracteres aleatórios) não tinha como ser trocada — "essa senha gerada é facilmente esquecida". Incremento 2 do P0-1a | Governança/Segurança | **código done** (22/09) — troca obrigatória no 1º acesso (`423 SENHA_PROVISORIA`) e voluntária; 22 testes; **falta confirmar em prod** |
 | P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; migration aplicada 07/10 (tarde — P0-1d); **falta confirmar em prod** |
 | P0-1d | **Incidente 07/10, 16:22–17:03:** pull com código lendo `excluido_em` antes da migration → só a conta de emergência entrava, e nem ela listava usuários. Log dizia "banco indisponível" com o banco no ar | Governança/Ops | **done** (07/10) — resolvido aplicando a migration; código agora tolera coluna opcional faltando e o log nomeia a migration pendente; 7 testes; **falta deploy** |
+| P0-1e | Não há como suspender ou conceder ABA por usuário: todo logado vê as 8 abas, e a API entrega os dados de todas | Governança/Segurança | **especificado** (07/10) — `SPEC-acesso-abas-2026-10-07.md`; bloqueio no servidor, nasce com todas, Admin segue no `role` (escolhas do José); aguardando OK da spec |
+| P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | pending — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
+| P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | pending — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
+| P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | pending — achado no levantamento do P0-1e (`index.html:9222`) |
 
 ---
 
@@ -6112,3 +6116,83 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   para inteira. Agora pelo menos o banner diz por quê.
 - **Rollback:** `git revert` do commit. Volta a mostrar a mensagem da `sp2`,
   sem outro efeito.
+
+## P0-1e — Acesso por aba: suspender e conceder abas por usuário
+
+- **Categoria:** Governança / Segurança
+- **Status:** **especificado** (07/10/2026) — aguardando OK do José na spec
+- **Spec:** `docs/handoff/SPEC-acesso-abas-2026-10-07.md` (inclui o mapa
+  completo rota → aba, levantado no `index.html`).
+- **Fonte:** José, 07/10/2026: *"e agora como fazemos para suspender ou
+  conceder acesso as abas aos usuarios"*. Escolhas dele: **bloqueio no
+  servidor**; usuário novo **nasce com todas**; a aba Admin **continua no
+  `role`**.
+- **Evidência:** todo logado vê as 8 abas (`public/index.html:96-103`); o
+  único controle por perfil é o botão Admin (`:1676-1683`) e o `requireAdmin`
+  em `/admin/*` (`routes/index.js:249`).
+- **Desenho (detalhe na spec):** coluna `abas_suspensas` (vazia = todas);
+  catálogo rota → aba em `services/abas.js`; um `router.use` recusa com
+  `403 ABA_SUSPENSA`; rota compartilhada liberada com qualquer das abas; rotas
+  sem uso pela tela viram só admin; **teste de cobertura que fica vermelho com
+  rota nova sem dono**; tolerante à migration pendente (lição do P0-1d).
+- **Ponto delicado:** o Monitor carrega no boot e a cada 5 min em qualquer aba
+  (`index.html:9466-9472`) e enche o cache de metas que o Gráficos usa. Para
+  ser suspensível, o frontend muda esse ciclo — spec §5.5.
+- **Achados paralelos do levantamento** (itens próprios, fora deste escopo):
+  P1-52 (`/teams/deslogadas` inalcançável), P2-58 (JWT indo para o
+  workers.dev), P3-20 (botão Acordar WPA para não-admin).
+
+## P1-52 — `/teams/deslogadas` nunca é alcançada
+
+- **Categoria:** Backend
+- **Status:** pending
+- **Evidência:** `router.get('/teams/:teamId')` em `routes/index.js:784` é
+  registrada **antes** de `router.get('/teams/deslogadas')` em `:1063`. O
+  Express casa na ordem de registro, então "deslogadas" vira `teamId`;
+  `getTeamDetail('deslogadas')` devolve null e o handler responde 404 sem
+  `next()`. **Reproduzido em 07/10/2026** (modo mock, conta admin):
+  ordem `/teams/historico → /teams/:teamId → /teams/deslogadas`, resposta
+  `404 {"error":"Equipe não encontrada."}`.
+- **Impacto:** o modo "Todas" do Monitor (`index.html:7573`, `_fetchDeslogadas`,
+  SPEC-monitor-deslogadas de 29/07) não traz as equipes deslogadas. Não
+  conferido em produção desde quando — a ordem das rotas pode ter mudado
+  depois da entrega.
+- **Ação:** mover a rota `/teams/deslogadas` para antes de `/teams/:teamId`
+  (como `/teams/historico` já está), com teste HTTP que chame
+  `/teams/deslogadas` e confira que NÃO responde "Equipe não encontrada".
+- **Aceite:** teste vermelho antes, verde depois; "Todas" no Monitor mostra
+  deslogadas em produção.
+- **Rollback:** `git revert`.
+
+## P2-58 — O JWT do painel vai para o proxy OSRM
+
+- **Categoria:** Segurança / Frontend
+- **Status:** pending
+- **Evidência:** o patch global de `window.fetch` (`public/index.html:1487-1495`)
+  põe `Authorization: Bearer <token>` em **toda** requisição. A aba Mapa chama
+  `https://osrm-proxy.jose-zouain.workers.dev/route/...` com esse `fetch`
+  (`:11696-11697`). O token de sessão (8h, com role e regionais) sai do
+  domínio do painel.
+- **Impacto:** o worker é do próprio José, então o risco hoje é baixo — mas o
+  token passa a depender de onde a Cloudflare e o worker guardam headers, e
+  qualquer outro `fetch` externo futuro herda o vazamento sem ninguém notar.
+- **Ação:** no patch, só injetar o header quando a URL for do próprio painel
+  (relativa, ou mesma origem). Teste de tela conferindo a condição.
+- **Rollback:** `git revert`.
+
+## P3-20 — Botão "Acordar WPA" aparece para quem não pode usá-lo
+
+- **Categoria:** Frontend
+- **Status:** pending
+- **Evidência:** o balão de ações rápidas, visível em todas as abas para todos
+  (`index.html:12287-12302`), tem "⚡ Acordar WPA", que faz
+  `POST /admin/warm` (`:9222`) — rota só admin (`routes/index.js:249`).
+  Não-admin clica e toma 403.
+- **Mais grave que o botão:** `fetchNotaComRecuperacao` (`:9161-9169`), ao
+  abrir uma OS que volta 502/503, dispara `/admin/warm` sozinho e tenta de
+  novo. Para não-admin esse "acordar" toma 403 calado — a recuperação de
+  cold-start **só funciona para admin**. A conferir antes de agir: se o
+  servidor já acorda o WPA por conta própria nesse caminho, o efeito é nulo.
+- **Ação:** esconder o botão para `role !== 'admin'`, como o botão Admin
+  (`:1683`); e decidir a recuperação automática (liberar um "acordar" restrito
+  a quem está logado, ou deixar o servidor fazê-lo).
