@@ -115,6 +115,13 @@ test('salvar vínculo no Admin atualiza os filtros sem F5 (08/10/2026)', () => {
   assert.match(extrairFuncao('renomearSupervisor'), /_supInvalidar\(\)/);
 });
 
+test('Monitor e Gráficos limitam o select de Supervisor à regional (08/10/2026)', () => {
+  // Monitor em CAC + supervisor só de GUA = tela vazia sem explicação.
+  assert.match(extrairFuncao('_supRenderSelect'), /regSet\.has\(e\.regional\)/);
+  assert.match(extrairFuncao('_monRefiltrarEquipes'), /_supRenderSelect\('mon-supervisor-select'/);
+  assert.match(extrairFuncao('_grafRefiltrarEquipes'), /_supRenderSelect\('graf-supervisor-select'/);
+});
+
 test('formulário só manda supervisor_id quando mudou', () => {
   const salvar = extrairFuncao('salvarEquipe');
   assert.match(salvar, /supSel\.value !== supSel\.dataset\.original/);

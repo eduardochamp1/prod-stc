@@ -3986,6 +3986,7 @@
         return _querOp && !CATEGORIAS_EQUIPE.some(c => u.startsWith(c.prefixo));
       };
 
+      _supRenderSelect('graf-supervisor-select', [...scope]);
       const _sup = _supSiglasDoSelect('graf-supervisor-select');
       const eqs = _grafAllEquipes
         .filter(e => scope.has(e.regional))
@@ -7660,17 +7661,28 @@ ${acumuladoHTML}
       }
     }
 
-    async function _supPopularSelect(selId) {
+    async function _supPopularSelect(selId, regionais) {
+      await _supCarregarEquipes();
+      _supRenderSelect(selId, regionais);
+    }
+
+    // Monta as opções a partir do cache JÁ carregado (síncrona). `regionais`
+    // opcional: só lista supervisor com equipe nessas regionais. 08/10/2026 —
+    // com o Monitor em CAC dava pra escolher supervisor só de GUA e a tela
+    // zerava sem explicação ("funil zerou — chegaram 28 equipes"). Se o
+    // supervisor escolhido sai da lista, o select volta pra Todos.
+    function _supRenderSelect(selId, regionais) {
       const sel = document.getElementById(selId);
-      if (!sel) return;
-      const eqs = await _supCarregarEquipes();
+      if (!sel || !_supEquipes) return;
+      const regSet = regionais && regionais.length ? new Set(regionais) : null;
+      const eqs = regSet ? _supEquipes.filter(e => regSet.has(e.regional)) : _supEquipes;
       const atual = sel.value || 'ALL';
       const ops = _supOpcoes(eqs);
       // Sem nenhuma equipe vinculada o select ficava só com "Todos" e parecia
       // quebrado (08/10/2026). O aviso diz o que falta fazer.
       sel.innerHTML = '<option value="ALL">Todos</option>'
         + (ops.length ? ops.map(o => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.nome)}</option>`).join('')
-          : '<option value="" disabled>(vincule equipes no Admin)</option>')
+          : '<option value="" disabled>(nenhum supervisor com equipe nesta seleção)</option>')
         + '<option value="NONE">— Sem supervisor —</option>';
       sel.value = [...sel.options].some(o => o.value === atual) ? atual : 'ALL';
     }
@@ -7724,6 +7736,7 @@ ${acumuladoHTML}
       const sel = document.getElementById('mon-equipe-select');
       if (!sel || !_monAllEquipes || !_monEquipeMSInit) return;
       const escopo = new Set(selectedRegionals.length ? selectedRegionals : userRegionals);
+      _supRenderSelect('mon-supervisor-select', [...escopo]);
       const sup = _supSiglasDoSelect('mon-supervisor-select');
       const eqs = _monAllEquipes
         .filter(e => escopo.has(e.regional))
