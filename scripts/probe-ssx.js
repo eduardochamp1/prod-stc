@@ -140,6 +140,10 @@ async function historico(token, filtros) {
 // assume placa com hífen ("ABC-1234", tracking-backfill.ts:81).
 let PLACA_SSX = PLACA;
 const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// TrackedUnit é texto livre do cadastro SSX e às vezes traz NOME do motorista
+// ("STT-9J51 <nome> 30.084", visto na VM em 08/10/2026). Só a 1ª palavra
+// (a placa) sai na tela; o resto vira "…".
+const unidSegura = s => { const t = String(s || '∅').trim().split(/\s+/); return t[0] + (t.length > 1 ? ' …' : ''); };
 
 function filtrosDia(dia) {
   return [
@@ -159,7 +163,7 @@ function resumo(lista) {
     ignicao: lista.filter(p => p.Ignition).length,
     gpsInvalido: lista.filter(p => p.ValidGPS === false).length,
     placas: [...new Set(lista.map(p => p.Plate || '∅'))].join(','),
-    unidade: [...new Set(lista.map(p => p.TrackedUnit || '∅'))].slice(0, 2).join(' | '),
+    unidade: [...new Set(lista.map(p => unidSegura(p.TrackedUnit)))].slice(0, 2).join(' | '),
   };
 }
 
@@ -187,14 +191,14 @@ function resumo(lista) {
     await sleep(PAUSA_MS);
   }
   const unid = new Map();   // Plate → TrackedUnit (sem motorista/CPF)
-  for (const p of amostra.lista) unid.set(p.Plate || '∅', p.TrackedUnit || '∅');
+  for (const p of amostra.lista) unid.set(p.Plate || '∅', unidSegura(p.TrackedUnit));
   if (unid.size) {
     console.log(`   ${unid.size} veículos distintos. Exemplos (Plate → TrackedUnit):`);
     for (const [pl, tu] of [...unid].slice(0, 12)) console.log(`     ${JSON.stringify(pl)} → ${JSON.stringify(tu)}`);
     const achou = amostra.lista.find(p => norm(p.Plate) === PLACA || norm(p.TrackedUnit).includes(PLACA));
     if (achou) {
       PLACA_SSX = achou.Plate || PLACA_SSX;
-      console.log(`   ✔ ${PLACA} está na amostra como Plate=${JSON.stringify(achou.Plate)}, TrackedUnit=${JSON.stringify(achou.TrackedUnit)}`);
+      console.log(`   ✔ ${PLACA} está na amostra como Plate=${JSON.stringify(achou.Plate)}, TrackedUnit=${JSON.stringify(unidSegura(achou.TrackedUnit))}`);
     } else {
       console.log(`   ${PLACA} não apareceu nesses 5 min (pode estar parado) — testando variantes`);
     }
