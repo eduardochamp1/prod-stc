@@ -166,6 +166,7 @@
 | P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | pending — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
 | P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | pending — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
 | P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | pending — achado no levantamento do P0-1e (`index.html:9222`) |
+| P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
 
 ---
 
@@ -6196,3 +6197,27 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Ação:** esconder o botão para `role !== 'admin'`, como o botão Admin
   (`:1683`); e decidir a recuperação automática (liberar um "acordar" restrito
   a quem está logado, ou deixar o servidor fazê-lo).
+
+## P2-59 — Aba Mapa sem mapa de fundo: o OpenStreetMap bloqueou o painel
+
+- **Categoria:** Frontend / Infra
+- **Status:** pending
+- **Evidência:** `public/index.html:11450` pede os tiles direto a
+  `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`, do browser de cada
+  usuário. Em 07/10/2026 (print do José, SJC) todo tile volta **403** com a
+  imagem "Access blocked — App is not following the tile usage policy of
+  OpenStreetMap's volunteer-run servers". Não é o Fortinet: o 403 vem do OSM.
+- **Causa provável (a confirmar):** a política do OSM exige app identificado e
+  volume baixo; toda a Engelmig sai pelo mesmo IP do Fortinet, sem cache nosso.
+- **Impacto:** a aba Mapa desenha rota e marcadores sobre fundo vazio. Bloqueia
+  o cruzamento apontamentos × rastreador veicular, que vai morar nessa aba.
+- **Ação (escolher):**
+  1. proxy de tiles no backend (`/api/tiles/:z/:x/:y`) com cache em disco e
+     `User-Agent` identificado — cada tile sai do OSM uma vez; ou
+  2. provedor com plano gratuito (CARTO/MapTiler/Esri) — exige cadastro/chave,
+     consultar o José antes (regra: nada pago sem consulta).
+  Em ambos, conferir que o Fortinet deixa a VM/browser alcançar o destino.
+- **Aceite:** aba Mapa com fundo em produção, na rede da Engelmig.
+- **Rollback:** `git revert`.
+- **Nota de numeração:** existem duas seções `## P2-58` (banner da `sp2` e JWT
+  no OSRM) — colisão a desfazer na próxima edição do índice.
