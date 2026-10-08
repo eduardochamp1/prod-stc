@@ -62,6 +62,40 @@ test('ambas fora → devolve a última (sp2); erro propaga sem tentar /signin à
   assert.equal(wpa._resolveUsableAccount('DSSJ'), 'sp2');
 });
 
+// P2-58 (07/10/2026): sp caiu às 13:48 com sp2 no kill-switch, e o banner de SJC
+// mostrou o erro da sp2 ("DESATIVADO ... decisão operacional") — escondendo a queda.
+test('sp com breaker + sp2 desativada → devolve sp (o erro é o da conta que CAIU)', () => {
+  wpa._disabledAccounts.add('sp2');
+  wpa._openBreaker('sp', MSG_INVALIDA);
+  assert.equal(wpa._resolveUsableAccount('DSSJ'), 'sp');
+});
+
+test('sp desativada + sp2 com breaker → devolve sp2 (não a desativada)', () => {
+  wpa._disabledAccounts.add('sp');
+  wpa._openBreaker('sp2', 'WPA login (account=sp2): Usuário ou senha inválidos');
+  assert.equal(wpa._resolveUsableAccount('DSSJ'), 'sp2');
+});
+
+test('ambas com breaker → devolve a primária (sp)', () => {
+  wpa._openBreaker('sp', MSG_INVALIDA);
+  wpa._openBreaker('sp2', 'WPA login (account=sp2): Usuário ou senha inválidos');
+  assert.equal(wpa._resolveUsableAccount('DSSJ'), 'sp');
+});
+
+test('sp com breaker + sp2 desativada → login(sp) recusa SEM /signin, com o motivo real', async () => {
+  wpa._disabledAccounts.add('sp2');
+  wpa._openBreaker('sp', MSG_INVALIDA);
+  const acc = wpa._resolveUsableAccount('DSSJ');
+  // isBreakerOpen só sai do ramo do breaker em login(), que fica ANTES do /signin.
+  await assert.rejects(wpa.login({ account: acc }), (err) => {
+    assert.ok(err.isBreakerOpen, 'erro é do breaker da sp');
+    assert.match(err.message, /account=sp\)/);
+    assert.match(err.message, /senha inv[áa]lid/i, 'carrega a causa original');
+    assert.doesNotMatch(err.message, /WPA_ACCOUNTS_DISABLED/);
+    return true;
+  });
+});
+
 test('ES nunca faz failover — sempre es', () => {
   wpa._openBreaker('es', 'WPA login (account=es): Usuário ou senha inválidos');
   assert.equal(wpa._resolveUsableAccount('DESG'), 'es', 'sem backup, devolve a única');

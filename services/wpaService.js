@@ -161,8 +161,15 @@ function _accountForSector(sectorId) {
 /**
  * Conta USÁVEL do setor agora, percorrendo a cadeia de failover: pula contas
  * DESATIVADAS (kill-switch) e com BREAKER ABERTO (pararam de funcionar). A
- * backup só entra quando a primária cai — exatamente a regra pedida. Se nenhuma
- * está usável, devolve a ÚLTIMA (o erro propaga limpo, sem tentar /signin à toa).
+ * backup só entra quando a primária cai — exatamente a regra pedida.
+ *
+ * Se nenhuma está usável, devolve a 1ª conta NÃO desativada (está com breaker
+ * aberto: login() recusa sem tocar no /signin, com o motivo real da queda). Só
+ * cai na ÚLTIMA quando a cadeia inteira está desativada.
+ * P2-58 (07/10/2026): devolvia sempre a última. Às 13:48 a `sp` caiu, a `sp2`
+ * está no kill-switch desde 26/08, e o banner de SJC mostrou "DESATIVADO
+ * (WPA_ACCOUNTS_DISABLED) — extração pausada por decisão operacional": o erro da
+ * conta desligada de propósito escondeu o da conta que de fato caiu.
  */
 function _resolveUsableAccount(sectorId) {
   const chain = _accountsForSector(sectorId);
@@ -171,7 +178,7 @@ function _resolveUsableAccount(sectorId) {
     if (_breakerRemaining(acc) > 0) continue;
     return acc;
   }
-  return chain[chain.length - 1];
+  return chain.find(acc => !isAccountDisabled(acc)) || chain[chain.length - 1];
 }
 
 /** Extrai sectorId de um path (?sectorId=X) pra rotear pra conta correta. */

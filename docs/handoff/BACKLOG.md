@@ -6068,3 +6068,47 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   do login tem de ser tolerada por construção, desde o primeiro commit.
 - **Rollback:** `git revert` — volta ao comportamento anterior (sem
   tolerância), que hoje é inofensivo porque as duas migrations estão aplicadas.
+
+
+## P2-58 — Banner de SJC culpava a `sp2` (desligada de propósito) quando quem caiu foi a `sp`
+
+- **Categoria:** Observabilidade / Ops
+- **Status:** **código done** (07/10/2026) — falta deploy.
+- **Ocorrência:** 07/10/2026, 13:48. O Monitor mostrou o banner vermelho
+  *"São José dos Campos: coleta indisponível desde 13:48"* com o detalhe
+  `WPA login (account=sp2) DESATIVADO (WPA_ACCOUNTS_DISABLED) — extração pausada
+  por decisão operacional; não tentando /signin.` Voltou sozinho pouco depois,
+  sem nenhuma ação.
+- **Evidência:** `services/wpaService.js` `_resolveUsableAccount`. Quando
+  nenhuma conta da cadeia `DSSJ → [sp, sp2]` está usável, devolvia **sempre a
+  última** (`chain[chain.length - 1]`). A `sp2` está no kill-switch desde 26/08
+  (RUNBOOK, "SJC roda SEM FAILOVER"). Com a `sp` de breaker aberto, a requisição
+  ia para a `sp2`, o `login()` recusava pelo kill-switch, e **essa** mensagem
+  virava o `msg` do setor no `buildColetaStatus` (`services/dataService.js`).
+- **Impacto:** o status já era `falha` (vermelho, correto), mas o texto dizia
+  "pausada por decisão operacional" bem na hora de uma queda **nova**. Quem lê
+  o painel conclui que foi de propósito e não age. O motivo real (o breaker da
+  `sp`: senha inválida, conta bloqueada ou erro desconhecido) não aparecia em
+  lugar nenhum da tela.
+- **Causa provável da queda de 13:48 (não verificada):** como voltou sozinho
+  em pouco tempo, cabe no breaker `unknown_error` (20 min, 2ª falha não
+  transiente seguida). Senha inválida seria 12h. Confirmar com
+  `pm2 logs wpa-monitor --lines 2000 --nostream | grep "account=sp)"`.
+- **Correção:** sem conta usável, devolve a **1ª conta não desativada** da
+  cadeia (está de breaker aberto: o `login()` recusa **sem tocar no /signin** e
+  com `Original: <motivo>`). Só cai na última se a cadeia inteira estiver
+  desativada (comportamento anterior, preservado). O failover normal não muda.
+- **Aceite:**
+  - [x] `test/accountFailover.test.js`: +4 testes (sp com breaker + sp2
+        desativada → `sp`; sp desativada + sp2 com breaker → `sp2`; as duas com
+        breaker → `sp`; `login()` da conta escolhida recusa pelo breaker, com a
+        causa original e sem `WPA_ACCOUNTS_DISABLED` na mensagem).
+  - [x] **Verificado que o teste morde:** no código antigo, 3 dos 4 ficam
+        vermelhos.
+  - [x] Suíte verde: 1316 testes, 0 falhas (2 rodadas; uma 3ª teve a
+        intermitência de `routes.test.js` do P3-19, que passa sozinha).
+  - [ ] Deploy (`git pull` + restart). Nenhuma migration.
+- **O que isto NÃO resolve:** SJC continua sem failover. Se a `sp` cair, SJC
+  para inteira. Agora pelo menos o banner diz por quê.
+- **Rollback:** `git revert` do commit. Volta a mostrar a mensagem da `sp2`,
+  sem outro efeito.
