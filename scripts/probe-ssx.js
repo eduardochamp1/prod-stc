@@ -41,6 +41,10 @@
  *   - 429 já na 3ª chamada: limite apertado — pausa de 4s entre chamadas;
  *   - TZW-7G19: D-1 com 500+ pontos, D-7 vazio → retenção curta OU o veículo
  *     parou. O passo 4 mede a retenção SEM filtro de placa para separar isso.
+ *     4ª rodada: RETENÇÃO DA API = janela móvel de ~72h (frota inteira vazia
+ *     de D-3 pra trás; D-3 só tem pontos das últimas 72h);
+ *   - /Tracking/Vehicle/v2/List → 403 "Usuário sem permissão" para esta
+ *     credencial; o --frota mede cobertura pelo histórico de 72h.
  *
  * Usa só POST /Login, /v3/Tracking/PositionHistory/List e
  * /Tracking/Vehicle/v2/List (leitura). Nenhum endpoint de escrita/comando
@@ -207,7 +211,12 @@ async function modoFrota() {
     await sleep(PAUSA_MS);
     r = await post('/Tracking/Vehicle/v2/List', []);
   }
-  if (!r.lista.length) { console.log(`   cadastro vazio: HTTP ${r.status}${r.erro ? ' — ' + r.erro : ''}`); return; }
+  if (!r.lista.length) {
+    console.log(`   cadastro vazio: HTTP ${r.status}${r.erro ? ' — ' + r.erro : ''}`);
+    // 08/10/2026 na VM: 403 "Usuário sem permissão" — a credencial (do GSEQ)
+    // só enxerga o PositionHistory. Cai para cobertura por histórico.
+    return frotaPorHistorico(nossas);
+  }
 
   const cad = new Map();   // placa normalizada → { LicensePlate, UEN }
   for (const v of r.lista) {
@@ -223,6 +232,40 @@ async function modoFrota() {
   for (const p of tem) { const u = cad.get(p).uen; porUen[u] = (porUen[u] || 0) + 1; }
   console.log(`   UEN SSX das que estão: ${Object.entries(porUen).map(([u, n]) => `${u}=${n}`).join('  ')}`);
   if (falta.length) console.log(`   FORA da SSX: ${falta.join(', ')}`);
+}
+
+// Cobertura sem o cadastro: 1 consulta por placa nas últimas 72h (a janela
+// que a SSX guarda), formato com hífen primeiro (o usual), depois sem.
+// "Fora" aqui = sem NENHUMA posição em 72h: veículo não rastreado pela SSX,
+// placa trocada no cadastro, OU veículo parado/desligado 3 dias seguidos.
+async function frotaPorHistorico(nossas) {
+  const ate = new Date().toISOString();
+  const de  = new Date(Date.now() - 71 * 3600e3).toISOString();
+  console.log(`\n   cobertura pelo histórico (${de.slice(0, 16)}Z → agora), ~${Math.ceil(nossas.length * 1.3 * PAUSA_MS / 60000)} min:`);
+  const tem = [], falta = [];
+  for (const [i, pl] of nossas.entries()) {
+    let achou = null;
+    for (const v of [pl.slice(0, 3) + '-' + pl.slice(3), pl]) {
+      await sleep(PAUSA_MS);
+      const r = await historico([
+        { PropertyName: 'Plate',     Condition: '=',  Value: v },
+        { PropertyName: 'EventDate', Condition: '>=', Value: de },
+        { PropertyName: 'EventDate', Condition: '<=', Value: ate },
+      ]);
+      if (r.erro) console.log(`     ${v}: HTTP ${r.status} ${r.erro}`);
+      if (r.lista.length) {
+        const ult = r.lista.map(p => p.EventDate).sort().pop();
+        achou = { v, n: r.lista.length, ult };
+        break;
+      }
+    }
+    if (achou) tem.push(pl); else falta.push(pl);
+    console.log(`   ${String(i + 1).padStart(3)}/${nossas.length}  ${pl.padEnd(8)} ${achou
+      ? `✔ como "${achou.v}"  ${achou.n}${achou.n >= 500 ? '+' : ''} pts, última ${fmtBRT(achou.ult)}`
+      : '✘ nenhuma posição em 72h'}`);
+  }
+  console.log(`\n   COM trilha na SSX: ${tem.length}/${nossas.length}    SEM: ${falta.length}`);
+  if (falta.length) console.log(`   SEM trilha: ${falta.join(', ')}`);
 }
 
 // ── Modo padrão: sonda de uma placa ──────────────────────────────────────────
