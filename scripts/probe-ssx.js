@@ -4,12 +4,15 @@
  * SONDA READ-ONLY da API do rastreador veicular SystemSatX (SSX).
  *
  * Uso (na VM):
- *   cd ~/prod-stc && node scripts/probe-ssx.js [PLACA] [--env-file CAMINHO]
+ *   cd ~/prod-stc && node scripts/probe-ssx.js [PLACA] [--credenciais CAMINHO]
  *
  *   PLACA        placa Mercosul sem hífen (padrão: TIO2G36, ECASJ84/SJC)
- *   --env-file   lê as credenciais de outro .env (ex.: o do GSEQ, que usa
- *                TRACKING_USERNAME/PASSWORD/HASH_AUTH) — assim a senha não
- *                precisa ser copiada para o .env do WPA Monitor só pra sondar.
+ *   --credenciais lê as credenciais de outro .env (ex.: o do GSEQ, que usa
+ *                 TRACKING_USERNAME/PASSWORD/HASH_AUTH) — assim a senha não
+ *                 precisa ser copiada para o .env do WPA Monitor só pra sondar.
+ *                 O nome NÃO pode ser --env-file: o Node >= 20 captura essa
+ *                 opção mesmo depois do nome do script (08/10/2026, na VM:
+ *                 "node: CAMINHO_DO_GSEQ/.env: not found").
  *
  * Variáveis aceitas (a primeira que existir):
  *   SSX_USERNAME  | TRACKING_USERNAME
@@ -35,11 +38,13 @@
 
 const path = require('path');
 const ARGS = process.argv.slice(2);
-const envIdx = ARGS.indexOf('--env-file');
+const envIdx = ARGS.indexOf('--credenciais');
 if (envIdx >= 0) {
   const p = ARGS[envIdx + 1];
-  if (!p) { console.error('--env-file sem caminho'); process.exit(2); }
-  require('dotenv').config({ path: path.resolve(p.replace(/^~/, process.env.HOME || '~')) });
+  if (!p) { console.error('--credenciais sem caminho'); process.exit(2); }
+  const arq = path.resolve(p.replace(/^~/, process.env.HOME || '~'));
+  if (!require('fs').existsSync(arq)) { console.error(`--credenciais: arquivo não existe: ${arq}`); process.exit(2); }
+  require('dotenv').config({ path: arq });
   ARGS.splice(envIdx, 2);
 }
 require('dotenv').config(); // .env do WPA Monitor (não sobrescreve o de cima)
@@ -58,7 +63,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 if (!USER || !PASS || !HASH) {
   console.error('Credenciais ausentes. Defina SSX_USERNAME/SSX_PASSWORD/SSX_HASH_AUTH no .env');
-  console.error('ou aponte para o .env do GSEQ:  node scripts/probe-ssx.js PLACA --env-file ~/gseq/.env');
+  console.error('ou aponte para o .env do GSEQ:  node scripts/probe-ssx.js PLACA --credenciais ~/gseq/.env');
   process.exit(2);
 }
 
