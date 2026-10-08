@@ -5,8 +5,13 @@
  *
  * Uso (na VM):
  *   cd ~/prod-stc && node scripts/probe-ssx.js [PLACA] [--credenciais CAMINHO]
+ *   cd ~/prod-stc && node scripts/probe-ssx.js --frota ARQ [--credenciais CAMINHO]
  *
  *   PLACA        placa Mercosul sem hífen (padrão: TIO2G36, ECASJ84/SJC)
+ *   --frota ARQ  em vez da sonda de placa, compara as placas do arquivo ARQ
+ *                (separadas por vírgula ou quebra de linha) com o CADASTRO de
+ *                veículos da SSX (/Tracking/Vehicle/v2/List) — mostra quais
+ *                equipes ficariam sem trilha.
  *   --credenciais lê as credenciais de outro .env (ex.: o do GSEQ, que usa
  *                 TRACKING_USERNAME/PASSWORD/HASH_AUTH) — assim a senha não
  *                 precisa ser copiada para o .env do WPA Monitor só pra sondar.
@@ -22,31 +27,44 @@
  *
  * Contexto (07/10/2026). Ideia do José: cruzar, na aba Mapa, a trilha do
  * veículo (SSX) com o endereço da nota e as coordenadas dos apontamentos WPA,
- * lendo a SSX SOB DEMANDA, sem gravar nada. Antes da spec faltam 2 respostas
- * que o manual (SSX_API_MANUAL.md) NÃO dá:
+ * lendo a SSX SOB DEMANDA, sem gravar nada. Antes da spec faltam respostas
+ * que o manual (SSX_API_MANUAL.md) NÃO dá: retenção, fuso, formato da placa
+ * e cobertura da frota.
  *
- *   1. RETENÇÃO — até quanto tempo atrás a SSX devolve posições?
- *      → consulta a mesma placa em D-1, D-7, D-30, D-90, D-180, D-365.
- *   2. FUSO — o EventDate vem em UTC ou em horário de Brasília?
- *      (o manual §7 admite que a doc é inconsistente)
- *      → compara o EventDate mais recente de HOJE com o relógio agora.
+ * Já medido na VM (08/10/2026, 3 rodadas):
+ *   - login por https funciona apesar do Fortinet;
+ *   - ExpiresIn é DateTime.Ticks do .NET (instante absoluto, +24h), não duração;
+ *   - EventDate vem em UTC com "Z", e o FILTRO de data sem fuso também é UTC
+ *     (pedir "2026-10-06T00:00:00" trouxe 00:07Z = 21h do dia 05 em Brasília).
+ *     Por isso o dia aqui é [D 03:00Z, D+1 03:00Z);
+ *   - Plate vem quase sempre com hífen ("TZW-7G19"), às vezes sem ("SHD8E40");
+ *   - 429 já na 3ª chamada: limite apertado — pausa de 4s entre chamadas;
+ *   - TZW-7G19: D-1 com 500+ pontos, D-7 vazio → retenção curta OU o veículo
+ *     parou. O passo 4 mede a retenção SEM filtro de placa para separar isso.
  *
- * Usa só POST /Login e POST /v3/Tracking/PositionHistory/List (leitura).
- * Nenhum endpoint de escrita/comando (manual §10). Não grava nada, não
- * imprime senha nem token, não imprime motorista nem CPF (DocumentNumber).
+ * Usa só POST /Login, /v3/Tracking/PositionHistory/List e
+ * /Tracking/Vehicle/v2/List (leitura). Nenhum endpoint de escrita/comando
+ * (manual §10). Não grava nada, não imprime senha nem token, não imprime
+ * motorista nem CPF (DocumentNumber).
  */
 
+const fs   = require('fs');
 const path = require('path');
 const ARGS = process.argv.slice(2);
-const envIdx = ARGS.indexOf('--credenciais');
-if (envIdx >= 0) {
-  const p = ARGS[envIdx + 1];
-  if (!p) { console.error('--credenciais sem caminho'); process.exit(2); }
-  const arq = path.resolve(p.replace(/^~/, process.env.HOME || '~'));
-  if (!require('fs').existsSync(arq)) { console.error(`--credenciais: arquivo não existe: ${arq}`); process.exit(2); }
-  require('dotenv').config({ path: arq });
-  ARGS.splice(envIdx, 2);
+
+function tirarOpcao(nome) {
+  const i = ARGS.indexOf(nome);
+  if (i < 0) return null;
+  const v = ARGS[i + 1];
+  if (!v) { console.error(`${nome} sem valor`); process.exit(2); }
+  ARGS.splice(i, 2);
+  const arq = path.resolve(v.replace(/^~/, process.env.HOME || '~'));
+  if (!fs.existsSync(arq)) { console.error(`${nome}: arquivo não existe: ${arq}`); process.exit(2); }
+  return arq;
 }
+const ARQ_CRED  = tirarOpcao('--credenciais');
+const ARQ_FROTA = tirarOpcao('--frota');
+if (ARQ_CRED) require('dotenv').config({ path: ARQ_CRED });
 require('dotenv').config(); // .env do WPA Monitor (não sobrescreve o de cima)
 
 const PLACA = (ARGS[0] || 'TIO2G36').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -57,8 +75,9 @@ const BASES = process.env.SSX_BASE
   ? [process.env.SSX_BASE]
   : ['https://integration.systemsatx.com.br', 'http://integration.systemsatx.com.br'];
 
-const DIAS_ATRAS = [1, 7, 30, 90, 180, 365];
-const PAUSA_MS   = 2000;   // chamadas serializadas — limite do 429 não é publicado
+const DIAS_PLACA = [1, 2, 3, 4, 5, 6, 7];
+const DIAS_FROTA = [1, 2, 3, 4, 5, 6, 7, 10, 14, 30, 60, 90];
+const PAUSA_MS   = 4000;   // 429 veio já na 3ª chamada com 2s (08/10/2026)
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 if (!USER || !PASS || !HASH) {
@@ -72,10 +91,22 @@ if (!USER || !PASS || !HASH) {
 function diaBRT(diasAtras) {
   return new Date(Date.now() - 3 * 3600e3 - diasAtras * 86400e3).toISOString().slice(0, 10);
 }
+// Instante UTC (ISO com Z) de "dia às hh:mm de Brasília" + delta em minutos.
+function utcDeBRT(dia, hhmm, deltaMin = 0) {
+  return new Date(Date.parse(`${dia}T${hhmm}:00-03:00`) + deltaMin * 60e3).toISOString();
+}
 const fmtMin = ms => (ms / 60000).toFixed(0) + ' min';
+const fmtBRT = iso => new Date(Date.parse(iso) - 3 * 3600e3).toISOString().slice(5, 16).replace('T', ' ');
+
+const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// TrackedUnit é texto livre do cadastro SSX e às vezes traz NOME do motorista
+// ("STT-9J51 <nome> 30.084", visto na VM em 08/10/2026). Só a 1ª palavra
+// (a placa) sai na tela; o resto vira "…".
+const unidSegura = s => { const t = String(s || '∅').trim().split(/\s+/); return t[0] + (t.length > 1 ? ' …' : ''); };
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
 let BASE = null;
+let TOKEN = null;
 
 async function login() {
   const body = new URLSearchParams({ Username: USER, Password: PASS, HashAuth: HASH });
@@ -99,9 +130,7 @@ async function login() {
         continue;
       }
       BASE = b;
-      // ExpiresIn NÃO é duração: na VM (08/10/2026) veio 639271048011557000,
-      // que tem a cara de DateTime.Ticks do .NET (instante absoluto, 2026).
-      console.log(`  ${b}: OK — token de ${j.AccessToken.length} chars, ExpiresIn=${j.ExpiresIn}`);
+      console.log(`  ${b}: OK`);
       return j.AccessToken;
     } catch (e) {
       const code = (e.cause && (e.cause.code || e.cause.message)) || e.message;
@@ -111,12 +140,12 @@ async function login() {
   return null;
 }
 
-async function historico(token, filtros) {
-  for (let tent = 0; tent < 4; tent++) {
-    const r = await fetch(BASE + '/v3/Tracking/PositionHistory/List', {
+async function post(rota, corpo) {
+  for (let tent = 0; tent < 5; tent++) {
+    const r = await fetch(BASE + rota, {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(filtros),
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(corpo),
       signal: AbortSignal.timeout(60000),
     });
     if (r.status === 429) {
@@ -132,24 +161,27 @@ async function historico(token, filtros) {
     const lista = Array.isArray(j) ? j : (j.Result || j.Data || []);
     return { status: r.status, lista };
   }
-  return { status: 429, erro: '429 após 4 tentativas', lista: [] };
+  return { status: 429, erro: '429 após 5 tentativas', lista: [] };
 }
+const historico = filtros => post('/v3/Tracking/PositionHistory/List', filtros);
 
 // Valor da placa como a SSX grava — descoberto no passo 2. 1ª rodada na VM
 // (08/10/2026): "TIO2G36" deu 204 em TODOS os dias, inclusive D-1; o GSEQ
 // assume placa com hífen ("ABC-1234", tracking-backfill.ts:81).
 let PLACA_SSX = PLACA;
-const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-// TrackedUnit é texto livre do cadastro SSX e às vezes traz NOME do motorista
-// ("STT-9J51 <nome> 30.084", visto na VM em 08/10/2026). Só a 1ª palavra
-// (a placa) sai na tela; o resto vira "…".
-const unidSegura = s => { const t = String(s || '∅').trim().split(/\s+/); return t[0] + (t.length > 1 ? ' …' : ''); };
 
 function filtrosDia(dia) {
   return [
     { PropertyName: 'Plate',     Condition: '=',  Value: PLACA_SSX },
-    { PropertyName: 'EventDate', Condition: '>=', Value: `${dia}T00:00:00` },
-    { PropertyName: 'EventDate', Condition: '<=', Value: `${dia}T23:59:59` },
+    { PropertyName: 'EventDate', Condition: '>=', Value: utcDeBRT(dia, '00:00') },
+    { PropertyName: 'EventDate', Condition: '<',  Value: utcDeBRT(dia, '00:00', 24 * 60) },
+  ];
+}
+// 5 min às 10:00 de Brasília, sem filtro de placa (horário de frota rodando).
+function filtrosAmostra(dia) {
+  return [
+    { PropertyName: 'EventDate', Condition: '>=', Value: utcDeBRT(dia, '10:00') },
+    { PropertyName: 'EventDate', Condition: '<',  Value: utcDeBRT(dia, '10:00', 5) },
   ];
 }
 
@@ -162,52 +194,54 @@ function resumo(lista) {
     ultimo: ev[ev.length - 1],
     ignicao: lista.filter(p => p.Ignition).length,
     gpsInvalido: lista.filter(p => p.ValidGPS === false).length,
-    placas: [...new Set(lista.map(p => p.Plate || '∅'))].join(','),
-    unidade: [...new Set(lista.map(p => unidSegura(p.TrackedUnit)))].slice(0, 2).join(' | '),
   };
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
-(async () => {
-  console.log(`\n== probe-ssx — placa ${PLACA} — ${new Date().toISOString()}\n`);
-
-  console.log('1. Login');
-  const token = await login();
-  if (!token) { console.log('\nSem login — pare aqui e me mande a saída acima.'); process.exit(1); }
-
-  // ── 2. Formato da placa na SSX ──
-  // Amostra de 5 min de ontem, SEM filtro de placa: mostra como a SSX escreve
-  // Plate/TrackedUnit e se o filtro de data funciona sozinho.
-  const d1 = diaBRT(1);
-  console.log(`\n2. Formato da placa — amostra de ${d1} 10:00–10:05, sem filtro de placa`);
-  let amostra = { lista: [] };
-  for (const suf of ['', 'Z']) {
-    amostra = await historico(token, [
-      { PropertyName: 'EventDate', Condition: '>=', Value: `${d1}T10:00:00${suf}` },
-      { PropertyName: 'EventDate', Condition: '<=', Value: `${d1}T10:05:00${suf}` },
-    ]);
-    console.log(`   data "${d1}T10:00:00${suf}": HTTP ${amostra.status}, ${amostra.lista.length} posições${amostra.erro ? ' — ' + amostra.erro : ''}`);
-    if (amostra.lista.length) break;
+// ── Modo --frota: nossas placas × cadastro SSX ───────────────────────────────
+async function modoFrota() {
+  const nossas = [...new Set(fs.readFileSync(ARQ_FROTA, 'utf8').split(/[,\s]+/).map(norm).filter(Boolean))];
+  console.log(`\n2. Frota — ${nossas.length} placas do arquivo × cadastro de veículos da SSX`);
+  let r = await post('/Tracking/Vehicle/v2/List', [{ PropertyName: 'LicensePlate', Condition: 'Contains', Value: '' }]);
+  if (!r.lista.length) {
+    console.log(`   filtro Contains "": HTTP ${r.status}${r.erro ? ' — ' + r.erro : ''} — tentando []`);
     await sleep(PAUSA_MS);
+    r = await post('/Tracking/Vehicle/v2/List', []);
   }
-  const unid = new Map();   // Plate → TrackedUnit (sem motorista/CPF)
-  for (const p of amostra.lista) unid.set(p.Plate || '∅', unidSegura(p.TrackedUnit));
-  if (unid.size) {
-    console.log(`   ${unid.size} veículos distintos. Exemplos (Plate → TrackedUnit):`);
-    for (const [pl, tu] of [...unid].slice(0, 12)) console.log(`     ${JSON.stringify(pl)} → ${JSON.stringify(tu)}`);
-    const achou = amostra.lista.find(p => norm(p.Plate) === PLACA || norm(p.TrackedUnit).includes(PLACA));
-    if (achou) {
-      PLACA_SSX = achou.Plate || PLACA_SSX;
-      console.log(`   ✔ ${PLACA} está na amostra como Plate=${JSON.stringify(achou.Plate)}, TrackedUnit=${JSON.stringify(unidSegura(achou.TrackedUnit))}`);
-    } else {
-      console.log(`   ${PLACA} não apareceu nesses 5 min (pode estar parado) — testando variantes`);
-    }
+  if (!r.lista.length) { console.log(`   cadastro vazio: HTTP ${r.status}${r.erro ? ' — ' + r.erro : ''}`); return; }
+
+  const cad = new Map();   // placa normalizada → { LicensePlate, UEN }
+  for (const v of r.lista) {
+    const k = norm(v.LicensePlate);
+    if (k) cad.set(k, { placa: v.LicensePlate, uen: v.OrganizationalUnitIntegrationCode || '∅' });
   }
-  if (PLACA_SSX === PLACA) {
+  console.log(`   cadastro SSX: ${r.lista.length} veículos (${cad.size} placas distintas)${r.lista.length >= 500 ? ' — pode estar TRUNCADO em 500' : ''}`);
+
+  const tem   = nossas.filter(p => cad.has(p));
+  const falta = nossas.filter(p => !cad.has(p));
+  console.log(`   no cadastro SSX: ${tem.length}/${nossas.length}    fora: ${falta.length}`);
+  const porUen = {};
+  for (const p of tem) { const u = cad.get(p).uen; porUen[u] = (porUen[u] || 0) + 1; }
+  console.log(`   UEN SSX das que estão: ${Object.entries(porUen).map(([u, n]) => `${u}=${n}`).join('  ')}`);
+  if (falta.length) console.log(`   FORA da SSX: ${falta.join(', ')}`);
+}
+
+// ── Modo padrão: sonda de uma placa ──────────────────────────────────────────
+async function modoPlaca() {
+  // ── 2. Formato da placa ──
+  const d1 = diaBRT(1);
+  console.log(`\n2. Formato da placa — amostra de ${d1} 10:00–10:05 (Brasília), sem filtro de placa`);
+  const amostra = await historico(filtrosAmostra(d1));
+  console.log(`   HTTP ${amostra.status}, ${amostra.lista.length} posições${amostra.erro ? ' — ' + amostra.erro : ''}`);
+  const achou = amostra.lista.find(p => norm(p.Plate) === PLACA || norm(p.TrackedUnit).startsWith(PLACA));
+  if (achou) {
+    PLACA_SSX = achou.Plate || PLACA_SSX;
+    console.log(`   ✔ ${PLACA} está na amostra como Plate=${JSON.stringify(achou.Plate)}, TrackedUnit=${JSON.stringify(unidSegura(achou.TrackedUnit))}`);
+  } else {
+    console.log(`   ${PLACA} não apareceu nesses 5 min — testando variantes`);
     for (const v of [PLACA, PLACA.slice(0, 3) + '-' + PLACA.slice(3)]) {
       await sleep(PAUSA_MS);
       PLACA_SSX = v;
-      const r = await historico(token, filtrosDia(d1));
+      const r = await historico(filtrosDia(d1));
       console.log(`   Plate = ${JSON.stringify(v)} em ${d1}: HTTP ${r.status}, ${r.lista.length} posições`);
       if (r.lista.length) break;
     }
@@ -215,49 +249,63 @@ function resumo(lista) {
   console.log(`   → seguindo com Plate = ${JSON.stringify(PLACA_SSX)}`);
 
   // ── 3. Fuso ──
+  await sleep(PAUSA_MS);
   console.log(`\n3. Fuso — posições de HOJE (${diaBRT(0)}) da placa`);
-  const hoje = await historico(token, filtrosDia(diaBRT(0)));
+  const hoje = await historico(filtrosDia(diaBRT(0)));
   if (hoje.erro) console.log(`   HTTP ${hoje.status}: ${hoje.erro}`);
-  const rh = resumo(hoje.lista);
-  if (!rh) {
-    console.log('   nenhuma posição hoje (veículo desligado/sem sinal?) — rode de novo em horário de operação');
+  if (!hoje.lista.length) {
+    console.log('   nenhuma posição hoje (veículo desligado/sem sinal?)');
   } else {
-    // Pega a posição mais recente por IdPosition e mostra os campos de data CRUS
     const ult = hoje.lista.reduce((a, b) => (b.IdPosition > a.IdPosition ? b : a));
     const agora = Date.now();
     const evComoUTC   = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(ult.EventDate) ? ult.EventDate : ult.EventDate + 'Z');
     const evComoLocal = Date.parse(ult.EventDate.replace(/[zZ]$/, '') + '-03:00');
-    console.log(`   ${rh.n} posições${rh.n >= 500 ? ' (TRUNCADO em 500)' : ''}`);
-    console.log(`   mais recente (IdPosition ${ult.IdPosition}):`);
-    console.log(`     EventDate  cru: ${ult.EventDate}`);
-    console.log(`     UpdateDate cru: ${ult.UpdateDate}`);
-    console.log(`     endereço      : ${ult.Address || '∅'}`);
-    console.log(`   relógio agora   : ${new Date(agora).toISOString()} UTC`);
-    console.log(`   se EventDate for UTC     → idade ${fmtMin(agora - evComoUTC)}`);
-    console.log(`   se EventDate for Brasília→ idade ${fmtMin(agora - evComoLocal)}`);
-    console.log('   → a hipótese com idade pequena e POSITIVA é a certa. Idade negativa = hipótese errada.');
-    console.log('   → confirme no portal SSX: a posição desse endereço tem que mostrar a mesma hora.');
+    console.log(`   ${hoje.lista.length} posições${hoje.lista.length >= 500 ? ' (TRUNCADO em 500)' : ''}`);
+    console.log(`   mais recente: EventDate=${ult.EventDate}  UpdateDate=${ult.UpdateDate}`);
+    console.log(`   se UTC → idade ${fmtMin(agora - evComoUTC)}  |  se Brasília → idade ${fmtMin(agora - evComoLocal)}`);
   }
 
-  // ── 4. Retenção ──
-  console.log('\n4. Retenção — mesma placa em dias passados');
-  console.log('   dias  data        status  pontos  primeiro → último                         ign  gpsInv');
-  for (const d of DIAS_ATRAS) {
+  // ── 4a. Retenção da placa ──
+  console.log(`\n4a. Retenção — placa ${PLACA_SSX}, dia inteiro de Brasília`);
+  console.log('   dias  data        status  pontos  primeiro → último (Brasília)   ign  gpsInv');
+  for (const d of DIAS_PLACA) {
     await sleep(PAUSA_MS);
     const dia = diaBRT(d);
-    const r = await historico(token, filtrosDia(dia));
+    const r = await historico(filtrosDia(dia));
     const s = resumo(r.lista);
     const linha = s
-      ? `${String(s.n).padStart(6)}${s.n >= 500 ? '+' : ' '} ${s.primeiro} → ${s.ultimo}  ${String(s.ignicao).padStart(4)}  ${String(s.gpsInvalido).padStart(6)}`
+      ? `${String(s.n).padStart(6)}${s.n >= 500 ? '+' : ' '} ${fmtBRT(s.primeiro)} → ${fmtBRT(s.ultimo)}  ${String(s.ignicao).padStart(4)}  ${String(s.gpsInvalido).padStart(6)}`
       : `     0  ${r.erro || '(vazio)'}`;
     console.log(`   ${String(d).padStart(4)}  ${dia}  ${String(r.status).padStart(6)}  ${linha}`);
-    if (s && d === 1) console.log(`         Plate=${s.placas}  TrackedUnit=${s.unidade}`);
   }
+}
 
-  console.log('\nComo ler:');
-  console.log('  - Pontos > 0 num dia antigo = a SSX ainda guarda aquele dia.');
-  console.log('  - Primeiro dia com 0 (e o anterior com dados) = limite da retenção.');
-  console.log('  - "500+" = há mais pontos naquele dia (uma chamada traz no máximo 500).');
-  console.log('  - Tudo 0, inclusive D-1: placa com outro formato na SSX, ou veículo parado.');
-  console.log('    Rode com outra placa:  node scripts/probe-ssx.js SHU2I06 ...\n');
+// ── 4b. Retenção da frota (independe de um veículo ter rodado) ───────────────
+async function retencaoFrota() {
+  console.log('\n4b. Retenção — FROTA inteira, 5 min às 10:00 de Brasília (sem filtro de placa)');
+  console.log('   dias  data        status  posições  veículos');
+  for (const d of DIAS_FROTA) {
+    await sleep(PAUSA_MS);
+    const dia = diaBRT(d);
+    const r = await historico(filtrosAmostra(dia));
+    const veic = new Set(r.lista.map(p => norm(p.Plate || p.TrackedUnit))).size;
+    console.log(`   ${String(d).padStart(4)}  ${dia}  ${String(r.status).padStart(6)}  ${String(r.lista.length).padStart(8)}${r.lista.length >= 500 ? '+' : ' '} ${String(veic).padStart(8)}${r.erro ? '  ' + r.erro : ''}`);
+  }
+  console.log('   → o 1º dia com 0 posições na FROTA é o limite da retenção da SSX.');
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+(async () => {
+  console.log(`\n== probe-ssx — ${ARQ_FROTA ? 'frota' : 'placa ' + PLACA} — ${new Date().toISOString()}\n`);
+  console.log('1. Login');
+  TOKEN = await login();
+  if (!TOKEN) { console.log('\nSem login — pare aqui e me mande a saída acima.'); process.exit(1); }
+
+  if (ARQ_FROTA) {
+    await modoFrota();
+  } else {
+    await modoPlaca();
+    await retencaoFrota();
+  }
+  console.log('');
 })().catch(e => { console.error('ERRO:', e.message); process.exit(1); });
