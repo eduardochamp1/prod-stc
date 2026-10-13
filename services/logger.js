@@ -32,7 +32,9 @@
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
-const MIN_LEVEL = LEVELS[process.env.LOG_LEVEL] || (IS_PROD ? LEVELS.info : LEVELS.debug);
+// 13/10/2026 — P3-18c: LOG_LEVEL=DEBUG (maiúsculo) dava undefined e caía no default
+// de produção em silêncio.
+const MIN_LEVEL = LEVELS[String(process.env.LOG_LEVEL || '').trim().toLowerCase()] || (IS_PROD ? LEVELS.info : LEVELS.debug);
 
 // Cores ANSI para dev
 const COLORS = {

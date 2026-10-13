@@ -113,7 +113,21 @@ function _baldeEstourado(rec, teto, now, janelaMs) {
 }
 
 /** Registra uma tentativa ERRADA num balde (reinicia a janela se expirou). */
+// 13/10/2026 — P3-15: o Map só perdia entrada no login OK; janela expirada de
+// quem nunca voltou ficava para sempre. Poda oportunista no caminho frio (só
+// quando passa de PODA_ACIMA entradas), custo O(n) raro.
+const LOGIN_PODA_ACIMA = 500;
+function _podarBaldes(now) {
+  if (_loginTries.size <= LOGIN_PODA_ACIMA) return 0;
+  let n = 0;
+  for (const [k, rec] of _loginTries) {
+    if (now - rec.first >= LOGIN_WINDOW_MS) { _loginTries.delete(k); n++; }
+  }
+  return n;
+}
+
 function _contarErro(chave, now) {
+  _podarBaldes(now);
   const rec = _loginTries.get(chave);
   if (!rec || now - rec.first >= LOGIN_WINDOW_MS) {
     _loginTries.set(chave, { count: 1, first: now });
@@ -4190,6 +4204,8 @@ module.exports._loginKey       = _loginKey;
 module.exports._loginKeyUser   = _loginKeyUser;
 module.exports._baldeEstourado = _baldeEstourado;
 module.exports._loginTries     = _loginTries;
+module.exports._contarErro     = _contarErro;
+module.exports._LOGIN_PODA_ACIMA = LOGIN_PODA_ACIMA;
 module.exports._LOGIN_MAX      = LOGIN_MAX;
 module.exports._LOGIN_MAX_USER = LOGIN_MAX_USER;
 module.exports._LOGIN_WINDOW_MS= LOGIN_WINDOW_MS;

@@ -58,7 +58,11 @@ function create({ ttlMs = 5 * 60 * 1000, name = 'cache', maxEntries = 200 } = {}
       }
       // 3. Computa, registra in-flight pra coalescer concorrentes.
       if (MEMO_DEBUG) console.log(`[memo:${name}] MISS     ${key}`);
-      const promise = (async () => {
+      // 13/10/2026 — P3-17: Promise.resolve().then(...) em vez de IIFE async. Com a
+      // IIFE, um fn que lançasse de forma SÍNCRONA rodava o finally ANTES do
+      // inflight.set abaixo, e a chave ficava com promise rejeitada para sempre.
+      // Aqui o fn só roda num microtask, depois do set.
+      const promise = Promise.resolve().then(async () => {
         try {
           const value = await fn(...args);
           store.set(key, { value, expiresAt: _now() + ttlMs });
@@ -67,7 +71,7 @@ function create({ ttlMs = 5 * 60 * 1000, name = 'cache', maxEntries = 200 } = {}
         } finally {
           inflight.delete(key);
         }
-      })();
+      });
       inflight.set(key, promise);
       return promise;
     };
