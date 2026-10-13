@@ -1485,16 +1485,29 @@
 
     // Patch global de window.fetch: injeta Bearer e redireciona 401 → login
     (function patchFetch() {
+      // 13/10/2026 — P2-58: o Bearer só vai para a NOSSA origem. Antes ia em toda
+      // requisição, e a aba Mapa chama o proxy OSRM no workers.dev — o JWT de
+      // sessão (8h, com role e regionais) saía do domínio.
+      const _mesmaOrigem = (resource) => {
+        try {
+          const raw = (typeof resource === 'string') ? resource : (resource && resource.url) || '';
+          const o = new URL(raw, window.location.href).origin;
+          const h = window.location.hostname;
+          return o === window.location.origin
+            || ((h === 'localhost' || h === '127.0.0.1') && o === 'http://' + h + ':3002');
+        } catch (_) { return false; }
+      };
       window.fetch = async function (resource, options = {}) {
         const sess = getStoredSession();
-        if (sess) {
+        const nossa = _mesmaOrigem(resource);
+        if (sess && nossa) {
           options = Object.assign({}, options);
           options.headers = Object.assign({}, options.headers, {
             'Authorization': 'Bearer ' + sess.token,
           });
         }
         const res = await _nativeFetch(resource, options);
-        if (res.status === 401) {
+        if (res.status === 401 && nossa) {
           clearSession();
           showLogin('Sessão expirada. Faça login novamente.');
           throw new Error('401');
