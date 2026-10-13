@@ -1694,6 +1694,9 @@
       // showOrHide('tab-btn-metas', isAdmin);  // desativado — aba oculta permanente
       showOrHide('btn-header-metas', true);       // todos os roles podem abrir
       showOrHide('btn-header-admin', isAdmin);
+      // 13/10/2026 — P3-20: o botão chama POST /admin/warm (requireAdmin); para
+      // não-admin era 403 garantido.
+      showOrHide('btn-warm', isAdmin);
 
       // Re-popula SEMPRE os dropdowns de regional baseado no escopo do user.
       // Antes só modificava quando regional!='ALL', mas isso deixava o dropdown
