@@ -23,7 +23,9 @@ let retryOutrosJob  = null;
 let driftJob        = null;
 let notasJob        = null;
 let isRunning       = false;
-let isRunningAt     = 0;          // timestamp de quando isRunning foi ligado
+let isRunningAt     = 0;
+let _runSeq         = 0;          // P2-23: id da execução dona do lock
+let _currentRun     = 0;          // timestamp de quando isRunning foi ligado
 const MAX_RUN_MS    = 5 * 60_000; // 5 minutos — destrava automaticamente se travar
 
 // ── HELPERS DE OBSERVABILIDADE ────────────────────────────────────────────────
@@ -180,6 +182,11 @@ async function runSnapshot() {
   }
   isRunning   = true;
   isRunningAt = Date.now();
+  // 13/10/2026 — P2-23: token de execução. Sem ele, o finally de uma execução
+  // antiga (destravada pelo MAX_RUN_MS) zerava o lock da NOVA e liberava uma
+  // terceira, sobrepondo execuções (snapshots é insert puro: duplica linhas).
+  const myRun = ++_runSeq;
+  _currentRun = myRun;
   try {
     // P1-30 (20/08/2026): o report tem que ser o DESTA chamada. Antes lia o
     // global, que um /api/teams de browser podia sobrescrever durante os
@@ -309,7 +316,7 @@ async function runSnapshot() {
     log.error('snapshot_failed', { msg: err.message });
     _recordSnapshotError(err);   // P1-3: falha visível no /admin/health
   } finally {
-    isRunning = false;
+    if (_currentRun === myRun) isRunning = false;
   }
 }
 
