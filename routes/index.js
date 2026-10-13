@@ -763,6 +763,22 @@ router.get('/equipes', async (req, res) => {
   }
 });
 
+// 07/10/2026 — P1-52: DEVE ficar antes de `/teams/:teamId`, senão "deslogadas" vira
+// teamId e responde 404 "Equipe não encontrada".
+// GET /api/teams/deslogadas?regionals=
+// Última sessão das equipes do roster que NÃO logaram hoje (modo "Todas" do
+// Monitor). Read-only sobre snapshots; não afeta KPI/produção.
+router.get('/teams/deslogadas', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({ teams: [], date: dateBRT() });
+    const result = await sq.getDeslogadasUltimaSessao(req.scope.regionals);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/teams/historico?de=YYYY-MM-DD&ate=YYYY-MM-DD&regional=GUA
 // Retorna equipes de um período via snapshots (Supabase)
 router.get('/teams/historico', async (req, res) => {
@@ -1051,20 +1067,6 @@ router.get('/performance/equipes-matriz', async (req, res) => {
     if (!(await enforceTeamRegional(req, res, team))) return;
     if (!sq) return res.json({ equipes: [], tipos: [], de, ate });
     const result = await sq.getEquipeTipoMatrix(de, ate, req.scope.regionals, tipo, team);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/teams/deslogadas?regionals=
-// Última sessão das equipes do roster que NÃO logaram hoje (modo "Todas" do
-// Monitor). Read-only sobre snapshots; não afeta KPI/produção.
-router.get('/teams/deslogadas', async (req, res) => {
-  try {
-    const sq = sbq();
-    if (!sq) return res.json({ teams: [], date: dateBRT() });
-    const result = await sq.getDeslogadasUltimaSessao(req.scope.regionals);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
