@@ -54,6 +54,30 @@ async function _throttle() {
   _lastCall = Date.now();
 }
 
+// 13/10/2026 — P2-45: cache NEGATIVO em memória (instances=1, regra 8 do CLAUDE.md).
+// Antes, par que falhava não deixava rastro: a cada carga da aba os mesmos pares
+// eram re-tentados e cada falha pagava o _throttle (1.424 falhas × 50ms = 71s de
+// piso no incidente P1-45). A distinção do TTL importa: NoRoute (coordenada sem
+// rota) é estável → 24h; erro de HTTP/rede (infra) NÃO pode congelar par bom →
+// 10min. Em memória de propósito: uma queda do proxy não deixa resíduo
+// permanente em tabela, e o restart zera tudo.
+const NEG_TTL_NOROUTE_MS = parseInt(process.env.ROUTING_NEG_TTL_NOROUTE_MS || String(24 * 3600_000), 10);
+const NEG_TTL_INFRA_MS   = parseInt(process.env.ROUTING_NEG_TTL_INFRA_MS   || String(10 * 60_000), 10);
+const NEG_MAX_ENTRIES    = 50_000;
+const _negCache = new Map(); // key -> expiraEm (ms)
+
+function _negCacheHas(key, now = Date.now()) {
+  const exp = _negCache.get(key);
+  if (exp === undefined) return false;
+  if (exp <= now) { _negCache.delete(key); return false; }
+  return true;
+}
+
+function _negCacheSet(key, kind, now = Date.now()) {
+  if (_negCache.size >= NEG_MAX_ENTRIES) _negCache.clear(); // teto simples: recomeça
+  _negCache.set(key, now + (kind === 'noroute' ? NEG_TTL_NOROUTE_MS : NEG_TTL_INFRA_MS));
+}
+
 /** Arredonda coord pra 5 casas (~1m precisão) — chave de cache estável. */
 function _round(n) { return Math.round(n * 1e5) / 1e5; }
 
@@ -105,14 +129,14 @@ async function _fetchOsrm(oLat, oLng, dLat, dLng) {
   try {
     res = await fetch(url, { timeout: 15000, agent: _insecureAgent });
   } catch (err) {
-    throw new Error(`OSRM fetch erro: ${err.message}`);
+    throw Object.assign(new Error(`OSRM fetch erro: ${err.message}`), { kind: "infra" });
   }
   if (!res.ok) {
-    throw new Error(`OSRM HTTP ${res.status}`);
+    throw Object.assign(new Error(`OSRM HTTP ${res.status}`), { kind: "infra" });
   }
   const json = await res.json();
   if (json.code !== 'Ok' || !json.routes || !json.routes.length) {
-    throw new Error(`OSRM sem rota: ${json.code || 'desconhecido'}`);
+    throw Object.assign(new Error(`OSRM sem rota: ${json.code || 'desconhecido'}`), { kind: "noroute" });
   }
   const r = json.routes[0];
   return {
@@ -149,12 +173,15 @@ async function getRoute(oLat, oLng, dLat, dLng) {
   const key = _cacheKey(oLat, oLng, dLat, dLng);
   const cached = await _readCache(key);
   if (cached) return cached;
+  if (_negCacheHas(key)) return null; // falhou há pouco: não re-tenta nem paga o throttle
 
   try {
     const fresh = await _fetchOsrm(oLat, oLng, dLat, dLng);
     await _writeCache(key, oLat, oLng, dLat, dLng, fresh);
     return fresh;
   } catch (err) {
+    // Só falha do OSRM entra no cache negativo; erro ao gravar no cache local não.
+    if (err.kind) _negCacheSet(key, err.kind);
     console.warn(`[routing] ${err.message} (${oLat},${oLng}→${dLat},${dLng})`);
     return null;
   }
@@ -178,4 +205,4 @@ async function getRoutesBatch(pairs, onProgress) {
   return results;
 }
 
-module.exports = { getRoute, getRoutesBatch, _cacheKey };
+module.exports = { getRoute, getRoutesBatch, _cacheKey, _negCacheHas, _negCacheSet, _negCache, NEG_TTL_NOROUTE_MS, NEG_TTL_INFRA_MS };

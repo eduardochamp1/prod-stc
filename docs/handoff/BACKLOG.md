@@ -140,10 +140,10 @@
 | P3-19 | `settingsScope.test.js` falhou 1× em 10 execuções da suíte completa, com mensagem inútil (`'test failed'`) e nenhum teste individual vermelho — e a suíte é o gate do `pre-push` | Qualidade | pending — **auditoria 28/08**, causa NÃO confirmada |
 | P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **roteamento restaurado 28/08** (`fails=0 misses=4` na VM) — falta só o guard de boot |
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
-| P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | pending — **medido 28/08** |
+| P2-45 | Falha do OSRM não é cacheada: os mesmos pares são re-tentados em toda carga, para sempre | Backend | **código done** (13/10/2026) — cache negativo em memória (NoRoute 24h, infra 10min); falta medir na VM — **medido 28/08** |
 | P2-47 | 10 equipes da whitelist não existem na escala do SGE: nunca entram no KPI "esperadas", em nenhum horário | Dados/Cadastro | pending — **conferência 30/08** |
 | P1-48 | `_normTzIso` anexa `Z` em instante que a EDP manda como hora de PAREDE — `sessao_intervalo` está gravada 3h adiantada, e `getNoteHistoric` usa o mesmo normalizador | Dados/Fuso | pending — medido 10/09 (oráculo da refeição: 1368/1765 almoços entre 11h-14h lendo como parede, 393 lendo como UTC). A Medição HE já compensa na leitura (`AT TIME ZONE 'UTC'`); falta decidir a raiz |
-| P2-49 | Fonte Roboto nunca carregou: `roboto.css` não existe (só os TTF) — painel roda no fallback desde 08/07; P1-9 foi fechado com o critério desmarcado | Frontend | pending — causa isolada 09/09, conserto é 1 arquivo |
+| P2-49 | Fonte Roboto nunca carregou: `roboto.css` não existe (só os TTF) — painel roda no fallback desde 08/07; P1-9 foi fechado com o critério desmarcado | Frontend | **código done** (13/10/2026) — roboto.css criado; falta conferir visualmente (muda métricas de texto) — causa isolada 09/09, conserto é 1 arquivo |
 | P2-48 | Medição HE levantada à mão do BI + portal WPA; 20 das 25 colunas saem de dado já ingerido | Produto/Operação | **Fases 1-3 done** (09/09) — cadastro, cálculo e sub-aba com XLSX. Falta SÓ a Fase 4: conferir julho linha a linha |
 | P1-47 | `runSyncLogoffs` perdia o logoff de todo turno que sai depois das 03:00 — a Medição HE perdia a prorrogação do turno noturno | Dados/Cobrança | **done** (09/09) — D-1+D-2, busca sem janela, casamento por instante, grava coluna+jsonb; 18 testes. Histórico de 16-31/08 recuperado (113/113) |
 | P1-46 | Monitor zerava a lista ao TROCAR de regional (`selectRegional` não rebuscava) + dropdown mostrava tudo marcado com dados de uma só (`MultiSelect.init` ignora o filtro restaurado) | Frontend/Dados | **done** (31/08) — dois defeitos independentes; 27 testes; falta confirmar em prod |
@@ -165,7 +165,7 @@
 | P0-1e | Não há como suspender ou conceder ABA por usuário: todo logado vê as 8 abas, e a API entrega os dados de todas | Governança/Segurança | **especificado** (07/10) — `SPEC-acesso-abas-2026-10-07.md`; bloqueio no servidor, nasce com todas, Admin segue no `role` (escolhas do José); aguardando OK da spec |
 | P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | **código done** (13/10/2026, 5ef43e4) — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
 | P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | **código done** (13/10/2026, 06db294) — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
-| P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | pending — achado no levantamento do P0-1e (`index.html:9222`) |
+| P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | **código done** (13/10/2026) — achado no levantamento do P0-1e (`index.html:9222`) |
 | P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
 
 ---
@@ -4738,7 +4738,7 @@ mesmo ponto cego, o que reforça o item.
 ## P2-45 — Falha do OSRM não é cacheada: re-tentada em toda carga, para sempre
 
 - **Categoria:** Backend
-- **Status:** pending — **medido 28/08/2026**
+- **Status:** **código done** (13/10/2026) — em MEMÓRIA, não em `osrm_cache` (instances=1, sem migration; restart zera, e queda do proxy não deixa resíduo). TTL: NoRoute 24h, HTTP/rede 10min, configuráveis por env. Falta medir o ganho na VM — **medido 28/08/2026**
 - **Evidência:** `services/osrmService.js:157-160` — no `catch`, `getRoute` faz
   `console.warn` e retorna `null` **sem gravar nada** no `osrm_cache`. O
   `_throttle()` (`osrmService.js:50`) é global e serializa toda saída em
@@ -4955,7 +4955,7 @@ mesmo ponto cego, o que reforça o item.
 ## P2-49 — A fonte Roboto nunca carregou: o `roboto.css` não existe
 
 - **Categoria:** Frontend
-- **Status:** pending — causa isolada em 09/09/2026, conserto é 1 arquivo novo
+- **Status:** **código done** (13/10/2026) — roboto.css criado + test/vendorLinks.test.js; falta conferir visualmente em prod (muda métricas de texto) — causa isolada em 09/09/2026, conserto é 1 arquivo novo
 - **Evidência:** o console do navegador acusa, em TODA carga de página, duas
   vezes:
   > `Refused to apply style from 'http://172.25.3.154:3002/vendor/roboto/roboto.css'
@@ -6184,7 +6184,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P3-20 — Botão "Acordar WPA" aparece para quem não pode usá-lo
 
 - **Categoria:** Frontend
-- **Status:** pending
+- **Status:** **código done** (13/10/2026) — btn-warm escondido para não-admin
 - **Evidência:** o balão de ações rápidas, visível em todas as abas para todos
   (`index.html:12287-12302`), tem "⚡ Acordar WPA", que faz
   `POST /admin/warm` (`:9222`) — rota só admin (`routes/index.js:249`).
