@@ -104,7 +104,7 @@
 | P2-20 | Leitura do histórico depende da whitelist de HOJE → desativar equipe apaga produção já reportada | Dados/Governança | pending |
 | P2-21 | `ConclusionStatus` (pontualidade) + `DesiredConclusionDate` descartados no `normalizarNotaV2` → KPI de SLA a custo zero | Dados/Produto | pending |
 | P2-22 | 429/503 não retentados → bucket vazio silencioso indistinguível de "não teve rejeição" | Ops/Dados | pending |
-| P2-23 | Lock do snapshot: `finally` da execução antiga libera a nova → execuções sobrepostas em cascata | Ops/Backend | pending |
+| P2-23 | Lock do snapshot: `finally` da execução antiga libera a nova → execuções sobrepostas em cascata | Ops/Backend | **código done** (13/10/2026, 1013dc3) |
 | P2-24 | Não existe cadastro de escala por dia → o P1-26 não tem onde guardar o dado | Dados/Schema | **done** (098dcfe, 22/08) — `escala_dia` no grão do COLABORADOR (dois da mesma equipe podem ter códigos diferentes no dia) |
 | P2-25 | pgShim sem nenhum `setTypeParser`: numeric volta string; `quantidadeExec` tem 2 tipos no mesmo jsonb | Dados/Backend | pending |
 | P2-26 | `snapshots` é a única tabela sem chave de idempotência (INSERT puro) | Dados | pending |
@@ -129,7 +129,7 @@
 | P1-43 | `CRON_SECRET` aceito na query string (vaza pro log) + `GET /api/cron/consolidate?date=` reescreve histórico sem validar a data | Segurança/Dados | **done** (28/08) — só header; data validada; +redação do segredo no log de slow_request; 13 testes |
 | P1-44 | `.env.example` não documenta 19 variáveis que o código lê — inclui o kill-switch de conta EDP e o que APAGA o histórico bruto | Governança | **done** (28/08) — eram 28, não 19 (as 4 credenciais do SJC eram invisíveis a grep); teste trava o drift |
 | P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | pending — **auditoria 28/08** |
-| P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | pending — **auditoria 28/08**, preventivo |
+| P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | **código done** (13/10/2026, 607cb9c) — falta confirmar `[FATAL]` no log em produção |
 | P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | **done** (28/08) — opção A: endpoint removido, mais os imports, o log de boot e o campo do /api/status |
 | P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | **done** (28/08) — _lock.js nos 4 scripts de número; _probe-save MANTIDO por decisão, com guarda. Verificado na VM |
 | P2-44 | `backfill-daily-subcat.js` MORRE de OOM na invocação padrão: paginação própria sem teto carrega as 697.945 linhas com a coluna `data` num array JS | Dados/Ops | **código done** (28/08) — DISTINCT ON no SQL + recusa range >250k sem `--tudo`; falta rodar na VM |
@@ -163,8 +163,8 @@
 | P0-1c | Não havia como excluir usuário — só desativar, e o inativo fica na lista para sempre | Governança/Segurança | **código done** (29/09) — excluir = OCULTAR (`excluido_em`, sem DELETE), só de inativos; 13 testes; migration aplicada 07/10 (tarde — P0-1d); **falta confirmar em prod** |
 | P0-1d | **Incidente 07/10, 16:22–17:03:** pull com código lendo `excluido_em` antes da migration → só a conta de emergência entrava, e nem ela listava usuários. Log dizia "banco indisponível" com o banco no ar | Governança/Ops | **done** (07/10) — resolvido aplicando a migration; código agora tolera coluna opcional faltando e o log nomeia a migration pendente; 7 testes; **falta deploy** |
 | P0-1e | Não há como suspender ou conceder ABA por usuário: todo logado vê as 8 abas, e a API entrega os dados de todas | Governança/Segurança | **especificado** (07/10) — `SPEC-acesso-abas-2026-10-07.md`; bloqueio no servidor, nasce com todas, Admin segue no `role` (escolhas do José); aguardando OK da spec |
-| P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | pending — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
-| P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | pending — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
+| P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | **código done** (13/10/2026, 5ef43e4) — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
+| P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | **código done** (13/10/2026, 06db294) — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
 | P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | pending — achado no levantamento do P0-1e (`index.html:9222`) |
 | P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
 
@@ -3096,7 +3096,7 @@ feita em PR separado depois dos testes.
 ## P2-23 — Lock do snapshot destrava em 5 min mas a execução continua: o `finally` da antiga libera a nova
 
 - **Categoria:** Ops / Backend
-- **Status:** pending
+- **Status:** **código done** (13/10/2026, 1013dc3) — token de execução; `MAX_RUN_MS` mantido como escape
 - **Origem:** revisão paralela 20/08/2026. Conferido.
 - **Evidência:** `services/cronService.js:27` (`MAX_RUN_MS = 5*60_000`),
   `:122-129` (se `elapsed >= MAX_RUN_MS`, loga `snapshot_unstuck` e **segue**),
@@ -6146,7 +6146,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P1-52 — `/teams/deslogadas` nunca é alcançada
 
 - **Categoria:** Backend
-- **Status:** pending
+- **Status:** **código done** (13/10/2026, 5ef43e4) — falta confirmar "Todas" no Monitor em produção
 - **Evidência:** `router.get('/teams/:teamId')` em `routes/index.js:784` é
   registrada **antes** de `router.get('/teams/deslogadas')` em `:1063`. O
   Express casa na ordem de registro, então "deslogadas" vira `teamId`;
@@ -6168,7 +6168,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P2-58 — O JWT do painel vai para o proxy OSRM
 
 - **Categoria:** Segurança / Frontend
-- **Status:** pending
+- **Status:** **código done** (13/10/2026, 06db294) — Bearer só para a própria origem
 - **Evidência:** o patch global de `window.fetch` (`public/index.html:1487-1495`)
   põe `Authorization: Bearer <token>` em **toda** requisição. A aba Mapa chama
   `https://osrm-proxy.jose-zouain.workers.dev/route/...` com esse `fetch`
