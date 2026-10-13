@@ -128,15 +128,15 @@
 | P1-42 | Rate limit do login é contornável trocando um header (`X-Forwarded-For`): 100 tentativas, zero 429 — furo no P1-5 | Segurança | **done** (28/08) — IP do socket + balde por usuário; 13 testes, 5 deles por HTTP real |
 | P1-43 | `CRON_SECRET` aceito na query string (vaza pro log) + `GET /api/cron/consolidate?date=` reescreve histórico sem validar a data | Segurança/Dados | **done** (28/08) — só header; data validada; +redação do segredo no log de slow_request; 13 testes |
 | P1-44 | `.env.example` não documenta 19 variáveis que o código lê — inclui o kill-switch de conta EDP e o que APAGA o histórico bruto | Governança | **done** (28/08) — eram 28, não 19 (as 4 credenciais do SJC eram invisíveis a grep); teste trava o drift |
-| P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | pending — **auditoria 28/08** |
+| P2-40 | 15 `onclick="fn('${dado da EDP}')"` sem escape: um apóstrofo no nome de serviço quebra o clique em silêncio — furo no P2-4 | Frontend/Segurança | **código done** (13/10/2026) — `escapeJsAttr` em 21 sites; falta conferir as abas no navegador |
 | P2-41 | Nenhum handler de `unhandledRejection`/`uncaughtException`: no Node 24 a próxima promise solta derruba o processo (e `_acc` é em memória) | Ops | **código done** (13/10/2026, 607cb9c) — falta confirmar `[FATAL]` no log em produção |
 | P2-42 | `/webhook/deploy`: RCE latente num fluxo que não se usa, faz `pm2 restart` (contra a regra 4 do CLAUDE.md) e devolve 500 sem header | Segurança/Ops | **done** (28/08) — opção A: endpoint removido, mais os imports, o log de boot e o campo do /api/status |
 | P2-43 | 7 de 8 scripts de escrita não têm o advisory lock do `backfill-consolidate.js`; `_probe-save.js` grava em produção sem guarda nenhuma | Ops/Dados | **done** (28/08) — _lock.js nos 4 scripts de número; _probe-save MANTIDO por decisão, com guarda. Verificado na VM |
 | P2-44 | `backfill-daily-subcat.js` MORRE de OOM na invocação padrão: paginação própria sem teto carrega as 697.945 linhas com a coluna `data` num array JS | Dados/Ops | **código done** (28/08) — DISTINCT ON no SQL + recusa range >250k sem `--tudo`; falta rodar na VM |
-| P3-15 | `_loginTries` só perde entrada no login bem-sucedido — janela expirada fica pra sempre | Backend | pending — **auditoria 28/08** |
-| P3-16 | `openLightbox('${f.base64}')`: cada foto de OS entra DUAS vezes no DOM (~5,4 MB por foto de 2 MB) | Frontend | pending — **auditoria 28/08** |
-| P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | pending — **auditoria 28/08** |
-| P3-18 | Higiene: 74 rotas devolvem `err.message` cru; CLAUDE.md diz 266 testes (são 581); `LOG_LEVEL` maiúsculo é ignorado em silêncio | Backend/Docs | pending — **auditoria 28/08** |
+| P3-15 | `_loginTries` só perde entrada no login bem-sucedido — janela expirada fica pra sempre | Backend | **código done** (13/10/2026) |
+| P3-16 | `openLightbox('${f.base64}')`: cada foto de OS entra DUAS vezes no DOM (~5,4 MB por foto de 2 MB) | Frontend | **código done** (13/10/2026) — `openLightbox(this.src)` |
+| P3-17 | `memoCache` envenena a chave pra sempre se `fn` lançar de forma síncrona (latente: os 3 consumidores são `async`) | Backend | **código done** (13/10/2026) |
+| P3-18 | Higiene: 74 rotas devolvem `err.message` cru; CLAUDE.md diz 266 testes (são 581); `LOG_LEVEL` maiúsculo é ignorado em silêncio | Backend/Docs | **parcial** (13/10/2026): (b) contagem de testes e (c) LOG_LEVEL feitos; (a) `err.message` cru segue pending — junto com o P3-3 |
 | P3-19 | `settingsScope.test.js` falhou 1× em 10 execuções da suíte completa, com mensagem inútil (`'test failed'`) e nenhum teste individual vermelho — e a suíte é o gate do `pre-push` | Qualidade | pending — **auditoria 28/08**, causa NÃO confirmada |
 | P1-45 | `OSRM_HOST` sumiu do `.env` em 26/08 e o roteamento caiu por 2 dias em silêncio — o default cai num domínio que o Fortinet bloqueia | Ops/Dados | **roteamento restaurado 28/08** (`fails=0 misses=4` na VM) — falta só o guard de boot |
 | P2-46 | Passo 2 dos deslocamentos: 27,4s expandindo `jsonb_array_elements` sobre ~170 mil snapshots do período | Dados/Perf | **mitigado** (28/08) — cache por dia: 24.901ms → **36ms** na 2ª carga, verificado na VM. Só a 1ª carga do dia ainda custa ~25s |
@@ -4416,7 +4416,7 @@ mesmo ponto cego, o que reforça o item.
 ## P2-40 — 15 `onclick` com dado da EDP sem escape (furo no P2-4)
 
 - **Categoria:** Frontend / Segurança
-- **Status:** pending
+- **Status:** **código done** (13/10/2026) — `escapeJsAttr` (ao lado do `escapeHtml`, ~l.3771) em 21 sites + usuários (que usavam `escapeHtml`, também errado dentro de string JS). `test/escapeJsAttr.test.js` simula o navegador (ida e volta). **Falta o aceite visual**: equipe renomeada para `TESTE'X` e console sem SyntaxError nas 8 abas
 - **Evidência:** o P2-4 criou `escapeHtml` (`public/index.html:3212`) e o aplicou
   em **texto**. Ele não cobre atributo HTML nem string JS dentro de atributo.
   Restaram 15 sites (tabela completa no AUDIT): linhas 2063, 2352, 2365, 4903,
@@ -4536,7 +4536,7 @@ mesmo ponto cego, o que reforça o item.
 
 ## P3-15 · P3-16 · P3-17 · P3-18 — higiene do lote de 28/08
 
-- **Status:** pending. **Detalhe e patch de cada um no
+- **Status:** P3-15, P3-16, P3-17 **código done** (13/10/2026); P3-18 parcial — (b) e (c) feitos, (a) pendente com o P3-3. **Detalhe e patch de cada um no
   [`AUDIT-2026-08-28.md`](AUDIT-2026-08-28.md).**
 - **P3-15** — `routes/index.js:40`: `_loginTries` só perde entrada no login
   bem-sucedido (`:78`); janela expirada fica pra sempre. Hoje é lento; enquanto o

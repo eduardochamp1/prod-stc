@@ -2572,7 +2572,7 @@
         document.getElementById('notas-tabela-body').innerHTML = rows.map(r => {
           const saldoColor = r.saldo_dia > 0 ? '#dc2626' : (r.saldo_dia < 0 ? '#16a34a' : '#6b7280');
           return `
-            <tr style="border-bottom:1px solid #f3f4f6;cursor:pointer" onclick="openNotasDrilldown('${r.equipe}')">
+            <tr style="border-bottom:1px solid #f3f4f6;cursor:pointer" onclick="openNotasDrilldown('${escapeJsAttr(r.equipe)}')">
               <td style="padding:8px">${r.equipe}</td>
               <td style="padding:8px;text-align:right;font-weight:600">${r.pendentes}</td>
               <td style="padding:8px;text-align:right;color:#dc2626">${r.entraram_hoje > 0 ? '+' + r.entraram_hoje : 0}</td>
@@ -2884,7 +2884,7 @@
         // Quando filtrando por motivo, percentual geral da equipe não faz mais sentido — esconde.
         const pctRej = (!_rejMotivoFilter && e.percentual != null) ? ` <span style="font-size:10px;opacity:.6">(${e.percentual}%)</span>` : '';
         return `
-          <div class="rej-bar-row" onclick="rejFiltrarPorEquipe('${e.team}')" title="Clique pra filtrar pela equipe">
+          <div class="rej-bar-row" onclick="rejFiltrarPorEquipe('${escapeJsAttr(e.team)}')" title="Clique pra filtrar pela equipe">
             <div class="rej-bar-label">${e.team} <span style="font-size:10px;opacity:.5">${e.regional || ''}</span></div>
             <div class="rej-bar-track"><div class="rej-bar-fill" style="width:${pct}%;background:#e67e22"></div></div>
             <div class="rej-bar-count">${e.count}${pctRej}</div>
@@ -2897,7 +2897,7 @@
       // Por tipo
       const tipoEntries = Object.entries(tot.porTipo || {}).sort((a, b) => b[1] - a[1]);
       const tipoHTML = tipoEntries.map(([t, n]) =>
-        `<span class="rej-pill" onclick="rejFiltrarPorTipo('${t}')">${t}: <strong>${n}</strong></span>`
+        `<span class="rej-pill" onclick="rejFiltrarPorTipo('${escapeJsAttr(t)}')">${t}: <strong>${n}</strong></span>`
       ).join('');
 
       content.innerHTML = `
@@ -3335,7 +3335,7 @@
         const w = (100 * pct / rankMax).toFixed(1);
         const color = r.desvio_medio_pct > 50 ? '#e74c3c' : (r.desvio_medio_pct > 20 ? '#f39c12' : '#27ae60');
         return `
-          <div class="desloc-bar-row" onclick="MultiSelect.setValues('desloc-equipe-select', ['${r.team_name}']); loadDeslocamentos()">
+          <div class="desloc-bar-row" onclick="MultiSelect.setValues('desloc-equipe-select', ['${escapeJsAttr(r.team_name)}']); loadDeslocamentos()">
             <div class="desloc-bar-label">${r.team_name} <span style="font-size:10px;opacity:.5">${r.regional || ''}</span></div>
             <div class="desloc-bar-track"><div class="desloc-bar-fill" style="width:${w}%;background:${color}"></div></div>
             <div class="desloc-bar-count">${r.desvio_medio_pct}% <span style="font-size:10px;opacity:.6">(${r.lentos}/${r.total_desloc})</span></div>
@@ -3761,6 +3761,17 @@
 
     function escapeHtml(s) {
       return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // 13/10/2026 — P2-40. Para dado dentro de uma STRING JS num atributo onclick="fn('...')".
+    // escapeHtml sozinho NÃO serve: o navegador decodifica &#39; de volta para ' ANTES de
+    // interpretar o JS, então um apóstrofo (ex.: RAMAL D'AGUA) fecha a string e o clique
+    // morre com SyntaxError, sem log. Ordem importa: escapa para JS primeiro (barra e
+    // apóstrofo), depois para HTML. Para texto normal é a identidade.
+    function escapeJsAttr(s) {
+      return escapeHtml(String(s ?? '')
+        .replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n').replace(/\r/g, '\\r'));
     }
 
     // ── AVISO DE COLETA DEGRADADA (P1-39) ─────────────────────────────────────
@@ -6417,7 +6428,7 @@ ${acumuladoHTML}
         // Card OUTROS sem cliques úteis (ranking de OUTROS é menos informativo) —
         // mas mantemos clicável pra consistência. Apenas desativa se count=0.
         const onclickAttr = v.count > 0
-          ? `onclick="selectSubcatForRanking('${key}', '${s.tipo}', '${s.sub_code}', this)"`
+          ? `onclick="selectSubcatForRanking('${escapeJsAttr(key)}', '${escapeJsAttr(s.tipo)}', '${escapeJsAttr(s.sub_code)}', this)"`
           : 'style="cursor:default;opacity:0.5"';
         return `
           <div class="subcat-card tipo-${s.tipo} ${isSelected}" ${onclickAttr}>
@@ -9157,7 +9168,7 @@ ${acumuladoHTML}
         const subcatLabel = sc?.sub_categoria
           ? `<span class="nota-subcat">${sc.sub_categoria}${sc.quantidade != null ? ' ×' + sc.quantidade : ''}</span>`
           : '';
-        return `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${idParam}','${sectorId}','${n.tipoCode || n.tipoNome || ''}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span>${subcatLabel}</span>`;
+        return `<span class="nota-chip nota-${tipo} nota-chip-link" title="Ver detalhes da OS ${n.codigo}" onclick="openNotaDetail('${escapeJsAttr(idParam)}','${escapeJsAttr(sectorId)}','${escapeJsAttr(n.tipoCode || n.tipoNome || '')}',event)">${n.codigo}<span class="nota-tipo">${n.tipoNome || n.tipoCode}</span>${subcatLabel}</span>`;
       }).join('');
     }
 
@@ -9305,7 +9316,7 @@ ${acumuladoHTML}
             ? `<a href="https://maps.google.com/?q=${cp.latitude},${cp.longitude}" target="_blank" style="font-size:11px;color:var(--verde);text-decoration:none" title="Ver no mapa">🗺 Mapa</a>`
             : '';
           const fotosBtn = cp.fotosCount > 0
-            ? `<span class="cp-fotos-pill" onclick="loadNotaFotos('${nota.id}',${cpIdx})">📷 ${cp.fotosCount} foto${cp.fotosCount > 1 ? 's' : ''}</span>`
+            ? `<span class="cp-fotos-pill" onclick="loadNotaFotos('${escapeJsAttr(nota.id)}',${cpIdx})">📷 ${cp.fotosCount} foto${cp.fotosCount > 1 ? 's' : ''}</span>`
             : '';
           const mileage = cp.mileage > 0 ? ` · ${(cp.mileage).toFixed(2)} km` : '';
           const acc = cp.accuracy ? ` · ±${cp.accuracy}m` : '';
@@ -9423,7 +9434,7 @@ ${acumuladoHTML}
           container.dataset.loaded = '1';
           container.innerHTML = `<div class="foto-gallery">${cp.fotos.map((f, i) =>
             f.base64
-              ? `<img class="foto-thumb" src="${f.base64}" alt="Foto ${i + 1}" onclick="openLightbox('${f.base64}')">`
+              ? `<img class="foto-thumb" src="${f.base64}" alt="Foto ${i + 1}" onclick="openLightbox(this.src)">`
               : ''
           ).join('')}</div>`;
         })
@@ -10004,10 +10015,10 @@ ${acumuladoHTML}
           ? '<span style="color:var(--verde)">Ativo</span>'
           : '<span style="color:var(--vermelho)">Inativo</span>'}</td>
         <td style="padding:6px 8px;text-align:right;white-space:nowrap">
-          <button onclick="editarUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Editar">✎</button>
-          <button onclick="resetarSenhaUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Gerar nova senha">🔑</button>
-          <button onclick="alternarUsuarioAtivo('${esc(u.username)}', ${!u.ativo})" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer">${u.ativo ? '↓ Desativar' : '↑ Ativar'}</button>
-          ${u.ativo ? '' : `<button onclick="excluirUsuario('${esc(u.username)}')" style="background:none;border:1px solid var(--vermelho);color:var(--vermelho);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:4px" title="Tirar da lista (só inativos)">🗑 Excluir</button>`}
+          <button onclick="editarUsuario('${escapeJsAttr(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Editar">✎</button>
+          <button onclick="resetarSenhaUsuario('${escapeJsAttr(u.username)}')" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px" title="Gerar nova senha">🔑</button>
+          <button onclick="alternarUsuarioAtivo('${escapeJsAttr(u.username)}', ${!u.ativo})" style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer">${u.ativo ? '↓ Desativar' : '↑ Ativar'}</button>
+          ${u.ativo ? '' : `<button onclick="excluirUsuario('${escapeJsAttr(u.username)}')" style="background:none;border:1px solid var(--vermelho);color:var(--vermelho);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-left:4px" title="Tirar da lista (só inativos)">🗑 Excluir</button>`}
         </td></tr>`).join('');
 
       return `<table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -10140,7 +10151,7 @@ ${acumuladoHTML}
           </div>
         </div>
         <div style="display:flex;gap:8px">
-          <button onclick="salvarEdicaoUsuario('${escapeHtml(username)}')" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">Salvar</button>
+          <button onclick="salvarEdicaoUsuario('${escapeJsAttr(username)}')" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px;background:var(--verde);color:#fff">Salvar</button>
           <button onclick="document.getElementById('usr-form').style.display='none'" class="btn-refresh" style="height:32px;padding:0 16px;font-size:12px">Cancelar</button>
           <span id="usr-e-msg" style="font-size:11px;align-self:center"></span>
         </div>`;
@@ -10794,9 +10805,9 @@ ${acumuladoHTML}
           <td style="padding:6px 8px;font-size:11px">${e.supervisor_nome ? escapeHtml(e.supervisor_nome) : '<span style="color:var(--cinza3)">—</span>'}</td>
           <td style="padding:6px 8px;font-size:11px">${inativo ? '<span style="color:var(--vermelho)">Inativa</span>' : '<span style="color:var(--verde)">Ativa</span>'}</td>
           <td style="padding:6px 8px;text-align:right;white-space:nowrap">
-            <button onclick="editarEquipe('${e.sigla}', ${JSON.stringify(e).replace(/"/g, '&quot;')})"
+            <button onclick="editarEquipe('${escapeJsAttr(e.sigla)}', ${JSON.stringify(e).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')})"
               style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;margin-right:4px">✎</button>
-            <button onclick="alternarEquipeAtiva('${e.sigla}', ${!e.ativo})"
+            <button onclick="alternarEquipeAtiva('${escapeJsAttr(e.sigla)}', ${!e.ativo})"
               style="background:none;border:1px solid var(--cinza2);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer">
               ${inativo ? '↑ Ativar' : '↓ Desativar'}
             </button>
@@ -11579,7 +11590,7 @@ ${acumuladoHTML}
         ${list.map((e, i) => `
           <div class="mapa-team-opt ${baseIdx + i === _mapaTeamHighlight ? 'highlight' : ''}"
                data-sigla="${e.sigla}"
-               onclick="mapaTeamDDSelect('${e.sigla}')">
+               onclick="mapaTeamDDSelect('${escapeJsAttr(e.sigla)}')">
             <strong>${e.sigla}</strong>
             <span class="mapa-team-opt-meta">${e.tipo || ''}</span>
           </div>
@@ -11871,7 +11882,7 @@ ${acumuladoHTML}
             ${nota.endereco?.logradouro ? `<div style="font-size:11px;color:#666;margin-bottom:4px">📍 ${escapeHtml(nota.endereco.logradouro)}</div>` : ''}
             <div style="font-size:11px;color:#666">${tempoPercurso}</div>
             <div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee;font-size:11px;color:var(--verde);font-weight:700;cursor:pointer"
-                 onclick="mapaToggleNotaFilter('${nota.id}')">
+                 onclick="mapaToggleNotaFilter('${escapeJsAttr(nota.id)}')">
               🔎 Ver detalhes desta nota →
             </div>
           </div>`);
@@ -12138,7 +12149,7 @@ ${acumuladoHTML}
       const statCard = (status, label, n, c) => `
         <div class="mapa-stat-card ${_mapaFilterStatus === status ? 'active' : ''}"
              style="border-color: ${_mapaFilterStatus === status ? c : 'transparent'}"
-             onclick="mapaSetStatusFilter('${status}')">
+             onclick="mapaSetStatusFilter('${escapeJsAttr(status)}')">
           <div class="mapa-stat-num" style="color:${c}">${n}</div>
           <div class="mapa-stat-lbl">${label}</div>
         </div>`;
@@ -12178,7 +12189,7 @@ ${acumuladoHTML}
           const acc = cp.accuracy ? ` · ±${cp.accuracy.toFixed ? cp.accuracy.toFixed(4) : cp.accuracy}m` : '';
           const fotos = cp.fotosCount > 0 ? ` · 📷 ${cp.fotosCount}` : '';
           return `
-            <div class="mapa-cp-item" onclick="event.stopPropagation();mapaFocusCheckpoint('${nota.id}', ${idx})">
+            <div class="mapa-cp-item" onclick="event.stopPropagation();mapaFocusCheckpoint('${escapeJsAttr(nota.id)}', ${idx})">
               <div class="mapa-cp-badge cp-badge-${Math.min(ev, 4)}">${icon}</div>
               <div class="mapa-cp-info">
                 <div class="mapa-cp-title">${lbl} <span class="mapa-cp-ts">${_fmtNotaDate(cp.timestamp)}</span></div>
@@ -12195,7 +12206,7 @@ ${acumuladoHTML}
 
         return `
           <div class="mapa-nota-card ${isSelected ? 'active' : ''} ${isDimmed ? 'dimmed' : ''}" data-nota-id="${nota.id}">
-            <div class="mapa-nota-header" onclick="${temGps ? `mapaToggleNotaFilter('${nota.id}')` : ''}">
+            <div class="mapa-nota-header" onclick="${temGps ? `mapaToggleNotaFilter('${escapeJsAttr(nota.id)}')` : ''}">
               <div style="display:flex;align-items:center;gap:7px">
                 <div style="width:22px;height:22px;background:${cor};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0">${num}</div>
                 <span style="font-weight:700;font-size:12px">${nota.tipo} · ${nota.numero}</span>

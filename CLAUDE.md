@@ -109,7 +109,7 @@ git push
 | `public/css/app.css` (~4.3k linhas) | CSS do painel (extraído do `<style>` do index.html no P2-8). |
 | `public/vendor/` | Bibliotecas 3rd-party servidas localmente (Fortinet mata CDN). |
 | `scripts/` | Backfills, diagnóstico, migrações. Muitos read-only. |
-| `test/` | 1333 testes, `node --test`. Cobertura desigual (backend só). |
+| `test/` | 1354 testes, `node --test`. Cobertura desigual (backend só). |
 | `ecosystem.config.js` | Config PM2. Não edite sem entender max_memory_restart. |
 
 ## Filosofia deste projeto (aprendida em incidente)

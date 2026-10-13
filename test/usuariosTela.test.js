@@ -44,6 +44,7 @@ function extrairFuncao(nome) {
 function carregar(nome) {
   return new Function(`
     ${extrairFuncao('escapeHtml')}
+    ${extrairFuncao('escapeJsAttr')}
     ${extrairFuncao(nome)}
     return ${nome};
   `)();
