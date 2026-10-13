@@ -184,6 +184,21 @@ async function start() {
 // — permite testes de contrato de rota sem conflito de porta nem cron.
 // require.main === module é true só pro processo principal.
 if (require.main === module) {
+  // 13/10/2026 — P2-41. No Node 24 uma promise rejeitada sem .catch() MATA o
+  // processo, e `_acc` é em memória (P1-13): queda = subnotificar o dia, e com
+  // Postgres fora vira crash loop (runSnapshot reagenda 5s após o boot).
+  // Rejeição solta: loga e segue (ciclo perdido < painel fora do ar).
+  // Exceção síncrona: estado indefinido, então loga a causa e sai de propósito
+  // (o PM2 reinicia). console.error, não logger.js: se a queda for no logger,
+  // o console ainda funciona.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] unhandledRejection (ignorada, processo segue):',
+      (reason && reason.stack) || reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[FATAL] uncaughtException (saindo):', (err && err.stack) || err);
+    process.exit(1);
+  });
   start().catch(err => {
     console.error('Erro fatal ao iniciar servidor:', err);
     process.exit(1);
