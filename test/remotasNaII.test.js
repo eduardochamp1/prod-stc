@@ -21,7 +21,7 @@ describe('REMOTAS junto da II', () => {
     assert.ok(SRC.includes("l.key === 'II' && (qtdReg.REMOTA || 0) > 0"));
   });
   test('Histórico: linha da II lê a quantidade de MD/REMOTA', () => {
-    assert.ok(SRC.includes("{ tipo: 'II', sub_code: 'II', nome: 'Inspeção de Irregularidade', remotasDe: 'MD/REMOTA' }"));
+    assert.ok(/{ tipo: 'II', sub_code: 'II',s+nome: 'Inspeção de Irregularidade', remotasDe: 'MD/REMOTA' }/.test(SRC));
   });
   test('XLSX: coluna "Remotas Exec" nas abas por equipe e regional, só em linhas II', () => {
     const n = (SRC.match(/'Remotas Exec'/g) || []).length;
