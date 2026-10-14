@@ -55,9 +55,10 @@ Uma equipe gera alerta no dia D quando **todas** forem verdadeiras:
 4. `executadas < config.limite`, onde `executadas` = concluídas **não rejeitadas**
    do dia (rejeitada > concluída, decisão 20/07/2026; regra de 31/07 para
    rejeição posterior).
-5. **Não** está em refeição neste ciclo. Em refeição, o alerta **espera o ciclo
-   seguinte** (até `config.tolerancia_refeicao_min`; passado esse prazo avalia
-   mesmo assim — equipe que "almoça" por mais de 1h também é informação).
+5. **Não** está em refeição **agora**: sem intervalo de refeição **em aberto** na sessão
+   (§10.1). Em refeição, o alerta **espera o ciclo seguinte**; passada
+   `config.tolerancia_refeicao_min` desde o primeiro adiamento, avalia mesmo assim
+   (almoço de mais de 1h também é informação).
 
 **Um alerta por equipe por dia.** Se depois a equipe chegar a `limite`, o alerta
 é marcado como **resolvido** (sai da lista, fica no registro) e **não volta a
@@ -129,6 +130,7 @@ não duplica nem reabre.
 | `services/alertaProdutividade.js` — `avaliarEquipe(entrada)` | **Função PURA**: devolve `{ estado: 'nenhum'\|'abrir'\|'manter'\|'resolver', ... }` | só dados passados |
 | `services/alertaProdutividade.js` — `meioDoTurno(inicio, fim)` | **Pura**: horário do meio, tratando virada de meia-noite | — |
 | `services/alertaProdutividade.js` — `avaliarCiclo(deps)` | Orquestra: lê equipes ao vivo, escala, supervisor, config; chama `avaliarEquipe`; grava | deps **injetadas** |
+| `services/alertaProdutividade.js` — `emRefeicao(breaks)` | **Pura**: há intervalo `emAberto` com motivo `/refei/i`? | lista normalizada |
 | `db/alertasQueries.js` | `upsertAbrir`, `atualizar`, `resolver`, `listarAtivos(regionais)` | pgShim |
 | `routes/index.js` | `GET /api/alertas/produtividade` (escopo `req.scope.regionals`), `PUT /admin/alertas/config` | auth existente |
 | `services/cronService.js` | chama `avaliarCiclo` ao fim do ciclo de coleta, em `try/catch` | — |
@@ -194,7 +196,13 @@ mostrou que atributo com dado externo é vetor.
 **Backtest antes de ligar** — `scripts/backtest-alerta-produtividade.js`:
 reaplica a regra sobre os **últimos 30 dias de snapshots** (retenção ilimitada) e
 imprime, por dia e por categoria, quantas equipes teriam alertado e a
-distribuição de `executadas` no meio do turno. **Critério de parada:** se a regra
+distribuição de `executadas` no meio do turno. **Refeição no backtest:** o histórico vem de `sessao_intervalo` (D-1 em diante), lida
+com `AT TIME ZONE 'UTC'` para desfazer o `Z` errado do P1-48 (mesma técnica da
+Medição HE). Se isso não for confiável o bastante, o backtest roda **sem** o
+adiamento por refeição e **diz isso na saída** — o resultado vira um teto de
+alertas, não uma previsão exata. Equipes sem escala são **contadas à parte**.
+
+**Critério de parada:** se a regra
 alertaria uma fração alta e constante das equipes (ordem de dezenas de %), o
 limite ou a regra estão errados — **não ligar**, rediscutir com o José.
 
@@ -203,16 +211,42 @@ backtest na VM; (4) José lê e decide; (5) `ativo:true`.
 
 **Rollback:** `ativo:false` desliga tudo na hora, sem deploy. A tabela pode ficar.
 
-## 10. Verificações pendentes (resolver no plano, antes de codar)
+## 10. Verificações — RESOLVIDAS (14/10/2026)
 
-1. **Sinal de refeição ao vivo.** Confirmar se o dado da equipe em memória indica
-   "em refeição" (status/desvio). Se não indicar, alternativas: `getSessionBreaks`
-   (custo: 1 chamada por equipe) ou adiar por horário fixo. **Não** assumir.
-2. **Qualidade da escala.** `escala_inicio/fim` têm default por prefixo (turno de
-   9h = 8h + 1h de refeição). Medir quantas equipes têm escala real do SGE vs
-   default — afeta a exatidão do "meio do turno".
-3. **Fuso.** `escala_*` é `TIME` sem zona (BRT). Garantir a comparação em BRT
-   (ver P1-48/P3-12: `_hojeBRT` com `-3h` fixo ainda vive em 5 lugares).
+**10.1 Refeição ao vivo — o José confirmou que a equipe aponta a refeição.** Mas o
+caminho precisa de cuidado, medido no código:
+
+- `sessao_intervalo` **NÃO serve**: é sincronizada **uma vez por dia, às 03:10, para
+  o dia anterior** (`cronService.runSyncIntervalos`). O almoço de hoje não está lá
+  no meio do turno.
+- O que serve é `getSessionBreaks(sessionId)` (`GET /api/sessions/{id}/break`), ao
+  vivo. O `id` da equipe em memória **é** o id da sessão (`wpaService.js:2294`).
+- "Em refeição agora" = existe intervalo com **`emAberto` (EndTime nulo)** e motivo
+  casando `/refei/i` (o texto vem como "15 - Horário de Refeição").
+- **Isso dispensa comparar horários.** O `inicio/fim` dos intervalos tem o defeito
+  de fuso do **P1-48** (`Z` anexado a hora de parede, 3h adiantado), mas um
+  intervalo em aberto não precisa de relógio. A regra não depende do P1-48.
+- **Custo controlado:** a chamada só é feita para a equipe que já estaria a
+  alertar (passou do meio do turno, `executadas < limite`, ainda sem alerta
+  aberto) — e para de ser feita assim que o alerta abre. Estimativa: dezenas de
+  chamadas por ciclo no pior caso, no horário do almoço. Conta compartilhada com
+  outro projeto (**P1-25**): limitar a **no máximo 8 chamadas por ciclo** e
+  retomar no ciclo seguinte; erro/timeout = **não alertar neste ciclo** (nunca
+  alertar por falta de informação sobre a refeição).
+- Se a equipe nunca teve o apontamento (esqueceu de registrar), o alerta abre
+  normalmente — é justamente o caso que o supervisor quer ver.
+
+**10.2 Escala.** O José confirmou que **todas as equipes têm escala no SGE**.
+Atenção: o **P2-47** (30/08) registra 10 equipes da whitelist ausentes da escala;
+se já foi corrigido, está fechado — senão, a equipe sem escala é **ignorada e
+contada** no backtest (§9), não inventada. O default por prefixo de sigla vira
+só a **rede de segurança**, não a regra.
+
+**10.3 Fuso — usar o horário da região (BRT).** Decisão do José. Toda comparação
+(`agora` × meio do turno, `escala_*` que é `TIME` sem zona) é feita em **BRT**,
+com o utilitário `timeUtil` — **proibido** `-3h` fixo (o P3-12 documenta 5 lugares
+que ainda o fazem). O teste cobre um instante em UTC que já é "amanhã" em UTC e
+ainda "hoje" em BRT.
 
 ## 11. Fora de escopo (v1)
 
