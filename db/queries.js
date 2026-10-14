@@ -1318,7 +1318,7 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
  *                  (1 linha = 1 interrupção), JÁ filtradas por subcategoria e whitelist
  * @returns {{ equipes: Array, tipos: string[] }}
  *   equipes: [{ team_name, regional, sector_id, tipo_equipe, exec:{tipo:n}, rej:{tipo:n},
- *               interr:{tipo:n}, total_exec, total_rej, total_interr, total_remota }]
+ *               interr:{tipo:n}, total_exec, total_rej, total_interr, total_remota, total_ramal }]
  *   tipos: união dos códigos de tipo presentes (EXEC ∪ REJE ∪ INTERR)
  *
  * INTERR (07/10/2026) é contador PARALELO: não entra em total_exec/total_rej,
@@ -1329,8 +1329,12 @@ async function getPerformanceEquipes(de, ate, regionals, tipo, team) {
  * a MD nasce de uma II que exige trocar o medidor. Para a EDP é essa a quantidade
  * que conta; a nota II continua contada em exec.II. Não entra em total_exec
  * (a MD já está em exec.MD) — somar de novo duplicaria.
+ *
+ * RAMAIS (14/10/2026), idem: nº de RAMAIS executados (DD/C93, soma de `quantidade`),
+ * mostrado no grupo DD. A nota DD segue em exec.DD; os ramais são a quantidade de
+ * produção dentro dessas mesmas notas, então também não entram em total_exec.
  */
-function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows = [], remRows = []) {
+function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows = [], remRows = [], ramRows = []) {
   const teams = {};
   // Catálogo único desde 18/09/2026. `tipoEquipe` aceita CSV: 'COMERCIAL,MOTO'.
   const passaTipo = filtroDeCategorias(tipoEquipe);
@@ -1338,7 +1342,7 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows
     if (!teams[name]) {
       teams[name] = {
         team_name: name, regional, sector_id,
-        exec: {}, rej: {}, interr: {}, total_exec: 0, total_rej: 0, total_interr: 0, total_remota: 0,
+        exec: {}, rej: {}, interr: {}, total_exec: 0, total_rej: 0, total_interr: 0, total_remota: 0, total_ramal: 0,
         tipo_equipe: categoriaDaSigla(name),
       };
     }
@@ -1380,6 +1384,16 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows
     t.total_remota += n;
     temRemota = true;
   }
+  // ramRows: linhas de team_daily_subcat_totals (DD/C93) — soma `quantidade`.
+  let temRamal = false;
+  for (const r of (ramRows || [])) {
+    if (!r || !r.team_name || !passaTipo(r.team_name)) continue;
+    const n = Number(r.quantidade) || 0;
+    if (!n) continue;
+    const t = ensure(r.team_name, r.regional, r.sector_id);
+    t.total_ramal += n;
+    temRamal = true;
+  }
 
   const equipes = Object.values(teams).sort((a, b) =>
     (b.total_exec + b.total_rej) - (a.total_exec + a.total_rej) ||
@@ -1392,6 +1406,7 @@ function _buildEquipeTipoMatrix(execRows, rejRows, tipoEquipe = 'TODAS', intRows
     Object.keys(t.interr).forEach(k => tipos.add(k));
   }
   if (temRemota) tipos.add('II');   // a coluna REMOTAS mora no grupo II
+  if (temRamal)  tipos.add('DD');   // a coluna RAMAIS mora no grupo DD
   return { equipes, tipos: [...tipos] };
 }
 
@@ -1487,26 +1502,31 @@ async function getEquipeTipoMatrix(de, ate, regionals, tipo, team) {
     console.warn('[equipes-matriz] interrupções indisponíveis:', err.message);
   }
 
-  // REMOTAS (14/10/2026): medidores remotos executados (MD/REMOTA), por equipe.
-  // Mesma fonte dos cards de subcategoria. Falha aqui não derruba a matriz.
-  let remRows = [];
-  try {
-    remRows = _onlyOficiais(await _selectAll(() => {
-      let q = sb.from('team_daily_subcat_totals')
-        .select('team_name, regional, sector_id, quantidade, date')
-        .eq('tipo', 'MD').eq('sub_code', 'REMOTA');
-      if (de)                          q = q.gte('date', de);
-      if (ate)                         q = q.lte('date', ate);
-      q = inRegionals(q, regionals);
-      if (teamsArr)                    q = q.in('team_name', teamsArr);
-      else if (team && team !== 'ALL') q = q.eq('team_name', team);
-      return q;
-    }), 'team_name');
-  } catch (err) {
-    console.warn('[equipes-matriz] remotas indisponíveis:', err.message);
-  }
+  // REMOTAS e RAMAIS (14/10/2026): quantidades de produção por equipe, da mesma
+  // fonte dos cards de subcategoria (team_daily_subcat_totals). REMOTAS = MD/REMOTA
+  // (medidores remotos); RAMAIS = DD/C93 (ramais). Falha aqui não derruba a matriz.
+  const _qtdSubcat = async (tipoSub, subCode, rotulo) => {
+    try {
+      return _onlyOficiais(await _selectAll(() => {
+        let q = sb.from('team_daily_subcat_totals')
+          .select('team_name, regional, sector_id, quantidade, date')
+          .eq('tipo', tipoSub).eq('sub_code', subCode);
+        if (de)                          q = q.gte('date', de);
+        if (ate)                         q = q.lte('date', ate);
+        q = inRegionals(q, regionals);
+        if (teamsArr)                    q = q.in('team_name', teamsArr);
+        else if (team && team !== 'ALL') q = q.eq('team_name', team);
+        return q;
+      }), 'team_name');
+    } catch (err) {
+      console.warn(`[equipes-matriz] ${rotulo} indisponíveis:`, err.message);
+      return [];
+    }
+  };
+  const remRows = await _qtdSubcat('MD', 'REMOTA', 'remotas');
+  const ramRows = await _qtdSubcat('DD', 'C93', 'ramais');
 
-  const { equipes, tipos } = _buildEquipeTipoMatrix(_onlyOficiais(execRows, 'team_name'), rejRows, tipo, intRows, remRows);
+  const { equipes, tipos } = _buildEquipeTipoMatrix(_onlyOficiais(execRows, 'team_name'), rejRows, tipo, intRows, remRows, ramRows);
   return { equipes, tipos, de, ate };
 }
 

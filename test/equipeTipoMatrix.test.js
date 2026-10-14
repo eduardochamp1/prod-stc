@@ -175,3 +175,32 @@ test('sem remRows nada muda: total_remota = 0 e II não aparece sozinho', () => 
   assert.equal(byName(r, 'ECGPR53').total_remota, 0);
   assert.ok(!r.tipos.includes('II'));
 });
+
+// ── RAMAIS (14/10/2026): ramais executados (DD/C93), junto do grupo DD ───────
+const ram = (team_name, quantidade, regional = 'GUA', sector_id = 'DESG') =>
+  ({ team_name, quantidade, regional, sector_id });
+
+test('RAMAIS soma `quantidade` (ramais), não nº de linhas, e não entra em total_exec', () => {
+  const r = _buildEquipeTipoMatrix(
+    [exec('ECGPR53', 'DD', 4)], [], 'TODAS', [], [],
+    [ram('ECGPR53', 3), ram('ECGPR53', 2)],
+  );
+  const t = byName(r, 'ECGPR53');
+  assert.equal(t.total_ramal, 5);
+  assert.equal(t.exec.DD, 4, 'as notas DD seguem contadas à parte');
+  assert.equal(t.total_exec, 4);
+  assert.equal(t.total_remota, 0, 'remota e ramal não se misturam');
+});
+
+test('RAMAIS puxa o tipo DD para a lista de tipos; REMOTAS segue puxando II', () => {
+  const r = _buildEquipeTipoMatrix([exec('ECGPR53', 'LN', 1)], [], 'TODAS', [], [rem('ECGPR53', 1)], [ram('ECGPR53', 2)]);
+  assert.ok(r.tipos.includes('DD'));
+  assert.ok(r.tipos.includes('II'));
+});
+
+test('RAMAIS respeita o filtro de tipo de equipe e ignora 0/inválido', () => {
+  const r = _buildEquipeTipoMatrix([], [], 'COMERCIAL', [], [],
+    [ram('EPGPR10', 4), ram('ECGPR53', 0), ram('ECGPR54', 'x'), ram('ECGPR55', 6)]);
+  assert.deepEqual(r.equipes.map(e => e.team_name), ['ECGPR55']);
+  assert.equal(r.equipes[0].total_ramal, 6);
+});

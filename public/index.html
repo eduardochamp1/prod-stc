@@ -4684,7 +4684,12 @@
         // contabiliza. A MD nasce de uma II que exige trocar o medidor; o EXEC da II
         // segue contando notas. Fora da SOMA e do %REJ (a MD já está no grupo MD).
         const COM_REM = new Set(['II']);
-        const _extra = (t) => (COM_INTERR.has(t) || COM_REM.has(t)) ? 1 : 0;
+        // RAMAIS (14/10/2026, pedido do José): 5ª sub-coluna SÓ no grupo DD — nº de
+        // RAMAIS executados (DD/C93, soma da Activity.Amount; só conta "RAMAL BT").
+        // O EXEC da DD segue contando notas. Fora da SOMA e do %REJ: é uma
+        // quantidade de produção dentro das mesmas notas DD, não notas a mais.
+        const COM_RAMAL = new Set(['DD']);
+        const _extra = (t) => (COM_INTERR.has(t) || COM_REM.has(t) || COM_RAMAL.has(t)) ? 1 : 0;
         // 1ª linha do cabeçalho: Equipe (rowspan) + TOTAL (destacado) + um grupo por tipo.
         const grpHead = ['<th class="mtx-grp mtx-grp-total" colspan="4" title="Soma de todos os tipos">TOTAL</th>']
           .concat(tipos.map(t => `<th class="mtx-grp" colspan="${4 + _extra(t)}">${t}</th>`)).join('');
@@ -4693,7 +4698,8 @@
         const subHead = ['<th class="mtx-exec mtx-total">EXEC</th><th class="mtx-rej mtx-total">REJE</th><th class="mtx-soma mtx-total" title="EXEC + REJE">SOMA</th><th class="mtx-pct mtx-total" title="REJE ÷ SOMA">%REJ</th>']
           .concat(tipos.map(t => '<th class="mtx-exec">EXEC</th><th class="mtx-rej">REJE</th><th class="mtx-soma" title="EXEC + REJE">SOMA</th><th class="mtx-pct" title="REJE ÷ SOMA">%REJ</th>'
             + (COM_INTERR.has(t) ? '<th class="mtx-interr" title="Interrupções de MD Subs Obsoleto e TL11 — não é produção, fora da SOMA">INTERR</th>' : '')
-            + (COM_REM.has(t) ? '<th class="mtx-interr" title="Medidores remotos executados (MD gerada por uma II que exigiu trocar o medidor). É a quantidade que a EDP contabiliza; as notas MD já estão no grupo MD">REMOTAS</th>' : ''))).join('');
+            + (COM_REM.has(t) ? '<th class="mtx-interr" title="Medidores remotos executados (MD gerada por uma II que exigiu trocar o medidor). É a quantidade que a EDP contabiliza; as notas MD já estão no grupo MD">REMOTAS</th>' : '')
+            + (COM_RAMAL.has(t) ? '<th class="mtx-interr" title="Ramais executados (DD Subs Ramal, soma da quantidade da atividade C93). Conta só ramal BT. As notas DD seguem no EXEC ao lado">RAMAIS</th>' : ''))).join('');
         // Célula: número real, ou "—" bem apagado (classe mtx-zero) quando vazio.
         // REJE > 0 ganha mtx-rej-hot pra saltar (vermelho da marca).
         const cell = (v, cls) => v
@@ -4717,7 +4723,8 @@
               cell((e.exec?.[t] || 0) + (e.rej?.[t] || 0), 'mtx-soma'),
               pctCell(e.exec?.[t], e.rej?.[t], 'mtx-pct'),
               ...(COM_INTERR.has(t) ? [cell(e.interr?.[t], 'mtx-interr')] : []),
-              ...(COM_REM.has(t) ? [cell(e.total_remota, 'mtx-interr')] : [])])).join('');
+              ...(COM_REM.has(t) ? [cell(e.total_remota, 'mtx-interr')] : []),
+              ...(COM_RAMAL.has(t) ? [cell(e.total_ramal, 'mtx-interr')] : [])])).join('');
           return `<tr>
   <td class="mtx-team"><span class="perf-tipo-badge ${badge}">${badge}</span>${e.team_name}</td>
   ${cells}
@@ -4728,6 +4735,7 @@
         const somaRej  = (t) => eqs.reduce((s, e) => s + (t ? (e.rej?.[t]  || 0) : e.total_rej), 0);
         const somaInterr = (t) => eqs.reduce((s, e) => s + (e.interr?.[t] || 0), 0);
         const somaRemota = () => eqs.reduce((s, e) => s + (e.total_remota || 0), 0);
+        const somaRamal  = () => eqs.reduce((s, e) => s + (e.total_ramal || 0), 0);
         const footCells = [cell(somaExec(null), 'mtx-exec mtx-total'), cell(somaRej(null), 'mtx-rej mtx-total'),
           cell(somaExec(null) + somaRej(null), 'mtx-soma mtx-total'),
           pctCell(somaExec(null), somaRej(null), 'mtx-pct mtx-total')]
@@ -4735,7 +4743,8 @@
             cell(somaExec(t) + somaRej(t), 'mtx-soma'),
             pctCell(somaExec(t), somaRej(t), 'mtx-pct'),
             ...(COM_INTERR.has(t) ? [cell(somaInterr(t), 'mtx-interr')] : []),
-            ...(COM_REM.has(t) ? [cell(somaRemota(), 'mtx-interr')] : [])])).join('');
+            ...(COM_REM.has(t) ? [cell(somaRemota(), 'mtx-interr')] : []),
+            ...(COM_RAMAL.has(t) ? [cell(somaRamal(), 'mtx-interr')] : [])])).join('');
         return `
 <div class="perf-section">
   <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe</div>
@@ -4760,7 +4769,7 @@
       // linha sairia 0/0/0, coisa que esta tabela não mostrava antes.
       const acumuladoHTML = _renderAcumuladoRejeicao(
         _agruparPerdaPorRegional(((matrizData && matrizData.equipes) || [])
-          .filter(e => !(!e.total_exec && !e.total_rej && (e.total_interr > 0 || e.total_remota > 0)))));
+          .filter(e => !(!e.total_exec && !e.total_rej && (e.total_interr > 0 || e.total_remota > 0 || e.total_ramal > 0)))));
 
       return `
 <div class="perf-section">

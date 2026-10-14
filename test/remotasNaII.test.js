@@ -34,3 +34,12 @@ describe('REMOTAS junto da II', () => {
     assert.ok(!/total_remota\s*\)?\s*\+\s*\(?e\.total_rej/.test(SRC));
   });
 });
+
+describe('RAMAIS junto da DD (matriz)', () => {
+  test('coluna RAMAIS só no grupo DD, com a soma no rodapé', () => {
+    assert.ok(SRC.includes("const COM_RAMAL = new Set(['DD']);"));
+    assert.ok(SRC.includes("cell(e.total_ramal, 'mtx-interr')"));
+    assert.ok(SRC.includes("cell(somaRamal(), 'mtx-interr')"));
+    assert.ok(SRC.includes('>RAMAIS</th>'));
+  });
+});

@@ -6259,3 +6259,14 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Lição de processo:** o dry-run do `backfill-consolidate` traz o total por dia; qualquer variação além do esperado deve ser lida ANTES do `--apply`. O script recomputa produção + carteira + subcats juntos: não dá para isolar só a subcategoria.
 - **Pendente (humano):** conferir uma equipe do topo (ex.: ECPSJ87, 07/10) no Gestão Online do portal WPA — deve mostrar ~13 SF rejeitadas.
 - **Rollback:** dump `~/backups/wpa_monitor/wpa_monitor_2026-10-14_030001.dump` (retenção 14 dias) tem o estado anterior; restaurar só as linhas dos dias com `pg_restore` seletivo — mas o valor antigo estava errado.
+
+## P2-62 — Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo"
+
+- **Categoria:** Dados/Produto
+- **Status:** **código done** (14/10/2026). Sem migration, sem retroativo a fazer: `DD/C93.quantidade` já está gravada em `team_daily_subcat_totals`.
+- **Pedido (José, 14/10/2026):** "colocar qtd de ramal na nota DD", no mesmo molde das REMOTAS da II (P2-60).
+- **Regra:** `total_ramal` = soma de `quantidade` de `team_daily_subcat_totals` onde `tipo='DD'` e `sub_code='C93'` (Subs Ramal — só conta Address com "RAMAL BT", regra EDP 20/05/2026). Coluna paralela no grupo DD; **fora da SOMA e do %REJ** (é quantidade dentro das mesmas notas DD, não notas a mais). `_buildEquipeTipoMatrix(..., remRows, ramRows)`.
+- **Atenção à unidade:** o comentário de `dataWriter.upsertSubcatTotals` diz "metros de ramal", o do classificador e a UI dizem "ramais". A coluna se chama RAMAIS (UI atual). Se a Activity.Amount do C93 for metragem, o rótulo está errado — conferir uma nota C93 no portal ("Quantidade").
+- **Fora do pedido:** Sub CS (BTZ013) também tem quantidade e NÃO ganhou coluna.
+- **Rollback:** `git revert`.
+
