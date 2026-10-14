@@ -131,3 +131,47 @@ test('entrada vazia → matriz vazia (sem crash)', () => {
   const r2 = _buildEquipeTipoMatrix(null, null);
   assert.deepEqual(r2.equipes, []);
 });
+
+// ── REMOTAS (14/10/2026): medidores remotos executados, junto do grupo II ────
+const rem = (team_name, quantidade, regional = 'GUA', sector_id = 'DESG') =>
+  ({ team_name, quantidade, regional, sector_id });
+
+test('REMOTAS soma `quantidade` (medidores), não nº de linhas', () => {
+  const r = _buildEquipeTipoMatrix(
+    [exec('ECGPR53', 'II', 5)], [], 'TODAS', [],
+    [rem('ECGPR53', 2), rem('ECGPR53', 1)],
+  );
+  const t = byName(r, 'ECGPR53');
+  assert.equal(t.total_remota, 3);
+  assert.equal(t.exec.II, 5, 'as notas II continuam contadas à parte');
+});
+
+test('REMOTAS não entra em total_exec nem em exec.MD (a MD já está lá — somar duplicaria)', () => {
+  const r = _buildEquipeTipoMatrix(
+    [exec('ECGPR53', 'II', 5), exec('ECGPR53', 'MD', 4)], [], 'TODAS', [],
+    [rem('ECGPR53', 3)],
+  );
+  const t = byName(r, 'ECGPR53');
+  assert.equal(t.total_exec, 9);
+  assert.equal(t.exec.MD, 4);
+});
+
+test('REMOTAS puxa o tipo II para a lista de tipos, mesmo sem nenhuma II executada', () => {
+  const r = _buildEquipeTipoMatrix([exec('ECGPR53', 'MD', 4)], [], 'TODAS', [], [rem('ECGPR53', 1)]);
+  assert.ok(r.tipos.includes('II'));
+});
+
+test('REMOTAS respeita o filtro de tipo de equipe e ignora quantidade 0/inválida', () => {
+  const r = _buildEquipeTipoMatrix(
+    [], [], 'COMERCIAL', [],
+    [rem('EPGPR10', 4), rem('ECGPR53', 0), rem('ECGPR54', 'x'), rem('ECGPR55', 2)],
+  );
+  assert.deepEqual(r.equipes.map(e => e.team_name), ['ECGPR55']);
+  assert.equal(r.equipes[0].total_remota, 2);
+});
+
+test('sem remRows nada muda: total_remota = 0 e II não aparece sozinho', () => {
+  const r = _buildEquipeTipoMatrix([exec('ECGPR53', 'LN', 1)], []);
+  assert.equal(byName(r, 'ECGPR53').total_remota, 0);
+  assert.ok(!r.tipos.includes('II'));
+});

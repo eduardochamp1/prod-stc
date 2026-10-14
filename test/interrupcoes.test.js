@@ -121,8 +121,8 @@ describe('front — coluna INTERR só no grupo MD', () => {
     assert.ok(SRC.includes("const COM_INTERR = new Set(['MD']);"));
     assert.ok(SRC.includes("cell(e.interr?.[t], 'mtx-interr')"));
   });
-  test('Acumulado ignora equipe que só tem interrupção', () => {
-    assert.ok(SRC.includes('.filter(e => !(!e.total_exec && !e.total_rej && e.total_interr > 0))'));
+  test('Acumulado ignora equipe que só tem interrupção (ou só remota — 14/10/2026)', () => {
+    assert.ok(SRC.includes('.filter(e => !(!e.total_exec && !e.total_rej && (e.total_interr > 0 || e.total_remota > 0)))'));
   });
 });
 
