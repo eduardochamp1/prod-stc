@@ -43,3 +43,15 @@ describe('RAMAIS junto da DD (matriz)', () => {
     assert.ok(SRC.includes('>RAMAIS</th>'));
   });
 });
+
+describe('RAMAIS no gauge e no XLSX', () => {
+  test('gauge Ramal mostra também as notas DD C93', () => {
+    assert.ok(SRC.includes("g.key === 'C93' && (totais['C93'] || 0) > 0"));
+    assert.ok(SRC.includes('${notasRamalLabel}'));
+  });
+  test('XLSX: coluna "Ramais Exec" nas abas por equipe e regional, só em linhas DD', () => {
+    assert.equal((SRC.match(/'Ramais Exec'/g) || []).length, 2);
+    assert.ok(SRC.includes("r.tipo_code === 'DD' ? (ramEq["));
+    assert.ok(SRC.includes("r.tipo_code === 'DD' ? (ramReg["));
+  });
+});

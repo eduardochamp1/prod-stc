@@ -4534,11 +4534,22 @@
              </div>`
           : '';
 
+        // RAMAIS (14/10/2026): o gauge Ramal mostra a QUANTIDADE (g.qtd), e as notas DD
+        // C93 que a geraram ficavam invisíveis. Mostra as duas coisas, como a II faz
+        // com as remotas (lá o número grande é nota; aqui é ramal).
+        const notasRamalLabel = g.key === 'C93' && (totais['C93'] || 0) > 0
+          ? `<div style="font-size:11px;color:var(--text);text-align:center;margin-top:-2px;font-weight:600"
+                  title="Notas DD Subs Ramal executadas — o número do gauge é a quantidade de ramais">
+               📄 Notas: <strong>${totais['C93']}</strong>
+             </div>`
+          : '';
+
         return `<div class="gauge-card">
   <div class="gauge-label">${g.label}</div>
   ${svg}
   ${cicloLabel}
   ${remotasLabel}
+  ${notasRamalLabel}
 </div>`;
       }).join('');
 
@@ -11461,12 +11472,20 @@ ${acumuladoHTML}
             if (r.tipo === 'MD' && r.sub_code === 'REMOTA')
               remEq[`${r.date}|${r.team_name}`] = (remEq[`${r.date}|${r.team_name}`] || 0) + Number(r.quantidade || 0);
           });
-          const hdr = ['Data', 'Equipe', 'Regional', 'Setor', 'Tipo', 'Nome Tipo', 'Qtd OS', 'Remotas Exec'];
+          // "Ramais Exec" (14/10/2026): idem, só nas linhas da DD — ramais executados
+          // (DD/C93, soma de quantidade; só "RAMAL BT"). "Qtd OS" segue sendo notas.
+          const ramEq = {};
+          (d.team_subcat || []).forEach(r => {
+            if (r.tipo === 'DD' && r.sub_code === 'C93')
+              ramEq[`${r.date}|${r.team_name}`] = (ramEq[`${r.date}|${r.team_name}`] || 0) + Number(r.quantidade || 0);
+          });
+          const hdr = ['Data', 'Equipe', 'Regional', 'Setor', 'Tipo', 'Nome Tipo', 'Qtd OS', 'Remotas Exec', 'Ramais Exec'];
           const rows = (d.team_totais || []).map(r => [
             r.date, r.team_name, r.regional, r.sector_id,
             r.tipo_code, TIPO_NOME[r.tipo_code] || r.tipo_code,
             r.count,
             r.tipo_code === 'II' ? (remEq[`${r.date}|${r.team_name}`] || 0) : '',
+            r.tipo_code === 'DD' ? (ramEq[`${r.date}|${r.team_name}`] || 0) : '',
           ]);
           const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
           _autoWidth(ws, [hdr, ...rows]);
@@ -11480,12 +11499,18 @@ ${acumuladoHTML}
             if (r.tipo === 'MD' && r.sub_code === 'REMOTA')
               remReg[`${r.date}|${r.regional}`] = (remReg[`${r.date}|${r.regional}`] || 0) + Number(r.quantidade || 0);
           });
-          const hdr = ['Data', 'Regional', 'Tipo', 'Nome Tipo', 'Qtd OS', 'Remotas Exec'];
+          const ramReg = {};
+          (d.daily_subcat || []).forEach(r => {
+            if (r.tipo === 'DD' && r.sub_code === 'C93')
+              ramReg[`${r.date}|${r.regional}`] = (ramReg[`${r.date}|${r.regional}`] || 0) + Number(r.quantidade || 0);
+          });
+          const hdr = ['Data', 'Regional', 'Tipo', 'Nome Tipo', 'Qtd OS', 'Remotas Exec', 'Ramais Exec'];
           const rows = (d.daily_totais || []).map(r => [
             r.date, r.regional,
             r.tipo_code, TIPO_NOME[r.tipo_code] || r.tipo_code,
             r.count,
             r.tipo_code === 'II' ? (remReg[`${r.date}|${r.regional}`] || 0) : '',
+            r.tipo_code === 'DD' ? (ramReg[`${r.date}|${r.regional}`] || 0) : '',
           ]);
           const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
           _autoWidth(ws, [hdr, ...rows]);
