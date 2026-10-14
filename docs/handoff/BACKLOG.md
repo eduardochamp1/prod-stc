@@ -167,6 +167,8 @@
 | P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | **código done** (13/10/2026, 06db294) — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
 | P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | **código done** (13/10/2026) — achado no levantamento do P0-1e (`index.html:9222`) |
 | P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
+| P2-60 | MD de medidor remoto (gerada por uma II) contava só como nota em "MD Outros" — a EDP paga por medidor, não por nota | Dados/Produto | **done** (14/10/2026, 037ad66 + 2ccdb63); retroativo só desde 30/09 |
+| P2-61 | Re-consolidação 30/09→13/10 derrubou 516 OS (SF dominante) — explicado: regra de rejeição de 31/07, não perda | Dados | **done / registro** (14/10/2026) — avisar quem reportou os números antigos à EDP |
 
 ---
 
@@ -6230,3 +6232,29 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Rollback:** `git revert`.
 - **Nota de numeração:** existem duas seções `## P2-58` (banner da `sp2` e JWT
   no OSRM) — colisão a desfazer na próxima edição do índice.
+
+## P2-60 — MD de medidor remoto: contar medidores, não notas
+
+- **Categoria:** Dados/Produto
+- **Status:** **done** (14/10/2026) — classificador 037ad66; script mais leve 2ccdb63. Retroativo **só desde 30/09/2026**.
+- **Pedido (José, 14/10/2026):** numa II, quando o medidor precisa ser trocado por um REMOTO, a WPA gera na hora uma nota MD (ex.: 045006483560, precedente II 045006456798). Para a EDP o que importa é o nº de medidores, não de notas. 1 medidor por nota (afirmação do José).
+- **Sinal:** o Comments da MD traz o texto padrão "* Instalar remota, realizar inspecao, testar comunicacao e registrar atendimento junto ao CIM. Se nao for possivel instalar remota…". Code visto: MSEB (não SPEB), por isso caía em `MD Outros`.
+- **Regra:** `/instalar\s+remota/i` no Comments → `MD/REMOTA`, "Subs Medidor Remoto", `quantidade=1` (`classifierService.classificarMD`; espelhado em `notaProcessor.classificarSubCategoria`). SPEB (Obsoleto/TL11) tem prioridade. Card/gauge/filtros/histórico/XLSX no `index.html`.
+- **Custo:** toda MD passa a buscar `details/optimized` (antes só SPEB) — 1 chamada extra por UUID, cacheada. Falha 5xx devolve `null` (retenta; não grava `OUTROS`).
+- **Retroativo:** `scripts/rebackfill-md-remota.js [--dry] [--desde=AAAA-MM-DD] [--conc=N]` — só MD de snapshot recentes hoje em `OUTROS`, 1 chamada/nota, UPDATE que preserva `code`/`raw`. Reclassificar as ~34 mil MD (`rebackfill-md.js`) custaria ~3 GB de tráfego: NÃO usar. Depois, `backfill-consolidate` (ver P2-61). Resultado: **53 medidores em 11 dias** (30/09–14/10).
+- **Limites conhecidos:** (1) a ligação com a II (nota precedente no retorno do SAP) NÃO foi implementada — a quantidade fica na MD; (2) nada classificado antes de 30/09; (3) MD com o texto padrão mas remota NÃO instalada ("informar o motivo") também conta 1 — a regra do José é 1 por nota; (4) 41 achadas no dry-run contra 37 gravadas: diferença de timeouts da WPA (~10% das chamadas) e notas fora do cache; (5) notas sem linha em `note_subcategorias` não são atualizadas pelo script (o cron classifica com a regra nova).
+- **Rollback:** reverter o commit; as linhas `REMOTA` podem voltar a `OUTROS` com `update note_subcategorias set sub_code='OUTROS', sub_categoria='MD Outros', quantidade=null where sub_code='REMOTA'` + re-consolidar.
+
+---
+
+## P2-61 — Re-consolidação 30/09→13/10: -516 OS explicados (regra de rejeição)
+
+- **Categoria:** Dados
+- **Status:** **done / registro** (14/10/2026). Nenhum código. Pendente humano: avisar quem reportou à EDP os números antigos.
+- **O que aconteceu:** para refletir o P2-60 nos totais diários rodou-se `backfill-consolidate 2026-09-30 2026-10-13 --apply`. O dry-run mostrava **-516** no total (07/10 −200, 08/10 −114, 09/10 −74, 13/10 −166 no "antes→depois" do script) e o `--apply` foi executado em seguida, sem parar para ler.
+- **Causa (medida):** comparando o dump de 14/10 03:00 com a tabela depois do apply, a queda é concentrada em **SF** (07/10: 609→452; 08/10: 429→334). Nas 12 equipes que mais perderam SF em 07/10 o `diff` bate com `note_rejections` (ex.: ECPSJ87 −13 × 13 rejeitadas; ECPSJ85 −10 × 10; ECCSJ82 −10 × 10). É a regra de 31/07 — rejeição no dia da conclusão ou depois não é produção — aplicada a notas que a EDP rejeitou DEPOIS de a tabela ter sido gravada (SF "Conta Paga"). Alguns tipos subiram (PO, OS, VL, PA): recuperação de notas de D vistas em D+1.
+- **Conclusão:** o valor novo é o correto; os antigos (ex.: 07/10 = 1250, 08/10 = 1122, 09/10 = 1027, 13/10 = 1216) estavam **inflados** por SF depois rejeitado. Erro a favor do contrato, não contra.
+- **13/10:** ficou sem o passe do dia seguinte (1039 vs régua 1050, diff 11, limiar 21 — `verify-consolidacao` ok). O cron sela. Não aplicar o passe do dia corrente à mão (grava dia parcial).
+- **Lição de processo:** o dry-run do `backfill-consolidate` traz o total por dia; qualquer variação além do esperado deve ser lida ANTES do `--apply`. O script recomputa produção + carteira + subcats juntos: não dá para isolar só a subcategoria.
+- **Pendente (humano):** conferir uma equipe do topo (ex.: ECPSJ87, 07/10) no Gestão Online do portal WPA — deve mostrar ~13 SF rejeitadas.
+- **Rollback:** dump `~/backups/wpa_monitor/wpa_monitor_2026-10-14_030001.dump` (retenção 14 dias) tem o estado anterior; restaurar só as linhas dos dias com `pg_restore` seletivo — mas o valor antigo estava errado.
