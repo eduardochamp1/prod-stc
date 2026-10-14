@@ -23,8 +23,7 @@
 require('dotenv').config();
 
 const { getClient }        = require('../services/dbClient');
-const { classificarBatch } = require('../services/classifierService');
-const { upsertSubcategorias } = require('../db/subcategoriasQueries');
+const { wpaFetch }         = require('../services/wpaService');
 
 const arg = (n) => (process.argv.find(a => a.startsWith(`--${n}=`)) || '').split('=')[1];
 const DRY = process.argv.includes('--dry');
@@ -77,23 +76,53 @@ async function soOutros(jobs) {
   return jobs.filter(j => !naoOutros.has(j.noteId));
 }
 
+// 1 chamada por nota (só o details/optimized, onde está o Comments) e SEM
+// reclassificar: as candidatas já estão como OUTROS, então não são SPEB e o
+// /notes/md seria desperdício. Grava via UPDATE só sub_code/sub_categoria/
+// quantidade — preserva code, code_text e raw que já estavam na linha.
+// (Nota sem linha no cache não é atualizada aqui: o cron classifica com a regra nova.)
+const RE = /instalar\s+remota/i;
+const CONC = Number(arg('conc')) || 8;
+
+async function ehRemota(j) {
+  try {
+    const res = await wpaFetch(`/api/Notes/${j.noteId}/details/optimized?sectorId=${j.sectorId || 'DESG'}`);
+    if (!res.ok) return null;                    // falhou: não decide
+    const det = await res.json();
+    return RE.test(det?.Data?.Comments || '');
+  } catch { return null; }
+}
+
 async function main() {
-  console.log(`Re-backfill MD remota — desde ${DESDE}${DRY ? ' (DRY: não grava)' : ''}`);
+  console.log(`Re-backfill MD remota — desde ${DESDE}, conc=${CONC}${DRY ? ' (DRY: não grava)' : ''}`);
   const todas = await mdJobsDesde(DESDE);
   console.log(`  ${todas.length} MD nos snapshots`);
   const jobs = await soOutros(todas);
   console.log(`  ${jobs.length} estão como OUTROS (ou sem cache) → serão consultadas`);
 
-  const CHUNK = 60;
-  let achadas = 0, gravadas = 0;
-  for (let i = 0; i < jobs.length; i += CHUNK) {
-    const classifs = await classificarBatch(jobs.slice(i, i + CHUNK), 3);
-    const remotas = classifs.filter(c => c.sub_code === 'REMOTA');
-    achadas += remotas.length;
-    if (!DRY && remotas.length) gravadas += await upsertSubcategorias(remotas);
-    console.log(`  ${Math.min(i + CHUNK, jobs.length)}/${jobs.length} — REMOTA achadas=${achadas}`);
+  const sb = getClient();
+  let achadas = 0, gravadas = 0, falhas = 0, feitas = 0, prox = 0;
+  // Pool de workers: um timeout NÃO trava um lote inteiro (antes, lotes de 60 esperavam o mais lento).
+  async function worker() {
+    while (prox < jobs.length) {
+      const j = jobs[prox++];
+      const r = await ehRemota(j);
+      feitas++;
+      if (r === null) falhas++;
+      else if (r) {
+        achadas++;
+        if (!DRY) {
+          const { error } = await sb.from('note_subcategorias')
+            .update({ sub_code: 'REMOTA', sub_categoria: 'Subs Medidor Remoto', quantidade: 1 })
+            .eq('note_id', j.noteId);
+          if (error) console.error('  erro update', j.noteId, error.message); else gravadas++;
+        }
+      }
+      if (feitas % 100 === 0) console.log(`  ${feitas}/${jobs.length} — REMOTA=${achadas} falhas(timeout)=${falhas}`);
+    }
   }
-  console.log(`\n✅ Concluído. REMOTA achadas=${achadas}${DRY ? ' (nada gravado)' : `, gravadas=${gravadas}`}`);
+  await Promise.all(Array.from({ length: CONC }, worker));
+  console.log(`\n✅ Concluído. REMOTA=${achadas}${DRY ? ' (nada gravado)' : `, gravadas=${gravadas}`}, falhas=${falhas} (rode de novo p/ retentar)`);
   process.exit(0);
 }
 
