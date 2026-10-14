@@ -2253,6 +2253,9 @@
       { key: 'DL', nome: 'Desligamento', tipo: 'DL' },
       { key: 'OBSOLETO', nome: 'Subs Obsoleto', tipo: 'MD', subCode: 'OBSOLETO' },
       { key: 'TL11', nome: 'Subs TL11', tipo: 'MD', subCode: 'TL11' },
+      // 14/10/2026: MD gerada na hora por uma II que exige medidor REMOTO. Para a EDP
+      // conta o nº de medidores (1 por nota), não o de notas — por isso qtd:true.
+      { key: 'REMOTA', nome: 'Subs Medidor Remoto', tipo: 'MD', subCode: 'REMOTA', qtd: true },
       { key: 'MD_OUTROS', nome: 'MD Outros', tipo: 'MD', subCode: 'OUTROS' },
       { key: 'L0', nome: 'Corte Disjuntor', tipo: 'SF', subCode: 'L0' },
       { key: 'L1', nome: 'Corte Borne', tipo: 'SF', subCode: 'L1' },
@@ -2347,6 +2350,7 @@
     const MONITOR_SUBCATS = [
       { tipo: 'MD', sub: 'OBSOLETO', nome: 'Subs Obsoleto' },
       { tipo: 'MD', sub: 'TL11',     nome: 'Subs TL11' },
+      { tipo: 'MD', sub: 'REMOTA',   nome: 'Subs Medidor Remoto' },
       { tipo: 'MD', sub: 'OUTROS',   nome: 'MD Outros' },
       { tipo: 'SF', sub: 'L0',       nome: 'Corte Disjuntor' },
       { tipo: 'SF', sub: 'L1',       nome: 'Corte Borne' },
@@ -4055,6 +4059,7 @@
       MD: { nome: 'Modificação',               subcats: [
         { code: 'OBSOLETO', nome: 'Subs Obsoleto' },
         { code: 'TL11',     nome: 'Subs TL11' },
+        { code: 'REMOTA',   nome: 'Subs Medidor Remoto' },
         { code: 'OUTROS',   nome: 'MD Outros' },
       ]},
       SF: { nome: 'Suspensão de Fornecimento', subcats: [
@@ -4449,6 +4454,7 @@
         // MD
         { key: 'OBSOLETO',   label: 'Obsoleto',        metaKey: 'OBSOLETO', tipo: 'MD', subcat: 'OBSOLETO' },
         { key: 'TL11',       label: 'TL11',            metaKey: 'TL11',     tipo: 'MD', subcat: 'TL11' },
+        { key: 'REMOTA',     label: 'Medidor Remoto',  metaKey: 'REMOTA',   tipo: 'MD', subcat: 'REMOTA', qtd: true },
         { key: 'MD_OUTROS',  label: 'MD Outros',       metaKey: null,       tipo: 'MD', subcat: 'OUTROS', totalKey: 'MD_OUTROS' },
         // DD
         { key: 'C93',        label: 'Ramal',           metaKey: 'C93',      tipo: 'DD', subcat: 'C93',    qtd: true },
@@ -6362,6 +6368,7 @@ ${acumuladoHTML}
     const SUBCAT_DISPLAY = [
       { tipo: 'MD', sub_code: 'OBSOLETO', nome: 'Subs Obsoleto' },
       { tipo: 'MD', sub_code: 'TL11',     nome: 'Subs TL11' },
+      { tipo: 'MD', sub_code: 'REMOTA',   nome: 'Subs Medidor Remoto', qtd: 'medidores' },
       { tipo: 'MD', sub_code: 'OUTROS',   nome: 'MD Outros' },
       { tipo: 'SF', sub_code: 'L0',       nome: 'Corte Disjuntor' },
       { tipo: 'SF', sub_code: 'L1',       nome: 'Corte Borne' },
@@ -11316,7 +11323,7 @@ ${acumuladoHTML}
       PO:'Ordem Prioritária', SO:'SO', RD:'RD',
     };
     const SUBCAT_NOME = {
-      TL11:'Subs TL11', OBSOLETO:'Subs Obsoleto', L0:'Corte Disjuntor',
+      TL11:'Subs TL11', OBSOLETO:'Subs Obsoleto', REMOTA:'Subs Medidor Remoto', L0:'Corte Disjuntor',
       L1:'Corte Borne', C93:'Subs Ramal', BTZ013:'Substituição CS',
       OUTROS:'Outros',
     };

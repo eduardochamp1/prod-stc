@@ -136,23 +136,59 @@ describe('classificarMD', () => {
     assert.equal(r.sub_code, 'OBSOLETO');
   });
 
-  test('Code != SPEB → OUTROS, NÃO chama details/optimized (lazy fetch)', async () => {
-    // Mockando só /api/notes/md (com Code != SPEB) — se classifier chamar
-    // details/optimized vai dar 404 mas não deve, porque code != SPEB.
+  test('Code != SPEB sem texto de remota → OUTROS', async () => {
+    // 14/10/2026: o lazy fetch acabou — toda MD busca o Comments pra poder
+    // reconhecer a MD de medidor remoto. Sem o texto padrão, segue OUTROS.
     const id = 'note-outros-no-details-call';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('XPTO'),
-    });
+    const { classificar } = loadClassifierWith(mdMock(id, 'XPTO', '* qualquer outro texto'));
     const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code,      'OUTROS');
     assert.equal(r.sub_categoria, 'MD Outros');
+    assert.equal(r.quantidade,    null);
+  });
+
+  // MD gerada na hora por uma II que exige trocar o medidor por um REMOTO.
+  // Caso real: nota 045006483560 (09/10/2026), precedente II 045006456798.
+  const COMENT_REMOTA = '* Instalar remota, realizar inspecao, testar comunicacao e registrar ' +
+    'atendimento junto ao CIM. Se nao for possivel instalar remota, informar o motivo no texto da nota.';
+
+  test('MD de medidor remoto (Code MSEB) → REMOTA com quantidade 1', async () => {
+    const id = 'note-remota-real';
+    const { classificar } = loadClassifierWith(mdMock(id, 'MSEB', COMENT_REMOTA));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r.sub_code,      'REMOTA');
+    assert.equal(r.sub_categoria, 'Subs Medidor Remoto');
+    assert.equal(r.quantidade,    1);
+    assert.equal(r.tipo,          'MD');
+  });
+
+  test('MD de medidor remoto: reconhece por texto, não depende do Code nem da caixa', async () => {
+    const id = 'note-remota-caixa';
+    const { classificar } = loadClassifierWith(mdMock(id, 'XPTO', '* INSTALAR   REMOTA, realizar inspecao'));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r.sub_code, 'REMOTA');
+  });
+
+  test('SPEB continua SPEB mesmo que o Comments cite "instalar remota"', async () => {
+    const id = 'note-speb-cita-remota';
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPEB', 'projeto: instalar remota. TL11'));
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r.sub_code, 'TL11');
+  });
+
+  test('Code != SPEB + details/optimized 5xx → null (retenta; não grava OUTROS no cache)', async () => {
+    const id = 'note-remota-5xx';
+    const { classificar } = loadClassifierWith({
+      [`/api/notes/md?noteId=${id}`]: md('MSEB'),
+      [`/api/Notes/${id}/details/optimized?sectorId=DESG`]: null, // 500
+    });
+    const r = await classificar(id, 'MD', { sectorId: 'DESG' });
+    assert.equal(r, null);
   });
 
   test('Code = SPMD (não SPEB) → sub_code=OUTROS', async () => {
     const id = 'note-outros-spmd';
-    const { classificar } = loadClassifierWith({
-      [`/api/notes/md?noteId=${id}`]: md('SPMD'),
-    });
+    const { classificar } = loadClassifierWith(mdMock(id, 'SPMD', ''));
     const r = await classificar(id, 'MD', { sectorId: 'DESG' });
     assert.equal(r.sub_code, 'OUTROS');
   });

@@ -251,6 +251,9 @@ function classificarSubCategoria(tipo, code, comments, activities, groupDescript
         quantidade:   null,
       };
     }
+    // MD de medidor remoto (14/10/2026): espelha classifierService.classificarMD.
+    if (/instalar\s+remota/i.test(comments || ''))
+      return { subCategoria: 'Subs Medidor Remoto', subcatCode: 'REMOTA', quantidade: 1 };
     return { subCategoria: 'MD Outros', subcatCode: 'OUTROS', quantidade: null };
   }
 

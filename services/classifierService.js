@@ -59,6 +59,13 @@ async function safeJson(path) {
   } catch { return FETCH_FAILED; }   // erro de rede/timeout → transiente
 }
 
+// Texto padrão do Comments da MD gerada pela II quando o medidor precisa ser
+// trocado por um REMOTO: "* Instalar remota, realizar inspecao, testar
+// comunicacao e registrar atendimento junto ao CIM. Se nao for possivel instalar
+// remota, informar o motivo no texto da nota." (nota 045006483560, 09/10/2026).
+// Casa só o trecho fixo "instalar remota", tolerando caixa e espaços.
+const RE_MD_REMOTA = /instalar\s+remota/i;
+
 function nomeFallback(tipo) {
   return `${tipo} Outros`;
 }
@@ -101,8 +108,33 @@ async function classificarMD(noteId, sectorId) {
   const code     = md?.Data?.Code     || null;
   const codeText = md?.Data?.CodeText || null;
 
-  // Code != SPEB cai direto em OUTROS — evita chamada pesada ao details/optimized
+  // Comments NÃO está em /api/notes/md (verificado via diagnostic),
+  // está só em /details/optimized.
+  //
+  // 14/10/2026: antes, Code != SPEB saía daqui sem chamar o details (lazy fetch).
+  // Agora TODA MD busca o Comments, porque a MD de MEDIDOR REMOTO (gerada na hora
+  // por uma II que exige trocar o medidor) NÃO é SPEB — o único sinal dela é o
+  // texto padrão "* Instalar remota, realizar inspecao, testar comunicacao...".
+  // Custo: 1 chamada extra por UUID de MD, uma vez só (resultado vai pro cache).
+  const det = await safeJson(`/api/Notes/${noteId}/details/optimized?sectorId=${sectorId || 'DESG'}`);
+  // Se o details falhou, NÃO temos como discriminar (SPEB: TL11 vs OBSOLETO;
+  // outras: remota vs OUTROS) — retorna null pra retentar, senão gravaria
+  // OUTROS/OBSOLETO por default e o UUID entraria no cache pra sempre (P1-7).
+  if (det === FETCH_FAILED) return null;
+  const comments = det?.Data?.Comments || '';
+
   if (code !== 'SPEB') {
+    // MD de medidor remoto: 1 medidor por nota (confirmado pelo José, 14/10/2026).
+    // Para a EDP o que importa é a quantidade de medidores, não de notas — por isso
+    // grava `quantidade` (o mesmo mecanismo do Subs Ramal / Sub CS).
+    if (RE_MD_REMOTA.test(comments)) {
+      return {
+        sub_code:      'REMOTA',
+        sub_categoria: 'Subs Medidor Remoto',
+        code, code_text: codeText, quantidade: 1,
+        raw: { md: md?.Data ?? null, comments: comments.slice(0, 300) },
+      };
+    }
     return {
       sub_code:      'OUTROS',
       sub_categoria: nomeFallback('MD'),
@@ -111,15 +143,7 @@ async function classificarMD(noteId, sectorId) {
     };
   }
 
-  // SPEB → precisa de Comments p/ discriminar TL11 vs OBSOLETO.
-  // Comments NÃO está em /api/notes/md (verificado via diagnostic),
-  // está só em /details/optimized.
-  const det = await safeJson(`/api/Notes/${noteId}/details/optimized?sectorId=${sectorId || 'DESG'}`);
-  // Se o details falhou pra uma SPEB, NÃO temos como discriminar TL11 vs
-  // OBSOLETO — retorna null pra retentar (senão gravaria OBSOLETO por default).
-  if (det === FETCH_FAILED) return null;
-  const comments = det?.Data?.Comments || '';
-
+  // SPEB → Comments discrimina TL11 vs OBSOLETO.
   const isTL11 = /TL11/i.test(comments);
   return {
     sub_code:      isTL11 ? 'TL11'      : 'OBSOLETO',
