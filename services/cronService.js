@@ -20,6 +20,7 @@ let snapshotJob     = null;
 let consolidaJob    = null;
 let uuidHealthJob   = null;
 let retryOutrosJob  = null;
+let retryRejJob     = null;
 let driftJob        = null;
 let notasJob        = null;
 let isRunning       = false;
@@ -976,6 +977,62 @@ async function runBackfillRejeicoes(daysBack) {
   return { totalSnaps, jobs: jobs.length, gravadas, comMotivo, semMotivo: gravadas - comMotivo };
 }
 
+// ── RETRY DE REJEIÇÕES GRAVADAS VAZIAS POR FALHA DE COLETA ─────────────────────
+// 14/10/2026 (reporte do José: "notas rejeitadas sem motivo, mas no WPA têm"):
+// linhas com raw.no_path_cached / all_failed / unknown_tipo foram gravadas SEM
+// motivo por falha de coleta (cache negativo do tipo SF envenenado) e o cron
+// normal nunca volta nelas (filtra por presença do note_id). Este job re-coleta
+// só essas linhas, as mais recentes primeiro, em lote pequeno (conta WPA
+// compartilhada com outro projeto). UPDATE com COALESCE: nunca apaga o que já
+// existe. Linha que continua falhando fica como está e é tentada no próximo ciclo.
+async function runRetryRejeicoesVazias(limite = 120) {
+  if (process.env.DATA_MODE === 'mock') return { alvo: 0 };
+  const { _getPool } = require('./pgShim');
+  const { fetchRejectionDetails } = require('./rejectionService');
+  const pool = _getPool();
+  if (!pool) return { alvo: 0 };
+
+  const { rows: alvo } = await pool.query(
+    `SELECT note_id::text AS note_id, numero, tipo
+       FROM note_rejections
+      WHERE coalesce(array_length(motivo_codes, 1), 0) = 0
+        AND (raw ? 'no_path_cached' OR raw ? 'all_failed' OR raw ? 'unknown_tipo')
+      ORDER BY session_date DESC
+      LIMIT $1`, [limite]);
+  if (alvo.length === 0) return { alvo: 0 };
+
+  let recuperadas = 0;
+  for (let i = 0; i < alvo.length; i += 3) {
+    const lote = alvo.slice(i, i + 3);
+    await Promise.all(lote.map(async r => {
+      try {
+        const det = await fetchRejectionDetails(r.note_id, r.tipo);
+        // Só grava se a coleta de fato respondeu (traz motivo ou data).
+        if (!det || (!det.motivo_codes?.length && !det.rejection_date)) return;
+        await pool.query(
+          `UPDATE note_rejections
+              SET rejection_date = COALESCE($2, rejection_date),
+                  motivo_codes   = CASE WHEN cardinality($3::text[]) > 0 THEN $3::text[] ELSE motivo_codes END,
+                  motivo_textos  = CASE WHEN cardinality($4::text[]) > 0 THEN $4::text[] ELSE motivo_textos END,
+                  observacao     = COALESCE($5, observacao),
+                  formulario     = COALESCE($6, formulario),
+                  raw            = COALESCE($7::jsonb, raw),
+                  fetched_at     = now()
+            WHERE note_id = $1::uuid`,
+          [r.note_id, det.rejection_date || null,
+           det.motivo_codes || [], det.motivo_textos || [],
+           det.observacao || null, det.formulario || null,
+           det.raw ? JSON.stringify(det.raw) : null]);
+        recuperadas++;
+      } catch (err) {
+        console.warn(`[CRON] retry-rej: ${r.numero || r.note_id} falhou: ${err.message}`);
+      }
+    }));
+  }
+  console.log(`[CRON] retry-rej: ${recuperadas}/${alvo.length} linhas vazias recuperadas`);
+  return { alvo: alvo.length, recuperadas };
+}
+
 // ── RETRY DE DD/OUTROS RECENTES ────────────────────────────────────────────────
 // Bug histórico: equipes lançam Activities[] no WPA progressivamente durante o
 // dia. O cron `runClassifyNewNotes` vê a nota cedo (sem Activities) e classifica
@@ -1461,6 +1518,13 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
+  // Retry das rejeições gravadas vazias por falha de coleta (14/10/2026).
+  // Minuto 40: fora de snapshots (00/15/30/45), uuid-health (05) e retry-outros (25).
+  retryRejJob = cron.schedule('40 6-20 * * *', () => runRetryRejeicoesVazias().catch(err =>
+    console.warn('[CRON] retry-rej falhou:', err.message)), {
+    timezone: 'America/Sao_Paulo',
+  });
+
   // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
   driftJob = cron.schedule('0 2 * * *', runDailyDriftSweep, {
     timezone: 'America/Sao_Paulo',
@@ -1494,6 +1558,7 @@ function stopCron() {
   consolidaJob?.stop();
   uuidHealthJob?.stop();
   retryOutrosJob?.stop();
+  retryRejJob?.stop();
   driftJob?.stop();
   notasJob?.stop();
   // Para jobs extras (snapshot de madrugada)
@@ -1575,7 +1640,7 @@ module.exports = {
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,
   runSyncLogoffs,
-  runClassifyRejections, runBackfillRejeicoes,
+  runClassifyRejections, runBackfillRejeicoes, runRetryRejeicoesVazias,
   runSyncEscalas,
   runSyncEscalaCatalogo,
   runSyncEscalaDia,

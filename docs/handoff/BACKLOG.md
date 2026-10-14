@@ -3874,6 +3874,15 @@ exigem ação na VM/organização; não são executáveis por AI sozinha.
   FETCH_FAILED e o caller `runClassifyRejections` pular). Menor impacto (é
   indicador secundário), mas vale fechar.
 
+- **2026-10-14** — **P1-7 (sub-item rejeições) fechado.** Reporte: rejeitadas de
+  07/10 "sem motivo registrado" no painel, com motivo no portal. Causa (provada
+  na VM): 205 linhas `raw={"no_path_cached":"SF"}` — o cache negativo (21/08)
+  marcou o tipo SF inteiro como sem path após UMA nota 404, e as linhas vazias
+  nunca eram re-coletadas. Fix: tipo com KNOWN_PATHS fora do cache negativo,
+  TTL de 30min nos demais, SF tenta também FALLBACK_PATHS, e cron
+  `runRetryRejeicoesVazias` (min 40, 6-20h) recupera linhas vazias por falha.
+  Testes em `test/rejectionCacheNegativo.test.js`.
+
 **Próximo item de código puro:** P1-5 (rate limit `/auth/login` + scrypt).
 Depois entra P2. P0-1/P0-2/P1-1(config)/P1-11 dependem de você (VM/org/staging).
 

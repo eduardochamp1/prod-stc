@@ -150,10 +150,29 @@ const _discoveredPath = {};   // { 'DL': 'dlrl', ... }
 // candidatos derem 404, marca aqui e as notas seguintes nem tentam.
 // Só entra aqui em 404 puro. Se algum candidato devolveu 500, o endpoint EXISTE
 // e a falha é da nota (arquivada/limpa) — não envenena o cache.
-const _noPathForTipo = new Set();
+//
+// ⚠️ CORREÇÃO DE 14/10/2026 — o cache negativo ENVENENOU o tipo SF. Reporte do
+// José: notas rejeitadas de 07/10 apareciam "sem motivo registrado" no painel
+// mas tinham motivo no portal WPA. Diagnóstico na VM: 205 linhas com
+// raw={"no_path_cached":"SF"} — UMA nota SF que deu 404 em sfdl+sfrl marcou o
+// tipo inteiro como "sem path" e todas as SF seguintes daquele processo saíram
+// vazias, sem request, e foram gravadas assim PRA SEMPRE (o cron só coleta
+// note_id ausente da tabela). 404 numa nota não prova que o endpoint do TIPO
+// não existe — o path é por FORMULÁRIO e uma nota pode ter formulário de outro
+// path. Por isso: (1) tipo com KNOWN_PATHS nunca entra no cache negativo;
+// (2) pros demais, o cache expira (TTL) em vez de durar o processo inteiro.
+const _noPathForTipo = new Map();   // tipo → timestamp (ms) em que foi marcado
+const NO_PATH_TTL_MS = 30 * 60 * 1000;
+
+function _isNoPath(tipo, now = Date.now()) {
+  const t = _noPathForTipo.get(tipo);
+  if (t === undefined) return false;
+  if (now - t > NO_PATH_TTL_MS) { _noPathForTipo.delete(tipo); return false; }
+  return true;
+}
 
 /** Estado do cache negativo (debug/teste). */
-function getNoPathTipos() { return [..._noPathForTipo]; }
+function getNoPathTipos() { return [..._noPathForTipo.keys()].filter(t => _isNoPath(t)); }
 function _resetNoPathCache() { _noPathForTipo.clear(); }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -246,6 +265,9 @@ async function fetchRejectionDetails(noteId, tipo) {
   if (_discoveredPath[TIPO]) paths.push(_discoveredPath[TIPO]);
   if (KNOWN_PATHS[TIPO])     paths.push(...KNOWN_PATHS[TIPO]);
   if (CANDIDATE_PATHS[TIPO]) paths.push(...CANDIDATE_PATHS[TIPO]);
+  // 14/10/2026: o endpoint é por FORMULÁRIO. Tipo com path confirmado (SF) também
+  // tenta os demais paths de formulário antes de desistir da nota.
+  if (KNOWN_PATHS[TIPO]) paths.push(...FALLBACK_PATHS);
 
   // Dedup preservando ordem
   const tried = new Set();
@@ -262,7 +284,7 @@ async function fetchRejectionDetails(noteId, tipo) {
 
   // Cache negativo: este tipo já esgotou todos os candidatos com 404 neste
   // processo. Não gasta requisição de novo nota a nota.
-  if (_noPathForTipo.has(TIPO)) {
+  if (_isNoPath(TIPO)) {
     return {
       motivo_codes: [], motivo_textos: [], observacao: null,
       rejection_date: null, formulario: null,
@@ -299,9 +321,10 @@ async function fetchRejectionDetails(noteId, tipo) {
   // 404 em TODOS os candidatos → o path não existe pra este tipo. Marca pro
   // resto do processo (ver _noPathForTipo). Com um 500 no meio, não marca: o
   // endpoint existe e o problema é da nota.
-  if (!last500) {
-    _noPathForTipo.add(TIPO);
-    console.warn(`[rejectionService] tipo=${TIPO} marcado como SEM path — não tento de novo neste processo`);
+  // Tipo com KNOWN_PATHS nunca é marcado (ver correção de 14/10/2026 acima).
+  if (!last500 && !KNOWN_PATHS[TIPO]) {
+    _noPathForTipo.set(TIPO, Date.now());
+    console.warn(`[rejectionService] tipo=${TIPO} marcado como SEM path por ${NO_PATH_TTL_MS / 60000}min`);
   }
   return {
     motivo_codes: [], motivo_textos: [], observacao: null,
@@ -321,5 +344,6 @@ module.exports = {
   fetchRejectionDetails,
   getDiscoveredPaths,
   getNoPathTipos, _resetNoPathCache,   // cache negativo (21/08/2026) — exportado p/ teste
+  _isNoPath, _noPathForTipo, NO_PATH_TTL_MS,
   CANDIDATE_PATHS, KNOWN_PATHS,        // exportados p/ teste de cobertura de tipos
 };
