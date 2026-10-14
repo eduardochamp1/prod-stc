@@ -4524,10 +4524,21 @@
              </div>`
           : '';
 
+        // REMOTAS (14/10/2026): o gauge da II mostra também os medidores remotos
+        // executados (MD gerada pela II). É a quantidade que a EDP contabiliza; o
+        // número grande do gauge segue sendo o de notas II.
+        const remotasLabel = g.key === 'II' && Math.round(quantidades['REMOTA'] || 0) > 0
+          ? `<div style="font-size:11px;color:var(--text);text-align:center;margin-top:-2px;font-weight:600"
+                  title="Medidores remotos executados (MD gerada pela II)">
+               📡 Remotas: <strong>${Math.round(quantidades['REMOTA'])}</strong>
+             </div>`
+          : '';
+
         return `<div class="gauge-card">
   <div class="gauge-label">${g.label}</div>
   ${svg}
   ${cicloLabel}
+  ${remotasLabel}
 </div>`;
       }).join('');
 
@@ -6387,6 +6398,10 @@ ${acumuladoHTML}
       { tipo: 'DD', sub_code: 'C93',      nome: 'Subs Ramal',      qtd: 'ramais' },
       { tipo: 'DD', sub_code: 'BTZ013',   nome: 'Substituição CS', qtd: 'unidades' },
       { tipo: 'DD', sub_code: 'OUTROS',   nome: 'DD Outros' },
+      // II (14/10/2026): sem subcategoria própria (sub_code = tipo). Entra aqui só
+      // para mostrar, junto das notas II, os medidores remotos executados
+      // (MD/REMOTA) — `remotasDe` aponta a chave de onde sai essa quantidade.
+      { tipo: 'II', sub_code: 'II',       nome: 'Inspeção de Irregularidade', remotasDe: 'MD/REMOTA' },
     ];
 
     // Histórico por subcategoria começou a ser preenchido em 27/04/2026.
@@ -6439,9 +6454,10 @@ ${acumuladoHTML}
       const cardsHtml = SUBCAT_DISPLAY.map(s => {
         const key = `${s.tipo}/${s.sub_code}`;
         const v = consolidaTotais[key] || { count: 0, quantidade: 0 };
+        const _rem = s.remotasDe ? Math.round((consolidaTotais[s.remotasDe] || {}).quantidade || 0) : 0;
         const qtdLabel = s.qtd && v.quantidade > 0
           ? `<div class="subcat-qtd"><strong>${Math.round(v.quantidade)}</strong> ${s.qtd} acumulados</div>`
-          : '';
+          : (_rem > 0 ? `<div class="subcat-qtd"><strong>${_rem}</strong> remotas acumuladas</div>` : '');
         const isSelected = _subcatSelectedKey === key ? 'is-selected' : '';
         // Card OUTROS sem cliques úteis (ranking de OUTROS é menos informativo) —
         // mas mantemos clicável pra consistência. Apenas desativa se count=0.
@@ -6473,24 +6489,31 @@ ${acumuladoHTML}
           // Soma todas regionais visíveis dentro do dia pra essa subcat
           let count = 0;
           let qtd = 0;
+          // Linha da II: a "quantidade" são as remotas do dia (MD/REMOTA).
+          const kQtd = s.remotasDe || key;
           if (regional && regional !== 'ALL') {
             const v = d[regional]?.[key];
-            if (v) { count = v.count || 0; qtd = Number(v.quantidade || 0); }
+            if (v) count = v.count || 0;
+            const vq = d[regional]?.[kQtd];
+            if (vq) qtd = Number(vq.quantidade || 0);
           } else {
             REGIONAIS_ATIVAS.forEach(r => {
               const v = d[r]?.[key];
-              if (v) { count += v.count || 0; qtd += Number(v.quantidade || 0); }
+              if (v) count += v.count || 0;
+              const vq = d[r]?.[kQtd];
+              if (vq) qtd += Number(vq.quantidade || 0);
             });
           }
           totalRow += count;
           qtdRow   += qtd;
           const cls = count === 0 ? 'cell-zero' : '';
-          const qtdTag = (s.qtd && qtd > 0) ? `<span class="subcat-qtd-tag">(${Math.round(qtd)}${s.qtd})</span>` : '';
+          const qtdTag = ((s.qtd || s.remotasDe) && qtd > 0)
+            ? `<span class="subcat-qtd-tag">(${Math.round(qtd)}${s.qtd || ' remotas'})</span>` : '';
           return `<td class="${cls}">${count > 0 ? count : '·'}${qtdTag}</td>`;
         }).join('');
 
-        const totalLabel = (s.qtd && qtdRow > 0)
-          ? `${totalRow}<span class="subcat-qtd-tag">(${Math.round(qtdRow)}${s.qtd})</span>`
+        const totalLabel = ((s.qtd || s.remotasDe) && qtdRow > 0)
+          ? `${totalRow}<span class="subcat-qtd-tag">(${Math.round(qtdRow)}${s.qtd || ' remotas'})</span>`
           : totalRow;
 
         return `
@@ -11420,11 +11443,21 @@ ${acumuladoHTML}
 
         // ── Aba 3: Por Equipe — Total por Tipo ──────────────────────────────
         {
-          const hdr = ['Data', 'Equipe', 'Regional', 'Setor', 'Tipo', 'Nome Tipo', 'Qtd OS'];
+          // "Remotas Exec" (14/10/2026): só nas linhas da II — medidores remotos
+          // executados pela equipe no dia (MD/REMOTA, soma de quantidade). É o que a
+          // EDP contabiliza; "Qtd OS" segue sendo o nº de notas. Nas demais linhas
+          // fica vazio (não é zero: não se aplica).
+          const remEq = {};
+          (d.team_subcat || []).forEach(r => {
+            if (r.tipo === 'MD' && r.sub_code === 'REMOTA')
+              remEq[`${r.date}|${r.team_name}`] = (remEq[`${r.date}|${r.team_name}`] || 0) + Number(r.quantidade || 0);
+          });
+          const hdr = ['Data', 'Equipe', 'Regional', 'Setor', 'Tipo', 'Nome Tipo', 'Qtd OS', 'Remotas Exec'];
           const rows = (d.team_totais || []).map(r => [
             r.date, r.team_name, r.regional, r.sector_id,
             r.tipo_code, TIPO_NOME[r.tipo_code] || r.tipo_code,
             r.count,
+            r.tipo_code === 'II' ? (remEq[`${r.date}|${r.team_name}`] || 0) : '',
           ]);
           const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
           _autoWidth(ws, [hdr, ...rows]);
@@ -11433,11 +11466,17 @@ ${acumuladoHTML}
 
         // ── Aba 4: Totais Regionais ──────────────────────────────────────────
         {
-          const hdr = ['Data', 'Regional', 'Tipo', 'Nome Tipo', 'Qtd OS'];
+          const remReg = {};
+          (d.daily_subcat || []).forEach(r => {
+            if (r.tipo === 'MD' && r.sub_code === 'REMOTA')
+              remReg[`${r.date}|${r.regional}`] = (remReg[`${r.date}|${r.regional}`] || 0) + Number(r.quantidade || 0);
+          });
+          const hdr = ['Data', 'Regional', 'Tipo', 'Nome Tipo', 'Qtd OS', 'Remotas Exec'];
           const rows = (d.daily_totais || []).map(r => [
             r.date, r.regional,
             r.tipo_code, TIPO_NOME[r.tipo_code] || r.tipo_code,
             r.count,
+            r.tipo_code === 'II' ? (remReg[`${r.date}|${r.regional}`] || 0) : '',
           ]);
           const ws = XLSX.utils.aoa_to_sheet([hdr, ...rows]);
           _autoWidth(ws, [hdr, ...rows]);

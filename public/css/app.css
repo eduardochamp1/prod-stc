@@ -2413,6 +2413,7 @@
     .subcat-card.tipo-MD::before { background: var(--amarelo-grad, var(--amarelo)); }
     .subcat-card.tipo-SF::before { background: var(--verde-grad, var(--verde)); }
     .subcat-card.tipo-DD::before { background: var(--preto); }
+    .subcat-card.tipo-II::before { background: var(--cinza2); }
     .subcat-card .subcat-tipo-badge {
       font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
       color: var(--text2); margin-bottom: 4px;
@@ -2494,6 +2495,7 @@
     .subcat-matrix .subcat-tipo-tag.tipo-MD { background: rgba(254, 196, 14, 0.15); color: #7a5b00; }
     .subcat-matrix .subcat-tipo-tag.tipo-SF { background: rgba(8, 103, 56, 0.12); color: var(--verde); }
     .subcat-matrix .subcat-tipo-tag.tipo-DD { background: rgba(35, 31, 32, 0.08); color: var(--preto); }
+    .subcat-matrix .subcat-tipo-tag.tipo-II { background: rgba(35, 31, 32, 0.08); color: var(--preto); }
 
     .subcat-qtd-tag {
       display: inline-block; font-size: 10px;
