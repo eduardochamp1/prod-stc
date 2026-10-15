@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Favicon do WPA Monitor (14/10/2026): o raio da marca (mesmo desenho de logo.svg)
+       sobre o preto do cabeçalho, com a faixa amarela/verde do header embaixo. -->
+  <defs>
+    <clipPath id="raio">
+      <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z"/>
+    </clipPath>
+    <clipPath id="canto">
+      <rect width="64" height="64" rx="14"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#canto)">
+    <rect width="64" height="64" fill="#231F20"/>
+    <rect y="58" width="32" height="6" fill="#FEC40E"/>
+    <rect x="32" y="58" width="32" height="6" fill="#086738"/>
+  </g>
+  <g transform="translate(6.3 2.6) scale(0.66)">
+    <path d="M48,4 L22,46 L36,46 L16,82 L62,38 L48,38 Z" fill="#FEC40E"/>
+    <polygon points="48,4 70,4 46,46 22,46" fill="#ED1C24" clip-path="url(#raio)"/>
+  </g>
+</svg>

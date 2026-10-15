@@ -29,10 +29,10 @@ const CSS = ler('public', 'css', 'app.css');
 const INI = HTML.indexOf('/* ── AVISOS (balão esquerdo)');
 const FIM = HTML.indexOf('</script>', INI);
 const SCRIPT_AVISOS = HTML.slice(INI, FIM);
-const BASE = 'WPA Monitor — Engelmig Energia';
+const BASE = 'WPA Monitor · Engelmig';   // título curto desde 14/10/2026 (cabe na aba)
 
 /** Executa o script dos avisos com um DOM falso; devolve o mundo para inspeção. */
-function mundo({ fetchImpl, siglas = null } = {}) {
+function mundo({ fetchImpl, siglas = null, selecionadas, daConta, relogio } = {}) {
   const els = {};
   const el = (id, extra = {}) => (els[id] = { id, hidden: false, textContent: '', innerHTML: '', classList: { add() {}, remove() {} },
     attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, focus() { this.focado = true; }, ...extra });
@@ -42,6 +42,8 @@ function mundo({ fetchImpl, siglas = null } = {}) {
   const cls = new Set();
   els['fab-avisos'].classList = { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c) };
   els['fab-avisos-toggle'].attrs['aria-expanded'] = 'false';
+  el('favicon');
+  els['favicon'].attrs.href = 'favicon.svg';
 
   const ctx = {
     document: { title: BASE, getElementById: (id) => els[id] || null },
@@ -51,9 +53,14 @@ function mundo({ fetchImpl, siglas = null } = {}) {
     _supSiglasDoSelect: () => siglas,
     _supPopularSelect: async () => {},
     requestAnimationFrame: (fn) => fn(),
-    setTimeout: (fn) => fn(),
+    // relogio: { fila: [] } → timers ficam PENDENTES até o teste chamar disparar();
+    // sem relogio, executam na hora (comportamento antigo dos testes).
+    setTimeout: relogio ? (fn) => { relogio.fila.push(fn); return relogio.fila.length; } : (fn) => fn(),
+    clearTimeout: relogio ? (id) => { if (id) relogio.fila[id - 1] = null; } : () => {},
     console: { warn() {}, log() {} },
   };
+  if (selecionadas) ctx.selectedRegionals = selecionadas;
+  if (daConta) ctx.userRegionals = daConta;
   vm.createContext(ctx);
   vm.runInContext(SCRIPT_AVISOS, ctx);
   return { ctx, els };
@@ -249,7 +256,8 @@ describe('ganchos no index.html (fonte)', () => {
     assert.ok(!/if \(isRangeToday\([^)]*\)\) \{[^}]*carregarAvisos/.test(bloco));
   });
   test('o endpoint chamado é o das rotas', () => {
-    assert.match(SCRIPT_AVISOS, /`\$\{API\}\/alertas\/produtividade`/);
+    // 14/10/2026: com o filtro de regional, a URL leva `${qs}` (?regionals=...).
+    assert.match(SCRIPT_AVISOS, /`\$\{API\}\/alertas\/produtividade\$\{qs\}`/);
   });
   test('o único setInterval do app continua sendo o do Monitor (nenhum timer novo)', () => {
     assert.equal((HTML.match(/setInterval\(/g) || []).length, 1);
@@ -378,5 +386,136 @@ describe('visual do painel (redesenho)', () => {
   });
   test('o pulso é só visual: nenhum som/Notification/vibração no script', () => {
     assert.doesNotMatch(SCRIPT_AVISOS, /Audio|Notification|vibrate/);
+  });
+});
+
+// ── Filtro de regional (14/10/2026): o balão segue o filtro da tela ──────────
+describe('balão segue o filtro de regional (e o servidor, os acessos da conta)', () => {
+  test('pede com as regionais do FILTRO (?regionals=GUA,CAC, codificado)', async () => {
+    let url;
+    const { ctx } = mundo({
+      selecionadas: ['GUA', 'CAC'], daConta: ['GUA', 'CAC', 'SJC'],
+      fetchImpl: async (u) => { url = u; return { ok: true, json: async () => ({ ativo: true, alertas: [] }) }; },
+    });
+    await ctx.carregarAvisos();
+    assert.equal(url, '/api/alertas/produtividade?regionals=GUA%2CCAC');
+  });
+  test('sem filtro definido (antes do init) → sem parâmetro: o servidor usa os acessos da conta', async () => {
+    let url;
+    const { ctx } = mundo({ fetchImpl: async (u) => { url = u; return { ok: true, json: async () => ({ ativo: true, alertas: [] }) }; } });
+    await ctx.carregarAvisos();
+    assert.equal(url, '/api/alertas/produtividade');
+  });
+  test('lê o filtro NA HORA da busca (mudou a seleção → a próxima busca já vai com a nova)', async () => {
+    const urls = [];
+    const { ctx } = mundo({
+      selecionadas: ['GUA'], daConta: ['GUA', 'SJC'],
+      fetchImpl: async (u) => { urls.push(u); return { ok: true, json: async () => ({ ativo: true, alertas: [] }) }; },
+    });
+    await ctx.carregarAvisos();
+    ctx.selectedRegionals = ['SJC'];
+    await ctx.carregarAvisos();
+    assert.deepEqual(urls, ['/api/alertas/produtividade?regionals=GUA', '/api/alertas/produtividade?regionals=SJC']);
+  });
+  test('resposta VELHA (filtro trocado no meio) é descartada e não sobrescreve a nova', async () => {
+    const pendentes = [];
+    const { ctx, els } = mundo({
+      selecionadas: ['GUA'], daConta: ['GUA', 'SJC'],
+      fetchImpl: () => new Promise((resolve) => pendentes.push(resolve)),
+    });
+    const responder = (alertas) => ({ ok: true, json: async () => ({ ativo: true, alertas }) });
+    const p1 = ctx.carregarAvisos();                 // busca de GUA
+    ctx.selectedRegionals = ['SJC'];
+    const p2 = ctx.carregarAvisos();                 // busca de SJC
+    pendentes[1](responder([alerta({ equipe: 'ECCSJ82', regional: 'SJC' })]));   // a NOVA chega antes
+    await p2;
+    pendentes[0](responder([alerta({ equipe: 'ECGPR53', regional: 'GUA' })]));   // a VELHA chega depois
+    await p1;
+    assert.match(els['fab-avisos-lista'].innerHTML, /ECCSJ82/);
+    assert.doesNotMatch(els['fab-avisos-lista'].innerHTML, /ECGPR53/, 'a resposta de GUA chegou atrasada e foi ignorada');
+  });
+  test('erro de uma busca VELHA também não sobrescreve a nova', async () => {
+    const pendentes = [];
+    const { ctx, els } = mundo({ selecionadas: ['GUA'], daConta: ['GUA', 'SJC'], fetchImpl: () => new Promise((res, rej) => pendentes.push({ res, rej })) });
+    const p1 = ctx.carregarAvisos();
+    const p2 = ctx.carregarAvisos();
+    pendentes[1].res({ ok: true, json: async () => ({ ativo: true, alertas: [alerta()] }) });
+    await p2;
+    pendentes[0].rej(new Error('rede'));
+    await p1;
+    assert.doesNotMatch(els['fab-avisos-lista'].innerHTML, /indisponíveis/);
+  });
+  test('várias mudanças seguidas de filtro viram UMA busca (atraso curto)', async () => {
+    const relogio = { fila: [] };
+    let buscas = 0;
+    const { ctx } = mundo({ relogio, selecionadas: ['GUA'], fetchImpl: async () => { buscas++; return { ok: true, json: async () => ({ ativo: true, alertas: [] }) }; } });
+    ctx.avisosAgendarRecarga();
+    ctx.avisosAgendarRecarga();
+    ctx.avisosAgendarRecarga();
+    for (const fn of relogio.fila) if (fn) fn();
+    await new Promise(r => setImmediate(r));
+    assert.equal(buscas, 1);
+  });
+  test('cabeçalho mostra o filtro só quando ele ESTREITA o que a conta vê', async () => {
+    const r = mundo({ selecionadas: ['GUA'], daConta: ['GUA', 'CAC'], fetchImpl: resposta(true, [alerta()]) });
+    await r.ctx.carregarAvisos();
+    assert.equal(r.els['fab-avisos-sub'].textContent, '1 equipe abaixo de 4 notas · GUA');
+    const t = mundo({ selecionadas: ['GUA', 'CAC'], daConta: ['GUA', 'CAC'], fetchImpl: resposta(true, [alerta()]) });
+    await t.ctx.carregarAvisos();
+    assert.equal(t.els['fab-avisos-sub'].textContent, '1 equipe abaixo de 4 notas', 'filtro = tudo da conta: não polui');
+  });
+  test('ganchos: selectRegional (Monitor) e syncRegionalDropdowns (qualquer aba) agendam a recarga', () => {
+    const sel = HTML.slice(HTML.indexOf('function selectRegional('), HTML.indexOf('function _cobrePeloCache') > 0 ? HTML.indexOf('* A seleção atual está contida') : undefined);
+    assert.match(sel, /if \(typeof avisosAgendarRecarga === 'function'\) avisosAgendarRecarga\(\);/);
+    const sync = HTML.slice(HTML.indexOf('function syncRegionalDropdowns('), HTML.indexOf('// Propaga pros outros dropdowns'));
+    assert.match(sync, /selectedRegionals = finalRegs;[\s\S]*avisosAgendarRecarga\(\);/);
+  });
+});
+
+// ── Favicon e título da aba (14/10/2026) ─────────────────────────────────────
+describe('favicon e título da aba', () => {
+  test('com aviso o favicon ganha o ponto vermelho; sem aviso volta ao normal', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta()]) });
+    await ctx.carregarAvisos();
+    assert.equal(els['favicon'].attrs.href, 'favicon-alerta.svg');
+    ctx.fetch = resposta(true, []);
+    await ctx.carregarAvisos();
+    assert.equal(els['favicon'].attrs.href, 'favicon.svg');
+  });
+  test('desligado: favicon normal e título intacto', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(false, []) });
+    await ctx.carregarAvisos();
+    assert.equal(els['favicon'].attrs.href, 'favicon.svg');
+    assert.equal(ctx.document.title, BASE);
+  });
+  test('só regrava o href quando muda (o navegador não re-busca o ícone à toa)', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta()]) });
+    let escritas = 0;
+    const set = els['favicon'].setAttribute.bind(els['favicon']);
+    els['favicon'].setAttribute = (k, v) => { escritas++; set(k, v); };
+    await ctx.carregarAvisos();
+    await ctx.carregarAvisos();
+    await ctx.carregarAvisos();
+    assert.equal(escritas, 1);
+  });
+  test('<head>: título curto, description, theme-color e favicon LOCAL com id', () => {
+    const head = HTML.slice(0, HTML.indexOf('</head>'));
+    assert.match(head, /<title>WPA Monitor · Engelmig<\/title>/);
+    assert.match(head, /<meta name="description" content="[^"]{30,}"/);
+    assert.match(head, /<meta name="theme-color" content="#231F20"/);
+    assert.match(head, /<link rel="icon" type="image\/svg\+xml" href="favicon\.svg" id="favicon"/);
+    assert.doesNotMatch(head, /rel="icon"[^>]*href="https?:/, 'Fortinet bloqueia CDN: ícone tem de ser local');
+  });
+  test('os dois SVGs existem em public/, usam as cores da marca e o de alerta tem o ponto', () => {
+    const fav = ler('public', 'favicon.svg');
+    const alerta = ler('public', 'favicon-alerta.svg');
+    for (const svg of [fav, alerta]) {
+      assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 64 64">/);
+      assert.match(svg, /#FEC40E/);
+      assert.match(svg, /#231F20/);
+      assert.doesNotMatch(svg, /<script|href="http/, 'SVG sem script nem recurso externo');
+    }
+    assert.doesNotMatch(fav, /<circle/);
+    assert.match(alerta, /<circle [^>]*fill="#ED1C24"/);
   });
 });

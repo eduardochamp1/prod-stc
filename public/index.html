@@ -4,7 +4,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WPA Monitor — Engelmig Energia</title>
+  <!-- 14/10/2026: título curto pra caber na aba (o antigo, "WPA Monitor — Engelmig
+       Energia", era cortado — ainda mais com o contador de avisos "(N) " na frente).
+       Favicon com o raio da marca; o balão de avisos troca pelo favicon-alerta.svg
+       (ponto vermelho) quando há equipe abaixo do esperado. Arquivos LOCAIS (Fortinet). -->
+  <title>WPA Monitor · Engelmig</title>
+  <meta name="description" content="Painel de monitoramento das equipes de campo da Engelmig Energia — produtividade, rejeições e deslocamentos (WPA/EDP)." />
+  <meta name="theme-color" content="#231F20" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" id="favicon" />
+  <link rel="apple-touch-icon" href="logo.png" />
   <!-- TODAS as libs 3rd-party são servidas LOCALMENTE de vendor/ porque o
        Fortinet corporativo bloqueia CDNs públicos (cdn.sheetjs.com, unpkg.com,
        fonts.googleapis.com já deram ERR_CONNECTION_TIMED_OUT em prod). Ver
@@ -7604,6 +7612,8 @@ ${acumuladoHTML}
       // era a causa do painel zerar.
       if (_cobrePeloCache(selectedRegionals, _teamsFetchedFor)) renderAll();
       else loadData();
+      // Balão de avisos segue o filtro de regional (14/10/2026).
+      if (typeof avisosAgendarRecarga === 'function') avisosAgendarRecarga();
     }
 
     /**
@@ -7871,6 +7881,8 @@ ${acumuladoHTML}
       // Atualiza estado global (Monitor)
       selectedRegionals = finalRegs;
       if (typeof _syncCurrentRegional === 'function') _syncCurrentRegional();
+      // Balão de avisos segue o filtro de regional de QUALQUER aba (14/10/2026).
+      if (typeof avisosAgendarRecarga === 'function') avisosAgendarRecarga();
 
       // Propaga pros outros dropdowns
       const DROPDOWNS = [
@@ -12705,12 +12717,21 @@ ${acumuladoHTML}
         cont.textContent = n > 99 ? '99+' : String(n);
       }
       document.title = n > 0 ? '(' + n + ') ' + AVISOS_TITULO_BASE : AVISOS_TITULO_BASE;
+      // Favicon com ponto vermelho quando há aviso: a aba sinaliza mesmo com o
+      // título cortado. Só troca o href quando muda (evita o navegador re-buscar).
+      const fav = document.getElementById('favicon');
+      if (fav) {
+        const alvo = n > 0 ? 'favicon-alerta.svg' : 'favicon.svg';
+        if (fav.getAttribute('href') !== alvo) fav.setAttribute('href', alvo);
+      }
 
       const sub = document.getElementById('fab-avisos-sub');
       if (sub) {
-        sub.textContent = _avisosFalhou ? 'sem conexão com o servidor'
+        const filtro = avisosRotuloFiltro();
+        sub.textContent = (_avisosFalhou ? 'sem conexão com o servidor'
           : n === 0 ? 'nenhuma equipe abaixo do esperado'
-          : avisosPlural(n, 'equipe', 'equipes') + ' abaixo de ' + lim + ' notas';
+          : avisosPlural(n, 'equipe', 'equipes') + ' abaixo de ' + lim + ' notas')
+          + (filtro && !_avisosFalhou ? ' · ' + filtro : '');
       }
       const rodape = document.getElementById('fab-avisos-rodape');
       if (rodape) {
@@ -12729,18 +12750,56 @@ ${acumuladoHTML}
       }
     }
 
-    async function carregarAvisos() {
+    /* Regionais do FILTRO da tela (14/10/2026, pedido do José: "o balão segue o filtro
+       e também os acessos da conta"). `selectedRegionals` é o estado global que o
+       filtro do Monitor (selectRegional) e o de qualquer outra aba
+       (syncRegionalDropdowns) mantêm — sempre um subconjunto de `userRegionals`.
+       O SERVIDOR ainda cruza o pedido com os acessos da conta (applyScope): pedir
+       regional sem acesso não mostra nada dela. Vazio (antes do init) = sem filtro. */
+    function avisosRegionaisDoFiltro() {
       try {
-        const r = await fetch(`${API}/alertas/produtividade`);
+        return (typeof selectedRegionals !== 'undefined' && Array.isArray(selectedRegionals))
+          ? selectedRegionals.slice() : [];
+      } catch (_) { return []; }
+    }
+
+    /* Rótulo do filtro pro cabeçalho, só quando ele ESTREITA o que a conta vê. */
+    function avisosRotuloFiltro() {
+      const regs = avisosRegionaisDoFiltro();
+      let total = 0;
+      try { total = (typeof userRegionals !== 'undefined' && Array.isArray(userRegionals)) ? userRegionals.length : 0; } catch (_) { total = 0; }
+      return regs.length && total && regs.length < total ? regs.join(', ') : '';
+    }
+
+    // Número da carga em curso: se o filtro mudar no meio, a resposta VELHA é
+    // descartada em vez de sobrescrever a nova (as duas correm em paralelo).
+    let _avisosSeq = 0;
+
+    async function carregarAvisos() {
+      const seq = ++_avisosSeq;
+      const regs = avisosRegionaisDoFiltro();
+      const qs = regs.length ? '?regionals=' + encodeURIComponent(regs.join(',')) : '';
+      try {
+        const r = await fetch(`${API}/alertas/produtividade${qs}`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
+        if (seq !== _avisosSeq) return;              // filtro mudou: resposta velha
         _avisosDados = { ativo: !!j.ativo, limite: j.limite, alertas: Array.isArray(j.alertas) ? j.alertas : [] };
         _avisosFalhou = false;
       } catch (e) {
+        if (seq !== _avisosSeq) return;
         _avisosFalhou = true;
         console.warn('[avisos] indisponível:', e && e.message);
       }
       avisosRender();
+    }
+
+    /* Recarga ao MUDAR o filtro. Com atraso curto porque a troca no Monitor chama
+       selectRegional E syncRegionalDropdowns em seguida — sem isso seriam 2 buscas. */
+    let _avisosTimer = null;
+    function avisosAgendarRecarga() {
+      clearTimeout(_avisosTimer);
+      _avisosTimer = setTimeout(function () { carregarAvisos(); }, 150);
     }
 
     /* Estado lido do aria-expanded (setado sincronamente), como no balão de ações. */
