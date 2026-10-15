@@ -4915,6 +4915,110 @@ ${acumuladoHTML}
       return `${dia} ${hora}`;
     }
 
+    /* ── ALERTA DE SESSÃO (regras puras) ─────────────────────────────────────
+     * 15/10/2026 — o José questionou o aviso "app offline" em equipe logada:
+     * "se ela fez login ela está online, se não fez login ela está offline, e se
+     * não fez login e deveria conforme a escala, ela está atrasada". O 🔴 era o
+     * IsOnline CRU da telemetria V2 (o celular está falando com o WPA AGORA?) e
+     * caía em false também quando o V2 nem trazia a equipe. Agora são três
+     * estados, cada um com a sua fonte:
+     *   ⏰ atrasada        — escalada (escala_dia), turno começou há ≥ 15 min e
+     *                        não logou hoje. Tolerância cobre o ciclo de 15 min da
+     *                        coleta: quem logou 07:03 só aparece logado às 07:15.
+     *   📵 sem comunicação — logada, mas o celular não fala com o WPA há ≥ 30 min
+     *                        (LastUpdate do V2). Queda curta de sinal não alerta;
+     *                        sem telemetria é "sem dado", não "sem comunicação".
+     *   📅 dia anterior    — sessão aberta desde outro dia (esqueceu de deslogar).
+     * Bloco extraído e executado por test/alertaSessao.test.js — mantenha puro
+     * (sem DOM, sem globais fora deste bloco).
+     */
+    const ALERTA_SEM_COM_MIN    = 30;
+    const ALERTA_ATRASO_TOL_MIN = 15;
+
+    // LastUpdate do V2 → epoch ms, ou null quando não dá pra confiar no valor.
+    // Sem fuso (ex.: "2026-10-15T09:12:00") é BRT, como o SessionBegin do mesmo
+    // endpoint. Se essa premissa estiver errada (vier UTC sem sufixo), o horário
+    // cai 3h no FUTURO e é descartado — o erro vira "sem dado", nunca um falso
+    // "sem comunicação há 3h".
+    function _parseHoraEDP(v, agoraMs) {
+      if (!v) return null;
+      const s = String(v).trim().replace(' ', 'T');
+      if (!s || s.startsWith('0001-01-01')) return null;   // sentinela da EDP (P2-17)
+      const temFuso = /(Z|[+-]\d{2}:?\d{2})$/.test(s);
+      const ms = Date.parse(temFuso ? s : `${s}-03:00`);
+      if (!Number.isFinite(ms)) return null;
+      if (ms - agoraMs > 5 * 60000) return null;
+      return ms;
+    }
+
+    // Minutos sem comunicação: 0 se o celular está online; null = sem dado
+    // (V2 não trouxe a equipe, ou LastUpdate ausente/ilegível).
+    function minutosSemComunicacao(t, agoraMs) {
+      if (!t) return null;
+      if (t.isOnline) return 0;
+      if (t.v2Presente === false) return null;
+      const ms = _parseHoraEDP(t.lastUpdate, agoraMs);
+      if (ms == null) return null;
+      return Math.max(0, Math.floor((agoraMs - ms) / 60000));
+    }
+
+    function _ehTipoUsoMutuo(t) {
+      const tipo = String((t && t.tipo) || '').toUpperCase();
+      return tipo.includes('USO MUTUO') || tipo.includes('USO MÚTUO');
+    }
+
+    // Classifica a sessão de UMA equipe logada. `refLogon` é o _refLogon(t) do
+    // chamador e `hoje` o dia BRT 'YYYY-MM-DD'.
+    // USO MÚTUO não opera o app (nunca tem V2) — fica fora do "sem comunicação",
+    // mas continua no "dia anterior", que é real para ela também.
+    function classificarSessao(t, { agoraMs, hoje, refLogon }) {
+      const aberta = !!t && !t.sessionEnd;
+      const usoMutuo = _ehTipoUsoMutuo(t);
+      const diaAnterior = aberta && !!refLogon && String(refLogon).slice(0, 10) < hoje;
+      const semComMin = (aberta && !usoMutuo) ? minutosSemComunicacao(t, agoraMs) : null;
+      const semComunicacao = semComMin != null && semComMin >= ALERTA_SEM_COM_MIN;
+      return {
+        aberta, usoMutuo, diaAnterior, semComMin, semComunicacao,
+        semDado: aberta && !usoMutuo && !t.isOnline && semComMin == null,
+        entra: diaAnterior || semComunicacao,
+      };
+    }
+
+    // Siglas que logaram hoje: sessão aberta, ou que começou/terminou hoje.
+    function siglasLogadasHoje(teams, hoje) {
+      const out = new Set();
+      for (const t of (teams || [])) {
+        if (!t || t.deslogada || t._ghostFromAcc) continue;
+        const beg = String(t.sessionBegin || '').slice(0, 10);
+        const end = String(t.sessionEnd || '').slice(0, 10);
+        if (!t.sessionEnd || beg === hoje || end === hoje) {
+          const s = String(t.sigla || t.teamName || '').toUpperCase().trim();
+          if (s) out.add(s);
+        }
+      }
+      return out;
+    }
+
+    // Escaladas cujo turno começou há ≥ tolerância e que não logaram hoje.
+    // `detalhe` vem de GET /api/escala/agora (só turnos que cobrem o agora).
+    function equipesAtrasadas(detalhe, logadas, tol = ALERTA_ATRASO_TOL_MIN) {
+      return (detalhe || [])
+        .filter(e => e && e.sigla && Number.isFinite(e.minutosDesdeInicio))
+        .filter(e => e.minutosDesdeInicio >= tol)
+        .filter(e => !logadas.has(String(e.sigla).toUpperCase().trim()))
+        .map(e => ({ ...e, atrasoMin: e.minutosDesdeInicio }))
+        .sort((a, b) => b.atrasoMin - a.atrasoMin || a.sigla.localeCompare(b.sigla));
+    }
+
+    // 45 → "45 min"; 80 → "1h20"; 1500 → "1d1h"
+    function fmtMinutos(m) {
+      if (!Number.isFinite(m)) return '—';
+      if (m < 60) return `${m} min`;
+      if (m < 1440) return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+      return `${Math.floor(m / 1440)}d${Math.floor((m % 1440) / 60)}h`;
+    }
+    /* ── fim ALERTA DE SESSÃO ─────────────────────────────────────────────── */
+
     // Retorna true se o BeginTime é de um dia anterior ao dia de hoje (BRT)
     function sessaoAnterior(iso) {
       if (!iso) return false;
@@ -8542,6 +8646,10 @@ ${acumuladoHTML}
           escalaAgora = await fetch(`${API}/escala/agora?regionals=${_regionalsCsv}`)
             .then(r => r.json()).catch(() => null);
         }
+        // Mesma resposta alimenta as ⏰ atrasadas do aviso (15/10/2026). Fora do
+        // ao vivo zera — escala de agora ao lado de um dia passado não significa nada.
+        _escalaAgoraUltima = escalaAgora;
+        try { renderAlertaSessoes(); } catch (e) { console.warn('[monitor] aviso de sessões:', e && e.message); }
         const espEl = document.getElementById('m-esperadas');
         const gapEl = document.getElementById('m-escala-gap');
         if (espEl) {
@@ -8762,6 +8870,65 @@ ${acumuladoHTML}
       return out.concat(singles);
     }
 
+    // ── AVISO DE SESSÕES (⏰ atrasada · 📵 sem comunicação · 📅 dia anterior) ──
+    // Estado: _alertaCtx vem do renderAll (equipes logadas, já filtradas);
+    // _escalaAgoraUltima vem do renderMetrics (GET /api/escala/agora, só ao vivo).
+    var _alertaCtx = null;          // var: renderAll pode rodar antes desta linha (TDZ)
+    var _escalaAgoraUltima = null;
+
+    function renderAlertaSessoes() {
+      const alertEl = document.getElementById('alert-stale-sessions');
+      if (!alertEl || !_alertaCtx) return;
+      const agoraMs = Date.now();
+      const hoje = todayBRT();
+
+      const anomalas = [];
+      for (const t of _alertaCtx.teamsForAlert) {
+        const ref = _refLogon(t);
+        const c = classificarSessao(t, { agoraMs, hoje, refLogon: ref });
+        if (c.entra) anomalas.push({ t, c, ref });
+      }
+
+      // Atrasadas: escala × quem logou. "Quem logou" sai de allTeams SEM os
+      // filtros da tela — senão uma equipe escondida pelo filtro pareceria não
+      // ter logado. Os filtros (regional, equipes, busca) são aplicados depois,
+      // sobre a lista de atrasadas.
+      let atrasadas = [];
+      if (_alertaCtx.liveHoje && _escalaAgoraUltima && Array.isArray(_escalaAgoraUltima.detalhe)) {
+        const equipesSel = _monEquipesSelecionadas();
+        atrasadas = equipesAtrasadas(_escalaAgoraUltima.detalhe, siglasLogadasHoje(allTeams, hoje))
+          .filter(e => _regionalMatch(e.regional))
+          .filter(e => !equipesSel || equipesSel.has(e.sigla))
+          .filter(e => !currentFilter || e.sigla.toLowerCase().includes(currentFilter));
+      }
+
+      const total = atrasadas.length + anomalas.length;
+      if (total === 0) { alertEl.innerHTML = ''; return; }
+
+      const chipsAtraso = atrasadas.map(e =>
+        `<span class="alert-stale-team alert-atrasada" title="Escalada às ${e.inicio}${e.codigo ? ` (${e.codigo})` : ''} e ainda não logou hoje">${e.sigla}<span class="stale-data">⏰ ${e.inicio} · +${fmtMinutos(e.atrasoMin)}</span></span>`
+      ).join('');
+
+      const chipsSessao = anomalas.map(({ t, c, ref }) => {
+        const d = (ref || '').slice(0, 10);
+        const dataBR = d ? d.split('-').reverse().slice(0, 2).join('/') : '';
+        const partes = [];
+        const tips = [];
+        if (c.diaAnterior) { partes.push(`📅 ${dataBR}`); tips.push(`sessão aberta desde ${dataBR} (esqueceu de deslogar?)`); }
+        if (c.semComunicacao) {
+          partes.push(`📵 ${fmtMinutos(c.semComMin)}`);
+          tips.push(`celular sem comunicar com o WPA há ${fmtMinutos(c.semComMin)}`);
+        }
+        return `<span class="alert-stale-team" onclick="event.stopPropagation();openModal('${t.id}')" title="Logada desde ${fmt(t.sessionBegin)} · ${tips.join(' · ')}">${t.sigla || t.teamName}<span class="stale-data">${partes.join(' ')}</span></span>`;
+      }).join('');
+
+      alertEl.innerHTML = `
+          <div class="alert-stale">
+            <div class="alert-stale-title">⚠️ ${total} equipe${total !== 1 ? 's' : ''} precisa${total !== 1 ? 'm' : ''} de atenção <span style="font-weight:400;color:#8a6309">(⏰ atrasada pela escala · 📵 logada, celular sem comunicar · 📅 sessão de dia anterior)</span></div>
+            <div class="alert-stale-list">${chipsAtraso}${chipsSessao}</div>
+          </div>`;
+    }
+
     // ── RENDER CARDS ──────────────────────────────────────────────────────
     function renderAll() {
       const _rawTeams = getVisible();
@@ -8823,44 +8990,19 @@ ${acumuladoHTML}
       // Banner de alerta — equipes com sessão anômala:
       //   • Dia anterior + ainda aberta (esqueceram de deslogar)
       //   • Hoje + app offline   (sessão pendente — app não responde)
+      //     [15/10/2026: virou "sem comunicação há ≥ 30 min", ver abaixo]
       // Equipes "Em campo" normais (sessão de hoje + online) não disparam alerta.
       // Equipes USO MÚTUO não operam o app no fluxo normal (nunca têm dados V2,
       // logo isOnline=false sempre) — excluí-las do critério de "app offline"
       // evita falso positivo recorrente (ex: ECCIT70). Continuam no alerta se
       // for sessão de dia anterior (esqueceram de deslogar), que é real.
-      const _ehUsoMutuo = t => String(t.tipo || '').toUpperCase().includes('USO MUTUO')
-                            || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
-      const alertaTeams = teamsForAlert.filter(t =>
-        !t.sessionEnd && (
-          sessaoAnterior(_refLogon(t)) ||
-          (!t.isOnline && !_ehUsoMutuo(t))
-        )
-      );
-      const alertEl = document.getElementById('alert-stale-sessions');
-      if (alertEl) {
-        if (alertaTeams.length > 0) {
-          const itens = alertaTeams.map(t => {
-            const d = (_refLogon(t) || '').slice(0, 10);
-            const dataBR = d ? d.split('-').reverse().slice(0, 2).join('/') : '';
-            const isAnt = sessaoAnterior(_refLogon(t));
-            const offline = !t.isOnline;
-            // marcadores: 📅 = dia anterior, 🔴 = app offline
-            const marca = `${isAnt ? '📅' : ''}${offline ? '🔴' : ''}`;
-            const tip = isAnt
-              ? (offline ? 'Sessão de dia anterior + app offline (esqueceu de deslogar)'
-                : 'Sessão de dia anterior — equipe ainda em escala?')
-              : 'Sessão pendente — app offline';
-            return `<span class="alert-stale-team" onclick="event.stopPropagation();openModal('${t.id}')" title="Início ${fmt(t.sessionBegin)} · ${tip}">${t.sigla || t.teamName}<span class="stale-data">${dataBR} ${marca}</span></span>`;
-          }).join('');
-          alertEl.innerHTML = `
-          <div class="alert-stale">
-            <div class="alert-stale-title">⚠️ ${alertaTeams.length} equipe${alertaTeams.length !== 1 ? 's' : ''} com sessão anômala <span style="font-weight:400;color:#8a6309">(📅 = dia anterior · 🔴 = app offline)</span></div>
-            <div class="alert-stale-list">${itens}</div>
-          </div>`;
-        } else {
-          alertEl.innerHTML = '';
-        }
-      }
+      // 15/10/2026: o 🔴 "app offline" virou 📵 "sem comunicação há X min" (só
+      // com telemetria e após 30 min) e entraram as ⏰ atrasadas pela escala —
+      // regras em "ALERTA DE SESSÃO (regras puras)". A renderização mora em
+      // renderAlertaSessoes() porque a escala chega DEPOIS (fetch do
+      // renderMetrics) e o aviso precisa se redesenhar quando ela chegar.
+      _alertaCtx = { teamsForAlert, liveHoje: _liveHoje };
+      renderAlertaSessoes();
 
       if (teams.length === 0) {
         // Lista vazia tem TRÊS causas distintas e o painel tratava as três com a
@@ -8908,9 +9050,14 @@ ${acumuladoHTML}
         const sessaoAberta = !t.sessionEnd;
         const ehUsoMutuo = String(t.tipo || '').toUpperCase().includes('USO MUTUO')
                        || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
-        const emCampo  = sessaoAberta && t.isOnline && !ehUsoMutuo;
+        // 15/10/2026: "pendente" era o !isOnline CRU do V2 — equipe logada com
+        // o celular calado por 2 min, ou que o V2 nem trouxe, virava "pendente".
+        // Agora: logada = em campo; pendente só com telemetria provando ≥ 30 min
+        // sem comunicação (classificarSessao). Deslogada mantém a regra antiga.
+        const _clsSessao = classificarSessao(t, { agoraMs: Date.now(), hoje: todayBRT(), refLogon: null });
+        const emCampo  = sessaoAberta && !ehUsoMutuo && !t.deslogada && !_clsSessao.semComunicacao;
         const usoMutuo = sessaoAberta && ehUsoMutuo;
-        const pendente = sessaoAberta && !t.isOnline && !ehUsoMutuo;
+        const pendente = sessaoAberta && !ehUsoMutuo && (t.deslogada ? !t.isOnline : _clsSessao.semComunicacao);
         const headerCls = pendente ? 'pendente' : ((emCampo || usoMutuo) ? '' : 'inativa');
         const badgeCls = emCampo  ? 'status-ativa'
                        : usoMutuo ? 'status-uso-mutuo'
@@ -8918,7 +9065,7 @@ ${acumuladoHTML}
                        : 'status-encerrada';
         const badgeTxt = emCampo  ? '● Em campo'
                        : usoMutuo ? '● Uso mútuo'
-                       : pendente ? '⚠ Sessão pendente'
+                       : pendente ? (_clsSessao.semComunicacao ? `📵 Sem comunicação · ${fmtMinutos(_clsSessao.semComMin)}` : '⚠ Sessão pendente')
                        : '○ Encerrada';
         // Borda laranja marca sessão anômala — uso mútuo NÃO é anômalo
         const isStale = sessaoAberta && !ehUsoMutuo && (sessaoAnterior(_refLogon(t)) || pendente);
@@ -9021,12 +9168,17 @@ ${acumuladoHTML}
         const sessaoAberta = !t.sessionEnd;
         const ehUsoMutuo = String(t.tipo || '').toUpperCase().includes('USO MUTUO')
                         || String(t.tipo || '').toUpperCase().includes('USO MÚTUO');
-        const emCampo  = sessaoAberta && t.isOnline && !ehUsoMutuo;
+        // 15/10/2026: "pendente" era o !isOnline CRU do V2 — equipe logada com
+        // o celular calado por 2 min, ou que o V2 nem trouxe, virava "pendente".
+        // Agora: logada = em campo; pendente só com telemetria provando ≥ 30 min
+        // sem comunicação (classificarSessao). Deslogada mantém a regra antiga.
+        const _clsSessao = classificarSessao(t, { agoraMs: Date.now(), hoje: todayBRT(), refLogon: null });
+        const emCampo  = sessaoAberta && !ehUsoMutuo && !t.deslogada && !_clsSessao.semComunicacao;
         const usoMutuo = sessaoAberta && ehUsoMutuo;
-        const pendente = sessaoAberta && !t.isOnline && !ehUsoMutuo;
+        const pendente = sessaoAberta && !ehUsoMutuo && (t.deslogada ? !t.isOnline : _clsSessao.semComunicacao);
         const desl = !!t.deslogada;
         const dot = desl ? 'var(--cinza3)' : emCampo ? 'var(--verde3)' : usoMutuo ? 'var(--amarelo)' : pendente ? 'var(--vermelho)' : 'var(--cinza3)';
-        const sitTxt = desl ? 'Deslogada' : emCampo ? 'Em campo' : usoMutuo ? 'Uso mútuo' : pendente ? 'Pendente' : 'Encerrada';
+        const sitTxt = desl ? 'Deslogada' : emCampo ? 'Em campo' : usoMutuo ? 'Uso mútuo' : pendente ? 'Sem comunicação' : 'Encerrada';
         const sitCls = desl ? 'sit-desl' : emCampo ? 'sit-campo' : usoMutuo ? 'sit-mutuo' : pendente ? 'sit-pend' : 'sit-enc';
         const isAnt = !desl && sessaoAnterior(_refLogon(t));
         const reloginsCount = t.relogouNoDia && (!t.relogins || t.relogins === 0) ? 1 : (t.relogins || 0);

@@ -2317,6 +2317,11 @@ async function _getTeamsBySectorUncached(sectorId) {
       isOnline:      v2?.IsOnline      || false,
       isInLunchTime: v2?.IsInLunchTime || false,
       lastUpdate:    v2?.LastUpdate    || null,
+      // A equipe veio no V2? Sem isso, `isOnline:false` mistura "celular calado"
+      // com "não temos o dado" (V2 não trouxe a equipe) — 15/10/2026, o José
+      // questionou o 🔴 "app offline" em equipe logada; o aviso agora só acusa
+      // falta de comunicação quando há telemetria pra provar.
+      v2Presente:    !!v2,
       location:      v2?.Location      || null,
       // ShiftType vem como "T07 07:00" / "T15 15:00" — o horário ali é a
       // escala REAL da EDP. Guardamos cru + horário extraído (HH:MM) pra

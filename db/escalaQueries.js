@@ -115,8 +115,21 @@ function equipesCobertas(linhas, agoraMin, hoje) {
       continue;
     }
     const sigla = String(l.sigla || '').toUpperCase().trim();
-    if (!sigla || out.has(sigla)) continue;
-    out.set(sigla, { sigla, tipo: (l.tipo || '—').toUpperCase(), regional: l.regional || null });
+    if (!sigla) continue;
+    // Há quanto tempo o turno começou. Turno vira-noite de ontem começou no dia
+    // anterior: às 02:00, um C35 (22:35) começou há 205 min, não há -1235.
+    const inicio = minutosDoDia(l.inicio_escala);
+    const desdeInicio = deOntem ? agoraMin + 1440 - inicio : agoraMin - inicio;
+    const atual = out.get(sigla);
+    // Mesma equipe com dois colaboradores em turnos diferentes: vale o que
+    // começou PRIMEIRO — é a partir dele que a equipe já deveria ter logado.
+    if (atual && atual.minutosDesdeInicio >= desdeInicio) continue;
+    out.set(sigla, {
+      sigla, tipo: (l.tipo || '—').toUpperCase(), regional: l.regional || null,
+      inicio: String(l.inicio_escala).slice(0, 5),
+      codigo: l.codigo_escala || null,
+      minutosDesdeInicio: desdeInicio,
+    });
   }
   return [...out.values()];
 }
@@ -151,7 +164,7 @@ async function equipesEsperadasAgora(regionais, quando) {
   // dias cobrem qualquer janela que alcance o instante atual.
   const { rows } = await pool.query(
     `SELECT to_char(ed.data, 'YYYY-MM-DD') AS data, eo.sigla, eo.tipo, eo.regional,
-            ec.inicio_escala, ec.fim_escala
+            ec.inicio_escala, ec.fim_escala, ed.codigo_escala
        FROM public.escala_dia ed
        JOIN public.escalas_catalogo ec
          ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
@@ -170,6 +183,13 @@ async function equipesEsperadasAgora(regionais, quando) {
   return {
     esperadas: equipes.length,
     equipes:   equipes.map(e => e.sigla).sort(),
+    // Por equipe: início do turno e há quantos minutos começou. Alimenta as
+    // "atrasadas" do aviso do Monitor (15/10/2026): escalada, turno já começou,
+    // e não logou. O front cruza com quem logou — aqui não se sabe disso.
+    detalhe:   equipes
+      .map(e => ({ sigla: e.sigla, regional: e.regional, tipo: e.tipo,
+        inicio: e.inicio, codigo: e.codigo, minutosDesdeInicio: e.minutosDesdeInicio }))
+      .sort((a, b) => a.sigla.localeCompare(b.sigla)),
     porTipo,
     referencia: { dia: hoje, hora: hhmm },
   };

@@ -199,3 +199,33 @@ test('linha com data ilegível é descartada, não tratada como de ontem', () =>
   ];
   assert.equal(equipesCobertas(linhas, min(3), '2026-08-30').length, 0);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Início do turno por equipe — alimenta as ⏰ atrasadas do aviso (15/10/2026)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('equipe traz início do turno, código e há quantos minutos começou', () => {
+  const linhas = [{ ...linha('ECGPR51', '2026-10-15', '07:00:00', '16:00:00'), codigo_escala: 'T07' }];
+  const [e] = equipesCobertas(linhas, min(7, 42), '2026-10-15');
+  assert.equal(e.inicio, '07:00');
+  assert.equal(e.codigo, 'T07');
+  assert.equal(e.minutosDesdeInicio, 42);
+});
+
+test('turno vira-noite de ontem conta os minutos desde o início de ONTEM', () => {
+  // C35 22:35 → 06:00, escalado ontem: às 02:00 começou há 205 min, não -1235.
+  const linhas = [linha('EPGPR30', '2026-10-14', '22:35:00', '06:00:00')];
+  const [e] = equipesCobertas(linhas, min(2), '2026-10-15');
+  assert.equal(e.minutosDesdeInicio, 205);
+});
+
+test('colaboradores em turnos diferentes: vale o turno que começou primeiro', () => {
+  const linhas = [
+    linha('ECGPR51', '2026-10-15', '08:00:00', '17:00:00'),
+    linha('ECGPR51', '2026-10-15', '07:00:00', '16:00:00'),
+  ];
+  const out = equipesCobertas(linhas, min(9), '2026-10-15');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].inicio, '07:00');
+  assert.equal(out[0].minutosDesdeInicio, 120);
+});

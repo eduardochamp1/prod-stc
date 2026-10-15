@@ -843,6 +843,15 @@
       margin-left: 4px;
     }
 
+    /* ⏰ atrasada pela escala (15/10/2026): vermelho, e sem cursor de clique —
+       equipe que não logou não tem sessão pra abrir no modal. */
+    .alert-stale-team.alert-atrasada,
+    .alert-stale-team.alert-atrasada:hover {
+      background: #c0392b;
+      box-shadow: 0 2px 4px rgba(192, 57, 43, 0.3);
+      cursor: default;
+    }
+
     .team-card-header {
       background: var(--preto);
       padding: 10px 14px;

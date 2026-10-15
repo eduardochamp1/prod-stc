@@ -171,6 +171,7 @@
 | P2-61 | Re-consolidação 30/09→13/10 derrubou 516 OS (SF dominante) — explicado: regra de rejeição de 31/07, não perda | Dados | **done / registro** (14/10/2026) — avisar quem reportou os números antigos à EDP |
 | P2-62 | Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo" (+ gauge e XLSX) | Dados/Produto | **done** (14/10/2026, 4d08c7b + 5152c9c) — conferir no portal se a quantidade do C93 é ramal ou metro |
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
+| P2-64 | Aviso "sessão anômala" chamava de 🔴 "app offline" equipe LOGADA (era o `IsOnline` cru do V2, falso também sem V2) e não mostrava quem estava escalada e não logou | Produto/Frontend | **código done** (15/10/2026) — virou ⏰ atrasada · 📵 sem comunicação ≥ 30 min · 📅 dia anterior; falta deploy e conferir na tela |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6288,6 +6289,21 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Revisão de 14/10/2026:** ver "Revisão da execução" no PLAN — 1 erro de planejamento (backtest devia vir antes da UI), 4 lacunas (3 fechadas), 2 defeitos corrigidos.
 - **Limites conhecidos:** rejeição "por nota" só na consolidação noturna (subalerta, nunca alerta falso); turno vira-noite fora da v1; escala usada é a atual; o backtest não tem o ajuste de `_notaDate`.
 - **Rollback:** `ativo:false` (imediato). Código: `git revert`. A tabela pode ficar.
+
+## P2-64 — Aviso de sessões: "app offline" em equipe logada; atrasadas não apareciam
+
+- **Categoria:** Produto/Frontend
+- **Status:** **código done** (15/10/2026). Sem migration.
+- **Pedido (José, 15/10/2026, print com EBGPR65/ECGPR82/ECGPR91 🔴):** "não faz sentido uma equipe ter app offline se ela já fez login no wpa, se ela fez login ela está online, se ela não fez login no wpa ela está offline, e se ela não fez login e deveria ter feito login conforme indicado na sua escala, ela está atrasada."
+- **Causa:** o 🔴 era `!t.isOnline`, e `isOnline` é `v2?.IsOnline || false` (`wpaService.js`): telemetria "o celular está falando com o WPA agora", não login. Caía em `false` também quando o V2 não trazia a equipe. O card fazia o mesmo ("⚠ Sessão pendente").
+- **Feito:**
+  - backend: `v2Presente` na equipe (`wpaService.js`); `GET /api/escala/agora` ganhou `detalhe[]` com `inicio`, `codigo` e `minutosDesdeInicio` por equipe (`escalaQueries.equipesCobertas`; vira-noite de ontem conta desde ontem; vários colaboradores → o turno que começou primeiro).
+  - front: bloco "ALERTA DE SESSÃO (regras puras)" no `index.html` + `renderAlertaSessoes()`. ⏰ atrasada = escalada, turno começou há ≥ 15 min (tolerância = ciclo da coleta), não logou hoje (cruza com `allTeams` SEM filtro da tela, depois aplica os filtros). 📵 = logada e `LastUpdate` do V2 há ≥ 30 min; sem V2/sem `LastUpdate` = sem dado, não acusa. 📅 = como antes. Card/tabela: logada = "Em campo"; "📵 Sem comunicação · X" só com a mesma regra.
+  - testes: `test/alertaSessao.test.js` (bloco puro num `vm`) + 3 em `test/escalaAgora.test.js`. Suíte 1653/1653.
+- **Premissa não conferida:** formato do `LastUpdate` do V2 (não há amostra no repo). Sem fuso = BRT, como o `SessionBegin`. Se vier UTC sem sufixo, o valor cai no futuro e vira "sem dado" (o 📵 some, não acusa errado). **Conferir na VM:** `psql -d wpa_monitor -c "select team_name, data->>'lastUpdate', data->>'isOnline', updated_at from teams_current limit 5"`.
+- **Não conferido no navegador:** HTML do aviso conferido num harness (`vm`), não no painel real.
+- **Fora do pedido, incoerência que fica:** o KPI "em campo" e o "faltam N equipes em campo" (`renderMetrics`) ainda contam só `!sessionEnd && isOnline` — equipe logada com celular calado sai da conta. Pela regra do José (logada = online) deveria contar. Mudar é decisão de KPI.
+- **Rollback:** `git revert` (campos novos são aditivos; o front antigo ignora).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 
