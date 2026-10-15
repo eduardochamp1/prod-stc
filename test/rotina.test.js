@@ -200,3 +200,41 @@ test('serviço fechado por interrupção leva o motivo', () => {
   assert.equal(r.faixas.servico[0].status, 'interrompida');
   assert.equal(r.faixas.servico[0].motivo, 'SUSPENSO PARA OUTROS SERVIÇOS');
 });
+
+// ── 15/10/2026: serviço "de 00:00 à tarde" no Plano Diário ──────────────────
+test('2 sem 3 de tentativa anterior não emenda com o 3 de hoje', () => {
+  const ontem = '2026-08-31';
+  const r = montarRotina({
+    dia: DIA,
+    notas: [{ id: 'x', numero: '9', tipo: 'MD', status: 'concluida', checkpoints: [
+      { event: 0, registradoEm: `${ontem}T15:00:00-03:00` },
+      { event: 1, registradoEm: `${ontem}T15:20:00-03:00` },
+      { event: 2, registradoEm: `${ontem}T15:21:00-03:00` },   // interrompida ontem, sem 3
+      cp(0, '10:00'), cp(1, '10:20'), cp(2, '10:25'), cp(3, '11:00'),
+    ] }],
+    agoraMs: msParede('2026-10-15T12:00:00'),
+  });
+  assert.deepEqual(r.faixas.servico.map(s => [s.ini, s.fim]), [[M('10:25'), M('11:00')]]);
+  assert.equal(r.avisos.servicoSemFim, 0);   // o bloco de ontem não é aviso de hoje
+});
+
+test('serviço retomado: o bloco interrompido fecha na interrupção, o retomado no 3', () => {
+  const r = montarRotina({
+    dia: DIA,
+    notas: [{ id: 'x', status: 'concluida', checkpoints: [cp(2, '12:00'), cp(2, '12:33'), cp(3, '12:57')] }],
+    interrupcoes: [{ note_id: 'x', instanteMs: msParede(`${DIA}T12:12:00`), motivo: 'falta material' }],
+    agoraMs: msParede('2026-10-15T12:00:00'),
+  });
+  assert.deepEqual(r.faixas.servico.map(s => [s.ini, s.fim, s.status]),
+    [[M('12:00'), M('12:12'), 'interrompida'], [M('12:33'), M('12:57'), 'concluida']]);
+});
+
+test('hoje: só o último bloco aberto vai até agora', () => {
+  const r = montarRotina({
+    dia: DIA,
+    notas: [{ id: 'x', status: 'executada', checkpoints: [cp(2, '09:00'), cp(0, '10:00'), cp(1, '10:10'), cp(2, '10:15')] }],
+    agoraMs: msParede(`${DIA}T11:00:00`),
+  });
+  assert.deepEqual(r.faixas.servico.map(s => [s.ini, s.fim, s.status]), [[M('10:15'), M('11:00'), 'andamento']]);
+  assert.equal(r.avisos.servicoSemFim, 1);   // o das 09:00 parou sem 3 e sem interrupção
+});

@@ -1,16 +1,11 @@
 /**
  * test/rotinaEquipes.test.js
  *
- * GET /api/rotina/equipes — o "Plano Diário" da aba Rotina (15/10/2026): a
- * rotina de TODAS as equipes do escopo num dia.
- *
- * Cadeia exercitada, toda REAL exceto o pool:
- *   middleware/auth.applyScope → handler da rota → db/rotinaQueries.rotinaEquipes
- *   → pool FALSO que filtra por regional e por `team = ANY(...)` com os
- *   PARÂMETROS recebidos.
- * O que importa: (1) escopo regional — conta do ES não vê SJC, `teams` não
- * amplia; (2) nada de N+1 — o número de consultas não cresce com as equipes;
- * (3) o lote monta a MESMA rotina que a tela de uma equipe.
+ * O carregador da aba Rotina (db/rotinaQueries._carregarLote via rotinaEquipe)
+ * com um pool FALSO que filtra por `team = ANY(...)` com os PARÂMETROS
+ * recebidos. Nasceu para o "Plano Diário" (15/10/2026), que saiu da tela no
+ * mesmo dia ("ficou confusa"); o carregador em lote ficou — é o mesmo da tela
+ * de uma equipe.
  */
 
 'use strict';
@@ -22,8 +17,6 @@ process.env.JWT_SECRET = 'test-secret-rotina-equipes';
 const { test, describe, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { applyScope } = require('../middleware/auth');
-const router = require('../routes/index');
 const pgShim = require('../services/pgShim');
 const { rotinaEquipe, notasDoDia } = require('../db/rotinaQueries');
 
@@ -111,131 +104,59 @@ function poolFalso(registro) {
   };
 }
 
-function handlerDaRota() {
-  const camada = router.stack.find(l => l.route && l.route.path === '/rotina/equipes' && l.route.methods.get);
-  assert.ok(camada, 'a rota GET /rotina/equipes tem de existir');
-  return camada.route.stack[0].handle;
-}
-
-function resFalso() {
-  return {
-    statusCode: 200, body: undefined,
-    status(c) { this.statusCode = c; return this; },
-    json(b) { this.body = b; return this; },
-  };
-}
-
-async function chamar(regionaisDaConta, query = {}) {
-  const req = { user: { username: 'x', role: 'user', regionals: regionaisDaConta }, query: { date: DIA, ...query } };
-  const res = resFalso();
-  let passou = false;
-  applyScope(req, res, () => { passou = true; });
-  if (!passou) return res;
-  await handlerDaRota()(req, res);
-  return res;
-}
-
-const siglas = res => (res.body.equipes || []).map(e => e.team);
-
-describe('GET /api/rotina/equipes', () => {
+describe('carregador da rotina (rotinaEquipe)', () => {
   let registro;
   beforeEach(() => {
     registro = [];
     pgShim._setPool(poolFalso(registro));
   });
 
-  test('conta do ES (GUA+CAC) não vê SJC', async () => {
-    const res = await chamar(['GUA', 'CAC']);
-    assert.equal(res.statusCode, 200);
-    assert.deepEqual(siglas(res), ['ECCAC10', 'ECGPR53']);
-    assert.deepEqual(res.body.erros, []);
+  test('número fixo de consultas, equipe e dia como PARÂMETROS', async () => {
+    await rotinaEquipe('ECGPR53', DIA);
+    assert.equal(registro.length, 8);   // 7 fontes + note_details
+    for (const c of registro) assert.doesNotMatch(c.sql, /ECGPR53|2026-09-01/);
   });
 
-  test('?regionals= de fora do permitido é recusado sem consultar o banco', async () => {
-    const res = await chamar(['GUA', 'CAC'], { regionals: 'SJC' });
-    assert.equal(res.statusCode, 403);
-    assert.equal(registro.length, 0);
-  });
-
-  test('teams= recorta, mas nunca amplia o escopo regional', async () => {
-    assert.deepEqual(siglas(await chamar(['GUA', 'CAC'], { teams: 'ecgpr53' })), ['ECGPR53']);
-    registro.length = 0;
-    const fora = await chamar(['GUA', 'CAC'], { teams: 'ECCSJ82' });
-    assert.deepEqual(siglas(fora), []);
-    assert.equal(registro.length, 1, 'sem equipe no escopo, só a lista de equipes é consultada');
-  });
-
-  test('sem N+1: o número de consultas não cresce com as equipes', async () => {
-    await chamar(['GUA']);
-    const umaEquipe = registro.length;
-    registro.length = 0;
-    await chamar(['GUA', 'CAC', 'SJC']);
-    assert.equal(registro.length, umaEquipe);
-    assert.equal(umaEquipe, 9);   // equipes + 7 fontes + note_details
-  });
-
-  test('regionais e equipes vão como PARÂMETROS, nunca interpolados', async () => {
-    await chamar(['GUA', 'CAC']);
-    for (const q of registro) assert.doesNotMatch(q.sql, /'GUA'|'CAC'|'SJC'|ECGPR53|ECCAC10/);
-  });
-
-  test('note_details: só checkpoints, só UUIDs, uma consulta pelas notas de todas as equipes', async () => {
-    await chamar(['GUA', 'CAC', 'SJC']);
-    const det = registro.filter(q => /note_details/.test(q.sql));
+  test('note_details: só checkpoints, só UUIDs', async () => {
+    await rotinaEquipe('ECGPR53', DIA);
+    const det = registro.filter(c => /note_details/.test(c.sql));
     assert.equal(det.length, 1);
     assert.match(det[0].sql, /payload->'checkpoints'/);
     assert.doesNotMatch(det[0].sql, /SELECT[^]*\bpayload\s*,/);
-    assert.deepEqual([...det[0].params[0]].sort(), [UUID_A, UUID_B, UUID_C]);
+    assert.deepEqual([...det[0].params[0]], [UUID_A]);   // 'nao-e-uuid' fica fora
   });
 
   test('o snapshot não traz o `data` inteiro pro Node', async () => {
-    await chamar(['GUA']);
-    const snap = registro.find(q => /jsonb_array_elements/.test(q.sql));
+    await rotinaEquipe('ECGPR53', DIA);
+    const snap = registro.find(c => /jsonb_array_elements/.test(c.sql));
     assert.doesNotMatch(snap.sql, /SELECT\s+(s\.)?data\b/);
   });
 
-  test('monta faixas e carteira de cada equipe', async () => {
-    const res = await chamar(['GUA', 'CAC']);
-    const gua = res.body.equipes.find(e => e.team === 'ECGPR53');
-    assert.equal(gua.regional, 'GUA');
+  test('monta faixas, desvio apontado e carteira', async () => {
+    const gua = await rotinaEquipe('ECGPR53', DIA);
     assert.deepEqual(gua.faixas.deslocamento.map(i => [i.ini, i.fim]), [[M('08:10'), M('08:30')]]);
     assert.deepEqual(gua.faixas.servico.map(i => [i.ini, i.fim, i.status]), [[M('08:35'), M('09:35'), 'concluida']]);
     // Desvio = parada APONTADA (sessao_intervalo), não o buraco entre apontamentos.
     assert.deepEqual(gua.faixas.desvio.map(i => [i.ini, i.fim, i.motivo]),
       [[M('12:00'), M('13:00'), '15 - Horário de Refeição']]);
-    assert.equal(gua.totaisMin.desvio, 60);
     assert.equal(gua.carteira.executadas, 2);
     assert.equal(gua.carteira.remanejadas, 1);
     assert.equal(gua.carteira.interrompidas, 0);
 
-    const cac = res.body.equipes.find(e => e.team === 'ECCAC10');
+    const cac = await rotinaEquipe('ECCAC10', DIA);
     assert.equal(cac.faixas.servico[0].status, 'rejeitada');   // rejeitada > concluída
     assert.equal(cac.carteira.rejeitadas, 1);
   });
 
-  test('o lote monta a MESMA rotina que a tela de uma equipe', async () => {
-    const lote = (await chamar(['GUA'])).body.equipes[0];
-    const uma = await rotinaEquipe('ECGPR53', DIA);
-    const { regional, tipo, ...semMeta } = lote;
-    const { erros, ...umaSemErros } = uma;
-    assert.deepEqual(semMeta, umaSemErros);
-  });
-
-  test('fonte que falha vira aviso, não derruba a lista', async () => {
+  test('fonte que falha vira aviso, não derruba a tela', async () => {
     const base = poolFalso(registro);
     pgShim._setPool({ ...base, async query(sql, p) {
       if (/note_interrupcoes/.test(sql)) throw new Error('relation does not exist');
       return base.query(sql, p);
     } });
-    const res = await chamar(['GUA']);
-    assert.equal(res.statusCode, 200);
-    assert.deepEqual(siglas(res), ['ECGPR53']);
-    assert.match(res.body.erros[0], /^interrupcoes:/);
-  });
-
-  test('date inválida → 400', async () => {
-    const res = await chamar(['GUA'], { date: '01/09/2026' });
-    assert.equal(res.statusCode, 400);
+    const r = await rotinaEquipe('ECGPR53', DIA);
+    assert.ok(r.faixas);
+    assert.match(r.erros[0], /^interrupcoes:/);
   });
 });
 

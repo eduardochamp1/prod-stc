@@ -49,7 +49,6 @@
 const { _getPool } = require('../services/pgShim');
 const { msParede, janelaDaEscala } = require('./heQueries');
 const { isFolga } = require('../services/escalaDia');
-const { inRegionalsSql } = require('../services/regionals');
 
 const MS_MIN = 60000;
 const MS_DIA = 86400000;
@@ -77,6 +76,13 @@ function instanteCp(cp) {
  * Serviço sem 3 volta com `fim: null` — quem chama decide (interrupção, em
  * andamento ou descartado). Deslocamento sem fim é descartado: sem chegada não
  * há duração para desenhar.
+ *
+ * ⚠️ 15/10/2026 — barras de serviço de 00:00 até a tarde no Plano Diário
+ * (ECDMA50, ECGPR53, ECGPR54, ECGPR82, ECMFL51). Um 2 SEM 3 de uma tentativa
+ * anterior (nota interrompida dias antes) ficava "aberto", o 2 de hoje era
+ * ignorado e o 3 de hoje fechava o bloco antigo — recortado na meia-noite.
+ * Agora um novo 0 ou um novo 2 ENCERRA o serviço aberto como "sem fim" e o
+ * bloco recomeça no instante certo.
  */
 function intervalosDaNota(checkpoints) {
   const evs = (checkpoints || [])
@@ -93,6 +99,7 @@ function intervalosDaNota(checkpoints) {
 
   for (const { ev, ms } of evs) {
     if (ev === 0) {
+      if (sAberto != null) { servico.push({ ini: sAberto, fim: null }); sAberto = null; }
       dAberto = ms;
     } else if (ev === 1) {
       if (dAberto != null && ms >= dAberto) desloc.push({ ini: dAberto, fim: ms });
@@ -100,13 +107,16 @@ function intervalosDaNota(checkpoints) {
     } else if (ev === 2) {
       if (dAberto != null && ms >= dAberto) desloc.push({ ini: dAberto, fim: ms });
       dAberto = null;
-      if (sAberto == null) sAberto = ms;
+      if (sAberto != null) servico.push({ ini: sAberto, fim: null });
+      sAberto = ms;
     } else if (ev === 3) {
       if (sAberto != null && ms >= sAberto) servico.push({ ini: sAberto, fim: ms });
       sAberto = null;
     }
   }
-  if (sAberto != null) servico.push({ ini: sAberto, fim: null });
+  // `ultimo`: só o bloco aberto FINAL pode estar em andamento agora; os que
+  // foram encerrados por um 0/2 seguinte já pararam (interrupção ou abandono).
+  if (sAberto != null) servico.push({ ini: sAberto, fim: null, ultimo: true });
   return { desloc, servico, semHorario };
 }
 
@@ -195,14 +205,16 @@ function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoe
     const info = { noteId: n.id, numero: n.numero || '', tipo: n.tipo || '' };
     for (const d of r.desloc) deslocamento.push({ ...d, ...info });
     for (const s of r.servico) {
-      if (s.fim != null) { servico.push({ ...s, ...info, status: n.status }); continue; }
+      if (s.fim != null) { servico.push({ ini: s.ini, fim: s.fim, ...info, status: n.status }); continue; }
+      // Bloco aberto que começou antes deste dia é de outra rotina — nem aviso.
+      if (s.ini < base) continue;
       // Sem "Fim do Trabalho": interrupção depois do início fecha o bloco.
       const ints = (intPorNota.get(n.id) || []).filter(t => t.instanteMs >= s.ini)
         .sort((a, b) => a.instanteMs - b.instanteMs);
       if (ints.length) {
         servico.push({ ini: s.ini, fim: ints[0].instanteMs, ...info, status: 'interrompida',
           motivo: ints[0].motivo || '' });
-      } else if (ehHoje && n.status === 'executada') {
+      } else if (ehHoje && s.ultimo && n.status === 'executada') {
         servico.push({ ini: s.ini, fim: agoraMs, ...info, status: 'andamento', aberto: true });
       } else {
         servicoSemFim++;
@@ -551,35 +563,8 @@ async function rotinaEquipe(team, dia, agora = Date.now()) {
   return { ...porEquipe.get(equipe), erros };
 }
 
-/**
- * Plano Diário: todas as equipes OFICIAIS ativas das regionais do escopo
- * (`regionais` = req.scope.regionals), opcionalmente recortadas por `teams`
- * (filtro de supervisor da tela). Bounded: equipes do escopo × 1 dia.
- */
-async function rotinaEquipes(dia, regionais, { teams = null, agora = Date.now() } = {}) {
-  const pool = _getPool();
-  if (!pool) return null;
-  const params = [];
-  const regClause = inRegionalsSql(regionais, params);
-  const { rows: eqs } = await pool.query(
-    `SELECT upper(btrim(sigla)) AS sigla, regional, tipo
-       FROM public.equipes_oficiais
-      WHERE ativo = true AND ${regClause}
-      ORDER BY regional, sigla`, params);
-  const filtro = Array.isArray(teams) && teams.length
-    ? new Set(teams.map(t => String(t).trim().toUpperCase())) : null;
-  const lista = eqs.filter(e => !filtro || filtro.has(e.sigla));
-
-  const { porEquipe, erros } = await _carregarLote(pool, dia, lista.map(e => e.sigla), agora);
-  return {
-    dia,
-    equipes: lista.map(e => ({ ...porEquipe.get(e.sigla), regional: e.regional, tipo: e.tipo })),
-    erros,
-  };
-}
-
 module.exports = {
-  rotinaEquipe, rotinaEquipes,
+  rotinaEquipe,
   // Puras, exportadas pra teste.
   instanteCp, intervalosDaNota, unir, montarRotina, montarCarteira, notasDoDia, desvioDoBreak,
 };

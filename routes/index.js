@@ -4248,24 +4248,6 @@ router.get('/rotina/equipe', async (req, res) => {
   }
 });
 
-// GET /api/rotina/equipes?date=YYYY-MM-DD&regionals=GUA,CAC&teams=A,B
-// "Plano Diário" (estilo eOrder, 15/10/2026): a rotina de TODAS as equipes
-// oficiais do escopo num dia — uma consulta por fonte, sem N+1. `teams` é o
-// recorte do filtro de supervisor; nunca amplia o escopo regional.
-router.get('/rotina/equipes', async (req, res) => {
-  try {
-    const date = req.query.date || dateBRT();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date inválida (YYYY-MM-DD).' });
-    const teams = req.query.teams
-      ? String(req.query.teams).split(',').map(s => s.trim()).filter(Boolean) : null;
-    const r = await require('../db/rotinaQueries').rotinaEquipes(date, req.scope.regionals, { teams });
-    if (!r) return res.json({ dia: date, equipes: [], erros: ['sem banco'] });
-    res.json(r);
-  } catch (err) {
-    console.error('[rotina/equipes]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 // ── NOTAS DEVOLVIDAS ────────────────────────────────────────────────────────
 // Monitor das notas devolvidas pelo SAP (a serem tratadas pelo backoffice).
 // Snapshot horário via cronService.runNotasCollect → tabelas notas_snapshots
