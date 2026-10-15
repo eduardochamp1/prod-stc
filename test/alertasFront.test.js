@@ -510,12 +510,30 @@ describe('favicon e título da aba', () => {
     const fav = ler('public', 'favicon.svg');
     const alerta = ler('public', 'favicon-alerta.svg');
     for (const svg of [fav, alerta]) {
-      assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 64 64">/);
+      assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[^>]*viewBox="0 0 64 64">/);
       assert.match(svg, /#FEC40E/);
       assert.match(svg, /#231F20/);
       assert.doesNotMatch(svg, /<script|href="http/, 'SVG sem script nem recurso externo');
+      // 14/10/2026 (José: "temos que usar o raio da logo da engelmig"): o raio é o
+      // RECORTE do logo.png real, embutido como PNG — não um desenho aproximado.
+      assert.match(svg, /<image [^>]*href="data:image\/png;base64,[A-Za-z0-9+/=]{1000,}"/);
+      assert.match(svg, /Recorte de public\/logo\.png/);
     }
     assert.doesNotMatch(fav, /<circle/);
     assert.match(alerta, /<circle [^>]*fill="#ED1C24"/);
+  });
+});
+
+describe('gerador do favicon (scripts/gerar-favicon.js)', () => {
+  test('regenerar a partir do logo.png reproduz EXATAMENTE os favicons commitados', () => {
+    const os = require('node:os');
+    const { execFileSync } = require('node:child_process');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'favicon-'));
+    execFileSync(process.execPath, [path.join(RAIZ, 'scripts', 'gerar-favicon.js'),
+      path.join(RAIZ, 'public', 'logo.png'), tmp], { stdio: 'pipe' });
+    for (const f of ['favicon.svg', 'favicon-alerta.svg']) {
+      const gerado = fs.readFileSync(path.join(tmp, f), 'utf8').replace(/\r\n/g, '\n');
+      assert.equal(gerado, ler('public', f), `${f} está fora de sincronia com o logo.png — rode o gerador`);
+    }
   });
 });
