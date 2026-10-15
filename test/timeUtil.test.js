@@ -107,3 +107,27 @@ describe('minutosBRT', () => {
     assert.ok(Number.isInteger(m) && m >= 0 && m <= 1439, String(m));
   });
 });
+
+// ── instanteBRT (14/10/2026): data BRT + minutos → instante (ms). Usado pelo backtest do alerta ──
+describe('instanteBRT', () => {
+  const { instanteBRT, minutosBRT, dateBRT } = require('../services/timeUtil');
+
+  test('12:30 BRT de 14/10/2026 = 15:30Z', () => {
+    assert.equal(instanteBRT('2026-10-14', 12 * 60 + 30), Date.parse('2026-10-14T15:30:00Z'));
+  });
+  test('meia-noite BRT = 03:00Z do mesmo dia', () => {
+    assert.equal(instanteBRT('2026-10-14', 0), Date.parse('2026-10-14T03:00:00Z'));
+  });
+  test('23:45 BRT ainda é o MESMO dia BRT (02:45Z do dia seguinte)', () => {
+    const t = instanteBRT('2026-10-14', 23 * 60 + 45);
+    assert.equal(t, Date.parse('2026-10-15T02:45:00Z'));
+    assert.equal(dateBRT(t), '2026-10-14');
+  });
+  test('ida e volta: dateBRT/minutosBRT devolvem exatamente o que entrou', () => {
+    for (const [d, m] of [['2026-01-01', 0], ['2026-06-30', 725], ['2026-12-31', 1439], ['2027-02-28', 480]]) {
+      const t = instanteBRT(d, m);
+      assert.equal(dateBRT(t), d, `${d} ${m}`);
+      assert.equal(minutosBRT(t), m, `${d} ${m}`);
+    }
+  });
+});
