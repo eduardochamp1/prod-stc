@@ -60,6 +60,11 @@ const FONTES = {
   ],
   rejeicoes: [{ team: 'ECCAC10', note_id: UUID_B, numero: '200', tipo: 'SF' }],
   interrupcoes: [],
+  // sessao_intervalo, já como sai do SQL (to_char da parede, sem fuso).
+  desvios: [
+    { team: 'ECGPR53', session_id: 'S1', motivo: '15 - Horário de Refeição', responsavel: 'Equipe',
+      inicio: `${DIA}T12:00:00`, fim: `${DIA}T13:00:00` },
+  ],
   carteira: [
     { team: 'ECGPR53', carteira_inicial: 5, entradas_novas: 1, atual: 3, andamento: 0, concluidas: 2, rejeitadas: 0, canceladas: 1 },
     { team: 'ECCAC10', carteira_inicial: 4, entradas_novas: 0, atual: 3, andamento: 0, concluidas: 0, rejeitadas: 1, canceladas: 0 },
@@ -89,6 +94,7 @@ function poolFalso(registro) {
         const ok = new Set(idx.map(i => params[i]));
         return { rows: EQUIPES.filter(e => ok.has(e.regional)) };
       }
+      if (/sessao_intervalo/.test(sql)) return { rows: porTimes(FONTES.desvios, params) };
       if (/escala_dia/.test(sql)) return { rows: porTimes(FONTES.escala, params) };
       if (/jsonb_array_elements/.test(sql)) return { rows: porTimes(FONTES.snapshot, params) };
       if (/session_begin IS NOT NULL/.test(sql)) return { rows: porTimes(FONTES.sessao, params) };
@@ -165,7 +171,7 @@ describe('GET /api/rotina/equipes', () => {
     registro.length = 0;
     await chamar(['GUA', 'CAC', 'SJC']);
     assert.equal(registro.length, umaEquipe);
-    assert.equal(umaEquipe, 8);   // equipes + 6 fontes + note_details
+    assert.equal(umaEquipe, 9);   // equipes + 7 fontes + note_details
   });
 
   test('regionais e equipes vão como PARÂMETROS, nunca interpolados', async () => {
@@ -194,7 +200,10 @@ describe('GET /api/rotina/equipes', () => {
     assert.equal(gua.regional, 'GUA');
     assert.deepEqual(gua.faixas.deslocamento.map(i => [i.ini, i.fim]), [[M('08:10'), M('08:30')]]);
     assert.deepEqual(gua.faixas.servico.map(i => [i.ini, i.fim, i.status]), [[M('08:35'), M('09:35'), 'concluida']]);
-    assert.equal(gua.totaisMin.desvio + gua.totaisMin.deslocamento + gua.totaisMin.servico, gua.totaisMin.sessao);
+    // Desvio = parada APONTADA (sessao_intervalo), não o buraco entre apontamentos.
+    assert.deepEqual(gua.faixas.desvio.map(i => [i.ini, i.fim, i.motivo]),
+      [[M('12:00'), M('13:00'), '15 - Horário de Refeição']]);
+    assert.equal(gua.totaisMin.desvio, 60);
     assert.equal(gua.carteira.executadas, 2);
     assert.equal(gua.carteira.remanejadas, 1);
     assert.equal(gua.carteira.interrompidas, 0);

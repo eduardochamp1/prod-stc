@@ -579,6 +579,16 @@
             <div id="rotina-carteira"><div class="empty-state" style="font-size:12px">—</div></div>
           </div>
         </div>
+        <!-- Serviços e Desvios (15/10/2026): a mesma lista do export da EDP
+             ("Gestão de equipes - ES"), evento a evento, na ordem do dia. -->
+        <div class="rotina-card rotina-eventos-card" id="rotina-eventos-card" hidden>
+          <div class="rotina-card-head">
+            <span>Serviços e Desvios</span>
+            <button type="button" class="btn-refresh" style="padding:3px 10px;font-size:11px"
+                    onclick="downloadRotinaEventosXLSX()">⬇ Excel</button>
+          </div>
+          <div id="rotina-eventos"></div>
+        </div>
         <div class="mapa-layout">
           <div class="mapa-sidebar">
             <div id="mapa-sidebar-list">
@@ -12102,10 +12112,12 @@ ${acumuladoHTML}
         if (data.error) throw new Error(data.error);
         g.innerHTML = _rotinaGanttHtml(data);
         c.innerHTML = _rotinaCarteiraHtml(data.carteira);
+        _rotinaEventosRender(data, team, date);
       } catch (err) {
         if (seq !== _rotinaSeq) return;
         g.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro: ${escapeHtml(err.message)}</div>`;
         c.innerHTML = '';
+        _rotinaEventosRender(null);
       }
     }
 
@@ -12179,7 +12191,7 @@ ${acumuladoHTML}
         linha('Sessão', t.sessao, f.sessao.map(i =>
           barra(i, 'var(--rot-sessao)', `Sessão: ${intervalo(i)}${i.aberta ? ' — aberta (sem logoff)' : ''}`)).join('')),
         linha('Desvio', t.desvio, f.desvio.map(i =>
-          barra(i, 'var(--rot-desvio)', `Desvio: ${intervalo(i)}\nTempo de sessão sem deslocamento nem serviço apontado (inclui refeição e espera).`)).join('')),
+          barra(i, 'var(--rot-desvio)', `Desvio ${i.motivo || '(sem motivo)'}: ${intervalo(i)}${i.aberto ? ' — em aberto' : ''}${i.responsavel ? `\nResponsável: ${i.responsavel}` : ''}`)).join('')),
         linha('Deslocamento', t.deslocamento, f.deslocamento.map(i =>
           barra(i, 'var(--rot-desloc)', `Deslocamento ${notaTxt(i)}: ${intervalo(i)}\nClique para ver a nota no mapa.`)).join('')),
         linha('Serviço', t.servico, f.servico.map(i => {
@@ -12195,6 +12207,7 @@ ${acumuladoHTML}
       const notas = [];
       if (av.semHorario) notas.push(`${av.semHorario} deslocamento(s) sem horário registrado (não desenhado)`);
       if (av.servicoSemFim) notas.push(`${av.servicoSemFim} serviço(s) sem "Fim do Trabalho" (não desenhado)`);
+      if (av.desvioSemFim) notas.push(`${av.desvioSemFim} desvio(s) sem fim registrado (não desenhado)`);
       if ((d.erros || []).length) notas.push(`fonte indisponível: ${d.erros.map(e => e.split(':')[0]).join(', ')}`);
       const statusLeg = ['concluida', 'rejeitada', 'interrompida', 'andamento'].map(k =>
         `<span><i style="display:inline-block;width:10px;height:4px;background:${_ROT_STATUS[k].cor};vertical-align:middle;margin-right:4px"></i>${_ROT_STATUS[k].lbl}</span>`).join('');
@@ -12204,6 +12217,77 @@ ${acumuladoHTML}
           ${ints ? '<span><i style="display:inline-block;height:10px;border-left:2px dashed #e65100;margin-right:4px;vertical-align:middle"></i>Interrupção</span>' : ''}
           ${notas.length ? `<span style="color:#b26a00">⚠ ${escapeHtml(notas.join(' · '))}</span>` : ''}
         </div>`;
+    }
+
+    // ── Serviços e Desvios — tabela evento a evento (15/10/2026) ──────────
+    // Mesmas colunas do export da EDP. Sai das MESMAS faixas do gráfico: a
+    // tabela e as barras não podem divergir.
+    let _rotinaEventos = { linhas: [], team: '', date: '' };
+
+    function _rotinaEventosLinhas(d) {
+      const f = d && d.faixas;
+      if (!f) return [];
+      const nota = i => [i.tipo, i.numero].filter(Boolean).join(' - ');
+      const ev = [];
+      for (const i of f.desvio || []) ev.push({ ini: i.ini, fim: i.fim, aberto: i.aberto, evento: 'Desvio',
+        descricao: i.motivo || '(sem motivo)', tipo: '', nota: '',
+        detalhe: i.responsavel ? `Resp.: ${i.responsavel}` : '', noteId: null });
+      for (const i of f.deslocamento || []) ev.push({ ini: i.ini, fim: i.fim, evento: 'Deslocamento',
+        descricao: nota(i), tipo: i.tipo, nota: i.numero, detalhe: '', noteId: i.noteId });
+      for (const i of f.servico || []) {
+        const st = _ROT_STATUS[i.status] || { lbl: i.status || '' };
+        ev.push({ ini: i.ini, fim: i.fim, aberto: i.aberto, evento: 'Serviço',
+          descricao: `${nota(i)} - ${st.lbl}`, tipo: i.tipo, nota: i.numero, detalhe: i.motivo || '', noteId: i.noteId });
+      }
+      return ev.sort((a, b) => a.ini - b.ini);
+    }
+
+    function _rotinaEventosRender(d, team, date) {
+      const card = document.getElementById('rotina-eventos-card');
+      const box = document.getElementById('rotina-eventos');
+      if (!card || !box) return;
+      const linhas = _rotinaEventosLinhas(d);
+      _rotinaEventos = { linhas, team: team || '', date: date || '' };
+      card.hidden = !linhas.length;
+      if (!linhas.length) { box.innerHTML = ''; return; }
+      const COR = { Desvio: 'var(--rot-desvio)', Deslocamento: 'var(--rot-desloc)', 'Serviço': 'var(--rot-serv)' };
+      box.innerHTML = `<div class="rot-ev-wrap"><table class="rot-ev">
+        <thead><tr><th>Evento</th><th>Descrição</th><th>Tipo</th><th>Nota</th><th>Detalhe</th>
+          <th>Início</th><th>Fim</th><th class="num">Tempo</th></tr></thead>
+        <tbody>${linhas.map(l => `
+          <tr${l.noteId ? ` class="clicavel" onclick="mapaToggleNotaFilter('${escapeJsAttr(l.noteId)}')" title="Ver a nota no mapa"` : ''}>
+            <td><i class="rot-ev-cor" style="background:${COR[l.evento]}"></i>${l.evento}</td>
+            <td>${escapeHtml(l.descricao)}</td>
+            <td>${escapeHtml(l.tipo || '')}</td>
+            <td>${escapeHtml(l.nota || '')}</td>
+            <td>${escapeHtml(l.detalhe || '')}</td>
+            <td>${_rotHora(l.ini)}</td>
+            <td>${l.aberto ? 'em aberto' : _rotHora(l.fim)}</td>
+            <td class="num">${_rotDur(l.fim - l.ini)}</td>
+          </tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function downloadRotinaEventosXLSX() {
+      const { linhas, team, date } = _rotinaEventos;
+      if (!linhas.length) return;
+      const hms = m => _rotHora(m).replace(' (+1)', '');
+      // `m` passa de 1440 no turno que vira a noite — a data acompanha.
+      const dia = m => {
+        const d = new Date(`${date}T12:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + Math.floor(m / 1440));
+        return d.toISOString().slice(0, 10).split('-').reverse().join('/');
+      };
+      const rows = linhas.map(l => ({
+        Equipe: team, Evento: l.evento, 'Descrição': l.descricao, 'Tipo Nota': l.tipo || '',
+        Nota: l.nota || '', Detalhe: l.detalhe || '',
+        'Início': `${dia(l.ini)} ${hms(l.ini)}`,
+        Fim: l.aberto ? '' : `${dia(l.fim)} ${hms(l.fim)}`,
+        'Tempo (min)': Math.round(l.fim - l.ini),
+        'Tempo (hr)': +((l.fim - l.ini) / 60).toFixed(2),
+      }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Serviços e Desvios');
+      XLSX.writeFile(wb, `servicos-desvios-${team}-${date}.xlsx`);
     }
 
     function _rotinaCarteiraHtml(c) {

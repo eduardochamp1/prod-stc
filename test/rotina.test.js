@@ -13,7 +13,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  instanteCp, intervalosDaNota, unir, buracos, montarRotina, montarCarteira,
+  instanteCp, intervalosDaNota, unir, montarRotina, montarCarteira, desvioDoBreak,
 } = require('../db/rotinaQueries');
 const { msParede } = require('../db/heQueries');
 
@@ -59,17 +59,12 @@ test('deslocamento sem registradoEm é contado, não desenhado', () => {
   assert.equal(r.semHorario, 1);
 });
 
-test('unir e buracos', () => {
+test('unir', () => {
   const u = unir([{ ini: 0, fim: 10 }, { ini: 5, fim: 20 }, { ini: 30, fim: 40 }]);
   assert.deepEqual(u, [{ ini: 0, fim: 20 }, { ini: 30, fim: 40 }]);
-  const MIN = 60000;
-  assert.deepEqual(buracos(0, 60 * MIN, [{ ini: 10 * MIN, fim: 20 * MIN }]),
-    [{ ini: 0, fim: 10 * MIN }, { ini: 20 * MIN, fim: 60 * MIN }]);
-  // buraco de 30s é ruído
-  assert.deepEqual(buracos(0, 10 * MIN, [{ ini: 30000, fim: 10 * MIN }]), []);
 });
 
-test('rotina completa: desvio = sessão − (deslocamento ∪ serviço)', () => {
+test('rotina completa; desvio vem do apontamento, não do buraco', () => {
   const r = montarRotina({
     dia: DIA,
     escalas: [{ codigo_escala: 'T08', inicio_escala: '08:00:00', fim_escala: '17:00:00' }],
@@ -84,8 +79,9 @@ test('rotina completa: desvio = sessão − (deslocamento ∪ serviço)', () => 
   assert.equal(r.totaisMin.escala, 540);
   assert.equal(r.totaisMin.deslocamento, 40);   // 08:30→09:10
   assert.equal(r.totaisMin.servico, 45);
-  // fecha por construção
-  assert.equal(r.totaisMin.desvio + r.totaisMin.deslocamento + r.totaisMin.servico, r.totaisMin.sessao);
+  // Sem parada apontada não há desvio — o buraco entre apontamentos NÃO é desvio
+  // no vocabulário da EDP (export "Serviços e Desvios", EPICO30 04/09/2026).
+  assert.equal(r.totaisMin.desvio, 0);
   assert.equal(r.faixas.servico[0].status, 'concluida');
   assert.equal(r.agoraMin, null);   // dia passado
 });
@@ -124,7 +120,7 @@ test('hoje: serviço em andamento e sessão aberta vão até agora', () => {
   assert.equal(r.faixas.sessao[0].fim, M('11:00'));
   assert.equal(r.faixas.sessao[0].aberta, true);
   assert.equal(r.faixas.servico[0].status, 'andamento');
-  assert.equal(r.totaisMin.desvio, 120);
+  assert.equal(r.totaisMin.desvio, 0);
 });
 
 test('turno que vira a noite passa de 1440', () => {
@@ -153,4 +149,54 @@ test('carteira: renomeia sem recalcular; interrompidas fora da conta', () => {
   assert.equal(c.inicial + c.entradas, c.pendentes + c.executadas + c.rejeitadas + c.remanejadas);
   assert.equal(c.interrompidas, 2);
   assert.equal(montarCarteira(null, 0), null);
+});
+
+// ── Desvio = parada apontada na sessão (sessao_intervalo) ────────────────────
+// Caso real: export "Serviços e Desvios" da EDP, EPICO30, 04/09/2026.
+const D4 = '2026-09-04';
+const ANTES = msParede('2026-10-15T12:00:00');
+
+test('desvios do export da EDP viram as barras com motivo', () => {
+  const r = montarRotina({
+    dia: D4,
+    desvios: [
+      { motivo: '06 - Check List', inicio: `${D4}T11:00:20`, fim: `${D4}T11:14:44` },
+      { motivo: '15 - Horário de Refeição', inicio: `${D4}T18:59:39`, fim: `${D4}T19:58:35` },
+      { motivo: '29 - Retorno da equipe à base', inicio: `${D4}T20:56:13`, fim: `${D4}T22:14:58` },
+    ],
+    agoraMs: ANTES,
+  });
+  assert.deepEqual(r.faixas.desvio.map(d => d.motivo),
+    ['06 - Check List', '15 - Horário de Refeição', '29 - Retorno da equipe à base']);
+  // EDP: 14 + 59 + 79 min (a coluna "Tempo (min)" do export trunca; aqui é soma exata arredondada)
+  assert.equal(r.totaisMin.desvio, 152);
+});
+
+test('desvio em aberto: hoje vai até agora; dia passado não é inventado', () => {
+  const hoje = montarRotina({ dia: DIA, desvios: [{ motivo: '15 - Refeição', inicio: `${DIA}T12:00:00`, fim: null }],
+    agoraMs: msParede(`${DIA}T12:30:00`) });
+  assert.equal(hoje.faixas.desvio[0].fim, M('12:30'));
+  assert.equal(hoje.faixas.desvio[0].aberto, true);
+  const passado = montarRotina({ dia: DIA, desvios: [{ motivo: 'x', inicio: `${DIA}T12:00:00`, fim: null }], agoraMs: ANTES });
+  assert.equal(passado.faixas.desvio.length, 0);
+  assert.equal(passado.avisos.desvioSemFim, 1);
+});
+
+test('break ao vivo: o Z falso do normalizador sai, a parede fica', () => {
+  const d = desvioDoBreak({ motivo: '06 - Check List', inicio: '2026-09-04T11:00:20Z', fim: '2026-09-04T11:14:44.123Z' });
+  assert.equal(msParede(d.inicio), msParede('2026-09-04T11:00:20'));
+  assert.equal(msParede(d.fim), msParede('2026-09-04T11:14:44'));
+  assert.equal(desvioDoBreak({ inicio: '2026-09-04T11:00:20Z', fim: null }).fim, null);
+});
+
+test('serviço fechado por interrupção leva o motivo', () => {
+  const r = montarRotina({
+    dia: D4,
+    notas: [{ id: 'dd', numero: '000017340324', tipo: 'DD', status: 'executada', checkpoints: [
+      { event: 2, registradoEm: `${D4}T12:06:03-03:00` }] }],
+    interrupcoes: [{ note_id: 'dd', instanteMs: msParede(`${D4}T12:06:32`), motivo: 'SUSPENSO PARA OUTROS SERVIÇOS' }],
+    agoraMs: ANTES,
+  });
+  assert.equal(r.faixas.servico[0].status, 'interrompida');
+  assert.equal(r.faixas.servico[0].motivo, 'SUSPENSO PARA OUTROS SERVIÇOS');
 });

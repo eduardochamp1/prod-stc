@@ -11,14 +11,26 @@
  *   Sessão        snapshots.session_begin/session_end (login → logoff no app)
  *   Deslocamento  checkpoint 0 → 1 de cada nota
  *   Serviço       checkpoint 2 → 3 de cada nota (cor = status da nota)
- *   Desvio        tempo DENTRO da sessão sem deslocamento nem serviço
+ *   Desvio        apontamento de parada da SESSÃO (sessao_intervalo, P2-15):
+ *                 "06 - Check List", "15 - Horário de Refeição",
+ *                 "29 - Retorno da equipe à base"...
  *
  * Eventos do checkpoint: docs/handoff/API-WPA-EDP.md §292 (0 início desloc,
  * 1 fim desloc, 2 início trabalho, 4 finalizando, 3 fim do trabalho).
  *
- * ⚠️ "Desvio" é DERIVADO, não vem da EDP: é sessão menos (deslocamento ∪
- * serviço). A definição é essa e só essa — inclui almoço, espera de material,
- * tudo. A tela diz isso no tooltip; não é acusação de ociosidade.
+ * ⚠️ DESVIO — EU ESTAVA ERRADO (15/10/2026). A 1ª versão (aa1e901) DERIVAVA o
+ * desvio como "sessão menos (deslocamento ∪ serviço)". O José trouxe o export
+ * "Serviços e Desvios" do painel da EDP (EPICO30, 04/09/2026) e lá Desvio é
+ * APONTAMENTO, com código e texto: 06 Check List 11:00:20→11:14:44, 15 Refeição
+ * 18:59:39→19:58:35, 29 Retorno à base 20:56:13→22:14:58 — exatamente o
+ * `sessions/{id}/break` que já gravamos em `sessao_intervalo`. O buraco entre
+ * apontamentos NÃO é desvio no vocabulário da EDP, e chamá-lo assim seria pôr
+ * na tela um número que a EDP desmente.
+ *
+ * ⚠️ FUSO do sessao_intervalo: leitura com `AT TIME ZONE 'UTC'` (o coletor
+ * anexa um 'Z' falso) — mesma armadilha e mesma leitura de heQueries (P1-48).
+ * E o cron só sincroniza às 03:10 de D+1: no dia de HOJE a tabela está vazia,
+ * então a tela de UMA equipe busca ao vivo (`desviosAoVivo`).
  *
  * ⚠️ HORÁRIO DO CHECKPOINT: lê `registradoEm` (RegisteredAt2), nunca o
  * `timestamp` nos eventos 0 e 1 — ali ele é o instante da SINCRONIZAÇÃO e erra
@@ -43,8 +55,6 @@ const MS_MIN = 60000;
 const MS_DIA = 86400000;
 // Até onde a linha do tempo de um dia pode ir: turno noturno que fecha de manhã.
 const HORIZONTE_MS = 30 * 3600000;
-// Buraco menor que isso entre dois apontamentos é ruído de sincronização, não desvio.
-const DESVIO_MIN_MS = 60000;
 
 /** Instante do checkpoint em ms de parede. Ver o ⚠️ do topo. */
 function instanteCp(cp) {
@@ -115,21 +125,6 @@ function unir(intervalos) {
   return out;
 }
 
-/** FUNÇÃO PURA: [s,e] menos a união `ocupado`. Devolve os buracos ≥ minMs. */
-function buracos(s, e, ocupado, minMs = DESVIO_MIN_MS) {
-  const out = [];
-  let cur = s;
-  for (const o of unir(ocupado)) {
-    if (o.fim <= cur) continue;
-    if (o.ini >= e) break;
-    if (o.ini > cur && o.ini - cur >= minMs) out.push({ ini: cur, fim: Math.min(o.ini, e) });
-    cur = Math.max(cur, o.fim);
-    if (cur >= e) break;
-  }
-  if (e > cur && e - cur >= minMs) out.push({ ini: cur, fim: e });
-  return out;
-}
-
 const _soma = arr => unir(arr).reduce((acc, i) => acc + (i.fim - i.ini), 0);
 
 /**
@@ -141,9 +136,11 @@ const _soma = arr => unir(arr).reduce((acc, i) => acc + (i.fim - i.ini), 0);
  * @param {Array}  p.sessoes       [{begin, end}]  (strings como no snapshot)
  * @param {Array}  p.notas         [{id, numero, tipo, status, checkpoints}]
  * @param {Array}  p.interrupcoes  [{note_id, numero, instanteMs, motivo}]
+ * @param {Array}  p.desvios       [{motivo, responsavel, inicio, fim}] — parede
+ *                                 BRT sem fuso (sessao_intervalo / break ao vivo)
  * @param {number} p.agoraMs       "agora" em ms de parede BRT
  */
-function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoes = [], agoraMs }) {
+function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoes = [], desvios = [], agoraMs }) {
   const base = msParede(`${dia}T00:00:00`);
   const limite = base + HORIZONTE_MS;
   const ehHoje = agoraMs != null && agoraMs >= base && agoraMs < base + MS_DIA;
@@ -187,7 +184,7 @@ function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoe
   for (const it of interrupcoes) {
     if (it.instanteMs == null) continue;
     if (!intPorNota.has(it.note_id)) intPorNota.set(it.note_id, []);
-    intPorNota.get(it.note_id).push(it.instanteMs);
+    intPorNota.get(it.note_id).push(it);
   }
 
   const deslocamento = [], servico = [];
@@ -200,9 +197,11 @@ function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoe
     for (const s of r.servico) {
       if (s.fim != null) { servico.push({ ...s, ...info, status: n.status }); continue; }
       // Sem "Fim do Trabalho": interrupção depois do início fecha o bloco.
-      const ints = (intPorNota.get(n.id) || []).filter(t => t >= s.ini).sort((a, b) => a - b);
+      const ints = (intPorNota.get(n.id) || []).filter(t => t.instanteMs >= s.ini)
+        .sort((a, b) => a.instanteMs - b.instanteMs);
       if (ints.length) {
-        servico.push({ ini: s.ini, fim: ints[0], ...info, status: 'interrompida' });
+        servico.push({ ini: s.ini, fim: ints[0].instanteMs, ...info, status: 'interrompida',
+          motivo: ints[0].motivo || '' });
       } else if (ehHoje && n.status === 'executada') {
         servico.push({ ini: s.ini, fim: agoraMs, ...info, status: 'andamento', aberto: true });
       } else {
@@ -220,10 +219,26 @@ function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoe
   const fSessao = sessao.filter(s => s.fim > s.ini).filter(dentro).map(recorta);
   const fEscala = escala.filter(dentro).map(recorta);
 
-  // ── Desvio ────────────────────────────────────────────────────────────────
-  const ocupado = [...fDesloc, ...fServ];
+  // ── Desvio — apontamento de parada da sessão (ver ⚠️ DESVIO no topo) ──────
   const desvio = [];
-  for (const s of unir(fSessao)) desvio.push(...buracos(s.ini, s.fim, ocupado));
+  let desvioSemFim = 0;
+  const vistosDesvio = new Set();
+  for (const d of desvios) {
+    const ini = msParede(d.inicio);
+    if (ini == null) continue;
+    let fim = msParede(d.fim);
+    let aberto = false;
+    if (fim == null) {
+      // Parada em aberto: hoje vai até agora; em dia passado não se inventa fim.
+      if (!ehHoje) { desvioSemFim++; continue; }
+      fim = agoraMs; aberto = true;
+    }
+    const k = `${ini}|${d.motivo || ''}`;
+    if (vistosDesvio.has(k)) continue;     // tabela + ao vivo não duplicam
+    vistosDesvio.add(k);
+    desvio.push({ ini, fim: Math.max(ini, fim), motivo: d.motivo || '', responsavel: d.responsavel || '', aberto });
+  }
+  const fDesvio = desvio.filter(dentro).map(recorta).sort((a, b) => a.ini - b.ini);
 
   const paraMin = arr => arr.map(i => ({ ...i, ini: min(i.ini), fim: min(i.fim) }));
   const totalMin = arr => Math.round(_soma(arr) / MS_MIN);
@@ -233,12 +248,12 @@ function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoe
     faixas: {
       escala:       paraMin(fEscala),
       sessao:       paraMin(fSessao),
-      desvio:       paraMin(desvio),
+      desvio:       paraMin(fDesvio),
       deslocamento: paraMin(fDesloc.sort((a, b) => a.ini - b.ini)),
       servico:      paraMin(fServ.sort((a, b) => a.ini - b.ini)),
     },
     totaisMin: {
-      escala: totalMin(fEscala), sessao: totalMin(fSessao), desvio: totalMin(desvio),
+      escala: totalMin(fEscala), sessao: totalMin(fSessao), desvio: totalMin(fDesvio),
       deslocamento: totalMin(fDesloc), servico: totalMin(fServ),
     },
     interrupcoes: interrupcoes
@@ -247,7 +262,7 @@ function montarRotina({ dia, escalas = [], sessoes = [], notas = [], interrupcoe
       .sort((a, b) => a.min - b.min),
     folgas: [...folgas],
     agoraMin: ehHoje ? min(agoraMs) : null,
-    avisos: { semHorario, servicoSemFim },
+    avisos: { semHorario, servicoSemFim, desvioSemFim },
   };
 }
 
@@ -349,12 +364,12 @@ function _porEquipe(rows) {
  * @returns {Promise<Map<string, object>>} team → {team, ...rotina, carteira}
  *          + `erros` (comum a todas: a fonte que falha, falha pra todas).
  */
-async function _carregarLote(pool, dia, equipes, agora) {
+async function _carregarLote(pool, dia, equipes, agora, { aoVivo = null } = {}) {
   const siglas = [...new Set(equipes.map(t => String(t).trim().toUpperCase()).filter(Boolean))];
   const erros = [];
   if (!siglas.length) return { porEquipe: new Map(), erros };
 
-  const [escalas, sesRows, snapRows, rejRows, intRows, cartRows] = await Promise.all([
+  const [escalas, sesRows, snapRows, rejRows, intRows, cartRows, desvRows] = await Promise.all([
     _talvez(pool,
       `SELECT DISTINCT upper(btrim(ed.equipe)) AS team, ed.codigo_escala, ec.inicio_escala, ec.fim_escala
          FROM public.escala_dia ed
@@ -376,7 +391,7 @@ async function _carregarLote(pool, dia, equipes, agora) {
             AND session_begin IS NOT NULL
           ORDER BY upper(btrim(team_name)), session_begin, captured_at DESC
        )
-       SELECT u.team, u.session_begin,
+       SELECT u.team, u.session_begin, s.data->>'id' AS session_id,
               COALESCE(u.session_end, s.data->>'sessionEnd', s.data->>'session_end') AS session_end
          FROM ult u JOIN public.snapshots s ON s.id = u.id`,
       [siglas, dia, _diaMais(dia, 1)], 'sessao', erros),
@@ -416,10 +431,38 @@ async function _carregarLote(pool, dia, equipes, agora) {
          FROM public.team_daily_carteira
         WHERE upper(btrim(team_name)) = ANY($1::text[]) AND date = $2::date`,
       [siglas, dia], 'carteira', erros),
+    // Desvios = paradas apontadas na sessão. `data` é o dia do BeginTime da
+    // sessão (cronService.runSyncIntervalos) — o mesmo critério das sessões aqui.
+    // `AT TIME ZONE 'UTC'` desfaz o 'Z' falso do coletor (ver ⚠️ FUSO no topo).
+    _talvez(pool,
+      `SELECT upper(btrim(equipe)) AS team, session_id, motivo, responsavel,
+              to_char(inicio AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS inicio,
+              to_char(fim    AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS fim
+         FROM public.sessao_intervalo
+        WHERE data = $1::date AND upper(btrim(equipe)) = ANY($2::text[])`,
+      [dia, siglas], 'desvios', erros),
   ]);
 
   const escPor = _porEquipe(escalas), sesPor = _porEquipe(sesRows), snapPor = _porEquipe(snapRows);
   const rejPor = _porEquipe(rejRows), intPor = _porEquipe(intRows), cartPor = _porEquipe(cartRows);
+  const desvPor = _porEquipe(desvRows);
+
+  // Hoje a tabela ainda não tem as paradas (sync 03:10 de D+1). Só a tela de
+  // UMA equipe pede ao vivo — no Plano Diário seriam ~140 GETs por abertura.
+  if (aoVivo) {
+    for (const t of siglas) {
+      if ((desvPor.get(t) || []).length) continue;
+      const ids = [...new Set((sesPor.get(t) || [])
+        .filter(r => String(r.session_begin).slice(0, 10) === dia && r.session_id)
+        .map(r => r.session_id))];
+      const vivos = [];
+      for (const id of ids) {
+        try { vivos.push(...(await aoVivo(id))); }
+        catch (err) { erros.push(`desvios ao vivo: ${err.message}`); }
+      }
+      if (vivos.length) desvPor.set(t, vivos);
+    }
+  }
 
   const notasPor = new Map();
   for (const t of siglas) notasPor.set(t, notasDoDia(snapPor.get(t), rejPor.get(t), intPor.get(t)));
@@ -458,12 +501,40 @@ async function _carregarLote(pool, dia, equipes, agora) {
         note_id: r.note_id, numero: r.numero, motivo: r.motivo,
         instanteMs: msParede(toIso(r.instante)),
       })),
+      desvios: desvPor.get(t) || [],
       agoraMs,
     });
     const interrompidas = new Set(ints.map(r => r.note_id)).size;
     porEquipe.set(t, { team: t, ...rotina, carteira: montarCarteira((cartPor.get(t) || [])[0], interrompidas) });
   }
   return { porEquipe, erros };
+}
+
+/**
+ * FUNÇÃO PURA (testável): break do WPA (normalizado por wpaService) → desvio.
+ * O normalizador anexa 'Z' em instante que é PAREDE BRT (P1-48); aqui o 'Z'
+ * sai, para ler igual à tabela lida com `AT TIME ZONE 'UTC'`.
+ */
+function desvioDoBreak(b) {
+  const parede = v => (v ? String(v).replace(/(\.\d+)?Z$/i, '') : null);
+  return { motivo: b && b.motivo, responsavel: b && b.responsavel,
+    inicio: parede(b && b.inicio), fim: parede(b && b.fim) };
+}
+
+// Cache curto das paradas ao vivo: a conta WPA é compartilhada (P1-25) e a
+// tela pode ser reaberta várias vezes seguidas. 5 min = 1/3 do ciclo do cron.
+const _cacheBreaks = new Map();
+const CACHE_BREAKS_MS = 5 * 60000;
+
+async function desviosAoVivo(sessionId) {
+  if (process.env.DATA_MODE === 'mock') return [];
+  const c = _cacheBreaks.get(sessionId);
+  if (c && Date.now() - c.em < CACHE_BREAKS_MS) return c.lista;
+  const { getSessionBreaks } = require('../services/wpaService');
+  const lista = (await getSessionBreaks(sessionId)).map(desvioDoBreak);
+  if (_cacheBreaks.size > 500) _cacheBreaks.clear();
+  _cacheBreaks.set(sessionId, { em: Date.now(), lista });
+  return lista;
 }
 
 /**
@@ -474,7 +545,9 @@ async function rotinaEquipe(team, dia, agora = Date.now()) {
   const pool = _getPool();
   if (!pool) return null;
   const equipe = String(team).trim().toUpperCase();
-  const { porEquipe, erros } = await _carregarLote(pool, dia, [equipe], agora);
+  const { dateBRT } = require('../services/timeUtil');
+  const aoVivo = dia === dateBRT(agora) ? desviosAoVivo : null;
+  const { porEquipe, erros } = await _carregarLote(pool, dia, [equipe], agora, { aoVivo });
   return { ...porEquipe.get(equipe), erros };
 }
 
@@ -508,5 +581,5 @@ async function rotinaEquipes(dia, regionais, { teams = null, agora = Date.now() 
 module.exports = {
   rotinaEquipe, rotinaEquipes,
   // Puras, exportadas pra teste.
-  instanteCp, intervalosDaNota, unir, buracos, montarRotina, montarCarteira, notasDoDia,
+  instanteCp, intervalosDaNota, unir, montarRotina, montarCarteira, notasDoDia, desvioDoBreak,
 };

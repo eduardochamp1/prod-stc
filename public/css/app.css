@@ -4150,6 +4150,20 @@
     }
     .rot-cart-lin b { font-size: 16px; }
     .rot-cart-lin .barra { display: inline-block; width: 6px; height: 16px; border-radius: 2px; margin-right: 8px; vertical-align: middle; }
+    .rotina-eventos-card { margin-bottom: 14px; }
+    .rot-ev-wrap { max-height: 320px; overflow: auto; }
+    .rot-ev { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .rot-ev th {
+      position: sticky; top: 0; background: var(--cinza1); text-align: left;
+      font-weight: 700; padding: 6px 10px; border-bottom: 2px solid var(--rot-sessao); white-space: nowrap;
+    }
+    .rot-ev td { padding: 5px 10px; border-bottom: 1px solid var(--cinza2); vertical-align: top; }
+    .rot-ev tbody tr:nth-child(even) { background: #fafaf8; }
+    .rot-ev tr.clicavel { cursor: pointer; }
+    .rot-ev tr.clicavel:hover { background: #eef6f5; }
+    .rot-ev .num { text-align: right; white-space: nowrap; }
+    .rot-ev td:nth-child(6), .rot-ev td:nth-child(7) { white-space: nowrap; }
+    .rot-ev-cor { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
     .rot-cart-nota { font-size: 10px; color: var(--text2); line-height: 1.35; margin-top: 4px; }
     /* Plano Diário (15/10/2026) — todas as equipes, uma linha cada, estilo eOrder */
     .rotina-plano-card { margin-bottom: 14px; }
