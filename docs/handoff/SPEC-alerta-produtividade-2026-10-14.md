@@ -138,6 +138,8 @@ alertas_produtividade
   sector_id          text
   supervisor         text                      -- supervisorVigente(historico, sigla, data); null = sem supervisor
   limite             int         not null      -- limite em vigor no disparo
+  escala_inicio      text                      -- 'HH:MM' (o painel mostra o turno)
+  escala_fim         text
   meio_turno_em      timestamptz not null
   executadas_disparo int         not null
   executadas_atual   int         not null      -- atualizada a cada ciclo enquanto aberto
