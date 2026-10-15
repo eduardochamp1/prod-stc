@@ -171,8 +171,7 @@
 | P2-61 | Re-consolidação 30/09→13/10 derrubou 516 OS (SF dominante) — explicado: regra de rejeição de 31/07, não perda | Dados | **done / registro** (14/10/2026) — avisar quem reportou os números antigos à EDP |
 | P2-62 | Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo" (+ gauge e XLSX) | Dados/Produto | **done** (14/10/2026, 4d08c7b + 5152c9c) — conferir no portal se a quantidade do C93 é ramal ou metro |
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
-| P3-21 | Testes de fonte que procuram "
-" literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — normalizam CRLF; suíte verde com index.html em CRLF e em LF |
+| P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
 
@@ -6294,12 +6293,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 
 - **Categoria:** Qualidade
 - **Status:** **done** (14/10/2026).
-- **Evidência:** nesta máquina `core.autocrlf=true`; um `git checkout` regravou `public/index.html` em CRLF e `test/escapeJsAttr.test.js` (P2-40, `indexOf('
-    }
-')`) ficou vermelho em 8 casos sem o código mudar. Dois testes novos do alerta (P2-63) tinham o mesmo defeito.
+- **Evidência:** nesta máquina `core.autocrlf=true`; um `git checkout` regravou `public/index.html` em CRLF e `test/escapeJsAttr.test.js` (P2-40), que procura o fim da função com `indexOf` de uma string contendo quebra de linha LF, ficou vermelho em 8 casos sem o código mudar. Dois testes novos do alerta (P2-63) tinham o mesmo defeito.
 - **Impacto:** o hook de pre-push roda AQUI; depois de um `git pull` que tocasse o `index.html`, o push seria bloqueado — convite ao `--no-verify`. Na VM (Linux) não acontece.
-- **Ação feita:** os testes que leem `index.html`/`app.css` como texto normalizam `
-` → `
-`. Varredura: com `index.html` e `app.css` em CRLF, a suíte inteira passa (1594/1594); em LF também.
-- **Regra para teste novo de fonte:** normalizar CRLF ao ler o arquivo.
-
+- **Ação feita:** os testes que leem `index.html`/`app.css` como texto convertem CRLF em LF ao ler. Varredura: com `index.html` e `app.css` em CRLF, a suíte inteira passa (1594/1594); em LF também.
+- **Regra para teste novo de fonte:** converter CRLF em LF ao ler o arquivo.
