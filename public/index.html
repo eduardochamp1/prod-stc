@@ -7740,7 +7740,7 @@ ${acumuladoHTML}
     // "adicionei os supervisores, porém o filtro não está funcionando".
     // Chamada após salvar equipe/renomear supervisor: descarta o cache e
     // remonta os 6 selects que já estão no DOM.
-    const _SUP_SELECTS = ['mon', 'graf', 'rej', 'ranking', 'hist', 'mapa'].map(p => `${p}-supervisor-select`);
+    const _SUP_SELECTS = ['mon', 'graf', 'rej', 'ranking', 'hist', 'mapa', 'avisos'].map(p => `${p}-supervisor-select`);
     async function _supInvalidar() {
       _supEquipes = null;
       _supEquipesPromise = null;
@@ -9524,7 +9524,7 @@ ${acumuladoHTML}
       window._notaDetalheAtual = null;
     }
 
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); closeNotaDirect(); closeLightbox(); fabFecharPorEsc(); } });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModalDirect(); closeMetasDirect(); closeNotaDirect(); closeLightbox(); fabFecharPorEsc(); if (typeof avisosFecharPorEsc === 'function') avisosFecharPorEsc(); } });
     /* ESC no balão devolve o foco pro toggle — senão o foco fica órfão num
        botão que acabou de virar hidden e o Tab reinicia do topo da página. */
     function fabFecharPorEsc() {
@@ -9582,8 +9582,14 @@ ${acumuladoHTML}
         if (el) { el.value = _t; el.max = _t; }
       });
       loadData();
+      // Avisos de produtividade (14/10/2026): no boot e a cada ciclo do timer
+      // abaixo. O guard `typeof` cobre a ordem de carga: o balão e suas funções
+      // ficam num <script> posterior a este.
+      if (typeof carregarAvisos === 'function') carregarAvisos();
       // Auto-refresh só quando visualizando hoje
       setInterval(() => {
+        // Aviso vale em QUALQUER aba e período, por isso fica FORA do `if`.
+        if (typeof carregarAvisos === 'function') carregarAvisos();
         const de = document.getElementById('monitor-date-de')?.value;
         const ate = document.getElementById('monitor-date-ate')?.value;
         if (isRangeToday(de, ate)) loadData();
@@ -12571,6 +12577,159 @@ ${acumuladoHTML}
       const w = document.getElementById('fab-acoes');
       if (w && !w.contains(e.target)) fabSetAberto(false);
     });
+  </script>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       AVISOS — balão lateral ESQUERDO (14/10/2026)
+       Implementa docs/handoff/SPEC-alerta-produtividade-2026-10-14.md
+
+       Avisa quando uma equipe chega ao meio do turno com menos de N notas
+       executadas. SILENCIOSO por desenho (usuários reclamam de excesso de
+       informação na tela): sem popup, sem modal, sem som — só um contador no
+       balão e no <title> da aba. Irmão dos .tab-panel e position:fixed, como o
+       balão de ações da direita, pra aparecer nas 9 abas sem repetir markup.
+       Começa `hidden`: com o alerta desligado (padrão) o endpoint responde
+       ativo:false e o balão NEM APARECE.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="fab-avisos" id="fab-avisos" hidden>
+    <button class="fab-avisos-toggle" id="fab-avisos-toggle" type="button"
+            aria-expanded="false" aria-controls="fab-avisos-painel"
+            aria-label="Abrir avisos" title="Avisos de produtividade"
+            onclick="avisosToggle()">
+      <span class="fab-avisos-icone" id="fab-avisos-icone" aria-hidden="true">🔔</span>
+      <span class="fab-avisos-contador" id="fab-avisos-contador" aria-live="polite" hidden></span>
+    </button>
+    <div class="fab-avisos-painel" id="fab-avisos-painel" role="region"
+         aria-label="Avisos de produtividade" hidden>
+      <div class="fab-avisos-topo">
+        <span class="fab-avisos-titulo">Equipes abaixo do esperado</span>
+        <select id="avisos-supervisor-select" class="fab-avisos-sel"
+                aria-label="Filtrar avisos por supervisor" onchange="avisosRender()"></select>
+      </div>
+      <div class="fab-avisos-lista" id="fab-avisos-lista"></div>
+    </div>
+  </div>
+
+  <script>
+    /* ── AVISOS (balão esquerdo) — 14/10/2026 ───────────────────────────────
+       Quem GRAVA os alertas é o ciclo do cron no servidor; aqui só se LÊ.
+       Atualização: sem timer próprio — carregarAvisos() é chamada no init(),
+       dentro do setInterval de 5 min que já existe (fora do "só se for hoje":
+       aviso vale em qualquer aba/período) e ao abrir o painel. */
+    const AVISOS_TITULO_BASE = document.title;
+    let _avisosDados = { ativo: false, alertas: [] };
+    let _avisosFalhou = false;
+
+    function avisosPlural(n, sing, plur) { return n + ' ' + (n === 1 ? sing : plur); }
+
+    /* Hora BRT de um instante ISO. Fuso da REGIÃO, nunca o do navegador. */
+    function avisosHoraBRT(iso) {
+      try {
+        return new Date(iso).toLocaleTimeString('pt-BR',
+          { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+      } catch (_) { return ''; }
+    }
+
+    /* Texto de UMA linha de aviso (SEM HTML — quem monta escapa). */
+    function avisosTexto(a) {
+      const exec = avisosPlural(Number(a.executadas) || 0, 'executada', 'executadas');
+      const rej = Number(a.rejeitadas) > 0
+        ? ' (+' + avisosPlural(Number(a.rejeitadas), 'rejeitada', 'rejeitadas') + ')' : '';
+      const meio = a.meioTurnoEm ? ' · meio do turno ' + avisosHoraBRT(a.meioTurnoEm) : '';
+      const t = a.turno || {};
+      const turno = (t.inicio && t.fim) ? ' · turno ' + t.inicio + '–' + t.fim : '';
+      return exec + rej + meio + turno;
+    }
+
+    /* Alertas que passam no filtro de supervisor (o mesmo select das outras abas). */
+    function avisosVisiveis() {
+      const todas = (_avisosDados && _avisosDados.alertas) || [];
+      let siglas = null;
+      try { siglas = _supSiglasDoSelect('avisos-supervisor-select'); } catch (_) { siglas = null; }
+      return siglas ? todas.filter(a => siglas.has(String(a.equipe).toUpperCase())) : todas;
+    }
+
+    function avisosRender() {
+      const wrap = document.getElementById('fab-avisos');
+      if (!wrap) return;
+      wrap.hidden = !_avisosDados.ativo;           // desligado ⇒ o balão nem aparece
+      const visiveis = _avisosDados.ativo ? avisosVisiveis() : [];
+      const n = visiveis.length;
+
+      const cont = document.getElementById('fab-avisos-contador');
+      if (cont) {
+        cont.hidden = n === 0;
+        cont.textContent = n > 99 ? '99+' : String(n);
+      }
+      document.title = n > 0 ? '(' + n + ') ' + AVISOS_TITULO_BASE : AVISOS_TITULO_BASE;
+
+      const lista = document.getElementById('fab-avisos-lista');
+      if (!lista) return;
+      if (_avisosFalhou) {
+        lista.innerHTML = '<div class="aviso-vazio">Avisos indisponíveis.</div>';
+      } else if (n === 0) {
+        lista.innerHTML = '<div class="aviso-vazio">Nenhum alerta agora.</div>';
+      } else {
+        lista.innerHTML = visiveis.map(a => `
+          <div class="aviso-item">
+            <div class="aviso-eq"><strong>${escapeHtml(a.equipe)}</strong> · ${escapeHtml(a.regional)}${a.supervisor ? ' · Sup. ' + escapeHtml(a.supervisor) : ''}</div>
+            <div class="aviso-det">${escapeHtml(avisosTexto(a))}</div>
+          </div>`).join('');
+      }
+    }
+
+    async function carregarAvisos() {
+      try {
+        const r = await fetch(`${API}/alertas/produtividade`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json();
+        _avisosDados = { ativo: !!j.ativo, alertas: Array.isArray(j.alertas) ? j.alertas : [] };
+        _avisosFalhou = false;
+      } catch (e) {
+        _avisosFalhou = true;
+        console.warn('[avisos] indisponível:', e && e.message);
+      }
+      avisosRender();
+    }
+
+    /* Estado lido do aria-expanded (setado sincronamente), como no balão de ações. */
+    function avisosAberto() {
+      const t = document.getElementById('fab-avisos-toggle');
+      return Boolean(t && t.getAttribute('aria-expanded') === 'true');
+    }
+
+    function avisosSetAberto(abrir) {
+      const w = document.getElementById('fab-avisos');
+      const painel = document.getElementById('fab-avisos-painel');
+      const toggle = document.getElementById('fab-avisos-toggle');
+      const icone = document.getElementById('fab-avisos-icone');
+      if (!w || !painel || !toggle) return;
+      if (abrir) {
+        painel.hidden = false;
+        requestAnimationFrame(function () { w.classList.add('aberto'); });
+        if (icone) icone.textContent = '✕';
+        toggle.setAttribute('aria-expanded', 'true');
+        toggle.setAttribute('aria-label', 'Fechar avisos');
+        try { _supPopularSelect('avisos-supervisor-select'); } catch (_) { /* sem catálogo: segue sem filtro */ }
+        carregarAvisos();
+      } else {
+        w.classList.remove('aberto');
+        if (icone) icone.textContent = '🔔';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.setAttribute('aria-label', 'Abrir avisos');
+        setTimeout(function () { if (!avisosAberto()) painel.hidden = true; }, 220);
+      }
+    }
+
+    function avisosToggle() { avisosSetAberto(!avisosAberto()); }
+
+    /* ESC fecha e devolve o foco ao toggle (senão o foco fica órfão num painel hidden). */
+    function avisosFecharPorEsc() {
+      if (!avisosAberto()) return;
+      avisosSetAberto(false);
+      const t = document.getElementById('fab-avisos-toggle');
+      if (t) t.focus();
+    }
   </script>
 
 </body>

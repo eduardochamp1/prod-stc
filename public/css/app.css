@@ -4668,6 +4668,154 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   AVISOS — balão lateral ESQUERDO (14/10/2026)
+   ───────────────────────────────────────────────────────────────────────────
+   Alerta de baixa produtividade (SPEC-alerta-produtividade-2026-10-14). Espelho
+   do balão de ações da direita: círculo colado na borda, painel que expande pro
+   lado oposto. Silencioso por desenho: só um contador, sem popup nem som. Tom
+   escuro (preto) pra não competir com o amarelo do balão de ações.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.fab-avisos {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 900;              /* mesma camada do balão de ações: abaixo dos modais */
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+/* Sem esta regra o display:flex acima GANHA do [hidden] do navegador (atributo não
+   vence declaração de autor) e o balão apareceria mesmo com o alerta desligado. */
+.fab-avisos[hidden] { display: none; }
+
+.fab-avisos-toggle {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 0 50% 50% 0;
+  background: var(--preto);
+  color: var(--branco);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 2px 2px 10px rgba(35, 31, 32, 0.22);
+  transition: background 0.15s, width 0.15s;
+  font-family: 'Roboto', sans-serif;
+  padding: 0;
+}
+.fab-avisos-toggle:hover { background: #3a3536; width: 52px; }
+.fab-avisos-toggle:focus-visible { outline: 3px solid var(--verde); outline-offset: 2px; }
+
+/* Contador: vermelho da marca, no canto superior direito do círculo. */
+.fab-avisos-contador {
+  position: absolute;
+  top: -4px;
+  right: -2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #ED1C24;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  box-sizing: border-box;
+}
+.fab-avisos-contador[hidden] { display: none; }
+
+.fab-avisos-painel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--branco);
+  border: 1px solid var(--cinza2);
+  border-left: none;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  box-shadow: var(--shadow-lg);
+  /* Fechado: padding 0 também (mesma lição do balão de ações: um padding fixo não
+     cabe em max-width:0 e sobra uma lasca com borda e sombra). */
+  padding: 0;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition: max-width 0.22s ease, opacity 0.18s ease, padding 0.22s ease;
+}
+.fab-avisos-painel[hidden] { display: none; }
+
+.fab-avisos.aberto .fab-avisos-painel {
+  max-width: 340px;
+  opacity: 1;
+  padding: 12px;
+  pointer-events: auto;
+}
+
+.fab-avisos-topo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fab-avisos-titulo {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text2);
+  white-space: nowrap;
+}
+.fab-avisos-sel {
+  width: 100%;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--cinza2);
+  border-radius: 6px;
+  background: var(--branco);
+  color: var(--text);
+}
+
+.fab-avisos-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+  min-width: 260px;
+}
+.aviso-item {
+  padding: 8px 10px;
+  border: 1px solid var(--cinza2);
+  border-left: 4px solid #ED1C24;
+  border-radius: 6px;
+  background: #fff;
+}
+.aviso-eq { font-size: 12px; color: var(--text); }
+.aviso-det { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.aviso-vazio { font-size: 12px; color: var(--text2); padding: 6px 2px; white-space: nowrap; }
+
+/* Celular: canto inferior ESQUERDO. O balão de ações sobe pro bottom:84px da
+   DIREITA, então os dois nunca se encontram. */
+@media (max-width: 640px) {
+  /* flex-end: ancorado embaixo, o círculo NÃO sobe pro meio do painel quando ele
+     abre (com `center` o toggle pulava ~200px pra cima a cada abertura). */
+  .fab-avisos { top: auto; bottom: 84px; transform: none; align-items: flex-end; }
+  .fab-avisos.aberto .fab-avisos-painel { max-width: 82vw; }
+  .fab-avisos-lista { min-width: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fab-avisos-toggle,
+  .fab-avisos-painel { transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    ABA DESLOCAMENTOS — cartões, painéis, barras e tabela
    ───────────────────────────────────────────────────────────────────────────
    30/08/2026 — este bloco vivia num <style> INJETADO pelo innerHTML de
