@@ -20,7 +20,9 @@
 
 'use strict';
 
-const { CATEGORIAS, OPERACIONAL } = require('./categoriasEquipe');
+const { CATEGORIAS, OPERACIONAL, categoriaDaSigla } = require('./categoriasEquipe');
+const { dateBRT, minutosBRT } = require('./timeUtil');
+const { supervisorVigente } = require('./supervisores');
 
 // ── Configuração ─────────────────────────────────────────────────────────────
 
@@ -193,11 +195,201 @@ function avaliarEquipe(e) {
   return { estado: 'abrir', motivo: 'abaixo_do_limite_no_meio_do_turno' };
 }
 
+// ── O ciclo ──────────────────────────────────────────────────────────────────
+
+/**
+ * Teto de consultas de refeição (`GET /api/sessions/{id}/break`) por ciclo. A conta
+ * WPA é compartilhada com outro projeto da empresa (P1-25) e o ciclo roda a cada
+ * 15 min. Passado o teto, a equipe candidata fica `adiar` (refeição desconhecida)
+ * e é retomada no ciclo seguinte — nunca alerta sem essa informação.
+ */
+const MAX_CONSULTAS_REFEICAO = 8;
+
+const _SEM_LOG = { info() {}, warn() {}, error() {} };
+
+/** União por id das rejeitadas das sessões da equipe (sem dupla contagem entre relogins). */
+function _contarRejeitadas(entradas) {
+  const ids = new Set();
+  let semId = 0;
+  for (const t of entradas) {
+    for (const n of (t.notasRejeitadas || [])) {
+      const id = n && (n.id || n.noteId);
+      if (id) ids.add(id); else semId++;
+    }
+  }
+  return ids.size + semId;
+}
+
+/** 'HH:MM:SS' → 'HH:MM' (o painel mostra o turno sem os segundos). */
+function _hm(valor) {
+  const m = typeof valor === 'string' ? valor.match(/^(\d{2}:\d{2})/) : null;
+  return m ? m[1] : null;
+}
+
+/**
+ * Avalia TODAS as equipes ao vivo e grava abertura/atualização/resolução.
+ * Chamado pelo cron logo depois de `upsertTeamDailyTotals` (mesmo ciclo), então
+ * `executadasPorEquipe` já enxerga o valor deste ciclo.
+ *
+ * Tudo entra por `deps` (ver P2-39): o teste exercita o ciclo inteiro sem banco
+ * nem WPA. NUNCA lança: devolve o resumo, com `erro` quando algo geral falhou.
+ *
+ * @param {object} deps
+ * @param {() => Date} deps.agora
+ * @param {Array} deps.teams                 equipes REAIS ao vivo (não as fantasmas do _acc)
+ * @param {(t) => string|null} deps.sessionDate   dataWriter._sessionDate
+ * @param {() => Promise<*>} deps.lerConfig
+ * @param {(sigla) => object|null} deps.getMeta   equipesOficiais.getMeta
+ * @param {() => Promise<Array<{team_name, resolvido}>>} deps.estadoDoDia
+ * @param {() => Promise<Object<string, number>>} deps.executadasPorEquipe
+ * @param {() => Promise<{historico:Array, nomes:Object}>} deps.historicoSupervisores
+ * @param {(sessionId:string) => Promise<Array>} deps.lerRefeicao   getSessionBreaks
+ * @param {{abrir, atualizar, resolver}} deps.gravar
+ * @param {{info, warn, error}} [deps.log]
+ * @returns {Promise<object>} resumo do ciclo
+ */
+async function avaliarCiclo(deps) {
+  const log = deps.log || _SEM_LOG;
+  const resumo = {
+    ativo: false, data: null, avaliadas: 0, abertos: 0, mantidos: 0, resolvidos: 0,
+    adiadas: 0, consultasRefeicao: 0, errosRefeicao: 0, erros: 0,
+    ignoradas: { sem_escala: [], vira_noite: [] },
+  };
+
+  let config;
+  try {
+    const v = validarConfig(await deps.lerConfig());
+    config = v.config;
+    if (!v.ok || !config.ativo) return resumo;      // desligado: não toca em NADA
+  } catch (err) {
+    log.warn('alerta_produtividade_config_falhou', { msg: err.message });
+    return resumo;
+  }
+  resumo.ativo = true;
+
+  try {
+    // Um único relógio para o ciclo inteiro: data, minutos e carimbos não divergem.
+    const agora = deps.agora();
+    const data = dateBRT(agora);
+    const agoraMin = minutosBRT(agora);
+    resumo.data = data;
+    const agoraIso = agora.toISOString();
+    const baseMin = Math.floor(agora.getTime() / 60000) * 60000;
+
+    const [totais, estados, sup] = await Promise.all([
+      deps.executadasPorEquipe(data), deps.estadoDoDia(data), deps.historicoSupervisores(),
+    ]);
+    const estadoPorEquipe = new Map(estados.map(e => [e.team_name, e]));
+
+    // Agrupa as entradas ao vivo por equipe (relogin = mais de uma sessão no dia).
+    const porEquipe = new Map();
+    for (const t of deps.teams || []) {
+      const nome = t.teamName || t.sigla;
+      if (!nome || deps.sessionDate(t) !== data) continue;
+      if (!porEquipe.has(nome)) porEquipe.set(nome, []);
+      porEquipe.get(nome).push(t);
+    }
+
+    let consultas = 0;
+    for (const [nome, entradas] of porEquipe) {
+      try {
+        const meta = deps.getMeta(nome);
+        if (!meta) continue;                         // fora da whitelist
+        resumo.avaliadas++;
+
+        const abertas = entradas.filter(t => !t.sessionEnd);
+        const sessao = abertas[abertas.length - 1] || null;
+        const exist = estadoPorEquipe.get(nome);
+        const executadas = Number(totais[nome]) || 0;
+        const rejeitadas = _contarRejeitadas(entradas);
+        const base = {
+          agoraMin, config,
+          escala: { inicio: meta.escala_inicio, fim: meta.escala_fim },
+          executadas, rejeitadas,
+          sessaoAberta: !!sessao, ehReal: true,
+          categoria: categoriaDaSigla(nome),
+          aberto: !!exist && !exist.resolvido,
+          resolvido: !!exist && exist.resolvido,
+          emRefeicao: false,
+        };
+
+        // 1ª passada SEM refeição: só quem já alertaria (candidata) justifica uma
+        // consulta à WPA.
+        let dec = avaliarEquipe(base);
+        if (dec.estado === 'abrir') {
+          let refeicao = null;                       // null = desconhecida → adia
+          if (consultas < MAX_CONSULTAS_REFEICAO && sessao && sessao.id) {
+            consultas++;
+            try { refeicao = emRefeicao(await deps.lerRefeicao(sessao.id)); }
+            catch (err) {
+              resumo.errosRefeicao++;
+              log.warn('alerta_produtividade_refeicao_falhou', { equipe: nome, msg: err.message });
+            }
+          }
+          dec = avaliarEquipe({ ...base, emRefeicao: refeicao });
+        }
+
+        switch (dec.estado) {
+          case 'abrir': {
+            const meio = meioDoTurno(meta.escala_inicio, meta.escala_fim);
+            const id = supervisorVigente(sup.historico, nome, data);
+            const inseriu = await deps.gravar.abrir({
+              data, team_name: nome, regional: meta.regional || entradas[0].regional,
+              sector_id: entradas[0].sectorId || null,
+              supervisor: id === null ? null : ((sup.nomes || {})[id] || null),
+              limite: config.limite,
+              escala_inicio: _hm(meta.escala_inicio), escala_fim: _hm(meta.escala_fim),
+              meio_turno_em: new Date(baseMin - (agoraMin - meio) * 60000).toISOString(),
+              executadas, rejeitadas, disparado_em: agoraIso,
+            });
+            if (inseriu) resumo.abertos++;
+            break;
+          }
+          case 'manter':
+            await deps.gravar.atualizar(data, nome, { executadas, rejeitadas });
+            resumo.mantidos++;
+            break;
+          case 'resolver':
+            await deps.gravar.resolver(data, nome, { executadas, rejeitadas, quando: agoraIso });
+            resumo.resolvidos++;
+            break;
+          case 'adiar':
+            resumo.adiadas++;
+            break;
+          case 'ignorar':
+            (resumo.ignoradas[dec.motivo] || (resumo.ignoradas[dec.motivo] = [])).push(nome);
+            break;
+          default: break;                            // 'nenhum'
+        }
+      } catch (err) {
+        resumo.erros++;
+        log.warn('alerta_produtividade_equipe_falhou', { equipe: nome, msg: err.message });
+      }
+    }
+    resumo.consultasRefeicao = consultas;
+
+    if (resumo.abertos || resumo.resolvidos || resumo.ignoradas.sem_escala.length || resumo.ignoradas.vira_noite.length) {
+      log.info('alerta_produtividade_ciclo', {
+        data, abertos: resumo.abertos, resolvidos: resumo.resolvidos, adiadas: resumo.adiadas,
+        sem_escala: resumo.ignoradas.sem_escala.length, vira_noite: resumo.ignoradas.vira_noite.length,
+      });
+    }
+  } catch (err) {
+    // Falha geral (ex.: banco fora ao ler os totais): não grava nada e registra.
+    // Nunca fabrica número.
+    resumo.erro = err.message;
+    log.warn('alerta_produtividade_ciclo_falhou', { msg: err.message });
+  }
+  return resumo;
+}
+
 module.exports = {
   DEFAULT_CONFIG,
+  MAX_CONSULTAS_REFEICAO,
   validarConfig,
   minutosDeHM,
   meioDoTurno,
   emRefeicao,
   avaliarEquipe,
+  avaliarCiclo,
 };
