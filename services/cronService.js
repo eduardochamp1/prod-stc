@@ -169,6 +169,48 @@ async function runNotasCollect() {
   }
 }
 
+// ── ALERTA DE BAIXA PRODUTIVIDADE (14/10/2026) ───────────────────────────────
+// Roda logo depois de `upsertTeamDailyTotals` no MESMO ciclo, então os totais que
+// ele lê (team_daily_totals) já são os deste ciclo. Spec:
+// docs/handoff/SPEC-alerta-produtividade-2026-10-14.md.
+//
+// Este é só o FIO que liga o avaliador às dependências reais: a regra e o
+// orquestrador vivem em services/alertaProdutividade.js e são 100% injetáveis
+// (P2-39 — funções de cron são invisíveis à suíte). Os `require` ficam aqui
+// dentro, preguiçosos, de propósito: com o alerta DESLIGADO (padrão) este ciclo
+// faz UMA leitura em app_settings e mais nada — nenhuma chamada à WPA, nenhuma
+// escrita. Só equipes REAIS (`teams`): as fantasmas do _acc já deslogaram.
+async function runAlertaProdutividade(teams) {
+  if (process.env.DATA_MODE === 'mock') return null;
+  const { avaliarCiclo } = require('./alertaProdutividade');
+  const { _sessionDate } = require('./dataWriter');
+  const { getMeta } = require('./equipesOficiais');
+  const { getSessionBreaks } = require('./wpaService');
+  const { getSetting } = require('../db/queries');
+  const Q = require('../db/alertasQueries');
+
+  return avaliarCiclo({
+    agora: () => new Date(),
+    teams,
+    sessionDate: _sessionDate,
+    lerConfig: async () => {
+      const linha = await getSetting('alerta_produtividade');
+      return linha ? linha.data : null;
+    },
+    getMeta,
+    estadoDoDia: (data) => Q.estadoDoDia(null, data),
+    executadasPorEquipe: (data) => Q.executadasPorEquipe(null, data),
+    historicoSupervisores: () => Q.historicoSupervisores(null),
+    lerRefeicao: (sessionId) => getSessionBreaks(sessionId),
+    gravar: {
+      abrir:     (l)        => Q.abrir(null, l),
+      atualizar: (d, t, c)  => Q.atualizar(null, d, t, c),
+      resolver:  (d, t, c)  => Q.resolver(null, d, t, c),
+    },
+    log,
+  });
+}
+
 // ── SNAPSHOT ──────────────────────────────────────────────────────────────────
 
 async function runSnapshot() {
@@ -232,6 +274,13 @@ async function runSnapshot() {
     // (não importa o conclusionDate individual de cada nota).
     await upsertDailyTotals(allTeams);
     await upsertTeamDailyTotals(allTeams);
+
+    // Alerta de baixa produtividade (14/10/2026). DEPOIS do upsert acima (lê
+    // team_daily_totals do ciclo) e SEM await: não pode atrasar nem derrubar o
+    // snapshot — mesmo padrão de upsertTeamDailyCarteira / runClassifyNewNotes.
+    runAlertaProdutividade(teams).catch(err =>
+      log.error('alerta_produtividade_failed', { msg: err.message })
+    );
 
     log.info('snapshot_saved', { teams: teams.length, ghosts: ghostCount, at: ts });
     // Marca sucesso do ciclo pra observabilidade (P1-3) — /admin/health e
@@ -1645,6 +1694,7 @@ module.exports = {
   runSyncEscalaCatalogo,
   runSyncEscalaDia,
   runSyncIntervalos,
+  runAlertaProdutividade,
   // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
   _classifySnapshotOutcome,
   // Exportado pra teste (P1-39) — merge do carimbo por setor.
