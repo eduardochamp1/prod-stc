@@ -107,7 +107,7 @@
       <button class="tab-btn" id="tab-btn-notas" onclick="switchTab('notas')">📝 Notas</button>
       <button class="tab-btn" id="tab-btn-graficos" onclick="switchTab('graficos')">📈 Gráficos</button>
       <button class="tab-btn" id="tab-btn-ranking" onclick="switchTab('ranking')">🏆 Ranking</button>
-      <button class="tab-btn" id="tab-btn-mapa" onclick="switchTab('mapa')">🗺️ Mapa</button>
+      <button class="tab-btn" id="tab-btn-mapa" onclick="switchTab('mapa')">🗓️ Rotina</button>
       <button class="tab-btn" id="tab-btn-historico" onclick="switchTab('historico')">📋 Histórico</button>
       <!-- Metas oculta (regra de produto 25/05/2026 — nao esta fazendo sentido).
            Painel tab-metas mantido pra preservar codigo caso reativem. -->
@@ -466,7 +466,12 @@
 
     </div>
 
-    <!-- ── TAB: MAPA ────────────────────────────────────────────────────── -->
+    <!-- ── TAB: ROTINA (ex-MAPA) ────────────────────────────────────────── -->
+    <!-- 15/10/2026: a aba Mapa virou Rotina. No topo, o "Dia da equipe" no
+         formato do painel da EDP e do Plano Diário do eOrder (escala, sessão,
+         desvio, deslocamento, serviço) com a carteira ao lado; o mapa de
+         sempre fica embaixo. O id interno continua `mapa` — switchTab, sync de
+         regional e supervisor dependem dele. -->
     <div class="tab-panel" id="tab-mapa">
       <div class="page-section">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
@@ -535,6 +540,27 @@
             </select>
           </div>
 
+        </div>
+        <div class="rotina-topo" id="rotina-topo">
+          <div class="rotina-card rotina-gantt-card">
+            <div class="rotina-card-head">
+              <span>Dia da equipe</span>
+              <span class="rotina-legenda">
+                <span><i style="background:var(--rot-escala)"></i>Escala</span>
+                <span><i style="background:var(--rot-sessao)"></i>Sessão</span>
+                <span><i style="background:var(--rot-desvio)"></i>Desvio</span>
+                <span><i style="background:var(--rot-desloc)"></i>Deslocamento</span>
+                <span><i style="background:var(--rot-serv)"></i>Serviço</span>
+              </span>
+            </div>
+            <div id="rotina-gantt">
+              <div class="empty-state" style="font-size:12px">Selecione uma equipe para ver a rotina do dia.</div>
+            </div>
+          </div>
+          <div class="rotina-card rotina-carteira-card">
+            <div class="rotina-card-head"><span>Carteira do dia</span></div>
+            <div id="rotina-carteira"><div class="empty-state" style="font-size:12px">—</div></div>
+          </div>
         </div>
         <div class="mapa-layout">
           <div class="mapa-sidebar">
@@ -12007,6 +12033,7 @@ ${acumuladoHTML}
           '<div class="empty-state" style="font-size:12px">Selecione uma equipe.</div>';
         return;
       }
+      loadRotina(team, date);   // topo da aba (15/10/2026) — em paralelo com o mapa
       document.getElementById('mapa-sidebar-list').innerHTML =
         '<div class="empty-state"><div class="spinner"></div><br>Carregando notas…</div>';
       try {
@@ -12025,6 +12052,149 @@ ${acumuladoHTML}
         document.getElementById('mapa-sidebar-list').innerHTML =
           `<div class="empty-state" style="color:var(--vermelho)">Erro: ${err.message}</div>`;
       }
+    }
+
+    // ── ROTINA — "Dia da equipe" (15/10/2026) ─────────────────────────────
+    // Gantt de 5 faixas no formato do painel da EDP + carteira ao lado. Os
+    // intervalos chegam prontos de /api/rotina/equipe (db/rotinaQueries.js),
+    // em MINUTOS desde a meia-noite do dia (turno noturno passa de 1440).
+    // Aqui é só desenho: nenhuma conta de negócio no front.
+    let _rotinaSeq = 0;   // descarta resposta antiga se o usuário trocar rápido
+
+    async function loadRotina(team, date) {
+      const g = document.getElementById('rotina-gantt');
+      const c = document.getElementById('rotina-carteira');
+      if (!g || !c) return;
+      const seq = ++_rotinaSeq;
+      g.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando rotina…</div>';
+      c.innerHTML = '<div class="empty-state" style="font-size:12px">…</div>';
+      try {
+        const res = await fetch(`${API}/rotina/equipe?team=${encodeURIComponent(team)}&date=${date}`);
+        const data = await res.json();
+        if (seq !== _rotinaSeq) return;
+        if (data.error) throw new Error(data.error);
+        g.innerHTML = _rotinaGanttHtml(data);
+        c.innerHTML = _rotinaCarteiraHtml(data.carteira);
+      } catch (err) {
+        if (seq !== _rotinaSeq) return;
+        g.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro: ${escapeHtml(err.message)}</div>`;
+        c.innerHTML = '';
+      }
+    }
+
+    function _rotHora(min) {
+      const m = Math.round(min);
+      const h = Math.floor(m / 60), mm = m % 60;
+      const pre = h >= 24 ? `${String(h - 24).padStart(2, '0')}` : String(h).padStart(2, '0');
+      return `${pre}:${String(mm).padStart(2, '0')}${h >= 24 ? ' (+1)' : ''}`;
+    }
+    function _rotDur(min) {
+      const m = Math.round(min || 0);
+      return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+    }
+
+    const _ROT_STATUS = {
+      concluida:    { cor: '#086738', lbl: 'Concluída' },
+      rejeitada:    { cor: '#ED1C24', lbl: 'Rejeitada' },
+      interrompida: { cor: '#e65100', lbl: 'Interrompida' },
+      andamento:    { cor: '#FEC40E', lbl: 'Em andamento' },
+      executada:    { cor: '#FEC40E', lbl: 'Executada' },
+    };
+
+    function _rotinaGanttHtml(d) {
+      const f = d.faixas;
+      if (!f) return '<div class="empty-state" style="font-size:12px">Sem dados.</div>';
+      const todas = [...f.escala, ...f.sessao, ...f.desvio, ...f.deslocamento, ...f.servico];
+      if (!todas.length) {
+        const folga = (d.folgas || []).length ? ` Escala do dia: <b>${d.folgas.map(escapeHtml).join(', ')}</b> (sem turno).` : '';
+        return `<div class="empty-state" style="font-size:12px">Nenhum registro de escala, sessão ou apontamento neste dia.${folga}</div>`;
+      }
+      // Eixo: hora cheia antes do primeiro registro até hora cheia depois do último.
+      let ini = Math.min(...todas.map(i => i.ini));
+      let fim = Math.max(...todas.map(i => i.fim), d.agoraMin ?? 0);
+      ini = Math.max(0, Math.floor(ini / 60) * 60);
+      fim = Math.ceil(fim / 60) * 60;
+      if (fim - ini < 120) fim = ini + 120;
+      const span = fim - ini;
+      const pct = m => ((m - ini) / span * 100).toFixed(3);
+      const larg = (a, b) => (Math.max(0, b - a) / span * 100).toFixed(3);
+      const passo = span > 14 * 60 ? 120 : 60;
+
+      const grade = [];
+      for (let m = ini; m <= fim; m += passo) grade.push(m);
+      const linhasGrade = grade.map(m => `<div class="rot-grid" style="left:${pct(m)}%"></div>`).join('');
+      const agora = d.agoraMin != null && d.agoraMin >= ini && d.agoraMin <= fim
+        ? `<div class="rot-agora" style="left:${pct(d.agoraMin)}%" title="Agora ${_rotHora(d.agoraMin)}"></div>` : '';
+
+      const barra = (i, cor, titulo, extra = '') => {
+        const clic = i.noteId ? ` clicavel" onclick="mapaToggleNotaFilter('${escapeJsAttr(i.noteId)}')` : '';
+        return `<div class="rot-bar${i.aberta || i.aberto ? ' aberta' : ''}${clic}"
+                     style="left:${pct(i.ini)}%;width:${larg(i.ini, i.fim)}%;background:${cor}"
+                     title="${escapeHtml(titulo)}">${extra}</div>`;
+      };
+      const intervalo = i => `${_rotHora(i.ini)} → ${_rotHora(i.fim)} (${_rotDur(i.fim - i.ini)})`;
+      const notaTxt = i => [i.tipo, i.numero].filter(Boolean).join(' · ');
+
+      const linha = (nome, total, barras, extraTrack = '') => `
+        <div class="rot-row">
+          <div class="rot-lbl">${nome}<small>${_rotDur(total)}</small></div>
+          <div class="rot-track">${linhasGrade}${barras}${extraTrack}${agora}</div>
+        </div>`;
+
+      const t = d.totaisMin || {};
+      const ints = (d.interrupcoes || []).map(it =>
+        `<div class="rot-int" style="left:${pct(it.min)}%"
+              title="${escapeHtml(`Interrupção ${_rotHora(it.min)} — ${it.numero}${it.motivo ? ' · ' + it.motivo : ''}`)}"></div>`).join('');
+
+      const html = [
+        linha('Escala', t.escala, f.escala.map(i =>
+          barra(i, 'var(--rot-escala)', `Escala ${i.codigo || ''}: ${intervalo(i)}`)).join('')),
+        linha('Sessão', t.sessao, f.sessao.map(i =>
+          barra(i, 'var(--rot-sessao)', `Sessão: ${intervalo(i)}${i.aberta ? ' — aberta (sem logoff)' : ''}`)).join('')),
+        linha('Desvio', t.desvio, f.desvio.map(i =>
+          barra(i, 'var(--rot-desvio)', `Desvio: ${intervalo(i)}\nTempo de sessão sem deslocamento nem serviço apontado (inclui refeição e espera).`)).join('')),
+        linha('Deslocamento', t.deslocamento, f.deslocamento.map(i =>
+          barra(i, 'var(--rot-desloc)', `Deslocamento ${notaTxt(i)}: ${intervalo(i)}\nClique para ver a nota no mapa.`)).join('')),
+        linha('Serviço', t.servico, f.servico.map(i => {
+          const st = _ROT_STATUS[i.status] || { cor: '#888', lbl: i.status || '' };
+          return barra(i, 'var(--rot-serv)', `Serviço ${notaTxt(i)} — ${st.lbl}: ${intervalo(i)}\nClique para ver a nota no mapa.`,
+            `<span class="rot-st" style="background:${st.cor}"></span>`);
+        }).join(''), ints),
+      ].join('');
+
+      const eixo = grade.map(m => `<span style="left:${pct(m)}%">${_rotHora(m).replace(' (+1)', '')}</span>`).join('');
+
+      const av = d.avisos || {};
+      const notas = [];
+      if (av.semHorario) notas.push(`${av.semHorario} deslocamento(s) sem horário registrado (não desenhado)`);
+      if (av.servicoSemFim) notas.push(`${av.servicoSemFim} serviço(s) sem "Fim do Trabalho" (não desenhado)`);
+      if ((d.erros || []).length) notas.push(`fonte indisponível: ${d.erros.map(e => e.split(':')[0]).join(', ')}`);
+      const statusLeg = ['concluida', 'rejeitada', 'interrompida', 'andamento'].map(k =>
+        `<span><i style="display:inline-block;width:10px;height:4px;background:${_ROT_STATUS[k].cor};vertical-align:middle;margin-right:4px"></i>${_ROT_STATUS[k].lbl}</span>`).join('');
+
+      return `${html}<div class="rot-eixo">${eixo}</div>
+        <div class="rot-rodape">${statusLeg}
+          ${ints ? '<span><i style="display:inline-block;height:10px;border-left:2px dashed #e65100;margin-right:4px;vertical-align:middle"></i>Interrupção</span>' : ''}
+          ${notas.length ? `<span style="color:#b26a00">⚠ ${escapeHtml(notas.join(' · '))}</span>` : ''}
+        </div>`;
+    }
+
+    function _rotinaCarteiraHtml(c) {
+      if (!c) return '<div class="empty-state" style="font-size:12px">Sem carteira registrada para a equipe neste dia.</div>';
+      const lin = (cor, lbl, v, dica) => `
+        <div class="rot-cart-lin" title="${escapeHtml(dica)}">
+          <span><span class="barra" style="background:${cor}"></span>${lbl}</span><b>${v == null ? '—' : v}</b>
+        </div>`;
+      return `<div class="rot-cart">
+        ${lin('#5a5855', 'Carteira inicial', c.inicial, 'Notas na carteira da equipe no primeiro snapshot do dia.')}
+        ${lin('#3b82f6', 'Entradas no dia', c.entradas, 'Notas que entraram na carteira depois do primeiro snapshot.')}
+        ${lin('#086738', 'Executadas', c.executadas, 'Concluídas no dia (rejeitada tem prioridade sobre concluída).')}
+        ${lin('#ED1C24', 'Rejeitadas', c.rejeitadas, 'Rejeitadas no dia.')}
+        ${lin('#e65100', 'Interrompidas', c.interrompidas, 'Notas distintas com interrupção apontada pela equipe no dia. Continuam na carteira — não entram na soma.')}
+        ${lin('#9a9a96', 'Remanejadas / canceladas', c.remanejadas, 'Saíram da carteira sem conclusão nem rejeição: remanejadas para outra equipe, canceladas pela EDP ou levadas no logoff. O WPA não distingue os casos.')}
+        ${lin('#FEC40E', 'Pendentes', c.pendentes, `Ainda na carteira no último snapshot (${c.andamento} em andamento).`)}
+        <div class="rot-cart-nota">Inicial + entradas = executadas + rejeitadas + remanejadas + pendentes. Mesma fonte do quadro Aproveitamento da Carteira.</div>
+      </div>`;
     }
 
     // ── OSRM (roteamento por vias reais) ─────────────────────────────────

@@ -4227,6 +4227,26 @@ router.get('/mapa/equipe', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// GET /api/rotina/equipe?team=SIGLA&date=YYYY-MM-DD
+// Linha do tempo do dia (escala, sessão, desvio, deslocamento, serviço) +
+// situação da carteira. Topo da aba Rotina (ex-Mapa) — 15/10/2026.
+// Implementação em db/rotinaQueries.js.
+router.get('/rotina/equipe', async (req, res) => {
+  try {
+    const team = req.query.team;
+    if (!team) return res.status(400).json({ error: 'Parâmetro team é obrigatório.' });
+    if (!(await enforceTeamRegional(req, res, team))) return;
+    const date = req.query.date || dateBRT();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date inválida (YYYY-MM-DD).' });
+    const r = await require('../db/rotinaQueries').rotinaEquipe(team, date);
+    if (!r) return res.json({ team, dia: date, faixas: null, carteira: null, erros: ['sem banco'] });
+    res.json(r);
+  } catch (err) {
+    console.error('[rotina/equipe]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 // ── NOTAS DEVOLVIDAS ────────────────────────────────────────────────────────
 // Monitor das notas devolvidas pelo SAP (a serem tratadas pelo backoffice).
 // Snapshot horário via cronService.runNotasCollect → tabelas notas_snapshots

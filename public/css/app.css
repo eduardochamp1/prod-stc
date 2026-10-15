@@ -4063,6 +4063,94 @@
       flex-direction: column;
       gap: 6px;
     }
+    /* ── Rotina (15/10/2026) — "Dia da equipe" no topo da aba ex-Mapa ── */
+    :root {
+      --rot-escala: #9a9a96;
+      --rot-sessao: #00b3a4;
+      --rot-desvio: #f2c811;
+      --rot-desloc: #c0704d;
+      --rot-serv:   #456b7a;
+    }
+    .rotina-topo {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 250px;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    @media (max-width: 900px) {
+      .rotina-topo { grid-template-columns: minmax(0, 1fr); }
+    }
+    .rotina-card {
+      background: var(--branco);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      border: 1px solid var(--cinza2);
+      overflow: hidden;
+      min-width: 0;
+    }
+    .rotina-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 8px 14px;
+      background: var(--preto);
+      color: var(--branco);
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .rotina-legenda { display: flex; gap: 12px; flex-wrap: wrap; font-weight: 400; font-size: 11px; }
+    .rotina-legenda span { display: inline-flex; align-items: center; gap: 5px; }
+    .rotina-legenda i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    #rotina-gantt { padding: 10px 14px 6px; }
+    .rot-row { display: flex; align-items: center; height: 30px; }
+    .rot-lbl {
+      width: 120px; flex-shrink: 0; font-size: 12px; color: var(--text);
+      display: flex; flex-direction: column; line-height: 1.15;
+    }
+    .rot-lbl small { color: var(--text2); font-size: 10px; }
+    .rot-track {
+      position: relative; flex: 1; height: 100%;
+      border-left: 1px solid var(--cinza3);
+    }
+    .rot-bar {
+      position: absolute; top: 4px; bottom: 4px; min-width: 2px;
+      border-radius: 2px; cursor: default;
+    }
+    .rot-bar.clicavel { cursor: pointer; }
+    .rot-bar.clicavel:hover { filter: brightness(1.15); outline: 1px solid var(--preto); }
+    .rot-bar.aberta {
+      background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.35) 0 4px, transparent 4px 8px);
+    }
+    .rot-bar .rot-st { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; }
+    .rot-int {
+      position: absolute; top: 0; bottom: 0; width: 0;
+      border-left: 2px dashed #e65100; z-index: 2;
+    }
+    .rot-agora {
+      position: absolute; top: 0; bottom: 0; width: 0;
+      border-left: 2px solid var(--vermelho); z-index: 3; pointer-events: none;
+    }
+    .rot-grid {
+      position: absolute; top: 0; bottom: 0; width: 0;
+      border-left: 1px dotted var(--cinza2); pointer-events: none;
+    }
+    .rot-eixo { position: relative; height: 18px; margin-left: 120px; border-top: 1px solid var(--cinza3); }
+    .rot-eixo span {
+      position: absolute; top: 2px; transform: translateX(-50%);
+      font-size: 10px; color: var(--text2); white-space: nowrap;
+    }
+    .rot-rodape { font-size: 11px; color: var(--text2); padding: 6px 0 2px; display: flex; gap: 14px; flex-wrap: wrap; }
+    .rot-rodape b { color: var(--text); }
+    .rot-cart { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+    .rot-cart-lin {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 5px 8px; border-radius: 6px; font-size: 12px; background: var(--cinza1);
+    }
+    .rot-cart-lin b { font-size: 16px; }
+    .rot-cart-lin .barra { display: inline-block; width: 6px; height: 16px; border-radius: 2px; margin-right: 8px; vertical-align: middle; }
+    .rot-cart-nota { font-size: 10px; color: var(--text2); line-height: 1.35; margin-top: 4px; }
     #mapa-leaflet {
       flex: 1;
       border-radius: 12px;
