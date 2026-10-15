@@ -4151,6 +4151,34 @@
     .rot-cart-lin b { font-size: 16px; }
     .rot-cart-lin .barra { display: inline-block; width: 6px; height: 16px; border-radius: 2px; margin-right: 8px; vertical-align: middle; }
     .rot-cart-nota { font-size: 10px; color: var(--text2); line-height: 1.35; margin-top: 4px; }
+    /* Plano Diário (15/10/2026) — todas as equipes, uma linha cada, estilo eOrder */
+    .rotina-plano-card { margin-bottom: 14px; }
+    .rotina-plano-card .rotina-card-head small { font-weight: 400; opacity: .75; margin-left: 6px; }
+    #rotina-plano { max-height: 420px; overflow: auto; }
+    .pln-row {
+      display: grid; grid-template-columns: 110px minmax(160px, 1fr) repeat(5, 46px);
+      align-items: center; column-gap: 6px; padding: 0 14px; height: 30px;
+      border-bottom: 1px solid var(--cinza1); cursor: pointer; font-size: 12px;
+    }
+    .pln-row:hover { background: var(--cinza1); }
+    .pln-row.sel { background: #fff4cc; box-shadow: inset 3px 0 0 var(--amarelo, #FEC40E); }
+    .pln-row.vazia { color: var(--text2); }
+    .pln-row.pln-head {
+      position: sticky; top: 0; z-index: 4; background: var(--branco); cursor: default;
+      height: 22px; font-size: 10px; color: var(--text2); border-bottom: 1px solid var(--cinza3);
+    }
+    .pln-row.pln-head:hover { background: var(--branco); }
+    .pln-sigla { display: flex; flex-direction: column; line-height: 1.1; min-width: 0; }
+    .pln-sigla b { font-size: 12px; }
+    .pln-sigla small { font-size: 10px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pln-track { position: relative; height: 22px; border-left: 1px solid var(--cinza3); }
+    .pln-eixo { position: relative; height: 100%; }
+    .pln-eixo span { position: absolute; top: 4px; transform: translateX(-50%); white-space: nowrap; }
+    .pln-lane { position: absolute; left: 0; right: 0; height: 4px; }
+    .pln-lane i { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 1px; }
+    .pln-n { text-align: right; font-variant-numeric: tabular-nums; }
+    .pln-n.zero { color: var(--cinza3); }
+    .pln-legenda { font-size: 10px; color: var(--text2); padding: 6px 14px; display: flex; gap: 12px; flex-wrap: wrap; }
     #mapa-leaflet {
       flex: 1;
       border-radius: 12px;

@@ -37,6 +37,7 @@
 const { _getPool } = require('../services/pgShim');
 const { msParede, janelaDaEscala } = require('./heQueries');
 const { isFolga } = require('../services/escalaDia');
+const { inRegionalsSql } = require('../services/regionals');
 
 const MS_MIN = 60000;
 const MS_DIA = 86400000;
@@ -292,71 +293,25 @@ async function _talvez(pool, sql, params, rotulo, avisos) {
   }
 }
 
+// Ordem importa: a primeira lista em que a nota aparece define o status
+// (mesma ordem que o rotinaEquipe usava ao ler o `data` inteiro).
+const STATUS_SNAPSHOT = [
+  ['notasConcluidas', 'concluida'], ['notasRejeitadas', 'rejeitada'],
+  ['notasExecutadas', 'executada'], ['notasBaixadas', 'baixada'],
+];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * A rotina de uma equipe num dia. Bounded: 1 equipe × 1 dia.
+ * FUNÇÃO PURA (testável): as notas do dia de UMA equipe.
+ * Último snapshot (já na ordem de STATUS_SNAPSHOT) + rejeitadas persistidas +
+ * interrompidas. Rejeitada > concluída (decisão 20/07/2026).
  */
-async function rotinaEquipe(team, dia, agora = Date.now()) {
-  const pool = _getPool();
-  if (!pool) return null;
-  const equipe = String(team).trim().toUpperCase();
-  const erros = [];
-
-  const [escalas, sesRows, ultRows, rejRows, intRows, cartRows] = await Promise.all([
-    _talvez(pool,
-      `SELECT DISTINCT ed.codigo_escala, ec.inicio_escala, ec.fim_escala
-         FROM public.escala_dia ed
-         LEFT JOIN public.escalas_catalogo ec
-           ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
-        WHERE ed.data = $1::date AND upper(btrim(ed.equipe)) = $2`,
-      [dia, equipe], 'escala', erros),
-    // Mesma leitura de sessão da medição de HE (heQueries.medicaoHe): +1 dia de
-    // lookahead pro logoff depois da meia-noite, e COALESCE porque o job de
-    // logoff das 03:00 só atualiza o jsonb.
-    _talvez(pool,
-      `SELECT DISTINCT ON (session_begin)
-              session_begin,
-              COALESCE(session_end, data->>'sessionEnd', data->>'session_end') AS session_end
-         FROM public.snapshots
-        WHERE upper(btrim(team_name)) = $1
-          AND date BETWEEN $2::date AND $3::date
-          AND session_begin IS NOT NULL
-        ORDER BY session_begin, captured_at DESC`,
-      [equipe, dia, _diaMais(dia, 1)], 'sessao', erros),
-    _talvez(pool,
-      `SELECT data FROM public.snapshots
-        WHERE upper(btrim(team_name)) = $1 AND date = $2::date
-        ORDER BY captured_at DESC LIMIT 1`,
-      [equipe, dia], 'snapshot', erros),
-    // Rejeitadas somem do payload horas depois (WPA limpa) — note_rejections
-    // é a memória persistente, mesma regra de upsertTeamDailyCarteira.
-    _talvez(pool,
-      `SELECT DISTINCT note_id::text AS note_id, numero, tipo
-         FROM public.note_rejections
-        WHERE upper(btrim(team_name)) = $1 AND session_date = $2::date`,
-      [equipe, dia], 'rejeicoes', erros),
-    _talvez(pool,
-      `SELECT note_id::text AS note_id, numero, tipo, instante, motivo
-         FROM public.note_interrupcoes
-        WHERE upper(btrim(team_name)) = $1 AND dia = $2::date`,
-      [equipe, dia], 'interrupcoes', erros),
-    _talvez(pool,
-      `SELECT * FROM public.team_daily_carteira
-        WHERE upper(btrim(team_name)) = $1 AND date = $2::date`,
-      [equipe, dia], 'carteira', erros),
-  ]);
-
-  // Notas do dia: último snapshot + rejeitadas persistidas + interrompidas.
-  const STATUS = [
-    ['notasConcluidas', 'concluida'], ['notasRejeitadas', 'rejeitada'],
-    ['notasExecutadas', 'executada'], ['notasBaixadas', 'baixada'],
-  ];
+function notasDoDia(snapNotas = [], rejRows = [], intRows = []) {
   const notasMap = new Map();
-  const snap = (ultRows[0] && ultRows[0].data) || {};
-  for (const [k, status] of STATUS) {
-    for (const n of (snap[k] || [])) {
-      if (n && n.id && !notasMap.has(n.id)) {
-        notasMap.set(n.id, { id: n.id, numero: n.numero || n.number || '', tipo: n.tipo || n.type || '', status });
-      }
+  for (const n of snapNotas) {
+    if (n && n.id && !notasMap.has(n.id)) {
+      notasMap.set(n.id, { id: n.id, numero: n.numero || '', tipo: n.tipo || '', status: n.status });
     }
   }
   for (const r of rejRows) {
@@ -369,46 +324,189 @@ async function rotinaEquipe(team, dia, agora = Date.now()) {
       notasMap.set(r.note_id, { id: r.note_id, numero: r.numero || '', tipo: r.tipo || '', status: 'interrompida' });
     }
   }
+  return notasMap;
+}
 
-  const ids = [...notasMap.keys()];
+/** Agrupa linhas `{team, ...}` por equipe. */
+function _porEquipe(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    if (!m.has(r.team)) m.set(r.team, []);
+    m.get(r.team).push(r);
+  }
+  return m;
+}
+
+/**
+ * Carrega e monta a rotina de VÁRIAS equipes num dia. Pedido do José em
+ * 15/10/2026 (Plano Diário do eOrder: todas as equipes de uma vez).
+ *
+ * UMA consulta por fonte, todas com `team = ANY($n)` — nada de N+1 por equipe.
+ * A VM tem 3,8 GB: do snapshot sai só id/número/tipo das 4 listas de notas
+ * (desmontadas no Postgres, o `data` inteiro nunca vem pro Node), e do
+ * note_details só `payload->'checkpoints'` das notas do dia.
+ *
+ * @returns {Promise<Map<string, object>>} team → {team, ...rotina, carteira}
+ *          + `erros` (comum a todas: a fonte que falha, falha pra todas).
+ */
+async function _carregarLote(pool, dia, equipes, agora) {
+  const siglas = [...new Set(equipes.map(t => String(t).trim().toUpperCase()).filter(Boolean))];
+  const erros = [];
+  if (!siglas.length) return { porEquipe: new Map(), erros };
+
+  const [escalas, sesRows, snapRows, rejRows, intRows, cartRows] = await Promise.all([
+    _talvez(pool,
+      `SELECT DISTINCT upper(btrim(ed.equipe)) AS team, ed.codigo_escala, ec.inicio_escala, ec.fim_escala
+         FROM public.escala_dia ed
+         LEFT JOIN public.escalas_catalogo ec
+           ON ec.codigo = ed.codigo_escala AND ec.sector_id = ed.sector_id
+        WHERE ed.data = $1::date AND upper(btrim(ed.equipe)) = ANY($2::text[])`,
+      [dia, siglas], 'escala', erros),
+    // Mesma leitura de sessão da medição de HE (heQueries.medicaoHe): +1 dia de
+    // lookahead pro logoff depois da meia-noite, e COALESCE porque o job de
+    // logoff das 03:00 só atualiza o jsonb. O DISTINCT ON roda só nas colunas
+    // estreitas; o jsonb é lido apenas da linha escolhida de cada sessão.
+    _talvez(pool,
+      `WITH ult AS (
+         SELECT DISTINCT ON (upper(btrim(team_name)), session_begin)
+                id, upper(btrim(team_name)) AS team, session_begin, session_end
+           FROM public.snapshots
+          WHERE upper(btrim(team_name)) = ANY($1::text[])
+            AND date BETWEEN $2::date AND $3::date
+            AND session_begin IS NOT NULL
+          ORDER BY upper(btrim(team_name)), session_begin, captured_at DESC
+       )
+       SELECT u.team, u.session_begin,
+              COALESCE(u.session_end, s.data->>'sessionEnd', s.data->>'session_end') AS session_end
+         FROM ult u JOIN public.snapshots s ON s.id = u.id`,
+      [siglas, dia, _diaMais(dia, 1)], 'sessao', erros),
+    _talvez(pool,
+      `WITH ult AS (
+         SELECT DISTINCT ON (upper(btrim(team_name))) id, upper(btrim(team_name)) AS team
+           FROM public.snapshots
+          WHERE date = $1::date AND upper(btrim(team_name)) = ANY($2::text[])
+          ORDER BY upper(btrim(team_name)), captured_at DESC
+       )
+       SELECT u.team, k.status, nota->>'id' AS id,
+              COALESCE(NULLIF(nota->>'numero', ''), nota->>'number', '') AS numero,
+              COALESCE(NULLIF(nota->>'tipo', ''), nota->>'type', '') AS tipo
+         FROM ult u
+         JOIN public.snapshots s ON s.id = u.id
+         CROSS JOIN (VALUES ${STATUS_SNAPSHOT.map(([k, s], i) => `(${i + 1}, '${k}', '${s}')`).join(', ')})
+              AS k(ord, chave, status)
+         CROSS JOIN LATERAL jsonb_array_elements(
+              CASE WHEN jsonb_typeof(s.data->k.chave) = 'array' THEN s.data->k.chave ELSE '[]'::jsonb END) AS n(nota)
+        WHERE nota->>'id' IS NOT NULL
+        ORDER BY u.team, k.ord`,
+      [dia, siglas], 'snapshot', erros),
+    // Rejeitadas somem do payload horas depois (WPA limpa) — note_rejections
+    // é a memória persistente, mesma regra de upsertTeamDailyCarteira.
+    _talvez(pool,
+      `SELECT DISTINCT upper(btrim(team_name)) AS team, note_id::text AS note_id, numero, tipo
+         FROM public.note_rejections
+        WHERE upper(btrim(team_name)) = ANY($1::text[]) AND session_date = $2::date`,
+      [siglas, dia], 'rejeicoes', erros),
+    _talvez(pool,
+      `SELECT upper(btrim(team_name)) AS team, note_id::text AS note_id, numero, tipo, instante, motivo
+         FROM public.note_interrupcoes
+        WHERE upper(btrim(team_name)) = ANY($1::text[]) AND dia = $2::date`,
+      [siglas, dia], 'interrupcoes', erros),
+    _talvez(pool,
+      `SELECT upper(btrim(team_name)) AS team, *
+         FROM public.team_daily_carteira
+        WHERE upper(btrim(team_name)) = ANY($1::text[]) AND date = $2::date`,
+      [siglas, dia], 'carteira', erros),
+  ]);
+
+  const escPor = _porEquipe(escalas), sesPor = _porEquipe(sesRows), snapPor = _porEquipe(snapRows);
+  const rejPor = _porEquipe(rejRows), intPor = _porEquipe(intRows), cartPor = _porEquipe(cartRows);
+
+  const notasPor = new Map();
+  for (const t of siglas) notasPor.set(t, notasDoDia(snapPor.get(t), rejPor.get(t), intPor.get(t)));
+
+  // Checkpoints de TODAS as notas do dia numa consulta só. `note_id = ANY(uuid[])`
+  // usa a PK; id que não é UUID (payload estranho) não derruba a consulta.
+  const ids = [...new Set([...notasPor.values()].flatMap(m => [...m.keys()]))]
+    .filter(id => UUID_RE.test(String(id)));
   const det = ids.length ? await _talvez(pool,
     `SELECT note_id::text AS note_id, numero, tipo, payload->'checkpoints' AS checkpoints
-       FROM public.note_details WHERE note_id::text = ANY($1::text[])`,
+       FROM public.note_details WHERE note_id = ANY($1::uuid[])`,
     [ids], 'note_details', erros) : [];
-  for (const d of det) {
-    const n = notasMap.get(d.note_id);
-    if (!n) continue;
-    n.checkpoints = Array.isArray(d.checkpoints) ? d.checkpoints : [];
-    if (!n.numero) n.numero = d.numero || '';
-    if (!n.tipo) n.tipo = d.tipo || '';
-  }
+  const detPor = new Map(det.map(d => [String(d.note_id).toLowerCase(), d]));
 
   const toIso = v => (v instanceof Date ? v.toISOString() : v);
-  const rotina = montarRotina({
-    dia,
-    escalas,
-    sessoes: sesRows
-      .filter(r => String(r.session_begin).slice(0, 10) === dia)
-      .map(r => ({ begin: r.session_begin, end: r.session_end })),
-    notas: [...notasMap.values()],
-    interrupcoes: intRows.map(r => ({
-      note_id: r.note_id, numero: r.numero, motivo: r.motivo,
-      instanteMs: msParede(toIso(r.instante)),
-    })),
-    agoraMs: msParede(new Date(agora).toISOString()),
-  });
+  const agoraMs = msParede(new Date(agora).toISOString());
+  const porEquipe = new Map();
+  for (const t of siglas) {
+    const notasMap = notasPor.get(t);
+    for (const n of notasMap.values()) {
+      const d = detPor.get(String(n.id).toLowerCase());
+      if (!d) continue;
+      n.checkpoints = Array.isArray(d.checkpoints) ? d.checkpoints : [];
+      if (!n.numero) n.numero = d.numero || '';
+      if (!n.tipo) n.tipo = d.tipo || '';
+    }
+    const ints = intPor.get(t) || [];
+    const rotina = montarRotina({
+      dia,
+      escalas: escPor.get(t) || [],
+      sessoes: (sesPor.get(t) || [])
+        .filter(r => String(r.session_begin).slice(0, 10) === dia)
+        .map(r => ({ begin: r.session_begin, end: r.session_end })),
+      notas: [...notasMap.values()],
+      interrupcoes: ints.map(r => ({
+        note_id: r.note_id, numero: r.numero, motivo: r.motivo,
+        instanteMs: msParede(toIso(r.instante)),
+      })),
+      agoraMs,
+    });
+    const interrompidas = new Set(ints.map(r => r.note_id)).size;
+    porEquipe.set(t, { team: t, ...rotina, carteira: montarCarteira((cartPor.get(t) || [])[0], interrompidas) });
+  }
+  return { porEquipe, erros };
+}
 
-  const interrompidas = new Set(intRows.map(r => r.note_id)).size;
+/**
+ * A rotina de uma equipe num dia. Bounded: 1 equipe × 1 dia.
+ * Desde 15/10/2026 é o lote com uma equipe só — uma implementação, duas telas.
+ */
+async function rotinaEquipe(team, dia, agora = Date.now()) {
+  const pool = _getPool();
+  if (!pool) return null;
+  const equipe = String(team).trim().toUpperCase();
+  const { porEquipe, erros } = await _carregarLote(pool, dia, [equipe], agora);
+  return { ...porEquipe.get(equipe), erros };
+}
+
+/**
+ * Plano Diário: todas as equipes OFICIAIS ativas das regionais do escopo
+ * (`regionais` = req.scope.regionals), opcionalmente recortadas por `teams`
+ * (filtro de supervisor da tela). Bounded: equipes do escopo × 1 dia.
+ */
+async function rotinaEquipes(dia, regionais, { teams = null, agora = Date.now() } = {}) {
+  const pool = _getPool();
+  if (!pool) return null;
+  const params = [];
+  const regClause = inRegionalsSql(regionais, params);
+  const { rows: eqs } = await pool.query(
+    `SELECT upper(btrim(sigla)) AS sigla, regional, tipo
+       FROM public.equipes_oficiais
+      WHERE ativo = true AND ${regClause}
+      ORDER BY regional, sigla`, params);
+  const filtro = Array.isArray(teams) && teams.length
+    ? new Set(teams.map(t => String(t).trim().toUpperCase())) : null;
+  const lista = eqs.filter(e => !filtro || filtro.has(e.sigla));
+
+  const { porEquipe, erros } = await _carregarLote(pool, dia, lista.map(e => e.sigla), agora);
   return {
-    team: equipe,
-    ...rotina,
-    carteira: montarCarteira(cartRows[0], interrompidas),
+    dia,
+    equipes: lista.map(e => ({ ...porEquipe.get(e.sigla), regional: e.regional, tipo: e.tipo })),
     erros,
   };
 }
 
 module.exports = {
-  rotinaEquipe,
+  rotinaEquipe, rotinaEquipes,
   // Puras, exportadas pra teste.
-  instanteCp, intervalosDaNota, unir, buracos, montarRotina, montarCarteira,
+  instanteCp, intervalosDaNota, unir, buracos, montarRotina, montarCarteira, notasDoDia,
 };

@@ -477,7 +477,7 @@
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
           <div class="filter-group">
             <span class="filter-label">Data</span>
-            <input type="date" class="filter-select" id="mapa-date-input" style="min-width:140px" onchange="loadMapa()"/>
+            <input type="date" class="filter-select" id="mapa-date-input" style="min-width:140px" onchange="loadMapa(); planoDiarioAgendar()"/>
           </div>
 
           <div class="filter-group">
@@ -495,7 +495,7 @@
           <div class="filter-group">
             <span class="filter-label">Supervisor</span>
             <select class="filter-select" id="mapa-supervisor-select"
-              onchange="_mapaTeamHighlight = -1; _renderMapaTeamOptions()" style="min-width:150px">
+              onchange="_mapaTeamHighlight = -1; _renderMapaTeamOptions(); planoDiarioAgendar()" style="min-width:150px">
               <option value="ALL">Todos</option>
             </select>
           </div>
@@ -540,6 +540,23 @@
             </select>
           </div>
 
+        </div>
+        <!-- Plano Diário (15/10/2026): todas as equipes do filtro, uma linha
+             cada, como o Plano Diário do eOrder. Clicar seleciona a equipe e
+             abre o "Dia da equipe" + mapa abaixo. -->
+        <div class="rotina-card rotina-plano-card">
+          <div class="rotina-card-head">
+            <span>Plano diário<small id="rotina-plano-resumo"></small></span>
+            <span class="rotina-legenda">
+              <span><i style="background:var(--rot-escala)"></i>Escala</span>
+              <span><i style="background:var(--rot-sessao)"></i>Sessão</span>
+              <span><i style="background:var(--rot-desloc)"></i>Deslocamento</span>
+              <span><i style="background:var(--rot-serv)"></i>Serviço</span>
+            </span>
+          </div>
+          <div id="rotina-plano">
+            <div class="empty-state" style="font-size:12px">Carregando equipes…</div>
+          </div>
         </div>
         <div class="rotina-topo" id="rotina-topo">
           <div class="rotina-card rotina-gantt-card">
@@ -11869,7 +11886,8 @@ ${acumuladoHTML}
         _mapaMSInit = true;
       }
 
-      _popularMapaTeamSelect();
+      // Plano Diário depois do catálogo de supervisores (o filtro depende dele).
+      _popularMapaTeamSelect().then(() => { if (_planoSujo) loadPlanoDiario(); });
     }
 
     // ── Dropdown custom de equipe ──────────────────────────────────────────────
@@ -11975,6 +11993,7 @@ ${acumuladoHTML}
       }
 
       _renderMapaTeamOptions();
+      planoDiarioAgendar();
     }
 
     function mapaTeamDDToggle(evt) {
@@ -12020,6 +12039,7 @@ ${acumuladoHTML}
       document.getElementById('mapa-team-display').textContent = sigla;
       document.getElementById('mapa-team-display').style.color = 'var(--text)';
       document.getElementById('mapa-team-panel').setAttribute('hidden', '');
+      _planoMarcar(sigla);
       loadMapa();
     }
 
@@ -12202,6 +12222,129 @@ ${acumuladoHTML}
         ${lin('#FEC40E', 'Pendentes', c.pendentes, `Ainda na carteira no último snapshot (${c.andamento} em andamento).`)}
         <div class="rot-cart-nota">Inicial + entradas = executadas + rejeitadas + remanejadas + pendentes. Mesma fonte do quadro Aproveitamento da Carteira.</div>
       </div>`;
+    }
+
+    // ── PLANO DIÁRIO (15/10/2026) ─────────────────────────────────────────
+    // Todas as equipes do filtro (data/regional/supervisor), uma linha cada,
+    // como o Plano Diário do eOrder: mini linha do tempo + contadores da
+    // carteira. Dados de /api/rotina/equipes (db/rotinaQueries.rotinaEquipes,
+    // as MESMAS faixas e a MESMA carteira do "Dia da equipe"). Só desenho aqui.
+    let _planoSeq = 0;
+    let _planoSujo = true;   // filtro mudou com a aba fechada → recarrega ao abrir
+
+    function planoDiarioAgendar() {
+      _planoSujo = true;
+      if (currentTab === 'mapa') loadPlanoDiario();
+    }
+
+    async function loadPlanoDiario() {
+      const box = document.getElementById('rotina-plano');
+      const resumo = document.getElementById('rotina-plano-resumo');
+      const date = document.getElementById('mapa-date-input')?.value;
+      if (!box || !date) return;
+      _planoSujo = false;
+      const seq = ++_planoSeq;
+      const qs = new URLSearchParams({ date });
+      if (_mapaRegionalFilter.length) qs.set('regionals', _mapaRegionalFilter.join(','));
+      const sup = _supSiglasDoSelect('mapa-supervisor-select');
+      if (sup) {
+        if (!sup.size) {
+          box.innerHTML = '<div class="empty-state" style="font-size:12px">Nenhuma equipe deste supervisor.</div>';
+          if (resumo) resumo.textContent = '';
+          return;
+        }
+        qs.set('teams', [...sup].join(','));
+      }
+      box.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando equipes…</div>';
+      try {
+        const res = await fetch(`${API}/rotina/equipes?${qs}`);
+        const data = await res.json();
+        if (seq !== _planoSeq) return;
+        if (data.error) throw new Error(data.error);
+        box.innerHTML = _planoHtml(data);
+        if (resumo) resumo.textContent = `— ${(data.equipes || []).length} equipe(s)`;
+      } catch (err) {
+        if (seq !== _planoSeq) return;
+        box.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function _planoHtml(d) {
+      const eqs = d.equipes || [];
+      if (!eqs.length) return '<div class="empty-state" style="font-size:12px">Nenhuma equipe oficial ativa no filtro.</div>';
+      const LANES = ['escala', 'sessao', 'deslocamento', 'servico'];
+      const todas = eqs.flatMap(e => e.faixas ? LANES.flatMap(k => e.faixas[k] || []) : []);
+      const agoraMin = eqs.find(e => e.agoraMin != null)?.agoraMin ?? null;
+      // Eixo ÚNICO pra todas as linhas — é o que deixa comparar equipes de olho.
+      let ini = todas.length ? Math.min(...todas.map(i => i.ini)) : 360;
+      let fim = Math.max(todas.length ? Math.max(...todas.map(i => i.fim)) : 1080, agoraMin ?? 0);
+      ini = Math.max(0, Math.floor(ini / 60) * 60);
+      fim = Math.ceil(fim / 60) * 60;
+      if (fim - ini < 480) fim = ini + 480;
+      const span = fim - ini;
+      const pct = m => ((m - ini) / span * 100).toFixed(3);
+      const larg = (a, b) => (Math.max(0, b - a) / span * 100).toFixed(3);
+      const passo = span > 14 * 60 ? 180 : 120;
+      const grade = [];
+      for (let m = ini; m <= fim; m += passo) grade.push(m);
+      const linhasGrade = grade.map(m => `<div class="rot-grid" style="left:${pct(m)}%"></div>`).join('');
+      const agora = agoraMin != null ? `<div class="rot-agora" style="left:${pct(agoraMin)}%"></div>` : '';
+
+      const COR = { escala: 'var(--rot-escala)', sessao: 'var(--rot-sessao)', deslocamento: 'var(--rot-desloc)' };
+      const lane = (arr, k, top) => `<div class="pln-lane" style="top:${top}px">${(arr || []).map(i => {
+        const cor = k === 'servico' ? (_ROT_STATUS[i.status]?.cor || 'var(--rot-serv)') : COR[k];
+        return `<i style="left:${pct(i.ini)}%;width:${larg(i.ini, i.fim)}%;background:${cor}"></i>`;
+      }).join('')}</div>`;
+      const num = v => v == null ? '<span class="pln-n zero">—</span>' : `<span class="pln-n${v ? '' : ' zero'}">${v}</span>`;
+      const selAtual = document.getElementById('mapa-team-select')?.value || '';
+
+      const cab = `<div class="pln-row pln-head">
+          <span>Equipe</span>
+          <div class="pln-eixo">${grade.map(m => `<span style="left:${pct(m)}%">${_rotHora(m).replace(' (+1)', '')}</span>`).join('')}</div>
+          <span class="pln-n" title="Executadas (concluídas no dia)">Exec</span>
+          <span class="pln-n" title="Rejeitadas no dia">Rej</span>
+          <span class="pln-n" title="Notas distintas com interrupção no dia (continuam na carteira)">Int</span>
+          <span class="pln-n" title="Remanejadas / canceladas: saíram da carteira sem conclusão nem rejeição">Rem</span>
+          <span class="pln-n" title="Pendentes: ainda na carteira no último snapshot">Pend</span>
+        </div>`;
+
+      const linhas = eqs.map(e => {
+        const f = e.faixas || {};
+        const t = e.totaisMin || {};
+        const vazia = !LANES.some(k => (f[k] || []).length);
+        const c = e.carteira;
+        const dica = vazia
+          ? `${e.team}: sem escala, sessão ou apontamento no dia${(e.folgas || []).length ? ` (escala ${e.folgas.join(', ')})` : ''}`
+          : `${e.team} — escala ${_rotDur(t.escala)} · sessão ${_rotDur(t.sessao)} · deslocamento ${_rotDur(t.deslocamento)} · serviço ${_rotDur(t.servico)} · desvio ${_rotDur(t.desvio)}`;
+        return `<div class="pln-row${vazia ? ' vazia' : ''}${e.team === selAtual ? ' sel' : ''}" data-sigla="${escapeHtml(e.team)}"
+                     title="${escapeHtml(dica)}" onclick="planoSelecionar('${escapeJsAttr(e.team)}')">
+          <div class="pln-sigla"><b>${escapeHtml(e.team)}</b><small>${escapeHtml([e.regional, e.tipo].filter(Boolean).join(' · '))}</small></div>
+          <div class="pln-track">${linhasGrade}${lane(f.escala, 'escala', 1)}${lane(f.sessao, 'sessao', 6)}${lane(f.deslocamento, 'deslocamento', 11)}${lane(f.servico, 'servico', 16)}${agora}</div>
+          ${num(c?.executadas)}${num(c?.rejeitadas)}${num(c?.interrompidas)}${num(c?.remanejadas)}${num(c?.pendentes)}
+        </div>`;
+      }).join('');
+
+      const avisos = (d.erros || []).length
+        ? `<span style="color:#b26a00">⚠ fonte indisponível: ${escapeHtml(d.erros.map(x => x.split(':')[0]).join(', '))}</span>` : '';
+      const statusLeg = ['concluida', 'rejeitada', 'interrompida', 'andamento'].map(k =>
+        `<span><i style="display:inline-block;width:10px;height:4px;background:${_ROT_STATUS[k].cor};vertical-align:middle;margin-right:4px"></i>Serviço ${_ROT_STATUS[k].lbl.toLowerCase()}</span>`).join('');
+      return `${cab}${linhas}<div class="pln-legenda">${statusLeg}<span>Clique numa equipe para ver o dia detalhado e o mapa.</span>${avisos}</div>`;
+    }
+
+    // Botão "Atualizar" da aba: a lista e a equipe selecionada.
+    function recarregarRotina() {
+      loadPlanoDiario();
+      return loadMapa();
+    }
+
+    function _planoMarcar(sigla) {
+      document.querySelectorAll('#rotina-plano .pln-row[data-sigla]').forEach(el =>
+        el.classList.toggle('sel', el.dataset.sigla === sigla));
+    }
+
+    function planoSelecionar(sigla) {
+      mapaTeamDDSelect(sigla);
+      document.getElementById('rotina-topo')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     // ── OSRM (roteamento por vias reais) ─────────────────────────────────
@@ -12869,7 +13012,7 @@ ${acumuladoHTML}
       notas:     { fn: () => loadNotasAll(),        rotulo: 'Notas' },
       graficos:  { fn: () => loadGraficos(),        rotulo: 'Gráficos' },
       ranking:   { fn: () => loadRanking(),         rotulo: 'Ranking' },
-      mapa:      { fn: () => loadMapa(),            rotulo: 'Mapa' },
+      mapa:      { fn: () => recarregarRotina(),       rotulo: 'Rotina' },
       historico: { fn: () => loadHistorico(),       rotulo: 'Histórico' },
       metas:     { fn: () => loadMetasCalculadas(), rotulo: 'Metas' },
     };
