@@ -63,4 +63,23 @@ function dateBRTMinusDays(days) {
   return dateBRT(Date.now() - days * 86400000);
 }
 
-module.exports = { dateBRT, hourBRT, dateBRTMinusDays, TZ };
+/**
+ * Minutos desde a meia-noite BRT (0..1439). Existe porque `hourBRT` só devolve a
+ * hora cheia, e o alerta de produtividade compara com o MEIO do turno (ex.: 12:30).
+ * Usa `formatToParts` (não parseia string) e trata o "24" que alguns runtimes
+ * devolvem pra meia-noite, como `hourBRT`.
+ *
+ * @param {Date|number} [when=Date.now()]
+ * @returns {number} 0..1439
+ */
+function minutosBRT(when) {
+  const d = (when instanceof Date) ? when : new Date(when ?? Date.now());
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: TZ, hour: 'numeric', minute: 'numeric', hour12: false,
+  }).formatToParts(d);
+  const get = (t) => parseInt((partes.find(p => p.type === t) || {}).value, 10);
+  const h = get('hour') === 24 ? 0 : get('hour');
+  return h * 60 + get('minute');
+}
+
+module.exports = { dateBRT, hourBRT, dateBRTMinusDays, minutosBRT, TZ };

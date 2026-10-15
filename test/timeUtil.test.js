@@ -84,3 +84,26 @@ describe('timeUtil', () => {
     assert.equal(tenDaysBefore, '2026-03-26');
   });
 });
+
+// ── minutosBRT (14/10/2026): minutos desde a meia-noite BRT, p/ o alerta de produtividade ──
+describe('minutosBRT', () => {
+  const { minutosBRT } = require('../services/timeUtil');
+
+  test('instante que já é "amanhã" em UTC e ainda é "hoje" em BRT', () => {
+    // 02:30Z do dia 14 = 23:30 BRT do dia 13
+    assert.equal(minutosBRT(new Date('2026-10-14T02:30:00Z')), 23 * 60 + 30);
+  });
+  test('meio-dia e meia em BRT', () => {
+    assert.equal(minutosBRT(new Date('2026-10-14T15:30:00Z')), 12 * 60 + 30);
+  });
+  test('meia-noite BRT é 0, nunca 1440', () => {
+    assert.equal(minutosBRT(new Date('2026-10-14T03:00:00Z')), 0);
+  });
+  test('aceita timestamp numérico e respeita os minutos quebrados', () => {
+    assert.equal(minutosBRT(Date.parse('2026-10-14T11:07:00Z')), 8 * 60 + 7);
+  });
+  test('sem argumento devolve inteiro 0..1439', () => {
+    const m = minutosBRT();
+    assert.ok(Number.isInteger(m) && m >= 0 && m <= 1439, String(m));
+  });
+});
