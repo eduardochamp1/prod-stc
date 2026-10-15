@@ -155,6 +155,9 @@ async function main() {
   for (const e of (r.faixas?.escala || [])) console.log(`  escala ${e.codigo || ''} ${hhmmss(e.ini)} → ${hhmmss(e.fim)}`);
   if ((r.erros || []).length) console.log(`  ⚠ fontes com erro: ${r.erros.join(' | ')}`);
   console.log(`  avisos: ${JSON.stringify(r.avisos)}`);
+  for (const n of (r.notasSemDetalhe || [])) {
+    console.log(`  ⚠ sem detalhe em cache (não desenhada): ${n.tipo} ${n.numero} [${n.status}] ${n.id}`);
+  }
 
   const nosso = eventosDaRotina(r);
   if (!arquivo) {

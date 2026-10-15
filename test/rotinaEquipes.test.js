@@ -148,6 +148,20 @@ describe('carregador da rotina (rotinaEquipe)', () => {
     assert.equal(cac.carteira.rejeitadas, 1);
   });
 
+  test('nota trabalhada sem detalhe em cache é listada (o gráfico não a desenha)', async () => {
+    const r = await rotinaEquipe('ECGPR53', DIA);
+    assert.deepEqual(r.notasSemDetalhe.map(n => [n.numero, n.status]), [['101', 'concluida']]);
+    assert.equal(r.avisos.notasSemDetalhe, 1);
+  });
+
+  test('o snapshot lê TODOS os snapshots do dia, uma linha por nota', async () => {
+    await rotinaEquipe('ECGPR53', DIA);
+    const snap = registro.find(c => /jsonb_array_elements/.test(c.sql));
+    assert.ok(snap.sql.includes('DISTINCT ON (x.team, x.id)'));
+    assert.ok(!/LIMIT 1/.test(snap.sql));
+    assert.ok(!snap.sql.includes('DISTINCT ON (upper(btrim(team_name))) id'));
+  });
+
   test('fonte que falha vira aviso, não derruba a tela', async () => {
     const base = poolFalso(registro);
     pgShim._setPool({ ...base, async query(sql, p) {

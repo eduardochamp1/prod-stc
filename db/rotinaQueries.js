@@ -407,24 +407,30 @@ async function _carregarLote(pool, dia, equipes, agora, { aoVivo = null } = {}) 
               COALESCE(u.session_end, s.data->>'sessionEnd', s.data->>'session_end') AS session_end
          FROM ult u JOIN public.snapshots s ON s.id = u.id`,
       [siglas, dia, _diaMais(dia, 1)], 'sessao', erros),
+    // ⚠️ TODOS os snapshots do dia, não só o último (15/10/2026). Conferido
+    // contra o export da EDP (EPICO30, 04/09): lendo só o último snapshot o
+    // painel deu deslocamento 121 / serviço 247 min contra 176 / 338 da EDP —
+    // sumiam a DD 000017340324 (interrompida e remanejada no meio do dia) e um
+    // PO concluído cedo, que já não estavam na carteira no fim do dia. Nota que
+    // SAIU da equipe continua sendo trabalho que a equipe fez.
+    // Status = o do snapshot MAIS RECENTE em que a nota aparece. O jsonb é
+    // desmontado no Postgres; só id/número/tipo vêm pro Node.
     _talvez(pool,
-      `WITH ult AS (
-         SELECT DISTINCT ON (upper(btrim(team_name))) id, upper(btrim(team_name)) AS team
-           FROM public.snapshots
-          WHERE date = $1::date AND upper(btrim(team_name)) = ANY($2::text[])
-          ORDER BY upper(btrim(team_name)), captured_at DESC
-       )
-       SELECT u.team, k.status, nota->>'id' AS id,
-              COALESCE(NULLIF(nota->>'numero', ''), nota->>'number', '') AS numero,
-              COALESCE(NULLIF(nota->>'tipo', ''), nota->>'type', '') AS tipo
-         FROM ult u
-         JOIN public.snapshots s ON s.id = u.id
-         CROSS JOIN (VALUES ${STATUS_SNAPSHOT.map(([k, s], i) => `(${i + 1}, '${k}', '${s}')`).join(', ')})
-              AS k(ord, chave, status)
-         CROSS JOIN LATERAL jsonb_array_elements(
-              CASE WHEN jsonb_typeof(s.data->k.chave) = 'array' THEN s.data->k.chave ELSE '[]'::jsonb END) AS n(nota)
-        WHERE nota->>'id' IS NOT NULL
-        ORDER BY u.team, k.ord`,
+      `SELECT DISTINCT ON (x.team, x.id) x.team, x.status, x.id, x.numero, x.tipo
+         FROM (
+           SELECT upper(btrim(s.team_name)) AS team, s.captured_at, k.ord, k.status,
+                  nota->>'id' AS id,
+                  COALESCE(NULLIF(nota->>'numero', ''), nota->>'number', '') AS numero,
+                  COALESCE(NULLIF(nota->>'tipo', ''), nota->>'type', '') AS tipo
+             FROM public.snapshots s
+             CROSS JOIN (VALUES ${STATUS_SNAPSHOT.map(([k, s], i) => `(${i + 1}, '${k}', '${s}')`).join(', ')})
+                  AS k(ord, chave, status)
+             CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(s.data->k.chave) = 'array' THEN s.data->k.chave ELSE '[]'::jsonb END) AS n(nota)
+            WHERE s.date = $1::date AND upper(btrim(s.team_name)) = ANY($2::text[])
+              AND nota->>'id' IS NOT NULL
+         ) x
+        ORDER BY x.team, x.id, x.captured_at DESC, x.ord`,
       [dia, siglas], 'snapshot', erros),
     // Rejeitadas somem do payload horas depois (WPA limpa) — note_rejections
     // é a memória persistente, mesma regra de upsertTeamDailyCarteira.
@@ -494,9 +500,18 @@ async function _carregarLote(pool, dia, equipes, agora, { aoVivo = null } = {}) 
   const porEquipe = new Map();
   for (const t of siglas) {
     const notasMap = notasPor.get(t);
+    const comInterrupcao = new Set((intPor.get(t) || []).map(r => r.note_id));
+    // Nota trabalhada sem detalhe em cache = trajeto que o gráfico NÃO desenha.
+    // Baixada sem interrupção não entra: nunca começou, não há o que desenhar.
+    const semDetalhe = [];
     for (const n of notasMap.values()) {
       const d = detPor.get(String(n.id).toLowerCase());
-      if (!d) continue;
+      if (!d) {
+        if (n.status !== 'baixada' || comInterrupcao.has(n.id)) {
+          semDetalhe.push({ id: n.id, numero: n.numero || '', tipo: n.tipo || '', status: n.status });
+        }
+        continue;
+      }
       n.checkpoints = Array.isArray(d.checkpoints) ? d.checkpoints : [];
       if (!n.numero) n.numero = d.numero || '';
       if (!n.tipo) n.tipo = d.tipo || '';
@@ -517,7 +532,9 @@ async function _carregarLote(pool, dia, equipes, agora, { aoVivo = null } = {}) 
       agoraMs,
     });
     const interrompidas = new Set(ints.map(r => r.note_id)).size;
-    porEquipe.set(t, { team: t, ...rotina, carteira: montarCarteira((cartPor.get(t) || [])[0], interrompidas) });
+    rotina.avisos.notasSemDetalhe = semDetalhe.length;
+    porEquipe.set(t, { team: t, ...rotina, notasSemDetalhe: semDetalhe,
+      carteira: montarCarteira((cartPor.get(t) || [])[0], interrompidas) });
   }
   return { porEquipe, erros };
 }

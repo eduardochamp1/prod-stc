@@ -12188,6 +12188,7 @@ ${acumuladoHTML}
       if (av.semHorario) notas.push(`${av.semHorario} deslocamento(s) sem horário registrado (não desenhado)`);
       if (av.servicoSemFim) notas.push(`${av.servicoSemFim} serviço(s) sem "Fim do Trabalho" (não desenhado)`);
       if (av.desvioSemFim) notas.push(`${av.desvioSemFim} desvio(s) sem fim registrado (não desenhado)`);
+      if (av.notasSemDetalhe) notas.push(`${av.notasSemDetalhe} nota(s) trabalhada(s) sem detalhe em cache (trajeto não desenhado): ${(d.notasSemDetalhe || []).map(n => [n.tipo, n.numero].filter(Boolean).join(' ')).join(', ')}`);
       if ((d.erros || []).length) notas.push(`fonte indisponível: ${d.erros.map(e => e.split(':')[0]).join(', ')}`);
       const statusLeg = ['concluida', 'rejeitada', 'interrompida', 'andamento'].map(k =>
         `<span><i style="display:inline-block;width:10px;height:4px;background:${_ROT_STATUS[k].cor};vertical-align:middle;margin-right:4px"></i>${_ROT_STATUS[k].lbl}</span>`).join('');
