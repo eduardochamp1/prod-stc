@@ -1,6 +1,6 @@
 # SPEC — Alerta de baixa produtividade (balão de avisos, lado esquerdo)
 
-> Data: 2026-10-14 · Pedido do José. Status: **desenhado, não implementado**.
+> Data: 2026-10-14 · Pedido do José. Status: **implementado e DESLIGADO** (14/10/2026, backlog P2-63) — falta a migration 016 na VM, o backtest e a decisão do José.
 > Brainstorm fechado em 14/10/2026. Revisada contra o código na mesma data:
 > toda âncora `arquivo:linha` abaixo foi **lida**, não lembrada (§12 lista o que
 > a revisão corrigiu). Nasce **desligado** (`ativo: false`) até o backtest (§9)

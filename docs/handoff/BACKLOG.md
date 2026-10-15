@@ -169,6 +169,8 @@
 | P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
 | P2-60 | MD de medidor remoto (gerada por uma II) contava só como nota em "MD Outros" — a EDP paga por medidor, não por nota | Dados/Produto | **done** (14/10/2026, 037ad66 + 2ccdb63); retroativo só desde 30/09 |
 | P2-61 | Re-consolidação 30/09→13/10 derrubou 516 OS (SF dominante) — explicado: regra de rejeição de 31/07, não perda | Dados | **done / registro** (14/10/2026) — avisar quem reportou os números antigos à EDP |
+| P2-62 | Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo" (+ gauge e XLSX) | Dados/Produto | **done** (14/10/2026, 4d08c7b + 5152c9c) — conferir no portal se a quantidade do C93 é ramal ou metro |
+| P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
 
 ---
 
@@ -6269,4 +6271,19 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Atenção à unidade:** o comentário de `dataWriter.upsertSubcatTotals` diz "metros de ramal", o do classificador e a UI dizem "ramais". A coluna se chama RAMAIS (UI atual). Se a Activity.Amount do C93 for metragem, o rótulo está errado — conferir uma nota C93 no portal ("Quantidade").
 - **Fora do pedido:** Sub CS (BTZ013) também tem quantidade e NÃO ganhou coluna.
 - **Rollback:** `git revert`.
+
+## P2-63 — Alerta de baixa produtividade (balão de avisos, lado esquerdo)
+
+- **Categoria:** Produto/Dados
+- **Status:** **código done, DESLIGADO** (14/10/2026). Commits: c930041 (minutosBRT), c75b5f0 (regras puras), 5a58e73 (migration 016 + queries), 2ae5e2b (avaliarCiclo), 010ae60 (gancho no cron), b32c95e (rotas), 778686d (balão), 5ec4038 (backtest), + docs.
+- **Pedido (José, 14/10/2026):** avisar supervisores/coordenadores quando a equipe chega à metade do turno com menos de 4 notas atendidas, sem aumentar o excesso de informação na tela.
+- **Decisões:** spec `SPEC-alerta-produtividade-2026-10-14.md` §2 (D1–D12 com o José; A1–A5 minhas, vetáveis). Plano: `PLAN-alerta-produtividade-2026-10-14.md`.
+- **Falta (José, na VM — PLAN T10):**
+  1. `psql -d wpa_monitor -f supabase/migrations/016_alertas_produtividade.sql` **antes** do deploy;
+  2. deploy (`pm2 delete … && pm2 start …`);
+  3. `node scripts/backtest-alerta-produtividade.js` e ler o VEREDITO;
+  4. só então ligar (`RUNBOOK.md` → "Alerta de baixa produtividade").
+- **Não testado em produção:** a suíte cobre regra, ciclo, SQL (pool falso), rotas (modo mock) e o script do balão (executado num `vm`); o balão foi conferido à mão no navegador (desktop e celular, harness com o `app.css` real). **Nada rodou contra o Postgres real nem contra a WPA** — a 1ª execução de verdade é o backtest na VM.
+- **Limites conhecidos:** rejeição "por nota" só na consolidação noturna (subalerta, nunca alerta falso); turno vira-noite fora da v1; escala usada é a atual; o backtest não tem o ajuste de `_notaDate`.
+- **Rollback:** `ativo:false` (imediato). Código: `git revert`. A tabela pode ficar.
 

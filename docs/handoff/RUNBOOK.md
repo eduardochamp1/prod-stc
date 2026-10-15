@@ -344,6 +344,83 @@ Conferir que pegou (deve listar as colunas e o Owner `wpa_app`):
 psql -d wpa_monitor -c "\d escalas_catalogo"
 ```
 
+### Alerta de baixa produtividade (ligar, desligar, ajustar) — desde 14/10/2026
+
+Avisa, no balão 🔔 do lado esquerdo do painel, as equipes que chegam ao meio do
+turno com menos de N notas executadas (não rejeitadas). Só avisa; nenhuma ação do
+supervisor. Spec: `docs/handoff/SPEC-alerta-produtividade-2026-10-14.md`.
+**Nasce DESLIGADO** — nada acontece até alguém ligar.
+
+**Ordem de implantação (importa):**
+
+1. Aplicar a migration **antes** do código (o incidente de 07/10 foi migration
+   pendente trancando o login):
+   ```bash
+   cd ~/prod-stc && psql -d wpa_monitor -f supabase/migrations/016_alertas_produtividade.sql
+   psql -d wpa_monitor -c "\d alertas_produtividade"     # Owner deve ser wpa_app
+   ```
+2. Deploy normal (`git pull && pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save`).
+   Com o alerta desligado, o ciclo faz **uma leitura** em `app_settings` e mais
+   nada: nenhuma chamada à WPA, nenhuma escrita.
+3. **Rodar o backtest e ler o resultado** (somente leitura, 1 dia por vez):
+   ```bash
+   node scripts/backtest-alerta-produtividade.js                 # 30 dias, limite 4
+   node scripts/backtest-alerta-produtividade.js --limite=3      # e se fosse 3?
+   node scripts/backtest-alerta-produtividade.js --sem-refeicao  # ignora o almoço
+   ```
+   A saída termina com um VEREDITO. Se disser **NÃO LIGAR**, a regra alertaria
+   uma fração alta e constante das equipes: reveja o limite antes de ligar.
+4. Só então ligar.
+
+**Ver a configuração:**
+```bash
+psql -d wpa_monitor -c "SELECT data FROM app_settings WHERE key='alerta_produtividade';"
+```
+(Sem linha = desligado. É o estado normal antes do passo 4.)
+
+**Ligar / desligar / mudar o limite** (mescla no que já existe; `data` é jsonb):
+```bash
+# LIGAR
+psql -d wpa_monitor -c "INSERT INTO app_settings(key,data,updated_at) VALUES ('alerta_produtividade','{\"ativo\":true}',now()) ON CONFLICT (key) DO UPDATE SET data = app_settings.data || '{\"ativo\":true}', updated_at = now();"
+# DESLIGAR (imediato, sem deploy)
+psql -d wpa_monitor -c "UPDATE app_settings SET data = data || '{\"ativo\":false}', updated_at = now() WHERE key='alerta_produtividade';"
+# MUDAR O LIMITE para 3
+psql -d wpa_monitor -c "UPDATE app_settings SET data = data || '{\"limite\":3}', updated_at = now() WHERE key='alerta_produtividade';"
+```
+Configuração inválida **nunca liga**: o painel a trata como desligada. Chaves:
+`ativo` (booleano), `limite` (inteiro ≥ 1), `categorias`
+(`COMERCIAL`/`PLANTAO`/`MOTO`/`BT_ZERO`; `OPERACIONAL` existe mas fica fora do
+padrão), `tolerancia_refeicao_min` (inteiro ≥ 0, padrão 60). A mesma coisa pela
+API, como admin: `PUT /api/admin/alertas/config` (mescla e valida; 400 se inválido).
+A mudança vale no **próximo ciclo** (até 15 min); o balão no navegador atualiza em
+até 5 min depois disso (~20 min no total).
+
+**Se "o alerta não aparece":**
+
+| Sintoma | Causa provável |
+|---|---|
+| Balão nem aparece | `ativo` não é `true` (ou a config é inválida). Veja `GET /api/alertas/produtividade` → `{"ativo":false}` |
+| Balão aparece, lista vazia | Nenhuma equipe abaixo do limite **depois do meio do turno**. Antes do meio não alerta |
+| Equipe esperada não alerta | Categoria fora de `categorias`; sem escala no SGE; turno vira-noite (fora da v1); sessão encerrada; em refeição (adia até meio+60 min); ou já chegou ao limite |
+| `alerta_produtividade_failed` no log | Erro no ciclo (não derruba o snapshot). `pm2 logs wpa-monitor --lines 200 \| grep alerta_produtividade` |
+| `alerta_produtividade_refeicao_falhou` | A consulta de refeição à WPA falhou: a equipe é **adiada**, nunca alertada sem essa informação. Se for frequente, é a WPA lenta |
+
+**Ver o que foi gravado:**
+```bash
+psql -d wpa_monitor -c "SELECT data, team_name, supervisor, executadas_disparo, executadas_atual, rejeitadas, disparado_em, resolvido_em FROM alertas_produtividade ORDER BY data DESC, disparado_em DESC LIMIT 30;"
+```
+A tabela guarda **um alerta por equipe por dia, para sempre** (é o registro de
+notificação). `resolvido_em` preenchido = a equipe chegou ao limite depois; um
+alerta resolvido **não reabre** no mesmo dia.
+
+**Limite conhecido (por desenho):** a regra de rejeição "por nota" (31/07) só é
+aplicada na consolidação noturna, não ao vivo. `executadas` ao meio-dia pode incluir
+nota que a EDP rejeitará depois (SF "Conta Paga"; ver P2-61). O efeito é o alerta
+**subalertar**, nunca alertar por engano.
+
+**Rollback:** `ativo:false` (acima) desliga na hora. Código: `git revert`. A tabela
+pode ficar.
+
 ## Backfills
 
 > ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**

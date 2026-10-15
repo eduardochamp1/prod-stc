@@ -86,6 +86,11 @@ API WPA (Azure) ──1──► wpaService.js
                           ├──async─► notaProcessor (payload da OS)
                           │             └─► note_details (TTL 90d)
                           │
+                          ├──async─► alertaProdutividade.avaliarCiclo()   (14/10/2026)
+                          │             └─► alertas_produtividade (1/equipe/dia)
+                          │             lê team_daily_totals do MESMO ciclo; só equipes
+                          │             reais; DESLIGADO por padrão (app_settings)
+                          │
                           └──async─► syncEscalas (WPA shiftType → equipes_oficiais)
 ```
 
@@ -170,7 +175,9 @@ services/
   notasMonitor.js            # Aba "Notas devolvidas"
   equipesOficiais.js         # Cache in-memory da whitelist
   osrmService.js             # Rotas OSRM via Cloudflare Worker
-  timeUtil.js                # dateBRT() — fonte única de "hoje em BRT"
+  timeUtil.js                # dateBRT(), hourBRT(), minutosBRT(), instanteBRT() — fonte única de BRT
+  alertaProdutividade.js     # Alerta de baixa produtividade: regras PURAS + avaliarCiclo(deps injetadas)
+  alertaBacktest.js          # Núcleo puro do backtest do alerta (usa a MESMA avaliarEquipe)
   memoCache.js               # TTL + single-flight para queries caras
   logger.js                  # JSON logs estruturados via stdout
 db/
@@ -179,6 +186,7 @@ db/
   rejectionsQueries.js       # Rejeições persistentes
   subcategoriasQueries.js    # Cache de classificação
   notasQueries.js            # Notas devolvidas
+  alertasQueries.js          # SQL fino do alerta (abrir por INSERT … DO NOTHING; o upsert do shim sobrescreveria)
   wpaTokenStore.js           # Persistência do JWT da WPA da EDP
 scripts/
   backfill-*.js              # Backfills retroativos (idempotentes)
@@ -221,6 +229,7 @@ Um `index.html` com **12.8k linhas** dividido informalmente por comentários:
 | `cronService` | `wpaService`, `dataWriter`, `classifierService`, `rejectionService`, `notaProcessor` | Qualquer erro não-catchado derruba o ciclo inteiro |
 | `routes/index.js` | `dbClient`, `db/queries`, `dataService`, `services/regionals`, `middleware/auth` | 54 `require()` inline escondem o grafo — cuidado ao mover |
 | Frontend | Backend `/api/*` | Zero validação de contrato — mudar shape do JSON pode quebrar UI silenciosamente |
+| `alertaProdutividade` | `team_daily_totals` (a MESMA fonte da coluna EXEC), `equipesOficiais.getMeta` (escala), `getSessionBreaks` (refeição), `timeUtil` (BRT) | Se a regra de produção do dia mudar em `_aggregateTeamDailyTotals`, o alerta muda junto (fonte única, de propósito). Não recontar `notasConcluidas` por outro caminho |
 | `pgShim` | `pg` driver puro | Se mudar API do supabase-js "legacy" caller, o shim tem que aprender novo método |
 | `applyScope` middleware | `req.user.regionals` do JWT v=2 | Se qualquer rota ler `req.user.regional` (singular), está morta silenciosamente — ver H1 |
 

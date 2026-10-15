@@ -1,7 +1,8 @@
 # PLANO — Alerta de baixa produtividade
 
 > Data: 2026-10-14. Executa a [SPEC-alerta-produtividade-2026-10-14.md](SPEC-alerta-produtividade-2026-10-14.md)
-> (aprovada pelo José em 14/10/2026). **Nada disto foi implementado.**
+> (aprovada pelo José em 14/10/2026). **T1–T9 implementadas em 14/10/2026** (backlog P2-63);
+> **T10 é do José, na VM.** Desvios do plano registrados abaixo, em "Execução".
 >
 > Regras do projeto que valem em TODA tarefa: ler o código antes de mexer
 > (nunca inventar `arquivo:linha`); **não remover comentários datados**;
@@ -149,3 +150,22 @@ T1 → T2 → T3 → T4 → T5 (backend, ~1 sessão) · T6 → T7 (~1 sessão) �
 · T10 (José, na VM). Cada tarefa fecha com suíte verde e commit próprio; dá para
 parar entre quaisquer duas sem deixar o sistema quebrado, porque o alerta só liga
 no passo 5 do T10.
+
+## Execução (14/10/2026)
+
+Todas as tarefas fecharam com suíte verde e commit próprio (1377 → 1583 testes).
+Desvios do plano, todos registrados na spec:
+
+- **T2:** a tolerância de refeição é medida a partir do **meio do turno** (adia até
+  `meio + tolerância`), não "desde o 1º adiamento" — evita guardar estado entre ciclos.
+- **T3:** a tabela ganhou `escala_inicio`/`escala_fim` (o painel mostra o turno).
+- **T6:** além do `PUT`, um `GET /api/admin/alertas/config`. O `PUT` **mescla** com o
+  gravado (mandar só o limite não desliga o alerta) e valida antes de exigir o banco.
+- **T7:** no celular o círculo **subia** até o meio do painel ao abrir — achado na
+  conferência visual e corrigido (`align-items: flex-end`), com teste.
+- **T8:** o núcleo do backtest virou módulo puro (`services/alertaBacktest.js`) e o
+  `timeUtil` ganhou `instanteBRT`; o script é só I/O, testado com pool falso.
+- **Intermitência:** na T4, uma execução da suíte teve 1 falha que não se repetiu em 3
+  reexecuções (mesmo padrão do **P3-19**; não identifiquei o arquivo). A partir da T5
+  o commit só sai com `fail 0`.
+
