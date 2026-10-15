@@ -246,11 +246,20 @@ test('a seção nova é renderizada DEPOIS da matriz existente', () => {
 test('a ligação lê de matrizData.equipes, não da variável `equipes`', () => {
   // São duas variáveis no mesmo escopo e só a primeira tem total_exec/
   // total_rej/regional. Usar a errada dá tabela vazia, em silêncio.
+  // 14/10/2026: o Acumulado passou a ler `matrizEquipes` — a MESMA lista da matriz,
+  // já recortada pelo filtro de Tipos (_matrizRecortarTipos). A proteção continua:
+  // a cadeia tem de nascer de matrizData.equipes, nunca da variável `equipes`.
   const i = SRC.indexOf('const acumuladoHTML');
   assert.ok(i > -1, 'não achei a atribuição de acumuladoHTML');
   const bloco = SRC.slice(i, i + 220);
-  assert.ok(bloco.includes('matrizData'),
-    `a ligação tem de partir de matrizData.equipes. Bloco:\n${bloco}`);
+  assert.ok(bloco.includes('matrizEquipes'),
+    `o Acumulado tem de ler a lista recortada da matriz (matrizEquipes). Bloco:\n${bloco}`);
+  const k = SRC.indexOf('const matrizEquipes');
+  assert.ok(k > -1 && k < i, 'matrizEquipes tem de ser definida antes do Acumulado');
+  const origem = SRC.slice(k, k + 160);
+  assert.ok(origem.includes('matrizData && matrizData.equipes'),
+    `matrizEquipes tem de partir de matrizData.equipes. Bloco:\n${origem}`);
+  assert.ok(!/_matrizRecortarTipos\(\s*equipes\b/.test(origem), 'nunca da variável `equipes`');
 });
 
 test('a matriz existente continua intacta', () => {

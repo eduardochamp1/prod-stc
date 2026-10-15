@@ -4684,11 +4684,19 @@
       // %REJ (= REJE ÷ SOMA, mesma fórmula do "% Rejeição" do Acumulado) —
       // começando pelo TOTAL. %REJ pedida pelo José em 07/10/2026, no TOTAL e em
       // cada tipo. É derivada das duas colunas ao lado, nunca de outra fonte.
+      // 14/10/2026: matriz e Acumulado respeitam o filtro de Tipos (antes ignoravam).
+      // Uma lista só, recortada uma vez, alimenta os dois — o TOTAL da matriz e o
+      // Acumulado fecham entre si e com as colunas visíveis.
+      const matrizEquipes = _matrizRecortarTipos(
+        (matrizData && matrizData.equipes) || [], tiposVisiveis, todosOsTiposMarcados);
+      const _tiposFiltroLabel = todosOsTiposMarcados ? ''
+        : ` <span style="font-weight:400;color:var(--text2);font-size:11px">· tipos: ${escapeHtml([...tiposVisiveis].join(', ') || 'nenhum')}</span>`;
       const matrizHTML = (() => {
-        const eqs = (matrizData && matrizData.equipes) || [];
+        const eqs = matrizEquipes;
         if (eqs.length === 0) return '';
         const ORDEM = ['LN','LE','DL','MD','SF','RL','UG','DD','II','PO','SO','RD'];
-        const presentes = new Set((matrizData.tipos || []));
+        const presentes = new Set((matrizData.tipos || [])
+          .filter(t => todosOsTiposMarcados || tiposVisiveis.has(t)));
         const tipos = [
           ...ORDEM.filter(t => presentes.has(t)),
           ...[...presentes].filter(t => !ORDEM.includes(t)).sort(),
@@ -4766,7 +4774,7 @@
             ...(COM_RAMAL.has(t) ? [cell(somaRamal(), 'mtx-interr')] : [])])).join('');
         return `
 <div class="perf-section">
-  <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe</div>
+  <div class="perf-section-title">Notas Atendidas por Tipo — EXEC × Rejeitadas por Equipe${_tiposFiltroLabel}</div>
   <div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:560px">
     <table class="perf-tipo-table mtx-table">
       <thead>
@@ -4786,8 +4794,9 @@
       // 07/10/2026: equipe que só aparece na matriz por INTERRUPÇÃO (sem EXEC nem
       // REJE no período) não entra aqui — o Acumulado é sobre atendidas, e a
       // linha sairia 0/0/0, coisa que esta tabela não mostrava antes.
+      // 14/10/2026: usa a lista JÁ recortada pelo filtro de Tipos (matrizEquipes).
       const acumuladoHTML = _renderAcumuladoRejeicao(
-        _agruparPerdaPorRegional(((matrizData && matrizData.equipes) || [])
+        _agruparPerdaPorRegional(matrizEquipes
           .filter(e => !(!e.total_exec && !e.total_rej && (e.total_interr > 0 || e.total_remota > 0 || e.total_ramal > 0)))));
 
       return `
@@ -10760,6 +10769,41 @@ ${acumuladoHTML}
      *                     equipes: [{ team_name, total_exec, total_rej,
      *                                 total_atend, taxa }] }]
      */
+    /**
+     * Recorta a matriz EQUIPE × TIPO ao filtro de Tipos da aba Gráficos. PURA.
+     *
+     * 14/10/2026 — José: "esse filtro não está aplicando em todas as tabelas e
+     * gráficos da aba de gráficos". KPIs, gauges, barras e o detalhamento já
+     * respeitavam o filtro de Tipos; a matriz "EXEC × Rejeitadas" e o "Acumulado —
+     * Perda por Rejeição" mostravam TODOS os tipos e um TOTAL de todos.
+     *
+     * Mantém só exec/rej/interr dos tipos marcados e RECALCULA total_exec/total_rej
+     * a partir deles, então o TOTAL da matriz e o Acumulado fecham com as colunas
+     * visíveis (aritmética por construção). REMOTAS mora no grupo II e RAMAIS no
+     * DD: somem junto com o tipo. Tipos fora da lista do filtro (ex.: OS, VL, PA, que
+     * só aparecem nos dados) somem quando há filtro — o usuário pediu tipos
+     * específicos. Equipe sem nada nos tipos marcados sai. Todos marcados ⇒ igual.
+     */
+    function _matrizRecortarTipos(equipes, tiposSel, todosMarcados) {
+      const lista = equipes || [];
+      if (todosMarcados) return lista;
+      const so = (obj) => Object.fromEntries(Object.entries(obj || {}).filter(([t]) => tiposSel.has(t)));
+      const soma = (o) => Object.values(o).reduce((s, v) => s + (Number(v) || 0), 0);
+      return lista.map(e => {
+        const exec = so(e.exec), rej = so(e.rej), interr = so(e.interr);
+        return {
+          ...e, exec, rej, interr,
+          total_exec: soma(exec), total_rej: soma(rej), total_interr: soma(interr),
+          total_remota: tiposSel.has('II') ? (Number(e.total_remota) || 0) : 0,
+          total_ramal:  tiposSel.has('DD') ? (Number(e.total_ramal)  || 0) : 0,
+        };
+      })
+        .filter(e => e.total_exec || e.total_rej || e.total_interr || e.total_remota || e.total_ramal)
+        // mesma ordem do servidor (_buildEquipeTipoMatrix), agora sobre os totais recortados
+        .sort((a, b) => (b.total_exec + b.total_rej) - (a.total_exec + a.total_rej)
+          || String(a.team_name).localeCompare(String(b.team_name)));
+    }
+
     function _agruparPerdaPorRegional(equipesMatriz) {
       const porReg = new Map();
 
