@@ -4781,6 +4781,19 @@
   pointer-events: auto;
 }
 
+/* 15/10/2026 (José, com 15 equipes no balão: "vamos chegar o balão para cima para
+   que mostremos mais linhas"): no desktop o painel deixa de nascer na altura do
+   botão e passa a ocupar a altura da janela — logo abaixo do cabeçalho sticky
+   (~72px) até perto do rodapé. O botão não se move. Celular tem regra própria. */
+@media (min-width: 641px) {
+  .fab-avisos-painel {
+    position: fixed;
+    left: 56px;                 /* encosta no botão; o margin-left dá o respiro */
+    top: 84px;
+    max-height: calc(100vh - 100px);
+  }
+}
+
 /* Cabeçalho escuro com a faixa amarela da marca. */
 .fab-avisos-cab {
   display: flex;

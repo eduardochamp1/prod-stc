@@ -398,6 +398,13 @@ describe('visual do painel (redesenho)', () => {
     assert.doesNotMatch(avisos, /translateY/);
     assert.match(CSS, /\.fab-avisos-painel \{[^}]*max-height: calc\(50vh \+ 110px\);/);
   });
+  test('desktop (15/10/2026): painel aberto ocupa a altura da janela, abaixo do cabeçalho', () => {
+    const bloco = CSS.slice(CSS.indexOf('@media (min-width: 641px) {\n  .fab-avisos-painel'));
+    const regra = bloco.slice(0, bloco.indexOf('}'));
+    assert.match(regra, /position: fixed;/);
+    assert.match(regra, /top: 84px;/);                        // cabeçalho sticky ~72px + respiro
+    assert.match(regra, /max-height: calc\(100vh - 100px\);/); // 84 em cima + 16 embaixo
+  });
   test('a lista ROLA dentro do painel (muitas equipes cabem)', () => {
     assert.match(CSS, /\.fab-avisos-lista \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
   });
