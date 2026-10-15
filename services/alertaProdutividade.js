@@ -195,6 +195,28 @@ function avaliarEquipe(e) {
   return { estado: 'abrir', motivo: 'abaixo_do_limite_no_meio_do_turno' };
 }
 
+// ── Apresentação ─────────────────────────────────────────────────────────────
+
+/**
+ * FUNÇÃO PURA. Linha da tabela → formato do endpoint/balão.
+ * Não expõe id interno nem coluna de controle; `executadas` é o valor ATUAL
+ * (atualizado a cada ciclo), não o do disparo.
+ */
+function formatarAlerta(r) {
+  const iso = (v) => (v instanceof Date ? v.toISOString() : (v || null));
+  return {
+    equipe: r.team_name,
+    regional: r.regional,
+    supervisor: r.supervisor || null,
+    executadas: Number(r.executadas_atual),
+    rejeitadas: Number(r.rejeitadas) || 0,
+    limite: Number(r.limite),
+    meioTurnoEm: iso(r.meio_turno_em),
+    disparadoEm: iso(r.disparado_em),
+    turno: { inicio: r.escala_inicio || null, fim: r.escala_fim || null },
+  };
+}
+
 // ── O ciclo ──────────────────────────────────────────────────────────────────
 
 /**
@@ -392,4 +414,5 @@ module.exports = {
   emRefeicao,
   avaliarEquipe,
   avaliarCiclo,
+  formatarAlerta,
 };

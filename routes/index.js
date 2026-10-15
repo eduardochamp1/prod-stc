@@ -67,6 +67,11 @@ const { login: authLogin, authMiddleware, requireAdmin, requireGerenciarUsuarios
 
 const router = express.Router();
 
+// Alerta de baixa produtividade (14/10/2026): regras puras + SQL fino. Nenhum dos
+// dois abre conexão no load (alertasQueries só pega o pool quando consulta).
+const { validarConfig: validarConfigAlerta, formatarAlerta } = require('../services/alertaProdutividade');
+const alertasQ = require('../db/alertasQueries');
+
 const MODE = (process.env.DATA_MODE || 'mock').toLowerCase();
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
@@ -970,6 +975,65 @@ router.post('/metas-diarias', async (req, res) => {
   } catch (err) {
     console.error('[API] setMetasDiarias:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── ALERTA DE BAIXA PRODUTIVIDADE (14/10/2026) ────────────────────────────────
+// Spec: docs/handoff/SPEC-alerta-produtividade-2026-10-14.md. Quem GRAVA é o
+// ciclo do cron (services/alertaProdutividade.avaliarCiclo); aqui só se LÊ e se
+// edita a configuração.
+
+// GET /api/alertas/produtividade — alertas ATIVOS de hoje, escopados às regionais
+// da conta (req.scope.regionals). `ativo:false` ⇒ lista vazia e o balão nem
+// aparece. Sem o banco (mock) também responde desligado, nunca erro.
+// Não devolve `err.message` cru (item P3-18a do backlog).
+router.get('/alertas/produtividade', async (req, res) => {
+  try {
+    const sq = sbq();
+    if (!sq) return res.json({ ativo: false, alertas: [] });
+    const linha = await sq.getSetting('alerta_produtividade');
+    const v = validarConfigAlerta(linha ? linha.data : null);
+    if (!v.ok || !v.config.ativo) return res.json({ ativo: false, alertas: [] });
+    const linhas = await alertasQ.listarAtivos(null, dateBRT(), req.scope.regionals);
+    res.json({ ativo: true, limite: v.config.limite, alertas: linhas.map(formatarAlerta) });
+  } catch (err) {
+    console.error('[API] alertasProdutividade:', err.message);
+    res.status(500).json({ error: 'Falha ao ler os avisos' });
+  }
+});
+
+// GET /admin/alertas/config — configuração em vigor (normalizada). Só admin
+// (herdado do router.use('/admin', requireAdmin)).
+router.get('/admin/alertas/config', async (req, res) => {
+  try {
+    const sq = sbq();
+    const linha = sq ? await sq.getSetting('alerta_produtividade') : null;
+    res.json(validarConfigAlerta(linha ? linha.data : null).config);
+  } catch (err) {
+    console.error('[API] getAlertasConfig:', err.message);
+    res.status(500).json({ error: 'Falha ao ler a configuração' });
+  }
+});
+
+// PUT /admin/alertas/config — MESCLA no que já está gravado (mandar só
+// {"limite":3} não pode desligar o alerta por esquecer o `ativo`), valida e grava
+// a configuração NORMALIZADA. Inválido ⇒ 400 e nada é gravado.
+router.put('/admin/alertas/config', async (req, res) => {
+  try {
+    const corpo = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : null;
+    if (!corpo) return res.status(400).json({ error: 'Configuração inválida', detalhes: ['corpo ausente ou ilegível'] });
+    const sq = sbq();
+    const atual = sq ? await sq.getSetting('alerta_produtividade') : null;
+    const base = atual && atual.data && typeof atual.data === 'object' ? atual.data : {};
+    const v = validarConfigAlerta({ ...base, ...corpo });
+    // Valida ANTES de exigir o banco: um 400 não depende dele.
+    if (!v.ok) return res.status(400).json({ error: 'Configuração inválida', detalhes: v.erros });
+    if (!sq) return res.status(503).json({ error: 'Banco indisponível' });
+    await sq.setSetting('alerta_produtividade', v.config);
+    res.json({ ok: true, config: v.config });
+  } catch (err) {
+    console.error('[API] setAlertasConfig:', err.message);
+    res.status(500).json({ error: 'Falha ao gravar a configuração' });
   }
 });
 
