@@ -114,27 +114,27 @@ async function executadasPorEquipe(pool, data) {
  *
  * Lido na hora, não gravado em alertas_produtividade: a coleta de interrupções
  * (interrupcaoService) roda no mesmo ciclo, e o número fica sempre atual sem
- * migration. Mesma regra da coluna INTERR da matriz (fonte única): 1 linha de
- * note_interrupcoes = 1 interrupção, no DIA dela e na EQUIPE que interrompeu,
- * só MD Subs Obsoleto/TL11 (queries._filtrarInterrupcoesPorSubcat). Nota ainda
- * sem subcategoria fica de fora, como na matriz.
+ * migration. 1 linha de note_interrupcoes = 1 interrupção, no DIA dela e na
+ * EQUIPE que interrompeu (mesma unidade da coluna INTERR da matriz).
+ *
+ * SEM o filtro de subcategoria da matriz (José, 15/10/2026): a 1ª versão contava
+ * só MD Subs Obsoleto/TL11, e a ECGPR51 com 1 interrupção de MD Outros ("46 -
+ * Aguardando Callback") aparecia no balão sem chip. A matriz é número de
+ * PRODUÇÃO (regra dele pra coluna INTERR); o balão responde "a equipe está
+ * travando notas?" — toda interrupção registrada conta. A coleta segue só MD
+ * (interrupcaoService.TIPOS_COLETADOS).
  *
  * @returns {Promise<Object<string, number>>} { 'ECGPR82': 2, ... } — só quem tem
  */
 async function interrompidasPorEquipe(pool, data, siglas) {
   if (!Array.isArray(siglas) || siglas.length === 0) return {};
   const { rows } = await _pool(pool).query(
-    `SELECT ni.interrupcao_id, ni.note_id, ni.team_name, ns.sub_code
-       FROM public.note_interrupcoes ni
-       LEFT JOIN public.note_subcategorias ns ON ns.note_id = ni.note_id
-      WHERE ni.dia = $1::date AND ni.team_name = ANY($2::text[])`, [data, siglas]);
-  const subcats = {};
-  for (const r of rows) if (r.sub_code) subcats[r.note_id] = { sub_code: r.sub_code };
-  const { _filtrarInterrupcoesPorSubcat } = require('./queries');
+    `SELECT team_name, COUNT(*)::int AS interrompidas
+       FROM public.note_interrupcoes
+      WHERE dia = $1::date AND team_name = ANY($2::text[])
+      GROUP BY team_name`, [data, siglas]);
   const out = {};
-  for (const r of _filtrarInterrupcoesPorSubcat(rows, subcats)) {
-    out[r.team_name] = (out[r.team_name] || 0) + 1;
-  }
+  for (const r of rows) out[r.team_name] = Number(r.interrompidas) || 0;
   return out;
 }
 
