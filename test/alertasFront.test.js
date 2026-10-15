@@ -537,3 +537,18 @@ describe('gerador do favicon (scripts/gerar-favicon.js)', () => {
     }
   });
 });
+
+describe('cantos do painel (15/10/2026)', () => {
+  const regra = () => CSS.slice(CSS.indexOf('.fab-avisos-painel {'), CSS.indexOf('}', CSS.indexOf('.fab-avisos-painel {')));
+  test('os 4 cantos iguais e borda inteira (sem o lado "colado" reto)', () => {
+    assert.match(regra(), /border-radius: 14px;/);
+    assert.doesNotMatch(regra(), /border-left: none/);
+    assert.doesNotMatch(regra(), /border-radius: 0 /);
+  });
+  test('respiro entre o botão e o painel', () => {
+    assert.match(regra(), /margin-left: 10px;/);
+  });
+  test('celular: largura = tela − botão − respiro − margem (sem rolagem lateral)', () => {
+    assert.match(CSS, /\.fab-avisos\.aberto \.fab-avisos-painel \{ max-width: calc\(100vw - 76px\); \}/);
+  });
+});

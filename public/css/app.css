@@ -4750,8 +4750,12 @@
   flex-direction: column;
   background: var(--branco);
   border: 1px solid var(--cinza2);
-  border-left: none;
-  border-radius: 0 14px 14px 0;
+  /* 15/10/2026 (José: "de um lado as bordas estão circulares, na outra quadrada"):
+     o painel é bem mais alto que o botão, então o lado esquerdo "colado" sobrava
+     reto abaixo dele. Agora é um cartão flutuante: 4 cantos iguais, borda
+     inteira e um respiro entre o botão e o painel. */
+  border-radius: 14px;
+  margin-left: 10px;
   box-shadow: 6px 8px 28px rgba(35, 31, 32, 0.22);
   max-width: 0;
   max-height: calc(50vh + 110px);   /* do botão até perto do rodapé da janela */
@@ -4926,7 +4930,8 @@
 @media (max-width: 640px) {
   .fab-avisos { top: auto; bottom: 84px; transform: none; align-items: flex-end; }
   .fab-avisos-painel { max-height: calc(100vh - 150px); }
-  .fab-avisos.aberto .fab-avisos-painel { max-width: 84vw; }
+  /* largura da tela menos botão (56) + respiro (10) + margem à direita (10) */
+  .fab-avisos.aberto .fab-avisos-painel { max-width: calc(100vw - 76px); }
   .fab-avisos-cab { min-width: 0; }
 }
 
