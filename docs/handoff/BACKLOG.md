@@ -171,6 +171,8 @@
 | P2-61 | Re-consolidação 30/09→13/10 derrubou 516 OS (SF dominante) — explicado: regra de rejeição de 31/07, não perda | Dados | **done / registro** (14/10/2026) — avisar quem reportou os números antigos à EDP |
 | P2-62 | Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo" (+ gauge e XLSX) | Dados/Produto | **done** (14/10/2026, 4d08c7b + 5152c9c) — conferir no portal se a quantidade do C93 é ramal ou metro |
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
+| P3-21 | Testes de fonte que procuram "
+" literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — normalizam CRLF; suíte verde com index.html em CRLF e em LF |
 
 ---
 
@@ -6283,7 +6285,21 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   2. deploy (`pm2 delete … && pm2 start …`);
   3. `node scripts/backtest-alerta-produtividade.js` e ler o VEREDITO;
   4. só então ligar (`RUNBOOK.md` → "Alerta de baixa produtividade").
-- **Não testado em produção:** a suíte cobre regra, ciclo, SQL (pool falso), rotas (modo mock) e o script do balão (executado num `vm`); o balão foi conferido à mão no navegador (desktop e celular, harness com o `app.css` real). **Nada rodou contra o Postgres real nem contra a WPA** — a 1ª execução de verdade é o backtest na VM.
+- **Não testado em produção:** a suíte cobre regra, ciclo, SQL (pool falso), rotas, **escopo por regional de ponta a ponta** e o script do balão (executado num `vm`); o balão foi conferido no harness e **no painel real em modo mock** (login, boot, 1 e 2 alertas, ESC, escape, console sem erro de JS). **Nada rodou contra o Postgres real nem contra a WPA** — a 1ª execução de verdade é a migration + o backtest na VM.
+- **Revisão de 14/10/2026:** ver "Revisão da execução" no PLAN — 1 erro de planejamento (backtest devia vir antes da UI), 4 lacunas (3 fechadas), 2 defeitos corrigidos.
 - **Limites conhecidos:** rejeição "por nota" só na consolidação noturna (subalerta, nunca alerta falso); turno vira-noite fora da v1; escala usada é a atual; o backtest não tem o ajuste de `_notaDate`.
 - **Rollback:** `ativo:false` (imediato). Código: `git revert`. A tabela pode ficar.
+
+## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
+
+- **Categoria:** Qualidade
+- **Status:** **done** (14/10/2026).
+- **Evidência:** nesta máquina `core.autocrlf=true`; um `git checkout` regravou `public/index.html` em CRLF e `test/escapeJsAttr.test.js` (P2-40, `indexOf('
+    }
+')`) ficou vermelho em 8 casos sem o código mudar. Dois testes novos do alerta (P2-63) tinham o mesmo defeito.
+- **Impacto:** o hook de pre-push roda AQUI; depois de um `git pull` que tocasse o `index.html`, o push seria bloqueado — convite ao `--no-verify`. Na VM (Linux) não acontece.
+- **Ação feita:** os testes que leem `index.html`/`app.css` como texto normalizam `
+` → `
+`. Varredura: com `index.html` e `app.css` em CRLF, a suíte inteira passa (1594/1594); em LF também.
+- **Regra para teste novo de fonte:** normalizar CRLF ao ler o arquivo.
 

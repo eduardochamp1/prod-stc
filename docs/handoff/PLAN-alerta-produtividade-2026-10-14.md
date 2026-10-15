@@ -169,3 +169,36 @@ Desvios do plano, todos registrados na spec:
   reexecuções (mesmo padrão do **P3-19**; não identifiquei o arquivo). A partir da T5
   o commit só sai com `fail 0`.
 
+## Revisão da execução (14/10/2026, a pedido do José)
+
+Releitura do plano contra o código. O que foi construído é o planejado; a revisão
+achou **um erro de PLANEJAMENTO** e **quatro lacunas de EXECUÇÃO**.
+
+**Erro de planejamento — a ordem.** O backtest (T8) só depende das regras puras (T2)
+e dos snapshots, mas ficou DEPOIS do painel (T7). Ele é o que valida o limite de 4;
+devia ter sido a 3ª tarefa, para o José decidir limite e categorias antes do
+investimento em tela. Consequência: tudo está construído sobre um limite ainda não
+medido. Lição para o próximo plano: **validar a regra com dado real antes da UI.**
+Também faltou prever um teste contra **Postgres real** (a migration 016 e as
+consultas do backtest nunca rodaram num banco).
+
+**Lacunas de execução e o que foi feito:**
+
+| # | Lacuna | Situação |
+|---|---|---|
+| 1 | T6 pedia teste de escopo por regional; só havia teste de fonte | **Fechada.** `test/alertasEscopo.test.js`: `applyScope` real → handler real → `listarAtivos` real → pool falso que aplica o `IN` pelos parâmetros. Prova de mutação: passar todas as regionais deixa 5 testes vermelhos |
+| 2 | T4 commitada com a suíte vermelha (cadeia de comandos errada) | Registrada; dali em diante o commit só sai com `fail 0` |
+| 3 | T7 conferida só num harness; o painel REAL nunca abriu no navegador | **Fechada.** Painel real em modo mock (porta 3002, a que o front usa em localhost): login, boot chama o endpoint (200), 1 e 2 alertas, título, ESC pelo handler global, escape de HTML, zero erro de JS no console. Os 503 de `/api/equipes` são do modo mock sem banco (desde 26/05) |
+| 4 | T8 "roda na VM em tempo razoável" | **Aberta** — só dá para medir na VM |
+
+**Dois defeitos achados na revisão, corrigidos:**
+
+- O balão chamava `_supPopularSelect` (assíncrona) dentro de `try/catch` sem
+  `await` — o comentário prometia tratar a falha e não tratava. Hoje não estoura
+  porque `_supCarregarEquipes` nunca rejeita; trocado por `.catch` na promise, com
+  teste que reproduz a rejeição (o padrão antigo fica vermelho).
+- Dois testes de fonte procuravam `\n` literal e **ficavam vermelhos num clone
+  Windows** (`core.autocrlf=true` — esta máquina, onde roda o hook de pre-push).
+  Agora normalizam CRLF; com TODOS os arquivos da feature em CRLF, os 234 testes
+  relacionados passam.
+

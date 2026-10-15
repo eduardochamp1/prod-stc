@@ -12710,7 +12710,11 @@ ${acumuladoHTML}
         if (icone) icone.textContent = '✕';
         toggle.setAttribute('aria-expanded', 'true');
         toggle.setAttribute('aria-label', 'Fechar avisos');
-        try { _supPopularSelect('avisos-supervisor-select'); } catch (_) { /* sem catálogo: segue sem filtro */ }
+        // Sem catálogo de supervisores o painel segue sem filtro. `_supPopularSelect` é
+        // ASSÍNCRONA: um try/catch em volta dela NÃO pega a rejeição (revisão de
+        // 14/10/2026) — por isso o .catch na promise, dentro do Promise.resolve
+        // (que também cobre um throw síncrono).
+        Promise.resolve().then(() => _supPopularSelect('avisos-supervisor-select')).catch(() => {});
         carregarAvisos();
       } else {
         w.classList.remove('aberto');

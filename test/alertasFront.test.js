@@ -19,8 +19,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const RAIZ = path.join(__dirname, '..');
-const HTML = fs.readFileSync(path.join(RAIZ, 'public', 'index.html'), 'utf8');
-const CSS = fs.readFileSync(path.join(RAIZ, 'public', 'css', 'app.css'), 'utf8');
+// Normaliza CRLF → LF: num clone Windows com core.autocrlf=true (esta máquina, onde
+// roda o hook de pre-push) o checkout grava CRLF, e os testes de fonte que procuram
+// "\n" ficavam vermelhos sem o código ter mudado (achado em 14/10/2026).
+const ler = (...p) => fs.readFileSync(path.join(RAIZ, ...p), 'utf8').replace(/\r\n/g, '\n');
+const HTML = ler('public', 'index.html');
+const CSS = ler('public', 'css', 'app.css');
 
 const INI = HTML.indexOf('/* ── AVISOS (balão esquerdo)');
 const FIM = HTML.indexOf('</script>', INI);
@@ -180,6 +184,25 @@ describe('abrir / fechar', () => {
     assert.equal(els['fab-avisos-icone'].textContent, '✕');
     assert.equal(els['fab-avisos-painel'].hidden, false);
     assert.equal(chamadas, 1);
+  });
+  test('catálogo de supervisores FALHANDO ao abrir não vira promise rejeitada solta', async () => {
+    const soltas = [];
+    const ouvinte = (e) => soltas.push(e);
+    process.on('unhandledRejection', ouvinte);
+    try {
+      const { ctx } = mundo();
+      ctx._supPopularSelect = () => Promise.reject(new Error('catálogo fora'));
+      ctx.avisosToggle();
+      await new Promise(r => setTimeout(r, 20));
+      // throw SÍNCRONO também não pode escapar
+      const m2 = mundo();
+      m2.ctx._supPopularSelect = () => { throw new Error('síncrono'); };
+      assert.doesNotThrow(() => m2.ctx.avisosToggle());
+      await new Promise(r => setTimeout(r, 20));
+    } finally {
+      process.off('unhandledRejection', ouvinte);
+    }
+    assert.deepEqual(soltas, []);
   });
   test('fechar: volta o 🔔 e esconde o painel', () => {
     const { ctx, els } = mundo();

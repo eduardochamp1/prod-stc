@@ -12,7 +12,10 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('node:vm');
 
-const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+// CRLF → LF (14/10/2026): num clone Windows com core.autocrlf=true o checkout grava
+// CRLF, e o `indexOf('\n    }\n')` abaixo não achava o fim da função — o teste ficava
+// vermelho sem o código ter mudado (e o pre-push desta máquina bloqueava o push).
+const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 function extrai(nome) {
   const i = html.indexOf(`function ${nome}(`);
