@@ -4668,22 +4668,24 @@
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   AVISOS — balão lateral ESQUERDO (14/10/2026)
+   AVISOS — balão lateral ESQUERDO (14/10/2026; redesenho visual na mesma data)
    ───────────────────────────────────────────────────────────────────────────
-   Alerta de baixa produtividade (SPEC-alerta-produtividade-2026-10-14). Espelho
-   do balão de ações da direita: círculo colado na borda, painel que expande pro
-   lado oposto. Silencioso por desenho: só um contador, sem popup nem som. Tom
-   escuro (preto) pra não competir com o amarelo do balão de ações.
+   Alerta de baixa produtividade (SPEC-alerta-produtividade-2026-10-14).
+   Silencioso por desenho: contador e um pulso discreto, sem popup nem som.
+
+   Posição: um pouco ACIMA do meio da tela (José, 14/10/2026: "não precisa ficar no
+   topo, só um pouco mais pra cima"). O painel abre pra BAIXO a partir do botão e a
+   lista rola dentro dele, então cabem muitas equipes. O balão de ações (⚡) continua
+   no meio da borda DIREITA.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .fab-avisos {
   position: fixed;
   left: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  top: calc(50% - 130px);    /* ~100px acima do centro do botão de antes */
   z-index: 900;              /* mesma camada do balão de ações: abaixo dos modais */
   display: flex;
-  align-items: center;
+  align-items: flex-start;   /* o botão fica parado; o painel cresce pra baixo */
   gap: 0;
 }
 /* Sem esta regra o display:flex acima GANHA do [hidden] do navegador (atributo não
@@ -4692,127 +4694,247 @@
 
 .fab-avisos-toggle {
   position: relative;
-  width: 46px;
-  height: 46px;
+  width: 56px;
+  height: 56px;
   border: none;
   border-radius: 0 50% 50% 0;
-  background: var(--preto);
+  background: linear-gradient(135deg, #3a3536 0%, var(--preto) 70%);
   color: var(--branco);
-  font-size: 19px;
+  font-size: 24px;
   line-height: 1;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 2px 2px 10px rgba(35, 31, 32, 0.22);
-  transition: background 0.15s, width 0.15s;
+  box-shadow: 3px 3px 14px rgba(35, 31, 32, 0.28);
+  transition: width 0.15s, box-shadow 0.15s;
   font-family: 'Roboto', sans-serif;
-  padding: 0;
+  padding: 0 4px 0 0;
 }
-.fab-avisos-toggle:hover { background: #3a3536; width: 52px; }
-.fab-avisos-toggle:focus-visible { outline: 3px solid var(--verde); outline-offset: 2px; }
+.fab-avisos-toggle:hover { width: 62px; box-shadow: 4px 4px 18px rgba(35, 31, 32, 0.34); }
+.fab-avisos-toggle:focus-visible { outline: 3px solid var(--amarelo); outline-offset: 2px; }
 
-/* Contador: vermelho da marca, no canto superior direito do círculo. */
+/* Contador: vermelho da marca, com aro branco pra destacar do fundo escuro. */
 .fab-avisos-contador {
   position: absolute;
-  top: -4px;
-  right: -2px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
+  top: -6px;
+  right: -4px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
   background: #ED1C24;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 18px;
+  line-height: 22px;
   text-align: center;
   box-sizing: border-box;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(237, 28, 36, 0.45);
 }
 .fab-avisos-contador[hidden] { display: none; }
 
+/* Pulso discreto (visual, sem som) quando há avisos. Desligado em reduced-motion. */
+.fab-avisos.tem-avisos .fab-avisos-toggle { animation: aviso-pulso 2.4s ease-out infinite; }
+@keyframes aviso-pulso {
+  0%   { box-shadow: 3px 3px 14px rgba(35, 31, 32, 0.28), 0 0 0 0 rgba(237, 28, 36, 0.45); }
+  70%  { box-shadow: 3px 3px 14px rgba(35, 31, 32, 0.28), 0 0 0 12px rgba(237, 28, 36, 0); }
+  100% { box-shadow: 3px 3px 14px rgba(35, 31, 32, 0.28), 0 0 0 0 rgba(237, 28, 36, 0); }
+}
+
+/* O painel. Fechado: largura zero, sem padding (com box-sizing:border-box um padding
+   fixo não cabe em max-width:0 e sobra uma lasca com borda e sombra). */
 .fab-avisos-painel {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   background: var(--branco);
   border: 1px solid var(--cinza2);
   border-left: none;
-  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
-  box-shadow: var(--shadow-lg);
-  /* Fechado: padding 0 também (mesma lição do balão de ações: um padding fixo não
-     cabe em max-width:0 e sobra uma lasca com borda e sombra). */
-  padding: 0;
+  border-radius: 0 14px 14px 0;
+  box-shadow: 6px 8px 28px rgba(35, 31, 32, 0.22);
   max-width: 0;
+  max-height: calc(50vh + 110px);   /* do botão até perto do rodapé da janela */
   opacity: 0;
   overflow: hidden;
   pointer-events: none;
-  transition: max-width 0.22s ease, opacity 0.18s ease, padding 0.22s ease;
+  transition: max-width 0.24s ease, opacity 0.18s ease;
 }
 .fab-avisos-painel[hidden] { display: none; }
 
 .fab-avisos.aberto .fab-avisos-painel {
-  max-width: 340px;
+  max-width: 400px;
   opacity: 1;
-  padding: 12px;
   pointer-events: auto;
 }
 
-.fab-avisos-topo {
+/* Cabeçalho escuro com a faixa amarela da marca. */
+.fab-avisos-cab {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 12px;
+  background: var(--preto);
+  color: var(--branco);
+  border-bottom: 3px solid var(--amarelo);
+  min-width: 340px;
+  box-sizing: border-box;
 }
+.fab-avisos-cab-icone {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(254, 196, 14, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+  flex: 0 0 auto;
+}
+.fab-avisos-cab-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .fab-avisos-titulo {
-  font-size: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.fab-avisos-sub { font-size: 13px; color: rgba(255, 255, 255, 0.72); }
+
+.fab-avisos-filtro {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--cinza2);
+  background: #faf9f6;
+}
+.fab-avisos-filtro label {
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text2);
-  white-space: nowrap;
 }
 .fab-avisos-sel {
-  width: 100%;
-  font-size: 12px;
-  padding: 4px 6px;
+  flex: 1;
+  font-size: 13px;
+  padding: 6px 8px;
   border: 1px solid var(--cinza2);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--branco);
   color: var(--text);
+  font-family: 'Roboto', sans-serif;
 }
 
+/* A lista ROLA dentro do painel: o painel tem altura máxima e a lista ocupa o resto. */
 .fab-avisos-lista {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 60vh;
-  overflow-y: auto;
-  min-width: 260px;
 }
-.aviso-item {
-  padding: 8px 10px;
-  border: 1px solid var(--cinza2);
-  border-left: 4px solid #ED1C24;
-  border-radius: 6px;
-  background: #fff;
-}
-.aviso-eq { font-size: 12px; color: var(--text); }
-.aviso-det { font-size: 11px; color: var(--text2); margin-top: 2px; }
-.aviso-vazio { font-size: 12px; color: var(--text2); padding: 6px 2px; white-space: nowrap; }
+.fab-avisos-lista [role="list"] { display: flex; flex-direction: column; gap: 10px; }
 
-/* Celular: canto inferior ESQUERDO. O balão de ações sobe pro bottom:84px da
-   DIREITA, então os dois nunca se encontram. */
+.aviso-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 11px 12px;
+  border: 1px solid var(--cinza2);
+  border-left: 5px solid #ED1C24;
+  border-radius: 10px;
+  background: #fff;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.aviso-item:hover { box-shadow: 0 3px 12px rgba(35, 31, 32, 0.10); transform: translateX(2px); }
+
+/* Número de executadas em destaque; a cor diz a gravidade. */
+.aviso-num {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  padding-top: 10px;
+  box-sizing: border-box;
+  background: #fdecea;
+  color: #b3141b;
+}
+.aviso-num strong { font-size: 22px; line-height: 1; font-weight: 700; }
+.aviso-num small { font-size: 12px; font-weight: 600; opacity: 0.75; margin-left: 1px; }
+
+.aviso-alta  { border-left-color: #ED1C24; }
+.aviso-alta  .aviso-num { background: #fdecea; color: #b3141b; }
+.aviso-media { border-left-color: #f08c00; }
+.aviso-media .aviso-num { background: #fff3e0; color: #b35f00; }
+.aviso-baixa { border-left-color: var(--amarelo); }
+.aviso-baixa .aviso-num { background: #fff8e1; color: #8a6309; }
+
+.aviso-corpo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.aviso-eq { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--text); }
+.aviso-reg {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--cinza2);
+  color: var(--text2);
+}
+.aviso-sup { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.aviso-sem-sup { color: var(--text2); font-style: italic; }
+.aviso-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 3px; }
+.aviso-chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f0ec;
+  color: var(--text2);
+  white-space: nowrap;
+}
+.aviso-chip-rej { background: #fdecea; color: #b3141b; font-weight: 600; }
+
+.aviso-vazio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 26px 10px;
+  font-size: 14px;
+  color: var(--text2);
+  text-align: center;
+}
+.aviso-vazio span { font-size: 28px; }
+
+.fab-avisos-rodape {
+  padding: 9px 18px 11px;
+  font-size: 11.5px;
+  color: var(--text2);
+  border-top: 1px solid var(--cinza2);
+  background: #faf9f6;
+  line-height: 1.35;
+}
+
+/* Celular: o alto da tela é o cabeçalho (alto e sticky), então o balão fica no
+   canto inferior ESQUERDO — o de ações está no inferior DIREITO — e o painel abre
+   pra CIMA ocupando quase a tela toda (flex-end: o círculo não sobe ao abrir). */
 @media (max-width: 640px) {
-  /* flex-end: ancorado embaixo, o círculo NÃO sobe pro meio do painel quando ele
-     abre (com `center` o toggle pulava ~200px pra cima a cada abertura). */
   .fab-avisos { top: auto; bottom: 84px; transform: none; align-items: flex-end; }
-  .fab-avisos.aberto .fab-avisos-painel { max-width: 82vw; }
-  .fab-avisos-lista { min-width: 0; }
+  .fab-avisos-painel { max-height: calc(100vh - 150px); }
+  .fab-avisos.aberto .fab-avisos-painel { max-width: 84vw; }
+  .fab-avisos-cab { min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .fab-avisos-toggle,
-  .fab-avisos-painel { transition: none; }
+  .fab-avisos-painel,
+  .aviso-item { transition: none; }
+  .fab-avisos.tem-avisos .fab-avisos-toggle { animation: none; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

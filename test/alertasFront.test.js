@@ -37,7 +37,10 @@ function mundo({ fetchImpl, siglas = null } = {}) {
   const el = (id, extra = {}) => (els[id] = { id, hidden: false, textContent: '', innerHTML: '', classList: { add() {}, remove() {} },
     attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; }, focus() { this.focado = true; }, ...extra });
   for (const id of ['fab-avisos', 'fab-avisos-painel', 'fab-avisos-toggle', 'fab-avisos-icone',
-    'fab-avisos-contador', 'fab-avisos-lista', 'avisos-supervisor-select']) el(id);
+    'fab-avisos-contador', 'fab-avisos-lista', 'avisos-supervisor-select', 'fab-avisos-sub', 'fab-avisos-rodape']) el(id);
+  // classList que GUARDA as classes (o painel usa 'tem-avisos' pro pulso)
+  const cls = new Set();
+  els['fab-avisos'].classList = { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c) };
   els['fab-avisos-toggle'].attrs['aria-expanded'] = 'false';
 
   const ctx = {
@@ -303,6 +306,77 @@ describe('CSS', () => {
     assert.match(movel, /align-items: flex-end/);
   });
   test('respeita prefers-reduced-motion', () => {
-    assert.match(CSS, /prefers-reduced-motion: reduce\) \{\s*\.fab-avisos-toggle,\s*\.fab-avisos-painel \{ transition: none; \}/);
+    const bloco = CSS.slice(CSS.indexOf('AVISOS — balão lateral ESQUERDO'));
+    const rm = bloco.slice(bloco.indexOf('@media (prefers-reduced-motion: reduce)'));
+    assert.match(rm, /\.fab-avisos-toggle,\s*\.fab-avisos-painel,\s*\.aviso-item \{ transition: none; \}/);
+    assert.match(rm, /\.fab-avisos\.tem-avisos \.fab-avisos-toggle \{ animation: none; \}/, 'o pulso desliga em reduced-motion');
+  });
+});
+
+// ── Redesenho visual (14/10/2026) ────────────────────────────────────────────
+describe('visual do painel (redesenho)', () => {
+  test('gravidade pela distância do limite: 0 alta, < metade média, resto baixa', () => {
+    const { ctx } = mundo();
+    assert.equal(ctx.avisosGravidade(0, 4), 'alta');
+    assert.equal(ctx.avisosGravidade(1, 4), 'media');
+    assert.equal(ctx.avisosGravidade(2, 4), 'baixa');
+    assert.equal(ctx.avisosGravidade(3, 4), 'baixa');
+    assert.equal(ctx.avisosGravidade(2, 6), 'media');
+  });
+  test('cartão: número/limite em destaque, classe de gravidade, chips e aria-label com o resumo', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta({ executadas: 0, rejeitadas: 2 })]) });
+    await ctx.carregarAvisos();
+    const html = els['fab-avisos-lista'].innerHTML;
+    assert.match(html, /class="aviso-item aviso-alta"/);
+    assert.match(html, /<strong>0<\/strong><small>\/4<\/small>/);
+    assert.match(html, /\+2 rejeitadas/);
+    assert.match(html, /meio do turno 12:30/);
+    assert.match(html, /turno 08:00–17:00/);
+    assert.match(html, /aria-label="ECGPR53, 0 executadas \(\+2 rejeitadas\)/);
+    assert.match(html, /role="list"/);
+  });
+  test('sem supervisor: mostra "sem supervisor" (não um "Sup." vazio)', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta({ supervisor: null })]) });
+    await ctx.carregarAvisos();
+    assert.match(els['fab-avisos-lista'].innerHTML, /sem supervisor/);
+    assert.doesNotMatch(els['fab-avisos-lista'].innerHTML, /Sup\. /);
+  });
+  test('cabeçalho resume (plural/singular) e o rodapé explica a regra com o limite em vigor', async () => {
+    const { ctx, els } = mundo({ fetchImpl: async () => ({ ok: true, json: async () => ({ ativo: true, limite: 3, alertas: [alerta()] }) }) });
+    await ctx.carregarAvisos();
+    assert.equal(els['fab-avisos-sub'].textContent, '1 equipe abaixo de 3 notas');
+    assert.match(els['fab-avisos-rodape'].textContent, /menos de 3 notas executadas/);
+    ctx.fetch = resposta(true, [alerta(), alerta({ equipe: 'X' })]);
+    await ctx.carregarAvisos();
+    assert.equal(els['fab-avisos-sub'].textContent, '2 equipes abaixo de 4 notas', 'sem limite na resposta → 4');
+  });
+  test('vazio e falha também mudam o cabeçalho', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, []) });
+    await ctx.carregarAvisos();
+    assert.equal(els['fab-avisos-sub'].textContent, 'nenhuma equipe abaixo do esperado');
+    ctx.fetch = async () => { throw new Error('rede'); };
+    await ctx.carregarAvisos();
+    assert.equal(els['fab-avisos-sub'].textContent, 'sem conexão com o servidor');
+  });
+  test('o pulso (classe tem-avisos) só existe quando há aviso visível', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta()]) });
+    await ctx.carregarAvisos();
+    assert.equal(els['fab-avisos'].classList.contains('tem-avisos'), true);
+    ctx.fetch = resposta(true, []);
+    await ctx.carregarAvisos();
+    assert.equal(els['fab-avisos'].classList.contains('tem-avisos'), false);
+  });
+  test('posição: um pouco ACIMA do meio (não no topo), botão parado e painel crescendo pra baixo', () => {
+    const avisos = CSS.slice(CSS.indexOf('.fab-avisos {'), CSS.indexOf('.fab-avisos[hidden]'));
+    assert.match(avisos, /top: calc\(50% - 130px\);/);
+    assert.match(avisos, /align-items: flex-start;/);
+    assert.doesNotMatch(avisos, /translateY/);
+    assert.match(CSS, /\.fab-avisos-painel \{[^}]*max-height: calc\(50vh \+ 110px\);/);
+  });
+  test('a lista ROLA dentro do painel (muitas equipes cabem)', () => {
+    assert.match(CSS, /\.fab-avisos-lista \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
+  });
+  test('o pulso é só visual: nenhum som/Notification/vibração no script', () => {
+    assert.doesNotMatch(SCRIPT_AVISOS, /Audio|Notification|vibrate/);
   });
 });

@@ -217,6 +217,14 @@ processo; o estado vive na tabela.
   `bottom: 84px`). O novo usa o prefixo **`.fab-avisos*`** e, no celular, fica no
   **canto inferior esquerdo**, para não colidir com ele.
 - Fechado: círculo 🔔 com **contador** (oculto quando 0). Aberto: painel curto.
+- **Redesenho visual (14/10/2026, pedido do José):** botão um pouco **acima do meio**
+  da tela (`top: calc(50% - 130px)` — "não precisa ficar no topo, só um pouco mais pra
+  cima"), maior (56px) e com pulso discreto quando há aviso (desliga em
+  reduced-motion); painel de 400px que abre pra baixo com lista rolável; cabeçalho
+  escuro com faixa amarela e resumo ("9 equipes abaixo de 4 notas"); um cartão por
+  equipe com o número de executadas em destaque e cor por gravidade (0 vermelho,
+  < metade laranja, resto âmbar), etiquetas de rejeitadas/meio do turno/turno; rodapé
+  com a regra e o limite em vigor. No celular continua no canto inferior esquerdo.
 - Cada linha: `ECXXX00 · GUA · Sup. FULANO` e abaixo
   `2 executadas (+1 rejeitada) às 12:30 · turno 08–17h`. Ordenação: menos
   executadas primeiro; empate pelo disparo mais antigo.

@@ -12601,12 +12601,20 @@ ${acumuladoHTML}
     </button>
     <div class="fab-avisos-painel" id="fab-avisos-painel" role="region"
          aria-label="Avisos de produtividade" hidden>
-      <div class="fab-avisos-topo">
-        <span class="fab-avisos-titulo">Equipes abaixo do esperado</span>
+      <div class="fab-avisos-cab">
+        <span class="fab-avisos-cab-icone" aria-hidden="true">🔔</span>
+        <div class="fab-avisos-cab-txt">
+          <span class="fab-avisos-titulo">Avisos de produtividade</span>
+          <span class="fab-avisos-sub" id="fab-avisos-sub"></span>
+        </div>
+      </div>
+      <div class="fab-avisos-filtro">
+        <label for="avisos-supervisor-select">Supervisor</label>
         <select id="avisos-supervisor-select" class="fab-avisos-sel"
                 aria-label="Filtrar avisos por supervisor" onchange="avisosRender()"></select>
       </div>
       <div class="fab-avisos-lista" id="fab-avisos-lista"></div>
+      <div class="fab-avisos-rodape" id="fab-avisos-rodape"></div>
     </div>
   </div>
 
@@ -12649,12 +12657,47 @@ ${acumuladoHTML}
       return siglas ? todas.filter(a => siglas.has(String(a.equipe).toUpperCase())) : todas;
     }
 
+    /* Gravidade pela distância do limite: 0 executadas é o caso mais grave. Só cor —
+       a regra (abaixo do limite) é a mesma pra todos. */
+    function avisosGravidade(executadas, limite) {
+      const n = Number(executadas) || 0;
+      const lim = Number(limite) || 4;
+      if (n === 0) return 'alta';
+      if (n < lim / 2) return 'media';
+      return 'baixa';
+    }
+
+    /* Um cartão de equipe. Todo texto do banco passa por escapeHtml; o resumo em
+       texto corrido (avisosTexto) vai no aria-label pra leitor de tela. */
+    function avisosCartao(a) {
+      const lim = Number(a.limite) || Number(_avisosDados.limite) || 4;
+      const t = a.turno || {};
+      const chips = [];
+      if (Number(a.rejeitadas) > 0) {
+        chips.push(`<span class="aviso-chip aviso-chip-rej">+${escapeHtml(avisosPlural(Number(a.rejeitadas), 'rejeitada', 'rejeitadas'))}</span>`);
+      }
+      if (a.meioTurnoEm) chips.push(`<span class="aviso-chip">meio do turno ${escapeHtml(avisosHoraBRT(a.meioTurnoEm))}</span>`);
+      if (t.inicio && t.fim) chips.push(`<span class="aviso-chip">turno ${escapeHtml(t.inicio)}–${escapeHtml(t.fim)}</span>`);
+      return `
+          <div class="aviso-item aviso-${avisosGravidade(a.executadas, lim)}" role="listitem"
+               aria-label="${escapeHtml(a.equipe + ', ' + avisosTexto(a))}">
+            <div class="aviso-num" aria-hidden="true"><strong>${escapeHtml(Number(a.executadas) || 0)}</strong><small>/${escapeHtml(lim)}</small></div>
+            <div class="aviso-corpo">
+              <div class="aviso-eq"><strong>${escapeHtml(a.equipe)}</strong><span class="aviso-reg">${escapeHtml(a.regional)}</span></div>
+              <div class="aviso-sup">${a.supervisor ? 'Sup. ' + escapeHtml(a.supervisor) : '<span class="aviso-sem-sup">sem supervisor</span>'}</div>
+              ${chips.length ? `<div class="aviso-chips">${chips.join('')}</div>` : ''}
+            </div>
+          </div>`;
+    }
+
     function avisosRender() {
       const wrap = document.getElementById('fab-avisos');
       if (!wrap) return;
       wrap.hidden = !_avisosDados.ativo;           // desligado ⇒ o balão nem aparece
       const visiveis = _avisosDados.ativo ? avisosVisiveis() : [];
       const n = visiveis.length;
+      const lim = Number(_avisosDados.limite) || 4;
+      if (wrap.classList) wrap.classList[n > 0 ? 'add' : 'remove']('tem-avisos');
 
       const cont = document.getElementById('fab-avisos-contador');
       if (cont) {
@@ -12663,18 +12706,26 @@ ${acumuladoHTML}
       }
       document.title = n > 0 ? '(' + n + ') ' + AVISOS_TITULO_BASE : AVISOS_TITULO_BASE;
 
+      const sub = document.getElementById('fab-avisos-sub');
+      if (sub) {
+        sub.textContent = _avisosFalhou ? 'sem conexão com o servidor'
+          : n === 0 ? 'nenhuma equipe abaixo do esperado'
+          : avisosPlural(n, 'equipe', 'equipes') + ' abaixo de ' + lim + ' notas';
+      }
+      const rodape = document.getElementById('fab-avisos-rodape');
+      if (rodape) {
+        rodape.textContent = 'Equipes que passaram do meio do turno com menos de ' + lim
+          + ' notas executadas · atualiza a cada 5 min';
+      }
+
       const lista = document.getElementById('fab-avisos-lista');
       if (!lista) return;
       if (_avisosFalhou) {
-        lista.innerHTML = '<div class="aviso-vazio">Avisos indisponíveis.</div>';
+        lista.innerHTML = '<div class="aviso-vazio aviso-vazio-erro"><span aria-hidden="true">⚠️</span>Avisos indisponíveis.</div>';
       } else if (n === 0) {
-        lista.innerHTML = '<div class="aviso-vazio">Nenhum alerta agora.</div>';
+        lista.innerHTML = '<div class="aviso-vazio"><span aria-hidden="true">✅</span>Nenhum alerta agora.</div>';
       } else {
-        lista.innerHTML = visiveis.map(a => `
-          <div class="aviso-item">
-            <div class="aviso-eq"><strong>${escapeHtml(a.equipe)}</strong> · ${escapeHtml(a.regional)}${a.supervisor ? ' · Sup. ' + escapeHtml(a.supervisor) : ''}</div>
-            <div class="aviso-det">${escapeHtml(avisosTexto(a))}</div>
-          </div>`).join('');
+        lista.innerHTML = `<div role="list">${visiveis.map(avisosCartao).join('')}</div>`;
       }
     }
 
@@ -12683,7 +12734,7 @@ ${acumuladoHTML}
         const r = await fetch(`${API}/alertas/produtividade`);
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const j = await r.json();
-        _avisosDados = { ativo: !!j.ativo, alertas: Array.isArray(j.alertas) ? j.alertas : [] };
+        _avisosDados = { ativo: !!j.ativo, limite: j.limite, alertas: Array.isArray(j.alertas) ? j.alertas : [] };
         _avisosFalhou = false;
       } catch (e) {
         _avisosFalhou = true;
