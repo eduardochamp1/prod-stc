@@ -76,9 +76,12 @@ Uma equipe gera alerta no dia D quando **todas** forem verdadeiras:
 4. `executadas < config.limite`, onde `executadas` = **soma de `count` de
    `team_daily_totals`** para `date = dateBRT()` e a equipe (§6, "Fonte").
 5. **Não** está em refeição **agora**: sem intervalo de refeição **em aberto** na
-   sessão (§10.1). Em refeição, o alerta **espera o ciclo seguinte**; passados
-   `config.tolerancia_refeicao_min` desde o primeiro adiamento, avalia mesmo
-   assim (almoço de mais de 1h também é informação).
+   sessão (§10.1). Em refeição, o alerta **espera o ciclo seguinte**, até
+   `meio_turno + config.tolerancia_refeicao_min`; depois disso avalia mesmo assim
+   (almoço de mais de 1h também é informação). Medir a partir do **meio do turno**
+   (e não "desde o 1º adiamento") evita guardar estado entre ciclos. Se a consulta
+   de refeição **falhar ou não for feita** (teto de 8 por ciclo), o resultado é
+   `adiar` — nunca alerta sem essa informação.
 
 **Um alerta por equipe por dia.** Se depois a equipe chegar a `limite`, o alerta
 é marcado como **resolvido** (sai da lista, fica no registro) e **não volta a
