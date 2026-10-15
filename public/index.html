@@ -11837,9 +11837,16 @@ ${acumuladoHTML}
       // Inicializa o mapa Leaflet apenas uma vez
       if (!_mapaMap) {
         _mapaMap = L.map('mapa-leaflet', { center: [-20.5, -40.9], zoom: 10 });
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        // 15/10/2026 — mapa com tiles "403 Access blocked" ("App is not
+        // following the tile usage policy"). O server manda Referrer-Policy
+        // same-origin (server.js), então o browser pedia tile SEM Referer, e o
+        // OSM bloqueia isso. Aqui o tile manda só a ORIGEM (sem caminho nem
+        // query) — o mínimo que a política pede; o resto do painel segue sem
+        // Referer. E sem o {s}: os subdomínios a/b/c são legado do OSM.
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
           maxZoom: 19,
+          referrerPolicy: 'strict-origin-when-cross-origin',
         }).addTo(_mapaMap);
       } else {
         setTimeout(() => _mapaMap.invalidateSize(), 100);

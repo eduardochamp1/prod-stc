@@ -35,7 +35,8 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https://*.tile.openstreetmap.org",
+  // tile.openstreetmap.org sem subdomínio (15/10/2026) — `*.` não casa o host nu.
+  "img-src 'self' data: https://tile.openstreetmap.org https://*.tile.openstreetmap.org",
   "connect-src 'self' https://osrm-proxy.jose-zouain.workers.dev",
   "font-src 'self'",
   "object-src 'none'",
