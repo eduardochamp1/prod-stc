@@ -37,21 +37,44 @@ describe('selecionarCandidatas — gatilho por ExecutionStatus 3', () => {
     notasExecutadas: [nota('b', 'MD', 3), nota('c', 'MD', 6), nota('d', 'PO', 3)],
   }];
 
-  test('só MD em 3 vira candidata (PO em 3 e MD em 1/6 não)', () => {
-    const { candidatas, atual } = svc.selecionarCandidatas(teams, new Map());
-    assert.deepEqual(candidatas.map(c => c.note_id), ['b']);
+  test('qualquer tipo em 3 vira candidata, MD primeiro (15/10/2026: antes só MD)', () => {
+    const { candidatas, atual } = svc.selecionarCandidatas(teams, new Map(), null);
+    assert.deepEqual(candidatas.map(c => c.note_id), ['b', 'd']);
     assert.equal(atual.get('a'), 1);
     assert.equal(atual.get('c'), 6);
+    assert.equal(atual.get('d'), 3);
+  });
+
+  test('MD fica na frente mesmo quando aparece depois (prioridade no teto do ciclo)', () => {
+    const t2 = [{ notasExecutadas: [nota('x', 'SF', 3), nota('y', 'DD', 3), nota('z', 'MD', 3)] }];
+    assert.deepEqual(svc.selecionarCandidatas(t2, new Map(), null).candidatas.map(c => c.note_id), ['z', 'x', 'y']);
+  });
+
+  test('INTERR_TIPOS restringe (rollback sem código): só MD → volta ao comportamento antigo', () => {
+    const { candidatas, atual } = svc.selecionarCandidatas(teams, new Map(), new Set(['MD']));
+    assert.deepEqual(candidatas.map(c => c.note_id), ['b']);
     assert.equal(atual.has('d'), false);
   });
 
+  test('sem INTERR_TIPOS no ambiente, o padrão é todos os tipos', () => {
+    const antes = process.env.INTERR_TIPOS;
+    delete process.env.INTERR_TIPOS;
+    try {
+      assert.deepEqual(svc.selecionarCandidatas(teams, new Map()).candidatas.map(c => c.note_id), ['b', 'd']);
+      process.env.INTERR_TIPOS = 'md';
+      assert.deepEqual(svc.selecionarCandidatas(teams, new Map()).candidatas.map(c => c.note_id), ['b']);
+    } finally {
+      if (antes === undefined) delete process.env.INTERR_TIPOS; else process.env.INTERR_TIPOS = antes;
+    }
+  });
+
   test('MD que JÁ estava em 3 no ciclo anterior não gasta outro GET', () => {
-    const { candidatas } = svc.selecionarCandidatas(teams, new Map([['b', 3]]));
+    const { candidatas } = svc.selecionarCandidatas(teams, new Map([['b', 3]]), new Set(['MD']));
     assert.deepEqual(candidatas, []);
   });
 
   test('MD que saiu de 3 e voltou (nova interrupção) é buscada de novo', () => {
-    const { candidatas } = svc.selecionarCandidatas(teams, new Map([['b', 6]]));
+    const { candidatas } = svc.selecionarCandidatas(teams, new Map([['b', 6]]), new Set(['MD']));
     assert.deepEqual(candidatas.map(c => c.note_id), ['b']);
   });
 });
@@ -88,6 +111,14 @@ describe('_filtrarInterrupcoesPorSubcat — só Subs Obsoleto e TL11', () => {
     const rows = [{ note_id: 'o' }, { note_id: 't' }, { note_id: 'x' }, { note_id: 'sem' }];
     const subcats = { o: { sub_code: 'OBSOLETO' }, t: { sub_code: 'TL11' }, x: { sub_code: 'OUTROS' } };
     assert.deepEqual(_filtrarInterrupcoesPorSubcat(rows, subcats).map(r => r.note_id), ['o', 't']);
+  });
+  test('coleta ampliada (15/10/2026): interrupção de SF/DD/PO não entra na coluna INTERR', () => {
+    const rows = [
+      { note_id: 'md', tipo: 'MD' }, { note_id: 'sf', tipo: 'SF' },
+      { note_id: 'dd', tipo: 'DD' }, { note_id: 'po', tipo: 'PO' },
+    ];
+    const subcats = { md: { sub_code: 'TL11' }, sf: { sub_code: 'L1' }, dd: { sub_code: 'C93' } };
+    assert.deepEqual(_filtrarInterrupcoesPorSubcat(rows, subcats).map(r => r.note_id), ['md']);
   });
 });
 
@@ -147,10 +178,14 @@ describe('deveColetarDoDetalhe — 2º caminho (MD concluída/rejeitada com inte
   test('MD com Interruptions[] preenchido → coleta', () => {
     assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD', Interruptions: [{ Id: 'x' }] }), true);
   });
-  test('MD sem interrupção, ou outro tipo → não gasta GET', () => {
-    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD', Interruptions: [] }), false);
-    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD' }), false);
-    assert.equal(svc.deveColetarDoDetalhe({ Type: 'PO', Interruptions: [{ Id: 'x' }] }), false);
-    assert.equal(svc.deveColetarDoDetalhe(null), false);
+  test('sem interrupção não gasta GET', () => {
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD', Interruptions: [] }, null), false);
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'MD' }, null), false);
+    assert.equal(svc.deveColetarDoDetalhe(null, null), false);
+  });
+  test('outro tipo com interrupção agora coleta (15/10/2026); INTERR_TIPOS=MD restringe', () => {
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'PO', Interruptions: [{ Id: 'x' }] }, null), true);
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'SF', Interruptions: [{ Id: 'x' }] }, null), true);
+    assert.equal(svc.deveColetarDoDetalhe({ Type: 'PO', Interruptions: [{ Id: 'x' }] }, new Set(['MD'])), false);
   });
 });

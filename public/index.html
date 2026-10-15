@@ -12891,7 +12891,7 @@ ${acumuladoHTML}
       // [mesmo dia: passou a contar TODA interrupção registrada, sem o filtro
       //  Obsoleto/TL11 — ver alertasQueries.interrompidasPorEquipe]
       if (Number(a.interrompidas) > 0) {
-        chips.push(`<span class="aviso-chip aviso-chip-int" title="Interrupções registradas hoje (notas MD, qualquer subcategoria)">+${escapeHtml(avisosPlural(Number(a.interrompidas), 'interrompida', 'interrompidas'))}</span>`);
+        chips.push(`<span class="aviso-chip aviso-chip-int" title="Interrupções registradas hoje (qualquer tipo de nota)">+${escapeHtml(avisosPlural(Number(a.interrompidas), 'interrompida', 'interrompidas'))}</span>`);
       }
       if (a.meioTurnoEm) chips.push(`<span class="aviso-chip">meio do turno ${escapeHtml(avisosHoraBRT(a.meioTurnoEm))}</span>`);
       if (t.inicio && t.fim) chips.push(`<span class="aviso-chip">turno ${escapeHtml(t.inicio)}–${escapeHtml(t.fim)}</span>`);

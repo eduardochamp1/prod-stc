@@ -2,6 +2,7 @@
  * services/interrupcaoService.js
  *
  * Coleta das INTERRUPÇÕES de notas MD → tabela `note_interrupcoes`.
+ * (15/10/2026: todos os tipos de nota — ver "TODOS OS TIPOS" abaixo.)
  *
  * ── O PEDIDO (José, 07/10/2026) ─────────────────────────────────────────────
  * Coluna de interrupções no grupo MD da matriz "Notas Atendidas por Tipo",
@@ -49,20 +50,72 @@
 
 const log = require('./logger').forModule('interrupcoes');
 
-const TIPOS_COLETADOS = new Set(['MD']);
+// ── TODOS OS TIPOS (15/10/2026) ─────────────────────────────────────────────
+// Pedido do José: "amplia a coleta de interrupções para todos os tipos de nota,
+// medindo o custo na conta EDP". Até aqui era só MD (pedido de 07/10, coluna
+// INTERR da matriz). A matriz continua só MD Obsoleto/TL11 — o filtro dela é na
+// LEITURA (db/queries._filtrarInterrupcoesPorSubcat); o balão de avisos conta tudo.
+//
+// ⚠️ RISCO DE CUSTO: o gatilho "ExecutionStatus 3 = interrompida" foi observado
+// em MD (P2-55, hipótese). Se em outro tipo o 3 for o "em andamento" normal, cada
+// nota em execução vira 1 GET. Por isso:
+//   - TETO de GETs por ciclo (INTERR_MAX_GETS_CICLO, padrão 30). O excedente NÃO
+//     é marcado como visto: entra no ciclo seguinte. MD tem prioridade no teto.
+//   - MEDIÇÃO por tipo: GETs, quantos voltaram COM interrupção e quantos VAZIOS.
+//     Vazio = GET gasto à toa = o 3 não significa interrompida naquele tipo.
+//     Sai a cada ciclo no log e acumulado do dia em custoDoDia() (/admin/health).
+//   - Rollback sem mexer em código: INTERR_TIPOS=MD no .env (csv; vazio = todos).
 const ES_INTERROMPIDA = 3;
 const CONCORRENCIA = 4;
+
+function _tiposDoEnv() {
+  const v = String(process.env.INTERR_TIPOS || '').trim();
+  if (!v) return null;                                   // null = todos os tipos
+  return new Set(v.split(',').map(x => x.trim().toUpperCase()).filter(Boolean));
+}
+function _tipoColetado(tipo, tipos) {
+  return !!tipo && (!tipos || tipos.has(tipo));
+}
+function _maxGetsCiclo() {
+  const n = Number(process.env.INTERR_MAX_GETS_CICLO);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30;
+}
+
+// Custo acumulado do DIA BRT (memória do processo — instances=1, CLAUDE.md).
+let _custo = null;
+function _custoHoje() {
+  const { dateBRT } = require('./timeUtil');
+  const dia = dateBRT();
+  if (!_custo || _custo.dia !== dia) {
+    _custo = { dia, ciclos: 0, gets: 0, comInterrupcao: 0, vazias: 0, falhas: 0,
+      adiadas: 0, getsDetalhe: 0, porTipo: {} };
+  }
+  return _custo;
+}
+function _contarGet(c, tipo, resultado, origem = 'ciclo') {
+  const t = c.porTipo[tipo] || (c.porTipo[tipo] = { gets: 0, comInterrupcao: 0, vazias: 0, falhas: 0 });
+  c.gets++; t.gets++;
+  if (origem === 'detalhe') c.getsDetalhe++;
+  if (resultado === 'falha') { c.falhas++; t.falhas++; }
+  else if (resultado === 'vazia') { c.vazias++; t.vazias++; }
+  else { c.comInterrupcao++; t.comInterrupcao++; }
+}
+/** Custo do dia na conta EDP (cópia — quem lê não altera o contador). */
+function custoDoDia() {
+  return JSON.parse(JSON.stringify(_custoHoje()));
+}
 
 // note_id → último ExecutionStatus visto. Reconstruído a cada ciclo.
 let _ultimoES = new Map();
 
 /**
  * FUNÇÃO PURA (testável). Varre as equipes e devolve:
- *   - candidatas: MD em ExecutionStatus 3 que NÃO estavam em 3 no ciclo
- *     anterior (precisam de GET);
- *   - atual: mapa note_id → ExecutionStatus de todas as MD vistas agora.
+ *   - candidatas: notas em ExecutionStatus 3 que NÃO estavam em 3 no ciclo
+ *     anterior (precisam de GET). MD primeiro (prioridade no teto do ciclo).
+ *   - atual: mapa note_id → ExecutionStatus de todas as notas vistas agora.
+ * `tipos`: Set de tipos coletados, ou null = todos (15/10/2026; antes só MD).
  */
-function selecionarCandidatas(teams, ultimoES = new Map()) {
+function selecionarCandidatas(teams, ultimoES = new Map(), tipos = _tiposDoEnv()) {
   const candidatas = [];
   const atual = new Map();
   const vistas = new Set();
@@ -74,7 +127,7 @@ function selecionarCandidatas(teams, ultimoES = new Map()) {
     for (const n of notas) {
       if (!n || !n.id || vistas.has(n.id)) continue;
       const tipo = String(n.tipoCode || '').toUpperCase();
-      if (!TIPOS_COLETADOS.has(tipo)) continue;
+      if (!_tipoColetado(tipo, tipos)) continue;
       vistas.add(n.id);
       const es = n.executionStatus ?? null;
       atual.set(n.id, es);
@@ -89,6 +142,9 @@ function selecionarCandidatas(teams, ultimoES = new Map()) {
       }
     }
   }
+  // MD primeiro: era o único tipo até 15/10 e é o da coluna INTERR — o teto do
+  // ciclo nunca pode deixá-la sem coleta por causa de tipo novo.
+  candidatas.sort((a, b) => (a.tipo === 'MD' ? 0 : 1) - (b.tipo === 'MD' ? 0 : 1));
   return { candidatas, atual };
 }
 
@@ -122,10 +178,11 @@ function montarLinhas(cand, interrupcoes, getRegional = () => null) {
 
 /**
  * FUNÇÃO PURA (testável): o payload CRU do details/optimized indica que vale
- * buscar o histórico? Só MD com `Interruptions[]` não vazio.
+ * buscar o histórico? Qualquer tipo coletado com `Interruptions[]` não vazio
+ * (15/10/2026; antes só MD). Custo só pra nota que DE FATO teve interrupção.
  */
-function deveColetarDoDetalhe(raw) {
-  return !!(raw && TIPOS_COLETADOS.has(String(raw.Type || '').toUpperCase())
+function deveColetarDoDetalhe(raw, tipos = _tiposDoEnv()) {
+  return !!(raw && _tipoColetado(String(raw.Type || '').toUpperCase(), tipos)
     && Array.isArray(raw.Interruptions) && raw.Interruptions.length > 0);
 }
 
@@ -169,17 +226,31 @@ async function coletarDaNota(cand) {
   if (!sb) return 0;
   const { getNoteInterruptions } = require('./wpaService');
   const { getRegional } = require('./equipesOficiais');
-  const linhas = montarLinhas(cand, await getNoteInterruptions(cand.note_id), getRegional);
+  let ints;
+  try { ints = await getNoteInterruptions(cand.note_id); }
+  catch (err) { _contarGet(_custoHoje(), cand.tipo, 'falha', 'detalhe'); throw err; }
+  const linhas = montarLinhas(cand, ints, getRegional);
+  _contarGet(_custoHoje(), cand.tipo, linhas.length ? 'com' : 'vazia', 'detalhe');
   const r = await _gravar(sb, linhas);
   return r.ok ? linhas.length : 0;
 }
 
 async function runColetaInterrupcoes(teams) {
   if (process.env.DATA_MODE === 'mock') return;
-  const { candidatas, atual } = selecionarCandidatas(teams, _ultimoES);
+  const sel = selecionarCandidatas(teams, _ultimoES);
+  const { atual } = sel;
+  const custo = _custoHoje();
+  custo.ciclos++;
+
+  // Teto de GETs (15/10/2026). O excedente entra em `falharam`: não fica marcado
+  // como visto em 3 e volta como candidata no ciclo seguinte.
+  const teto = _maxGetsCiclo();
+  const candidatas = sel.candidatas.slice(0, teto);
+  const adiadas = sel.candidatas.slice(teto);
+  custo.adiadas += adiadas.length;
 
   // Só marca como "já em 3" o que deu certo; falha é retentada no próximo ciclo.
-  const falharam = new Set();
+  const falharam = new Set(adiadas.map(c => c.note_id));
   const proximo = () => {
     for (const id of falharam) atual.delete(id);
     _ultimoES = atual;
@@ -198,8 +269,11 @@ async function runColetaInterrupcoes(teams) {
     await Promise.all(lote.map(async c => {
       try {
         const ints = await getNoteInterruptions(c.note_id);
-        linhas.push(...montarLinhas(c, ints, getRegional));
+        const novas = montarLinhas(c, ints, getRegional);
+        _contarGet(custo, c.tipo, novas.length ? 'com' : 'vazia');
+        linhas.push(...novas);
       } catch (err) {
+        _contarGet(custo, c.tipo, 'falha');
         falharam.add(c.note_id);
         log.warn('interrupcoes_fetch_falhou', { nota: c.numero || c.note_id, msg: err.message });
       }
@@ -215,12 +289,19 @@ async function runColetaInterrupcoes(teams) {
     return;
   }
   proximo();
+  const falhasRede = falharam.size - adiadas.length;
+  const porTipo = {};
+  for (const c of sel.candidatas) porTipo[c.tipo] = (porTipo[c.tipo] || 0) + 1;
   log.info('interrupcoes_ok', {
-    notas: candidatas.length - falharam.size, falhas: falharam.size, gravadas: linhas.length });
+    notas: candidatas.length - falhasRede, falhas: falhasRede,
+    adiadas: adiadas.length, teto, gravadas: linhas.length, candidatasPorTipo: porTipo,
+    // Custo do dia até aqui: é a régua do "medindo o custo na conta EDP".
+    dia: { gets: custo.gets, vazias: custo.vazias, comInterrupcao: custo.comInterrupcao, adiadas: custo.adiadas },
+  });
 }
 
 module.exports = {
-  runColetaInterrupcoes, coletarDaNota,
+  runColetaInterrupcoes, coletarDaNota, custoDoDia,
   selecionarCandidatas, montarLinhas, deveColetarDoDetalhe,
-  _resetMemoria: () => { _ultimoES = new Map(); _avisouSemTabela = false; },
+  _resetMemoria: () => { _ultimoES = new Map(); _avisouSemTabela = false; _custo = null; },
 };

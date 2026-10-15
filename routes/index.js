@@ -2137,6 +2137,13 @@ router.get('/admin/health', async (_req, res) => {
       out.token = getTokenStatus();
     } catch (e) { out.token = { error: e.message }; }
 
+    // Custo do dia na conta EDP da coleta de interrupções (15/10/2026 — coleta
+    // ampliada a todos os tipos). `vazias` = GET que voltou sem interrupção:
+    // se um tipo só tem vazias, o gatilho ExecutionStatus 3 não serve pra ele.
+    try {
+      out.interrupcoes_custo = require('../services/interrupcaoService').custoDoDia();
+    } catch (e) { out.interrupcoes_custo = { error: e.message }; }
+
     // teams_current → quem está logado agora (whitelist apenas)
     try {
       const teams = await sq.getTeamsCurrent({});
