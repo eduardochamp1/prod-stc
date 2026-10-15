@@ -210,6 +210,8 @@ function formatarAlerta(r) {
     supervisor: r.supervisor || null,
     executadas: Number(r.executadas_atual),
     rejeitadas: Number(r.rejeitadas) || 0,
+    // Não é coluna da tabela: a rota junta na leitura (alertasQueries.interrompidasPorEquipe).
+    interrompidas: Number(r.interrompidas) || 0,
     limite: Number(r.limite),
     meioTurnoEm: iso(r.meio_turno_em),
     disparadoEm: iso(r.disparado_em),

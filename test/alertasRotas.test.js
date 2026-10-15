@@ -99,10 +99,13 @@ describe('formatarAlerta', () => {
   test('formato do balão; usa o valor ATUAL, não o do disparo', () => {
     assert.deepEqual(formatarAlerta(linha), {
       equipe: 'ECGPR53', regional: 'GUA', supervisor: 'JOAO SILVA',
-      executadas: 3, rejeitadas: 1, limite: 4,
+      executadas: 3, rejeitadas: 1, interrompidas: 0, limite: 4,
       meioTurnoEm: '2026-10-14T15:30:00.000Z', disparadoEm: '2026-10-14T15:31:00.000Z',
       turno: { inicio: '08:00', fim: '17:00' },
     });
+  });
+  test('interrompidas juntadas pela rota passam adiante (15/10/2026)', () => {
+    assert.equal(formatarAlerta({ ...linha, interrompidas: '2' }).interrompidas, 2);
   });
   test('não vaza campos internos (id, sector_id, executadas_disparo)', () => {
     const f = formatarAlerta({ ...linha, id: 7, sector_id: 'DESG' });
@@ -122,7 +125,9 @@ describe('rotas (fonte)', () => {
   const bloco = SRC.slice(SRC.indexOf('// ── ALERTA DE BAIXA PRODUTIVIDADE'), SRC.indexOf('// ── KPIs do dia'));
 
   test('a listagem é ESCOPADA: passa req.scope.regionals ao banco', () => {
-    assert.match(bloco, /listarAtivos\(null, dateBRT\(\), req\.scope\.regionals\)/);
+    // 15/10/2026: o dia virou `hoje` (const hoje = dateBRT()), reusado pelas interrompidas.
+    assert.match(bloco, /const hoje = dateBRT\(\);/);
+    assert.match(bloco, /listarAtivos\(null, hoje, req\.scope\.regionals\)/);
   });
   test('nenhuma resposta do bloco devolve err.message cru (P3-18a)', () => {
     assert.ok(!/res\.(status\(\d+\)\.)?json\(\{[^}]*err\.message/.test(bloco));

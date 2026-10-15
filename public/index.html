@@ -12851,10 +12851,12 @@ ${acumuladoHTML}
       const exec = avisosPlural(Number(a.executadas) || 0, 'executada', 'executadas');
       const rej = Number(a.rejeitadas) > 0
         ? ' (+' + avisosPlural(Number(a.rejeitadas), 'rejeitada', 'rejeitadas') + ')' : '';
+      const intr = Number(a.interrompidas) > 0
+        ? ' (+' + avisosPlural(Number(a.interrompidas), 'interrompida', 'interrompidas') + ')' : '';
       const meio = a.meioTurnoEm ? ' · meio do turno ' + avisosHoraBRT(a.meioTurnoEm) : '';
       const t = a.turno || {};
       const turno = (t.inicio && t.fim) ? ' · turno ' + t.inicio + '–' + t.fim : '';
-      return exec + rej + meio + turno;
+      return exec + rej + intr + meio + turno;
     }
 
     /* Alertas que passam no filtro de supervisor (o mesmo select das outras abas). */
@@ -12883,6 +12885,11 @@ ${acumuladoHTML}
       const chips = [];
       if (Number(a.rejeitadas) > 0) {
         chips.push(`<span class="aviso-chip aviso-chip-rej">+${escapeHtml(avisosPlural(Number(a.rejeitadas), 'rejeitada', 'rejeitadas'))}</span>`);
+      }
+      // 15/10/2026: interrompidas do dia (MD Obsoleto/TL11, regra da coluna INTERR
+      // da matriz) — contexto, como as rejeitadas; não entram nas executadas.
+      if (Number(a.interrompidas) > 0) {
+        chips.push(`<span class="aviso-chip aviso-chip-int" title="Interrupções de hoje — MD Subs Obsoleto/TL11, como a coluna INTERR da matriz">+${escapeHtml(avisosPlural(Number(a.interrompidas), 'interrompida', 'interrompidas'))}</span>`);
       }
       if (a.meioTurnoEm) chips.push(`<span class="aviso-chip">meio do turno ${escapeHtml(avisosHoraBRT(a.meioTurnoEm))}</span>`);
       if (t.inicio && t.fim) chips.push(`<span class="aviso-chip">turno ${escapeHtml(t.inicio)}–${escapeHtml(t.fim)}</span>`);

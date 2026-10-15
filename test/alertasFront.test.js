@@ -343,6 +343,23 @@ describe('visual do painel (redesenho)', () => {
     assert.match(html, /aria-label="ECGPR53, 0 executadas \(\+2 rejeitadas\)/);
     assert.match(html, /role="list"/);
   });
+  test('interrompidas (15/10/2026): chip abaixo, como o das rejeitadas; some quando 0', async () => {
+    const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta({ rejeitadas: 1, interrompidas: 2 })]) });
+    await ctx.carregarAvisos();
+    const html = els['fab-avisos-lista'].innerHTML;
+    assert.match(html, /class="aviso-chip aviso-chip-int"[^>]*>\+2 interrompidas</);
+    assert.ok(html.indexOf('aviso-chip-rej') < html.indexOf('aviso-chip-int'), 'interrompidas vem depois das rejeitadas');
+    assert.match(html, /aria-label="ECGPR53, 2 executadas \(\+1 rejeitada\) \(\+2 interrompidas\)/);
+    assert.match(ctx.avisosTexto(alerta({ interrompidas: 1 })), /\(\+1 interrompida\)/);
+    for (const v of [0, undefined]) {
+      const m = mundo({ fetchImpl: resposta(true, [alerta({ interrompidas: v })]) });
+      await m.ctx.carregarAvisos();
+      assert.doesNotMatch(m.els['fab-avisos-lista'].innerHTML, /interrompida/);
+    }
+  });
+  test('CSS do chip de interrompidas existe', () => {
+    assert.match(CSS, /\.aviso-chip-int\s*\{/);
+  });
   test('sem supervisor: mostra "sem supervisor" (não um "Sup." vazio)', async () => {
     const { ctx, els } = mundo({ fetchImpl: resposta(true, [alerta({ supervisor: null })]) });
     await ctx.carregarAvisos();

@@ -994,8 +994,22 @@ router.get('/alertas/produtividade', async (req, res) => {
     const linha = await sq.getSetting('alerta_produtividade');
     const v = validarConfigAlerta(linha ? linha.data : null);
     if (!v.ok || !v.config.ativo) return res.json({ ativo: false, alertas: [] });
-    const linhas = await alertasQ.listarAtivos(null, dateBRT(), req.scope.regionals);
-    res.json({ ativo: true, limite: v.config.limite, alertas: linhas.map(formatarAlerta) });
+    const hoje = dateBRT();
+    const linhas = await alertasQ.listarAtivos(null, hoje, req.scope.regionals);
+    // "+N interrompidas" (15/10/2026). Contexto, como as rejeitadas: se a leitura
+    // falhar (ex.: note_interrupcoes ausente), o balão sai sem o chip, não com erro.
+    let interr = {};
+    if (linhas.length > 0) {
+      try {
+        interr = await alertasQ.interrompidasPorEquipe(null, hoje, linhas.map(l => l.team_name));
+      } catch (e) {
+        console.warn('[API] alertasProdutividade: interrompidas indisponíveis:', e.message);
+      }
+    }
+    res.json({
+      ativo: true, limite: v.config.limite,
+      alertas: linhas.map(l => formatarAlerta({ ...l, interrompidas: interr[l.team_name] || 0 })),
+    });
   } catch (err) {
     console.error('[API] alertasProdutividade:', err.message);
     res.status(500).json({ error: 'Falha ao ler os avisos' });

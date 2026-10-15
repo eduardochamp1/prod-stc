@@ -125,6 +125,29 @@ describe('executadasPorEquipe', () => {
   });
 });
 
+describe('interrompidasPorEquipe (15/10/2026)', () => {
+  test('conta 1 por interrupção, só MD Obsoleto/TL11 — a regra da coluna INTERR', async () => {
+    const p = poolFalso([
+      { interrupcao_id: 'i1', note_id: 'n1', team_name: 'ECGPR82', sub_code: 'OBSOLETO' },
+      { interrupcao_id: 'i2', note_id: 'n1', team_name: 'ECGPR82', sub_code: 'OBSOLETO' }, // 2ª interrupção da mesma nota
+      { interrupcao_id: 'i3', note_id: 'n2', team_name: 'ECGPR82', sub_code: 'TL11' },
+      { interrupcao_id: 'i4', note_id: 'n3', team_name: 'ECGPR82', sub_code: 'REMOTA' },   // fora da regra
+      { interrupcao_id: 'i5', note_id: 'n4', team_name: 'ECGPR81', sub_code: null },       // sem subcategoria
+    ]);
+    const r = await Q.interrompidasPorEquipe(p, '2026-10-15', ['ECGPR82', 'ECGPR81']);
+    assert.deepEqual(r, { ECGPR82: 3 });
+    const sql = norm(p.chamadas[0].sql);
+    assert.match(sql, /FROM public\.note_interrupcoes ni LEFT JOIN public\.note_subcategorias ns/);
+    assert.match(sql, /ni\.dia = \$1::date AND ni\.team_name = ANY\(\$2::text\[\]\)/);
+    assert.deepEqual(p.chamadas[0].params, ['2026-10-15', ['ECGPR82', 'ECGPR81']]);
+  });
+  test('sem equipes não consulta', async () => {
+    const p = poolFalso();
+    assert.deepEqual(await Q.interrompidasPorEquipe(p, '2026-10-15', []), {});
+    assert.equal(p.chamadas.length, 0);
+  });
+});
+
 describe('historicoSupervisores', () => {
   test('devolve no formato do supervisorVigente e o mapa de nomes', async () => {
     const p = poolFalso([
