@@ -13,7 +13,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  v2DaLinha, estadosDoCiclo, resumoPorSetor, atrasoDoCiclo, explicarQueda, quedasPontuais,
+  v2DaLinha, estadosDoCiclo, resumoPorSetor, atrasoDoCiclo, explicarQueda, quedasPontuais, setoresAusentes,
 } = require('../scripts/diag-ciclo-em-campo');
 const { unirSessoes } = require('../scripts/diag-escala-a-mais');
 
@@ -94,6 +94,16 @@ test('quedasPontuais: só a queda que volta, medida contra o menor vizinho', () 
   assert.deepEqual(quedasPontuais([104, 70, 103, 100], 15), [1]);
   assert.deepEqual(quedasPontuais([104, 70, 72, 71], 15), []);        // não voltou
   assert.deepEqual(quedasPontuais([104, 95, 103], 15), []);           // abaixo do limiar
+});
+
+test('setoresAusentes: pega setor diferente fora em ciclos seguidos, não a virada do dia', () => {
+  // 15/10 10:49 DEPT, 11:06 DESG, 11:18 DESC: nenhuma queda "pontual", três falhas.
+  const todos = ciclo([L({ team_name: 'A' }), L({ team_name: 'B', sector_id: 'DESC' }), L({ team_name: 'C', sector_id: 'DEPT' })]);
+  const semDESG = ciclo([L({ team_name: 'B', sector_id: 'DESC' }), L({ team_name: 'C', sector_id: 'DEPT' })]);
+  const semDESC = ciclo([L({ team_name: 'A' }), L({ team_name: 'C', sector_id: 'DEPT' })]);
+  assert.deepEqual(setoresAusentes(todos, semDESG, true), ['DESG']);
+  assert.deepEqual(setoresAusentes(semDESG, semDESC, true), ['DESC']);   // DESG voltou, DESC caiu
+  assert.deepEqual(setoresAusentes(todos, semDESG, false), []);          // outro dia: sessions/date é outra
 });
 
 test('atrasoDoCiclo: minutos desde a vaga do cron', () => {

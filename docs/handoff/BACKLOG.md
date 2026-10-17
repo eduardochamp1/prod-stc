@@ -173,6 +173,7 @@
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
 | P2-64 | Aviso "sessão anômala" chamava de 🔴 "app offline" equipe LOGADA (era o `IsOnline` cru do V2, falso também sem V2) e não mostrava quem estava escalada e não logou | Produto/Frontend | **código done** (15/10/2026) — virou ⏰ atrasada · 📵 sem comunicação ≥ 30 min · 📅 dia anterior; falta deploy e conferir na tela |
 | P2-65 | KPI do Monitor mostra "N a mais que o previsto": a janela da escala é estrita [início, fim), o sync da escala é 1x/dia e o "em campo" filtra coisas que o "esperadas" não filtra | Dados/Produto | **código done** (16/10/2026) — José escolheu o saldo aberto: em campo, na escala, fora da escala (motivo por equipe) e faltando; falta deploy e conferir na tela |
+| P2-66 | "Em campo" do snapshot cai ~35–45 equipes por UM ciclo e volta no seguinte → "faltam N" falso no KPI do Monitor | Dados/Ops | **causa confirmada** (16/10/2026, `scripts/diag-ciclo-em-campo.js`): a coleta de UM setor falha no ciclo e ele não entra no INSERT (165/165 casos); 11 falhas em 2 dias, 09h–15h30 — falta o erro no log e o José decidir o conserto |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6350,6 +6351,37 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - Testes: `test/escalaForaDaEscala.test.js` (8). Visual conferido num harness com o CSS real; **não conferido no painel real** (sem banco local).
 - **Rollback:** `git revert` do commit; o campo novo da API é aditivo.
 - **Relacionado:** P2-47 (sem escala), P2-33 (catálogo), P2-64 (atrasadas), P1-26/P2-24 (`escala_dia`).
+
+## P2-66 — "Em campo" do snapshot cai ~40 equipes por um ciclo e volta no seguinte
+
+- **Categoria:** Dados/Ops
+- **Status:** **causa confirmada na VM** (16/10/2026): setor ausente do ciclo. Falta o erro exato (log) e a decisão do conserto. Nada mudou na coleta nem no KPI.
+- **Evidência:** varredura do P2-65 (`diag-escala-a-mais.js --varrer 2 --passo 15`): quedas pontuais em 15/10 11:06, 12:02, 13:45, 14:19 e 16/10 09:04, 11:32 (ex.: 104 → 70 → 103). As horas são o `captured_at` do ciclo, que é o FIM da coleta — o ciclo das 11:00 que grava às 11:06 levou 6 min.
+- **Como o ciclo é gravado (lido no código):**
+  - `runSnapshot` (`services/cronService.js`) → `getTeams(…, sectorOut)` (`services/dataService.js`) coleta os setores **em série** e `saveSnapshot` (`services/dataWriter.js`) grava tudo num **único INSERT** — um ciclo = um `captured_at` (`DEFAULT now()`).
+  - Setor cujo `getTeamsBySector` lança (breaker, rede, HTTP ≠ 200 em `sessions/date` ou `teamsstatus/V2`) vai pra `report.failed` e **não entra no INSERT**: as equipes dele somem daquele ciclo. O report por ciclo **não fica em tabela** — só no log `snapshot_partial` e no `snapshot_last_ok` (que guarda só o último).
+  - `teamsstatus/V2` que volta 200 com lista vazia (ou sem a equipe) **não lança**: o setor conta como ok, a sessão segue aberta, e a equipe sai com `isOnline: v2?.IsOnline || false` e `v2Presente: false` (`services/wpaService.js`, getTeamsBySector).
+  - IsOnline derrubado em lote pela EDP: V2 presente, `isOnline: false`.
+- **Diag:** `scripts/diag-ciclo-em-campo.js` (read-only, sem chamada à EDP). Para cada ciclo do período: atraso da coleta e, por setor, equipes / em campo / aberta sem V2 / aberta com IsOnline=false. Acusa a queda pontual (≥ 15 abaixo do MENOR vizinho e volta no seguinte) e classifica cada equipe que "piscou" (em campo antes e depois, fora neste) pela assinatura: `setor-ausente`, `equipe-ausente`, `sem-v2`, `offline-no-v2`, `encerrada`. "Em campo" é a mesma regra do front (o teste compara com `unirSessoes` do diag-escala-a-mais). `v2Presente` só existe desde 15/10 ~08:20 (2fcbf6f); antes, a presença do V2 é inferida por `lastUpdate` e a saída marca "(v2 inferido)". Testes: `test/diagCicloEmCampo.test.js` + `test/diagSomenteLeitura.test.js`.
+  - `node scripts/diag-ciclo-em-campo.js` (2 dias) · `--dias 3` · `--em "2026-10-15 11:06"` (zoom equipe a equipe, com `lastUpdate` do V2 antes e no ciclo) · `--limiar 10`.
+- **Resultado na VM (16/10/2026, `--dias 2`, 14/10 21:38 → 16/10 21:38, 154 ciclos):**
+  - **As 5 quedas pontuais são `setor-ausente`, 165 de 165 equipes:** 15/10 12:02 DESG (103→70→107), 13:45 DESG (105→69→107), 14:19 DSSJ (107→65→109); 16/10 09:04 DESG (84→60→94), 11:32 DESC (102→78→104). Nenhum caso de `sem-v2`, `offline-no-v2`, `equipe-ausente` ou `encerrada` — o V2 e o IsOnline estão inocentados.
+  - **Contando também as falhas seguidas** (a verificação de queda pontual não pega um setor diferente fora em cada ciclo; o diag agora lista as ausências direto): **11 ausências em 2 dias** — 15/10 10:49 DEPT, 11:06 DESG, 11:18 DESC, 12:02 DESG, 13:45 DESG, 14:19 DSSJ; 16/10 09:04 DESG+DEPT, 09:18 DEPT, 11:32 DESC, 15:34 DEPT. Por setor: DESG 4, DEPT 4, DESC 2, DSSJ 1. **10 das 11 são da conta `es`** (DESG/DEPT/DESC); DSSJ é outra conta. Todas entre **09:04 e 15:34**, nenhuma à noite nem de madrugada. Em 15/10 entre 10:45 e 14:30, 6 dos ~16 ciclos perderam um setor.
+  - **Coleta lenta junto:** o atraso dos ciclos com queda é 0,8–4,5 min (o de 11:06, 6,3 min) contra mediana de 0,3 min dos demais — cara de requisição que espera e falha (timeout de 45s, `WPA_HTTP_TIMEOUT_MS`), não de recusa imediata.
+  - **Zoom 16/10 11:32:** as 26 equipes de DESC tinham `lastUpdate` do V2 às 11:05–11:06 no ciclo anterior e nenhuma linha neste; voltam todas às 11:45.
+  - Os INSERTs fora da grade (15/10 08:21, 13:17, 14:48, 16:41, 16:52, 17:25) **não são execução sobreposta**: batem com os deploys do dia — o boot roda um snapshot 5s depois de subir (`cronService.js`, `setTimeout(runSnapshot, 5000)`). O diag dizia "P2-23"; corrigido.
+- **Onde isso aparece:** o snapshot do ciclo perde o setor inteiro por 15 min (varreduras, histórico, qualquer métrica lida de `snapshots`). O painel ao vivo chama o mesmo `getTeams`, então a mesma falha intermitente aparece lá como a faixa de coleta degradada do P1-39 e um "faltam N" falso no KPI do Monitor.
+- **Em aberto (não investigado aqui):** se o `upsertDailyTotals(allTeams)` de um ciclo sem o setor regrava algum total diário mais baixo até o ciclo seguinte. Conferir antes de dar o item por encerrado — é número reportado à EDP.
+- **Leitura antes do dado (mantida pelo histórico):** queda de 35–45 tem tamanho de UM setor, e o ciclo das 11:00 gravando às 11:06 sugere coleta lenta — compatível com `setor-ausente` (timeout/breaker num setor). Se o diag disser `sem-v2`, a causa é o V2 vazio com 200, e o conserto é tratar lista V2 vazia num setor com sessões abertas como falha do setor (P1-39 já sabe exibir setor fora). Se disser `offline-no-v2`, é a EDP e o KPI precisa de tolerância de 1 ciclo — **regra de negócio, o José decide**.
+- **Para confirmar `setor-ausente`:** `pm2 logs wpa-monitor --lines 5000 --nostream | grep -E "snapshot_partial|setor .* falhou"` no horário da queda (lembrete: prefixo do `pm2 logs`).
+- **Critério de aceite:**
+  - [x] diag rodado na VM (`--dias 2` e `--em "2026-10-16 11:32"`) e a causa dominante registrada aqui: `setor-ausente`, 165/165.
+  - [ ] Log confirma o erro de cada ausência (`pm2 logs wpa-monitor --lines 20000 --nostream | grep -E "setor (DESG|DEPT|DESC|DSSJ) falhou|snapshot_partial"`): timeout, HTTP 5xx/429 ou breaker? E em qual chamada (`sessions/date` ou `teamsstatus/V2`)?
+  - [ ] Conferir se o ciclo sem o setor mexe em total diário (item em aberto acima).
+  - [ ] José decide o conserto. Opções, da menos para a mais invasiva: (a) **repetir 1x só o setor que falhou** no mesmo ciclo antes de gravar; (b) **gravar o report por ciclo** (hoje só o último fica em `snapshot_last_ok`), para que histórico e KPI saibam que o setor faltou em vez de ler "zero"; (c) no KPI, não comparar "em campo" com "esperadas" de um setor fora da coleta (o P1-39 já sabe qual é). Nenhuma das três esconde o número; nada foi mexido.
+- **Esforço:** diag feito; correção 1–3h depois da causa.
+- **Rollback:** o diag é read-only — nada a reverter.
+- **Relacionado:** P2-65 (onde a queda foi vista), P1-30/P1-37/P1-39 (setor que falha a coleta), P2-64 (`v2Presente`), P2-23 (execução sobreposta — o diag também acusa vaga com 2 INSERTs).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 

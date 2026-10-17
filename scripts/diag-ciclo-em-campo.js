@@ -171,6 +171,22 @@ function explicarQueda(prev, cur, next) {
 }
 
 /**
+ * Setores que gravaram no ciclo anterior do MESMO dia e sumiram neste. Como
+ * `sessions/all/date` devolve também as sessões encerradas, um setor que teve
+ * linha no ciclo anterior do dia só some se a coleta dele lançou.
+ *
+ * ⚠️ 16/10/2026 — a 1ª versão só olhava quedas pontuais e deixou passar 15/10
+ * 10:49 (DEPT), 11:06 (DESG) e 11:18 (DESC): três ciclos seguidos, cada um com
+ * um setor diferente fora — nenhum vizinho "voltou", então nenhum foi acusado.
+ */
+function setoresAusentes(prev, cur, mesmoDia) {
+  if (!prev || !mesmoDia) return [];
+  return Object.keys(prev.porSetor)
+    .filter(s => (prev.porSetor[s] || {}).linhas > 0 && !((cur.porSetor[s] || {}).linhas > 0))
+    .sort();
+}
+
+/**
  * Ciclos com queda pontual: em campo cai pelo menos `limiar` em relação ao
  * MENOR dos dois vizinhos (anterior e seguinte). Queda que não volta não é
  * pontual e não entra.
@@ -266,11 +282,43 @@ async function modoPeriodo(pool, dias, limiar) {
   const quedas = quedasPontuais(ciclos.map(c => c.emCampo), limiar);
   imprimirCiclos(ciclos, new Set(quedas));
 
-  // Mais de um INSERT por vaga = execução sobreposta (P2-23).
+  // Mais de um INSERT por vaga. ⚠️ 16/10/2026 — a 1ª versão chamava isso de
+  // execução sobreposta (P2-23), mas os 6 casos de 15/10 (08:21, 13:17, 14:48,
+  // 16:41, 16:52, 17:25) batem com os deploys do dia: o boot roda um snapshot
+  // 5s depois de subir (cronService.js, setTimeout(runSnapshot, 5000)). O
+  // "atraso" desses ciclos não é duração de coleta.
   const porVaga = {};
   for (const c of ciclos) { const v = Math.floor(c.t / 900000); porVaga[v] = (porVaga[v] || 0) + 1; }
   const dup = Object.entries(porVaga).filter(([, n]) => n > 1);
-  if (dup.length) warn(`${dup.length} vaga(s) de 15 min com mais de um INSERT (execução sobreposta, P2-23).`);
+  if (dup.length) {
+    info(`${dup.length} vaga(s) de 15 min com mais de um INSERT — em geral o snapshot do boot (deploy/restart);`);
+    info('só é execução sobreposta (P2-23) se não houve restart no horário.');
+  }
+
+  H('SETORES QUE SUMIRAM DO CICLO (gravaram no ciclo anterior do mesmo dia)');
+  const ausencias = [];
+  for (let i = 1; i < ciclos.length; i++) {
+    const mesmoDia = fmtBRT(ciclos[i - 1].t).slice(0, 5) === fmtBRT(ciclos[i].t).slice(0, 5);
+    for (const s of setoresAusentes(ciclos[i - 1], ciclos[i], mesmoDia)) {
+      ausencias.push({ c: ciclos[i], s, eq: ciclos[i - 1].porSetor[s].equipes,
+        cmp: ciclos[i - 1].porSetor[s].emCampo });
+    }
+  }
+  if (!ausencias.length) ok('nenhum.');
+  tabela(ausencias, [
+    { rotulo: 'ciclo', get: x => fmtBRT(x.c.t) },
+    { rotulo: 'atraso', get: x => `${atrasoDoCiclo(x.c.t)}m` },
+    { rotulo: 'setor', get: x => x.s },
+    { rotulo: 'equipes / em campo no ciclo anterior', get: x => `${x.eq} / ${x.cmp}` },
+  ]);
+  if (ausencias.length) {
+    const porSetor = {};
+    for (const a of ausencias) porSetor[a.s] = (porSetor[a.s] || 0) + 1;
+    console.log('');
+    info(`por setor: ${Object.entries(porSetor).map(([k, v]) => `${k}=${v}`).join(' ')} · ` +
+         `${ausencias.length} ausência(s) em ${ciclos.length} ciclos`);
+    info('o erro de cada uma está no log: `setor <X> falhou (...)` / `snapshot_partial`.');
+  }
 
   H(`QUEDAS PONTUAIS (≥ ${limiar} abaixo do menor vizinho, voltando no ciclo seguinte)`);
   if (!quedas.length) { ok('nenhuma.'); return; }
@@ -364,4 +412,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { v2DaLinha, estadosDoCiclo, resumoPorSetor, atrasoDoCiclo, explicarQueda, quedasPontuais };
+module.exports = { v2DaLinha, estadosDoCiclo, resumoPorSetor, atrasoDoCiclo, explicarQueda, quedasPontuais, setoresAusentes };

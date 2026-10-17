@@ -78,3 +78,13 @@ test('o diag do "a mais" usa a MESMA regra do KPI e não chama a EDP', () => {
   // Conta da EDP é compartilhada (P1-25): diag não loga nem coleta.
   assert.doesNotMatch(src, /require\(['"]\.\.\/services\/wpaService['"]\)/);
 });
+
+test('o diag da queda do "em campo" lê o ciclo gravado e não chama a EDP', () => {
+  // O ponto do script (16/10/2026) é ler a assinatura que o CICLO deixou em
+  // `snapshots` (setor ausente × sem V2 × IsOnline). Coletar de novo na EDP
+  // mostraria o agora, não o ciclo que caiu — e gastaria a conta (P1-25).
+  const src = fs.readFileSync(path.join(DIR, 'diag-ciclo-em-campo.js'), 'utf8');
+  assert.match(src, /FROM public\.snapshots/);
+  assert.match(src, /v2Presente/);
+  assert.doesNotMatch(src, /require\(['"]\.\.\/services\/(wpaService|dataService)['"]\)/);
+});
