@@ -21,6 +21,8 @@
  * escala NÃO previa, diz o porquê:
  *
  *   antes-do-turno     logou antes do início do turno (antecipação)
+ *   defasagem-do-ciclo o "depois do fim" cabe na diferença entre a foto da
+ *                      equipe e a referência do ciclo — não é prorrogação
  *   depois-do-turno    o turno já acabou e ela segue logada (prorrogação / HE /
  *                      sessão esquecida aberta)
  *   folga-no-cadastro  todos os códigos do dia são folga/DR/FER... (plantão, HE em
@@ -108,6 +110,7 @@ function unirSessoes(linhas, hoje) {
       refLogon,
       shiftType: base.shift_type || null,
       turnoV2: { inicio: base.escala_inicio_wpa || null, fim: base.escala_fim_wpa || null },
+      vistaEm: base.captured_at ? new Date(base.captured_at) : null,
     });
   }
   return out;
@@ -322,13 +325,21 @@ async function lerWhitelist(pool) {
 }
 
 /** Analisa um instante. Devolve o resultado estruturado (pra varredura). */
-async function analisar(pool, ref, whitelist) {
+async function analisar(pool, refPedido, whitelist) {
+  const { linhas, capturado } = await lerCiclo(pool, refPedido);
+  // ⚠️ 16/10/2026 — a 1ª varredura comparava o snapshot (capturado até ~15 min
+  // ANTES) com a escala da hora cheia: às 17:00, uma equipe de turno até 17:00
+  // vista em campo às 16:48 saía "depois-do-turno 0 min". 281 dos 401 casos
+  // caíram em ≤15 min — boa parte disso era a defasagem, não prorrogação. O
+  // front não tem esse atraso (o /teams é ao vivo), então a escala tem de ser
+  // avaliada no MESMO instante em que a equipe foi vista.
+  const ref = capturado || refPedido;
   const hoje = dateBRT(ref);
   const ontem = diaAnterior(hoje);
   const agoraMin = minutosDoDia(hhmmBRT(ref));
 
-  const [{ linhas, capturado }, escala, esp] = await Promise.all([
-    lerCiclo(pool, ref), lerEscala(pool, ontem, hoje), equipesEsperadasAgora(null, ref),
+  const [escala, esp] = await Promise.all([
+    lerEscala(pool, ontem, hoje), equipesEsperadasAgora(null, ref),
   ]);
   const sessoes = unirSessoes(linhas, hoje);
   const esperadas = new Set(esp.equipes.map(norm));
@@ -348,6 +359,16 @@ async function analisar(pool, ref, whitelist) {
       codigos: [...new Set((escala.porEquipe.get(s.sigla) || [])
         .filter(l => l.data === hoje).map(l => l.codigo_escala))].join(', ') || '—',
       ...cls });
+    // Os setores gravam em série: dentro do ciclo, a equipe pode ter sido vista
+    // minutos ANTES do instante de referência. Se o "depois do fim" cabe nessa
+    // diferença, não dá pra afirmar prorrogação — o turno pode ter acabado
+    // entre a foto e a referência.
+    const ult = aMais[aMais.length - 1];
+    const defasagem = (s.vistaEm && ref) ? Math.max(0, Math.round((ref - s.vistaEm) / 60000)) : 0;
+    if (ult.motivo === 'depois-do-turno' && ult.minutos <= defasagem) {
+      ult.motivo = 'defasagem-do-ciclo';
+      ult.detalhe += ` · vista ${defasagem} min antes da referência`;
+    }
   }
   const emCampoSet = new Set(emCampo.map(s => s.sigla));
   const faltando = esp.detalhe.filter(e => !emCampoSet.has(norm(e.sigla)));
@@ -375,6 +396,7 @@ async function modoInstante(pool, ref) {
     return;
   }
   info(`ciclo de snapshot usado .. ${r.capturado.toISOString()} (${hhmmBRT(r.capturado)} BRT)`);
+  info('(a escala é avaliada nesse instante, não no pedido — o front compara ao vivo)');
   info(`equipes no ciclo ......... ${r.sessoes.size} (sessões: ${[...r.sessoes.values()].reduce((s, x) => s + x.sessoes, 0)})`);
 
   // ── 1. Frescor da escala ───────────────────────────────────────────────────
