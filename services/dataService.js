@@ -629,8 +629,64 @@ function buildColetaStatus(report, sectorLastOk, regionals) {
 let _lastSectorReport = { ok: [], failed: [], skipped: [] };
 function getLastSectorReport() { return _lastSectorReport; }
 
+// ── COLETA POR SETOR ──────────────────────────────────────────────────────────
+// Pausa antes da 2ª tentativa de um setor que falhou (só com repetirFalhos).
+const RETRY_SETOR_ESPERA_MS = Number(process.env.RETRY_SETOR_ESPERA_MS) || 10_000;
+
+/**
+ * Coleta os setores em SÉRIE e devolve { resultados, report }. Deps injetadas
+ * pra teste (coletar = getTeamsBySector, desativado = isSectorDisabled).
+ *
+ * ⚠️ 16/10/2026 (P2-66): com `repetirFalhos`, o setor que falhou ganha UMA 2ª
+ * tentativa, DEPOIS dos outros e após `esperaMs`. Em 15–16/10 a Web API da EDP
+ * deu timeout de 45s ou 502/503 num setor em 11 ciclos de snapshot (09h–15h30)
+ * e o setor inteiro sumia do INSERT por 15 min: o "em campo" caía de 104 pra
+ * 70 e voltava no ciclo seguinte ("faltam N" falso no KPI do Monitor). O
+ * wpaFetch não repete timeout de propósito (21/08/2026: o usuário esperaria
+ * 3 × 45s) — por isso a 2ª tentativa fica SÓ no cron, onde ninguém espera.
+ * `resultados` mantém a ordem dos setores, com ou sem a 2ª tentativa.
+ */
+async function _coletarSetores(setores, { coletar, desativado, repetirFalhos = false,
+  esperaMs = RETRY_SETOR_ESPERA_MS, dormir = (ms) => new Promise(r => setTimeout(r, ms)) }) {
+  const report = { ok: [], failed: [], skipped: [] };
+  const porSetor = new Map();
+  for (const s of setores) {
+    if (desativado(s)) { report.skipped.push(s); continue; }
+    try {
+      porSetor.set(s, await coletar(s));
+      report.ok.push(s);
+    } catch (err) {
+      const msg = String((err && err.message) || err).slice(0, 140);
+      report.failed.push({ sector: s, msg });
+      console.warn(`[dataService] setor ${s} falhou (${msg.slice(0, 90)}) — seguindo com os demais.`);
+    }
+  }
+  if (repetirFalhos && report.failed.length > 0) {
+    report.retried = [];
+    await dormir(esperaMs);
+    const falhos = report.failed;
+    report.failed = [];
+    for (const f of falhos) {
+      try {
+        porSetor.set(f.sector, await coletar(f.sector));
+        report.ok.push(f.sector);
+        report.retried.push({ sector: f.sector, ok: true, msg1: f.msg });
+        console.warn(`[dataService] setor ${f.sector} recuperado na 2ª tentativa (1ª: ${f.msg.slice(0, 90)}).`);
+      } catch (err) {
+        const msg = String((err && err.message) || err).slice(0, 140);
+        report.failed.push({ sector: f.sector, msg });
+        report.retried.push({ sector: f.sector, ok: false, msg1: f.msg });
+        console.warn(`[dataService] setor ${f.sector} falhou também na 2ª tentativa (${msg.slice(0, 90)}).`);
+      }
+    }
+  }
+  const resultados = setores.filter(s => porSetor.has(s)).map(s => porSetor.get(s));
+  return { resultados, report };
+}
+
 // ── GET TEAMS ─────────────────────────────────────────────────────────────────
 // @param {object} [out] recebe `out.report = {ok, failed, skipped}` desta chamada.
+// `filters.repetirSetorFalho` (só o cron): 2ª tentativa do setor que falhou (P2-66).
 async function getTeams(filters = {}, out = null) {
   if (MODE === 'mock') return getMockTeams(filters);
   const t0 = Date.now();
@@ -664,19 +720,10 @@ async function getTeams(filters = {}, out = null) {
   // o snapshot ficava tudo-ou-nada entre contas. Agora coleta o que der e expõe
   // o resultado por setor em getLastSectorReport(), que o runSnapshot usa pra
   // decidir sucesso × erro do ciclo (e não travar o snapshot_last_ok à toa).
-  const report = { ok: [], failed: [], skipped: [] };
-  const resultados = [];
-  for (const s of setores) {
-    if (isSectorDisabled(s)) { report.skipped.push(s); continue; }
-    try {
-      resultados.push(await getTeamsBySector(s));
-      report.ok.push(s);
-    } catch (err) {
-      const msg = String((err && err.message) || err).slice(0, 140);
-      report.failed.push({ sector: s, msg });
-      console.warn(`[dataService] setor ${s} falhou (${msg.slice(0, 90)}) — seguindo com os demais.`);
-    }
-  }
+  const { resultados, report } = await _coletarSetores(setores, {
+    coletar: getTeamsBySector, desativado: isSectorDisabled,
+    repetirFalhos: filters.repetirSetorFalho === true,
+  });
   // 20/08/2026 (backlog P1-30): o report SÓ vivia no global `_lastSectorReport`,
   // e entre esta atribuição e a leitura pelo runSnapshot há TRÊS await com I/O
   // de banco (os enriches abaixo). Um `/api/teams` de browser chegando nessa
@@ -770,4 +817,4 @@ async function getSummary(filters = {}) {
   }));
 }
 
-module.exports = { getTeams, getLastSectorReport, getTeamDetail, getSummary, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite, buildColetaStatus };
+module.exports = { getTeams, getLastSectorReport, getTeamDetail, getSummary, _coletarSetores, _carteiraInicialDedupTotal, _buildDiaSummary, _resolveLogon, _linkViraNoite, buildColetaStatus };

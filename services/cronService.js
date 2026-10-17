@@ -235,7 +235,9 @@ async function runSnapshot() {
     // global, que um /api/teams de browser podia sobrescrever durante os
     // enriches — snapshot gravava saúde verde com setor faltando.
     const sectorOut = {};
-    const allTeams = await getTeams({}, sectorOut);
+    // P2-66 (16/10/2026): o setor que falhar ganha 1 nova tentativa, depois dos
+    // outros. Só aqui — o /api/teams do navegador não espera mais 45s.
+    const allTeams = await getTeams({ repetirSetorFalho: true }, sectorOut);
     const sectorReport = sectorOut.report || getLastSectorReport();   // { ok, failed, skipped } por setor
 
     // Separa equipes reais (vindas do WPA) das equipes-fantasma (_ghostFromAcc).
@@ -299,7 +301,12 @@ async function runSnapshot() {
     _clearSnapshotError();   // ciclo deu certo → limpa erro de ciclo antigo
     if (sectorReport.failed.length > 0) {
       log.warn('snapshot_partial', {
-        ok: sectorReport.ok, failed: sectorReport.failed, skipped: sectorReport.skipped });
+        ok: sectorReport.ok, failed: sectorReport.failed, skipped: sectorReport.skipped,
+        retried: sectorReport.retried || [] });
+    } else if (sectorReport.retried && sectorReport.retried.length > 0) {
+      // Setor caiu na 1ª tentativa e voltou na 2ª: ciclo completo. Fica no log
+      // pra medir se a nova tentativa está resolvendo (P2-66).
+      log.info('snapshot_sector_recovered', { retried: sectorReport.retried });
     }
 
     // Aproveitamento de carteira por equipe (team_daily_carteira) — histórico
