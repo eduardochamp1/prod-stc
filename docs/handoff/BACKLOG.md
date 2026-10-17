@@ -172,6 +172,7 @@
 | P2-62 | Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo" (+ gauge e XLSX) | Dados/Produto | **done** (14/10/2026, 4d08c7b + 5152c9c) — conferir no portal se a quantidade do C93 é ramal ou metro |
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
 | P2-64 | Aviso "sessão anômala" chamava de 🔴 "app offline" equipe LOGADA (era o `IsOnline` cru do V2, falso também sem V2) e não mostrava quem estava escalada e não logou | Produto/Frontend | **código done** (15/10/2026) — virou ⏰ atrasada · 📵 sem comunicação ≥ 30 min · 📅 dia anterior; falta deploy e conferir na tela |
+| P2-65 | KPI do Monitor mostra "N a mais que o previsto": a janela da escala é estrita [início, fim), o sync da escala é 1x/dia e o "em campo" filtra coisas que o "esperadas" não filtra | Dados/Produto | **diag pronto** (16/10/2026, `scripts/diag-escala-a-mais.js`) — falta rodar na VM e o José decidir a regra |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6308,6 +6309,32 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Não conferido no navegador:** HTML do aviso conferido num harness (`vm`), não no painel real.
 - **Fora do pedido, incoerência que fica:** o KPI "em campo" e o "faltam N equipes em campo" (`renderMetrics`) ainda contam só `!sessionEnd && isOnline` — equipe logada com celular calado sai da conta. Pela regra do José (logada = online) deveria contar. Mudar é decisão de KPI.
 - **Rollback:** `git revert` (campos novos são aditivos; o front antigo ignora).
+
+## P2-65 — KPI "em campo × esperadas" mostra "N a mais que o previsto"
+
+- **Categoria:** Dados/Produto
+- **Status:** **diag pronto, causa a confirmar com dado** (16/10/2026). Nada mudou no KPI.
+- **Reporte:** o José notou que o Monitor às vezes mostra mais equipes em campo do que a escala prevê.
+- **Como o número é feito (lido no código):** "em campo" = front, `renderMetrics` (`public/index.html`, `const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline)`), sobre as sessões unidas por sigla (`_mergeSessionsBySigla`). "Esperadas" = `GET /api/escala/agora` → `db/escalaQueries.equipesEsperadasAgora`. O texto "N a mais" é `ativas − esperadas`, ou seja um **saldo**: (em campo e não esperadas) − (esperadas e não em campo). As duas listas não são cruzadas em lugar nenhum.
+- **Causas candidatas, com evidência no código:**
+  1. **Janela estrita.** `turnoCobreAgora` (`db/escalaQueries.js`) só conta `agora >= início && agora < fim`, sem tolerância nenhuma. Equipe que loga 15 min antes do T07, ou fica até 16:30 num turno que acaba às 16:00, está em campo e não está esperada. Suspeita principal: deve acontecer todo dia, em toda troca de turno.
+  2. **Sync 1x/dia.** `runSyncEscalaDia` roda às 05:20 (`cronService.js`, `'20 5 * * *'`). Plantão, HE ou troca de turno lançados no SGE depois disso só chegam no dia seguinte, e a equipe trabalha com `FOL`/`DR` (ou com o turno antigo) gravado. O ShiftType ao vivo do V2 (`shiftType`/`escalaInicioWPA`/`escalaFimWPA` no snapshot) já traz o turno real, e o KPI não usa.
+  3. **Equipe sem linha em `escala_dia`** (P2-47): nunca é esperada.
+  4. **Código sem horário, fora do catálogo ou com grafia diferente:** o JOIN do código é exato (bloco 2 do `diag-escala-agora.js`).
+  5. **Início == fim** (turno de 24h) é recusado de propósito por `turnoCobreAgora`.
+  6. **Regional:** "em campo" filtra pela regional da SESSÃO (`REGIONAL_MAP[setor] || 'GUA'`, `wpaService.js`) e "esperadas" pela da WHITELIST (`eo.regional`). Com a tela filtrada, uma equipe em que as duas divergem entra de um lado só.
+  - **Descartadas por leitura:** relogin contado duas vezes (o front une por sigla antes de contar; o diag ainda mede quantas equipes têm 2+ sessões abertas); turno que vira a meia-noite (coberto, `test/escalaAgora.test.js`); sigla com caixa ou espaço diferente (os dois lados fazem upper+trim).
+  - **Achados no sentido OPOSTO (geram "faltam", não "a mais"):** (i) o "em campo" sai de `getVisible()`, que aplica o filtro de equipes e a busca, e o "esperadas" só respeita a regional — com filtro de equipe ligado, o KPI compara um subconjunto com o todo; (ii) as linhas de `escala_dia` nunca são apagadas (upsert sem DELETE), então um colaborador que a EDP tirou da escala segue "esperado" — o diag conta essas linhas no bloco 1.
+- **Diag:** `scripts/diag-escala-a-mais.js` (read-only, sem chamada à EDP). Usa a MESMA `equipesEsperadasAgora` e a mesma união de sessões do front, lendo o último ciclo de `snapshots` (e não `teams_current`, que deduplica por team_name e pode guardar a sessão encerrada de um relogin). Abre o saldo nos dois termos e dá o motivo equipe a equipe: `antes-do-turno` / `depois-do-turno` (com minutos), `folga-no-cadastro`, `sem-escala-hoje`, `codigo-*`, `janela-ambigua`, `fora-whitelist`, mais os atributos `v2-turno-diferente`, `v2-turno-cobre-agora`, `sessao-de-dia-anterior` e `regional-diverge`. Testes: `test/diagEscalaAMais.test.js` + `test/diagSomenteLeitura.test.js`.
+  - `node scripts/diag-escala-a-mais.js` (agora) · `--em "2026-10-16 07:10"` (instante passado, BRT) · `--varrer 3` (de hora em hora por 3 dias, com histograma de minutos).
+- **Proposta (depende do resultado da varredura; é regra de negócio, o José decide):** não esconder ninguém e não mexer no número — **mostrar o saldo aberto**. Trocar "N a mais que o previsto" por "N fora da escala", com a lista nominal e o motivo (o mesmo que o diag imprime), e cruzar as duas listas no backend (`/api/escala/agora` passa a devolver o detalhe). Se a varredura mostrar que a maior parte é antecipação ou prorrogação curta, a opção é uma tolerância **declarada** na tela (ex.: "esperadas: turno ±15 min"), não um ajuste escondido. Se for sync velho, rodar o `sync-escala-dia` mais vezes no dia (é 1 request por setor por mês) ou usar o ShiftType do V2 como segunda fonte, com a divergência visível.
+- **Critério de aceite:**
+  - [ ] `--varrer 3` rodado na VM e o motivo dominante registrado aqui.
+  - [ ] José decide a regra (saldo aberto / tolerância declarada / sync mais frequente).
+  - [ ] KPI e aviso de atrasadas usam o mesmo universo (filtro de equipe aplicado aos dois lados).
+- **Esforço:** diag feito; correção de 2 a 4h depois da decisão.
+- **Rollback:** o diag é read-only — nada a reverter.
+- **Relacionado:** P2-47 (sem escala), P2-33 (catálogo), P2-64 (atrasadas), P1-26/P2-24 (`escala_dia`).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 

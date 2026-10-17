@@ -65,3 +65,16 @@ test('o diag do retorno à base compara as DUAS leituras de fuso', () => {
   // E o oráculo é a refeição, não o próprio "29" (que é o que se quer medir).
   assert.match(src, /ILIKE '%refei%'/);
 });
+
+test('o diag do "a mais" usa a MESMA regra do KPI e não chama a EDP', () => {
+  // O ponto do script (16/10/2026) é explicar o número da TELA. Se ele
+  // reimplementar "esperadas" por conta própria, explica outro número; se ler
+  // `teams_current` (dedup por team_name, guarda a última sessão do lote) em vez
+  // de `snapshots`, perde a sessão aberta de quem relogou.
+  const src = fs.readFileSync(path.join(DIR, 'diag-escala-a-mais.js'), 'utf8');
+  assert.match(src, /equipesEsperadasAgora\(null, ref\)/);
+  assert.match(src, /FROM public\.snapshots/);
+  assert.doesNotMatch(src, /FROM public\.teams_current/);
+  // Conta da EDP é compartilhada (P1-25): diag não loga nem coleta.
+  assert.doesNotMatch(src, /require\(['"]\.\.\/services\/wpaService['"]\)/);
+});
