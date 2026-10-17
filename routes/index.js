@@ -2625,6 +2625,21 @@ router.get('/admin/equipes', async (_req, res) => {
       if (e.escala_fim)    e.escala_fim    = String(e.escala_fim).slice(0, 5);
     });
     await _anexarSupervisorNome(sb, data || []);
+    // Setor ATUAL (16/10/2026): GUA tem DESG e DEPT e a equipe é transferida
+    // entre eles; o `setor` do cadastro não acompanha. Vem da coleta mais
+    // recente (db/setorAtualQueries.js). Falha aqui não derruba a tela — a
+    // coluna cai no setor do cadastro, como era antes.
+    try {
+      const { setorAtualPorEquipe } = require('../db/setorAtualQueries');
+      const atual = await setorAtualPorEquipe();
+      (data || []).forEach(e => {
+        const a = atual.get(String(e.sigla || '').toUpperCase());
+        e.setor_atual      = a ? a.setor : null;
+        e.setor_atual_data = a ? a.data  : null;
+      });
+    } catch (err) {
+      console.warn('[admin/equipes] setor atual indisponível:', err.message);
+    }
     res.json({ equipes: data || [], count: (data || []).length });
   } catch (err) {
     res.status(500).json({ error: err.message });

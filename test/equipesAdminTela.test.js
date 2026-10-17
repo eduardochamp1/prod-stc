@@ -289,3 +289,41 @@ test('dado da planilha é escapado — apóstrofo não quebra a tela', () => {
   assert.ok(!html.includes('<img src=x'), 'HTML da planilha não pode ir cru pra tela');
   assert.ok(html.includes('&lt;img'), 'tem de vir escapado');
 });
+
+// ── Coluna Setor = setor ATUAL (16/10/2026) ─────────────────────────────────
+// GUA tem DESG e DEPT e a equipe é transferida entre eles; o cadastro não
+// acompanha. A célula mostra o setor da coleta mais recente.
+const _setorCelula = new Function(`
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+  ${extrairFuncao('_setorCelula')}
+  return _setorCelula;
+`)();
+
+test('setor atual igual ao cadastro: mostra só o setor', () => {
+  const h = _setorCelula({ setor: 'DESG', setor_atual: 'DESG', setor_atual_data: '2026-10-16' });
+  assert.match(h, />DESG</);
+  assert.doesNotMatch(h, /cad\./);
+  assert.match(h, /16\/10/);
+});
+
+test('equipe transferida DESG → DEPT: mostra DEPT e o cadastro ao lado', () => {
+  const h = _setorCelula({ setor: 'DESG', setor_atual: 'DEPT', setor_atual_data: '2026-10-15' });
+  assert.match(h, /<strong[^>]*>DEPT<\/strong>/, 'o setor atual é o destaque');
+  assert.match(h, /cad\. DESG/, 'o cadastro aparece como referência');
+});
+
+test('sem coleta recente: cai no cadastro, sinalizado', () => {
+  const h = _setorCelula({ setor: 'DESC', setor_atual: null });
+  assert.match(h, />DESC</);
+  assert.match(h, /Sem coleta/);
+});
+
+test('sem cadastro e sem coleta: traço', () => {
+  assert.equal(_setorCelula({ setor: null, setor_atual: null }), '—');
+});
+
+test('a tabela usa _setorCelula, não o e.setor cru', () => {
+  const fn = extrairFuncao('renderEquipesTabela');
+  assert.ok(fn.includes('_setorCelula(e)'));
+  assert.ok(!fn.includes("${e.setor || '—'}"));
+});

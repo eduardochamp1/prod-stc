@@ -11231,6 +11231,26 @@ ${acumuladoHTML}
 </div>`;
     }
 
+    // Coluna Setor (16/10/2026): mostra onde a equipe FOI VISTA na coleta mais
+    // recente (`setor_atual`, de db/setorAtualQueries.js), não o cadastro — GUA
+    // tem DESG e DEPT e a equipe é transferida entre eles conforme região/serviço.
+    // Divergindo do cadastro, o cadastro aparece ao lado; sem coleta recente,
+    // cai no cadastro em cinza.
+    function _setorCelula(e) {
+      const cad = e.setor || '';
+      const at  = e.setor_atual || '';
+      if (!at) {
+        if (!cad) return '—';
+        return `<span style="color:var(--cinza3)" title="Sem coleta nos últimos dias — setor do cadastro">${escapeHtml(cad)}</span>`;
+      }
+      const dia = e.setor_atual_data ? e.setor_atual_data.split('-').reverse().slice(0, 2).join('/') : '';
+      if (!cad || at === cad) {
+        return `<span title="Visto na coleta de ${dia}">${escapeHtml(at)}</span>`;
+      }
+      return `<strong title="Na coleta de ${dia} estava em ${escapeHtml(at)}; o cadastro diz ${escapeHtml(cad)}">${escapeHtml(at)}</strong>`
+           + ` <span style="color:var(--cinza3);font-size:10px">cad. ${escapeHtml(cad)}</span>`;
+    }
+
     function renderEquipesTabela(eqs) {
       if (eqs.length === 0) return '<div style="padding:12px;font-size:12px;color:var(--text2)">Nenhuma equipe cadastrada.</div>';
       const rows = eqs.map(e => {
@@ -11239,7 +11259,7 @@ ${acumuladoHTML}
         const placaTxt = e.placa || '<span style="color:var(--cinza3)">—</span>';
         return `<tr style="${styleRow};border-top:1px solid var(--cinza2)">
           <td style="padding:6px 8px;font-family:monospace;font-weight:600">${e.sigla}</td>
-          <td style="padding:6px 8px;font-family:monospace;font-size:11px">${e.setor || '—'}</td>
+          <td style="padding:6px 8px;font-family:monospace;font-size:11px">${_setorCelula(e)}</td>
           <td style="padding:6px 8px"><span style="background:${e.regional === 'GUA' ? '#fec40e22' : '#08673822'};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">${e.regional}</span></td>
           <td style="padding:6px 8px;font-size:11px">${e.tipo}</td>
           <td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text2)">${placaTxt}</td>

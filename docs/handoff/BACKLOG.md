@@ -174,6 +174,7 @@
 | P2-64 | Aviso "sessão anômala" chamava de 🔴 "app offline" equipe LOGADA (era o `IsOnline` cru do V2, falso também sem V2) e não mostrava quem estava escalada e não logou | Produto/Frontend | **código done** (15/10/2026) — virou ⏰ atrasada · 📵 sem comunicação ≥ 30 min · 📅 dia anterior; falta deploy e conferir na tela |
 | P2-65 | KPI do Monitor mostra "N a mais que o previsto": a janela da escala é estrita [início, fim), o sync da escala é 1x/dia e o "em campo" filtra coisas que o "esperadas" não filtra | Dados/Produto | **código done** (16/10/2026) — José escolheu o saldo aberto: em campo, na escala, fora da escala (motivo por equipe) e faltando; falta deploy e conferir na tela |
 | P2-66 | "Em campo" do snapshot cai ~35–45 equipes por UM ciclo e volta no seguinte → "faltam N" falso no KPI do Monitor | Dados/Ops | **causa confirmada** (16/10/2026, `scripts/diag-ciclo-em-campo.js` + log): a Web API da EDP dá timeout 45s ou 502/503 num setor e ele não entra no INSERT do ciclo (165/165); 11 falhas em 2 dias, 09h–15h30 — falta o José decidir o conserto |
+| P2-67 | GUA tem DOIS setores (DESG e DEPT) e a equipe é transferida entre eles; a tela de Equipes mostrava o setor do CADASTRO e o diag do P2-55 olhava só DESG | Dados/Frontend | **código done** (16/10/2026) — coluna Setor = setor da coleta mais recente (cadastro ao lado se divergir); `diag-nota-interrompida --setor GUA` roda os dois; falta deploy e conferir na tela |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -5934,7 +5935,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Status:** pending — hipótese reforçada em 07/10/2026: com `--so-v2` em DESG, 045006462967, 045006463152 (ECGPR82) e 045006475673 (ECMRT50), as três vistas como interrompidas no portal, estavam em 3. A 045006455506 (EBGPR63), do filtro "Interrompidas" das 12:49, NÃO estava: os checkpoints mostram tentativa 1 parada às 12:12, tentativa 2 iniciada às 12:33 e Fim do Trabalho às 12:57 — já tinha sido retomada. Não contradiz a hipótese, mas mostra que o filtro do portal inclui nota JÁ retomada, e que interrupção curta escapa do gatilho (coberta pelo 2º caminho do P2-54).
 - **Evidência:** `services/wpaService.js` `STATUS_V2`: `3: 'executada' // em andamento`. A nota 105293301 (PO, EPMFL30), com status "Em Campo interrompida" no portal em 07/10/2026, veio em `Downloaded` com `ExecutionStatus 3`. O Gestão Online mostra "Interromp." na coluna Status de execução (045006462967, ECGPR82).
 - **Impacto:** se confirmado, o card da equipe e o contador de andamento contam nota parada como se estivesse sendo trabalhada. Não afeta produção (concluídas).
-- **Ação:** 1) `node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG` e comparar a lista de código 3 com o filtro "Interrompidas" do portal; 2) se bater, decidir com o José como o Monitor deve mostrar (bucket próprio?). A coleta do P2-54 já depende desta hipótese.
+- **Ação:** 1) `node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2` (padrão `--setor GUA` = DESG **e** DEPT em série, desde 16/10/2026 — ver P2-67) e comparar a lista de código 3 com o filtro "Interrompidas" do portal; 2) se bater, decidir com o José como o Monitor deve mostrar (bucket próprio?). A coleta do P2-54 já depende desta hipótese.
 - **Relacionado:** P2-54.
 
 
@@ -6399,6 +6400,21 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Esforço:** diag feito; correção 1–3h depois da causa.
 - **Rollback:** o diag é read-only — nada a reverter.
 - **Relacionado:** P2-65 (onde a queda foi vista), P1-30/P1-37/P1-39 (setor que falha a coleta), P2-64 (`v2Presente`), P2-23 (execução sobreposta — o diag também acusa vaga com 2 INSERTs).
+
+## P2-67 — Guarapari tem dois setores (DESG e DEPT): não olhar só um
+
+- **Categoria:** Dados/Frontend
+- **Status:** **código done** (16/10/2026). Falta deploy e conferir a tela de Equipes na VM (tempo da consulta incluso).
+- **Regra de negócio (José, 16/10/2026):** GUA = setores **DESG + DEPT**. A equipe pode ser transferida de um para o outro conforme a região onde vai atuar ou o tipo de serviço a que for direcionada. Toda consulta, diag ou coleta de GUA olha os dois. DESC → CAC e DSSJ → SJC são 1:1.
+- **Evidência (varredura de 16/10/2026):** coleta, escala e catálogo de turnos já iteram os 4 setores (`cronService.js:457/533/604`, `routes/index.js:3649`); o filtro GUA é `['DESG','DEPT']` (`dataService.js:548`); a whitelist casa por sigla+regional, não por setor (`equipesOficiais.js:275`); o modal usa o `sectorId` da coleta (`index.html`, `_modalTeam.sectorId`). **Números não eram afetados.** Restavam: (1) a coluna Setor da tela de Equipes mostrava `equipes_oficiais.setor`, cadastro estático que não acompanha a transferência; (2) `scripts/diag-nota-interrompida.js` tinha `--setor DESG` como padrão e exigia rodar 2× para cobrir GUA.
+- **Ação feita:**
+  - `db/setorAtualQueries.js`: `DISTINCT ON (team_name)` em `snapshots` dos últimos 14 dias, mais recente primeiro. `snapshots` e não `teams_current`, que perde a equipe quando ela encerra a sessão. `GET /admin/equipes` anexa `setor_atual`/`setor_atual_data`; se a consulta falha, a tela segue com o cadastro (só `console.warn`).
+  - Tela: `_setorCelula` mostra o setor atual; divergindo do cadastro, **negrito** + `cad. XXXX` ao lado; sem coleta em 14 dias, o cadastro em cinza. O formulário de edição continua gravando o setor do cadastro — nada é reescrito sozinho.
+  - Diag: `--setor` aceita setor, regional (`GUA` → DESG, DEPT) ou lista; padrão `GUA`; os setores rodam em **série** (mesma conta `es`) com resumo somado das notas em ExecutionStatus 3, cada uma com seu setor.
+- **Teste:** `test/setorAtualQueries.test.js` (pool falso), `test/equipesAdminTela.test.js` (`_setorCelula`), `test/diagNotaInterrompida.test.js` (`resolverSetores`).
+- **Verificar na VM:** abrir Admin → Equipes → Listar; a coluna Setor deve vir preenchida. Se a lista demorar, medir `EXPLAIN ANALYZE` da consulta (janela de 14 dias em `snapshots`, índice `idx_snapshots_date_team`).
+- **Rollback:** `git revert` do commit. Sem migration.
+- **Relacionado:** P2-50 (setor no cadastro), P2-55 (diag), P2-54.
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 

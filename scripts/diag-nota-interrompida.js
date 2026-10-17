@@ -31,6 +31,18 @@
  * como "executada (em andamento)". Compare a lista com o filtro "Interrompidas"
  * do portal (Notes/Geral).
  *   node -r dotenv/config scripts/diag-nota-interrompida.js --so-v2 --setor DESG
+ *
+ * --setor aceita SETOR, REGIONAL ou lista (16/10/2026). Guarapari tem DOIS
+ * setores no WPA, DESG e DEPT, e a equipe é transferida entre eles conforme a
+ * região ou o tipo de serviço — rodar só DESG perdia quem estava no DEPT, e o
+ * José pediu pra não ter que rodar duas vezes. Agora:
+ *   --setor GUA          → DESG e DEPT, em série (PADRÃO)
+ *   --setor CAC | SJC    → DESC | DSSJ
+ *   --setor DESG,DESC    → lista livre
+ * Em série, não em paralelo: é a mesma conta WPA ('es') nos três setores do ES.
+ * O teamsstatus/V2 roda 1× por setor e o resumo de ExecutionStatus 3 sai junto,
+ * com o setor de cada nota. O details/optimized usa o 1º setor (a API aceita
+ * qualquer um).
  */
 
 function arg(nome, padrao = null) {
@@ -40,7 +52,25 @@ function arg(nome, padrao = null) {
 }
 
 const ID    = arg('id', 'ab7836cc-954f-4c6f-b847-c90448135afd');  // 105293301, PO, print de 07/10/2026
-const SETOR = arg('setor', 'DESG');
+// Setores de cada regional — espelho do REGIONAL_MAP (wpaService.js) e do
+// SETORES (dataService.js).
+const SETORES_DA_REGIONAL = { GUA: ['DESG', 'DEPT'], CAC: ['DESC'], SJC: ['DSSJ'] };
+const SETORES_VALIDOS = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
+
+/** 'GUA' → ['DESG','DEPT']; 'DESG,DESC' → ['DESG','DESC']; inválido → erro. */
+function resolverSetores(valor) {
+  const lista = [];
+  for (const parte of String(valor || '').toUpperCase().split(',').map(x => x.trim()).filter(Boolean)) {
+    const setores = SETORES_DA_REGIONAL[parte] || (SETORES_VALIDOS.includes(parte) ? [parte] : null);
+    if (!setores) throw new Error(`--setor inválido: "${parte}" (use GUA, CAC, SJC ou ${SETORES_VALIDOS.join('/')})`);
+    for (const s of setores) if (!lista.includes(s)) lista.push(s);
+  }
+  if (lista.length === 0) throw new Error('--setor vazio');
+  return lista;
+}
+
+const SETORES = resolverSetores(arg('setor', 'GUA'));
+const SETOR   = SETORES[0];   // só pro details/optimized
 const SO_V2 = process.argv.includes('--so-v2');
 
 /** Varre o objeto e devolve [caminho, valor] das chaves que casam com a regex. */
@@ -66,7 +96,19 @@ async function main() {
   const { wpaFetch } = require('../services/wpaService');
 
   if (!SO_V2) await detalheECompleteInterruptions(wpaFetch);
-  await teamsStatusV2(wpaFetch);
+  const status3 = [];
+  let achou = false;
+  for (const setor of SETORES) {            // em série — mesma conta WPA
+    const r = await teamsStatusV2(wpaFetch, setor);
+    status3.push(...r.status3);
+    achou = achou || r.achou;
+  }
+  if (SETORES.length > 1) {
+    console.log(`\n═══ RESUMO ${SETORES.join(' + ')} ═══`);
+    if (!SO_V2) console.log(achou ? '  nota encontrada (ver acima)' : '  (nota NÃO está no V2 de nenhum destes setores agora)');
+    console.log(`  Notas com ExecutionStatus 3 somando os setores (${status3.length}):`);
+    for (const l of status3.sort()) console.log(`    ${l}`);
+  }
 }
 
 async function detalheECompleteInterruptions(wpaFetch) {
@@ -97,7 +139,7 @@ async function detalheECompleteInterruptions(wpaFetch) {
 
 }
 
-async function teamsStatusV2(wpaFetch) {
+async function teamsStatusV2(wpaFetch, SETOR) {
   // ── 3. teamsstatus/V2 do setor ─────────────────────────────────────────────
   console.log(`\n═══ 3. teamsstatus/V2 — ${SETOR} ═══`);
   const v2 = await getJson(wpaFetch, `/api/teamsstatus/V2?sectorId=${SETOR}&filterByExhibitionSector=true`);
@@ -118,7 +160,7 @@ async function teamsStatusV2(wpaFetch) {
           (exemplos[es] = exemplos[es] || []);
           if (exemplos[es].length < 3) exemplos[es].push(`${nomeEq} ${n?.Type} ${n?.Number} (${lista})`);
         }
-        if (es === 3) status3.push(`${nomeEq.padEnd(9)} ${String(n?.Type).padEnd(3)} ${n?.Number}  Status=${n?.Status}  (${lista})`);
+        if (es === 3) status3.push(`${SETOR} ${nomeEq.padEnd(9)} ${String(n?.Type).padEnd(3)} ${n?.Number}  Status=${n?.Status}  (${lista})`);
         if (!SO_V2 && n?.Id === ID) {
           achou = true;
           console.log(`  ➜ nota encontrada: equipe ${nomeEq}, lista ${lista}, ExecutionStatus ${es}`);
@@ -138,6 +180,11 @@ async function teamsStatusV2(wpaFetch) {
   } else {
     console.log('\n  Nenhum ExecutionStatus fora do mapa neste momento.');
   }
+  return { status3, achou };
 }
 
-main().catch(err => { console.error('ERRO:', err.message); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => { console.error('ERRO:', err.message); process.exit(1); });
+}
+
+module.exports = { resolverSetores };
