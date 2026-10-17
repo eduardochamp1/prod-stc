@@ -173,7 +173,7 @@
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
 | P2-64 | Aviso "sessão anômala" chamava de 🔴 "app offline" equipe LOGADA (era o `IsOnline` cru do V2, falso também sem V2) e não mostrava quem estava escalada e não logou | Produto/Frontend | **código done** (15/10/2026) — virou ⏰ atrasada · 📵 sem comunicação ≥ 30 min · 📅 dia anterior; falta deploy e conferir na tela |
 | P2-65 | KPI do Monitor mostra "N a mais que o previsto": a janela da escala é estrita [início, fim), o sync da escala é 1x/dia e o "em campo" filtra coisas que o "esperadas" não filtra | Dados/Produto | **código done** (16/10/2026) — José escolheu o saldo aberto: em campo, na escala, fora da escala (motivo por equipe) e faltando; falta deploy e conferir na tela |
-| P2-66 | "Em campo" do snapshot cai ~35–45 equipes por UM ciclo e volta no seguinte → "faltam N" falso no KPI do Monitor | Dados/Ops | **causa confirmada** (16/10/2026, `scripts/diag-ciclo-em-campo.js`): a coleta de UM setor falha no ciclo e ele não entra no INSERT (165/165 casos); 11 falhas em 2 dias, 09h–15h30 — falta o erro no log e o José decidir o conserto |
+| P2-66 | "Em campo" do snapshot cai ~35–45 equipes por UM ciclo e volta no seguinte → "faltam N" falso no KPI do Monitor | Dados/Ops | **causa confirmada** (16/10/2026, `scripts/diag-ciclo-em-campo.js` + log): a Web API da EDP dá timeout 45s ou 502/503 num setor e ele não entra no INSERT do ciclo (165/165); 11 falhas em 2 dias, 09h–15h30 — falta o José decidir o conserto |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6370,15 +6370,32 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - **Coleta lenta junto:** o atraso dos ciclos com queda é 0,8–4,5 min (o de 11:06, 6,3 min) contra mediana de 0,3 min dos demais — cara de requisição que espera e falha (timeout de 45s, `WPA_HTTP_TIMEOUT_MS`), não de recusa imediata.
   - **Zoom 16/10 11:32:** as 26 equipes de DESC tinham `lastUpdate` do V2 às 11:05–11:06 no ciclo anterior e nenhuma linha neste; voltam todas às 11:45.
   - Os INSERTs fora da grade (15/10 08:21, 13:17, 14:48, 16:41, 16:52, 17:25) **não são execução sobreposta**: batem com os deploys do dia — o boot roda um snapshot 5s depois de subir (`cronService.js`, `setTimeout(runSnapshot, 5000)`). O diag dizia "P2-23"; corrigido.
+- **O erro, no log da VM (16/10/2026, `logs/out.log`/`logs/err.log` — o `log_date_format` sai em UTC, BRT = −3h):** cada ausência do diag tem o seu `snapshot_partial`, 1 para 1 (a de 15/10 10:49 ficou fora do `tail -80`):
+
+  | ciclo (BRT) | setor | erro |
+  |---|---|---|
+  | 15/10 11:06 | DESG | timeout 45s em `Sessions/all/date` |
+  | 15/10 11:18 | DESC | timeout em `Sessions/all/date` |
+  | 15/10 12:02 | DESG | timeout em `Sessions/all/date` |
+  | 15/10 13:45 | DESG | timeout em `teamsstatus/V2` |
+  | 15/10 14:19 | DSSJ | `teamsstatus/V2` **502** |
+  | 16/10 09:04 | DESG + DEPT | timeout em `teamsstatus/V2` (DESG) e `Sessions/all/date` (DEPT) |
+  | 16/10 09:18 | DEPT | timeout em `Sessions/all/date` |
+  | 16/10 11:32 | DESC | `sessions/date` **502** |
+  | 16/10 15:34 | DEPT | timeout em `Sessions/all/date` |
+
+  - **É instabilidade da Web API da EDP** (`edp-wpa-web-api.azurewebsites.net`): timeout de 45s ou 502/503, nos dois endpoints, nas duas contas (DSSJ é a conta SP), só em horário comercial. Não é credencial nem breaker nosso.
+  - **Por que não houve nova tentativa:** `wpaFetch` (`services/wpaService.js`) não repete timeout (de propósito desde 21/08/2026: 3 × 45s de espera para o usuário) e só repete 5xx quando a resposta tem cara de cold-start do Azure. Um 502/503 comum volta direto, `getSessionsByDate`/`getTeamStatusV2` lançam e o setor sai do ciclo.
+  - **O painel ao vivo sofre MAIS que o snapshot:** a maior parte das linhas `setor X falhou` do log NÃO tem `snapshot_partial` junto — são o `/api/teams` dos navegadores, que coleta ao vivo. As linhas repetidas no mesmo segundo (até 5×) são 1 requisição só: o `_singleFlight` faz vários navegadores esperarem a mesma promise, e cada um loga a falha. Em 15/10 entre 10:56 e 15:11 BRT o log tem falha de setor em quase todo intervalo de 15 min.
 - **Onde isso aparece:** o snapshot do ciclo perde o setor inteiro por 15 min (varreduras, histórico, qualquer métrica lida de `snapshots`). O painel ao vivo chama o mesmo `getTeams`, então a mesma falha intermitente aparece lá como a faixa de coleta degradada do P1-39 e um "faltam N" falso no KPI do Monitor.
 - **Em aberto (não investigado aqui):** se o `upsertDailyTotals(allTeams)` de um ciclo sem o setor regrava algum total diário mais baixo até o ciclo seguinte. Conferir antes de dar o item por encerrado — é número reportado à EDP.
 - **Leitura antes do dado (mantida pelo histórico):** queda de 35–45 tem tamanho de UM setor, e o ciclo das 11:00 gravando às 11:06 sugere coleta lenta — compatível com `setor-ausente` (timeout/breaker num setor). Se o diag disser `sem-v2`, a causa é o V2 vazio com 200, e o conserto é tratar lista V2 vazia num setor com sessões abertas como falha do setor (P1-39 já sabe exibir setor fora). Se disser `offline-no-v2`, é a EDP e o KPI precisa de tolerância de 1 ciclo — **regra de negócio, o José decide**.
 - **Para confirmar `setor-ausente`:** `pm2 logs wpa-monitor --lines 5000 --nostream | grep -E "snapshot_partial|setor .* falhou"` no horário da queda (lembrete: prefixo do `pm2 logs`).
 - **Critério de aceite:**
   - [x] diag rodado na VM (`--dias 2` e `--em "2026-10-16 11:32"`) e a causa dominante registrada aqui: `setor-ausente`, 165/165.
-  - [ ] Log confirma o erro de cada ausência (`pm2 logs wpa-monitor --lines 20000 --nostream | grep -E "setor (DESG|DEPT|DESC|DSSJ) falhou|snapshot_partial"`): timeout, HTTP 5xx/429 ou breaker? E em qual chamada (`sessions/date` ou `teamsstatus/V2`)?
+  - [x] Log confirma o erro de cada ausência: timeout de 45s ou 502/503 da Web API da EDP, em `Sessions/all/date` e em `teamsstatus/V2` (tabela acima). Comando: `grep -hE "setor (DESG|DEPT|DESC|DSSJ) falhou|snapshot_partial" logs/out*.log logs/err*.log` (os logs ficam em `~/prod-stc/logs/`, não em `~/.pm2/logs/`).
   - [ ] Conferir se o ciclo sem o setor mexe em total diário (item em aberto acima).
-  - [ ] José decide o conserto. Opções, da menos para a mais invasiva: (a) **repetir 1x só o setor que falhou** no mesmo ciclo antes de gravar; (b) **gravar o report por ciclo** (hoje só o último fica em `snapshot_last_ok`), para que histórico e KPI saibam que o setor faltou em vez de ler "zero"; (c) no KPI, não comparar "em campo" com "esperadas" de um setor fora da coleta (o P1-39 já sabe qual é). Nenhuma das três esconde o número; nada foi mexido.
+  - [ ] José decide o conserto. Opções, da menos para a mais invasiva: (a) **repetir 1x só o setor que falhou**, só no cron e depois dos outros setores (o usuário não espera; custa até +45s num ciclo que hoje leva 0,3 min de mediana) — como a EDP volta no ciclo seguinte, uma 2ª tentativa minutos depois provavelmente resolve a maioria; (b) **gravar o report por ciclo** (hoje só o último fica em `snapshot_last_ok`), para que histórico e KPI saibam que o setor faltou em vez de ler "zero"; (c) no KPI, não comparar "em campo" com "esperadas" de um setor fora da coleta (o P1-39 já sabe qual é). Nenhuma das três esconde o número; nada foi mexido.
 - **Esforço:** diag feito; correção 1–3h depois da causa.
 - **Rollback:** o diag é read-only — nada a reverter.
 - **Relacionado:** P2-65 (onde a queda foi vista), P1-30/P1-37/P1-39 (setor que falha a coleta), P2-64 (`v2Presente`), P2-23 (execução sobreposta — o diag também acusa vaga com 2 INSERTs).
