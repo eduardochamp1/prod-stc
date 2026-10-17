@@ -49,6 +49,7 @@
  *   cd ~/prod-stc && node scripts/diag-escala-a-mais.js
  *   node scripts/diag-escala-a-mais.js --em "2026-10-16 07:10"   (instante passado, BRT)
  *   node scripts/diag-escala-a-mais.js --varrer 3                (de hora em hora, 3 dias)
+ *   node scripts/diag-escala-a-mais.js --varrer 2 --passo 15     (todo ciclo de snapshot)
  */
 
 'use strict';
@@ -490,25 +491,35 @@ async function modoInstante(pool, ref) {
   console.log('');
 }
 
-async function modoVarredura(pool, dias) {
+async function modoVarredura(pool, dias, passoMin) {
   const whitelist = await lerWhitelist(pool);
   const fim = new Date();
   fim.setUTCMinutes(0, 0, 0);
   const inicio = new Date(fim.getTime() - dias * 86400000);
 
-  H(`VARREDURA — de hora em hora, ${dias} dia(s), até ${dateBRT(fim)} ${hhmmBRT(fim)} BRT`);
+  H(`VARREDURA — a cada ${passoMin} min, ${dias} dia(s), até ${dateBRT(fim)} ${hhmmBRT(fim)} BRT`);
+  info('instante = hora do SNAPSHOT usado (é nela que a escala é avaliada).');
+  const porHora = {};
+  let ultimoCiclo = null;
   const tot = { instantes: 0, comAMais: 0, saldoPositivo: 0, aMais: 0 };
   const porMotivo = {}, porFlag = {}, porFaixa = {}, porEquipe = {};
   const linhasInst = [];
 
-  for (let t = inicio.getTime() + 3600000; t <= fim.getTime(); t += 3600000) {
-    const ref = new Date(t);
-    const r = await analisar(pool, ref, whitelist);
+  const passo = passoMin * 60000;
+  for (let t = inicio.getTime() + passo; t <= fim.getTime(); t += passo) {
+    const r = await analisar(pool, new Date(t), whitelist);
     if (!r.capturado) continue;
+    // Com passo curto, dois pedidos podem cair no mesmo ciclo — conta 1 vez.
+    if (ultimoCiclo && r.capturado.getTime() === ultimoCiclo) continue;
+    ultimoCiclo = r.capturado.getTime();
+    const ref = r.ref;
     tot.instantes++;
     const saldo = r.emCampo.length - r.esp.esperadas;
     if (r.aMais.length) tot.comAMais++;
     if (saldo > 0) tot.saldoPositivo++;
+    const hh = hhmmBRT(ref).slice(0, 2);
+    const ph = (porHora[hh] ||= { n: 0, pos: 0, max: 0 });
+    ph.n++; if (saldo > 0) ph.pos++; ph.max = Math.max(ph.max, saldo);
     tot.aMais += r.aMais.length;
     for (const a of r.aMais) {
       porMotivo[a.motivo] = (porMotivo[a.motivo] || 0) + 1;
@@ -520,6 +531,8 @@ async function modoVarredura(pool, dias) {
       const e = (porEquipe[a.sigla] ||= { n: 0, motivos: {} });
       e.n++; e.motivos[a.motivo] = (e.motivos[a.motivo] || 0) + 1;
     }
+    // ⚠️ 16/10/2026 — o rótulo misturava o dia do snapshot (23:4x de ontem) com a
+    // hora do pedido (00:00) e saía "13/10 00:00" pro ciclo da virada do dia 14.
     linhasInst.push({ quando: `${r.hoje.slice(8, 10)}/${r.hoje.slice(5, 7)} ${hhmmBRT(ref)}`,
       campo: r.emCampo.length, esp: r.esp.esperadas, a: r.aMais.length, b: r.faltando.length,
       saldo, motivos: resumoMotivos(r.aMais) });
@@ -533,6 +546,12 @@ async function modoVarredura(pool, dias) {
   ]);
 
   H('RESUMO DA VARREDURA');
+  console.log('\n  Saldo positivo por hora do dia (BRT):');
+  tabela(Object.entries(porHora).filter(([, v]) => v.pos > 0).sort().map(([h, v]) => ({ h, ...v })), [
+    { rotulo: 'hora', get: x => `${x.h}h` }, { rotulo: 'ciclos', get: x => x.n },
+    { rotulo: 'com saldo +', get: x => x.pos }, { rotulo: 'maior saldo', get: x => `+${x.max}` },
+  ]);
+  console.log('');
   info(`instantes com snapshot ......... ${tot.instantes}`);
   info(`com alguma equipe (a) .......... ${tot.comAMais}`);
   info(`com saldo positivo ("a mais") .. ${tot.saldoPositivo}`);
@@ -568,7 +587,8 @@ async function main() {
     const em = arg('em');
     if (varrer != null) {
       const dias = Math.min(14, Math.max(1, Number(varrer) || 3));
-      await modoVarredura(pool, dias);
+      const passoMin = Math.min(60, Math.max(5, Number(arg('passo')) || 60));
+      await modoVarredura(pool, dias, passoMin);
     } else {
       let ref = new Date();
       if (em) {
