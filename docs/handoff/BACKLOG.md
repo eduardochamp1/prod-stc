@@ -172,7 +172,7 @@
 | P2-62 | Coluna RAMAIS no grupo DD da matriz "Notas Atendidas por Tipo" (+ gauge e XLSX) | Dados/Produto | **done** (14/10/2026, 4d08c7b + 5152c9c) — conferir no portal se a quantidade do C93 é ramal ou metro |
 | P2-63 | Alerta de baixa produtividade: equipe no meio do turno com < 4 executadas → balão 🔔 (lado esquerdo) | Produto/Dados | **código done, DESLIGADO** (14/10/2026, c930041…) — falta: migration 016 na VM, backtest, José decidir e ligar |
 | P2-64 | Aviso "sessão anômala" chamava de 🔴 "app offline" equipe LOGADA (era o `IsOnline` cru do V2, falso também sem V2) e não mostrava quem estava escalada e não logou | Produto/Frontend | **código done** (15/10/2026) — virou ⏰ atrasada · 📵 sem comunicação ≥ 30 min · 📅 dia anterior; falta deploy e conferir na tela |
-| P2-65 | KPI do Monitor mostra "N a mais que o previsto": a janela da escala é estrita [início, fim), o sync da escala é 1x/dia e o "em campo" filtra coisas que o "esperadas" não filtra | Dados/Produto | **diag pronto** (16/10/2026, `scripts/diag-escala-a-mais.js`) — falta rodar na VM e o José decidir a regra |
+| P2-65 | KPI do Monitor mostra "N a mais que o previsto": a janela da escala é estrita [início, fim), o sync da escala é 1x/dia e o "em campo" filtra coisas que o "esperadas" não filtra | Dados/Produto | **código done** (16/10/2026) — José escolheu o saldo aberto: em campo, na escala, fora da escala (motivo por equipe) e faltando; falta deploy e conferir na tela |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6313,7 +6313,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P2-65 — KPI "em campo × esperadas" mostra "N a mais que o previsto"
 
 - **Categoria:** Dados/Produto
-- **Status:** **diag pronto, causa a confirmar com dado** (16/10/2026). Nada mudou no KPI.
+- **Status:** **código done** (16/10/2026) — saldo aberto no card; falta deploy e conferir na tela.
 - **Reporte:** o José notou que o Monitor às vezes mostra mais equipes em campo do que a escala prevê.
 - **Como o número é feito (lido no código):** "em campo" = front, `renderMetrics` (`public/index.html`, `const ativas = teamsVisible.filter(t => !t.sessionEnd && t.isOnline)`), sobre as sessões unidas por sigla (`_mergeSessionsBySigla`). "Esperadas" = `GET /api/escala/agora` → `db/escalaQueries.equipesEsperadasAgora`. O texto "N a mais" é `ativas − esperadas`, ou seja um **saldo**: (em campo e não esperadas) − (esperadas e não em campo). As duas listas não são cruzadas em lugar nenhum.
 - **Causas candidatas, com evidência no código:**
@@ -6342,7 +6342,13 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - [ ] José decide a regra (saldo aberto / tolerância declarada / sync mais frequente).
   - [ ] KPI e aviso de atrasadas usam o mesmo universo (filtro de equipe aplicado aos dois lados).
 - **Esforço:** diag feito; correção de 2 a 4h depois da decisão.
-- **Rollback:** o diag é read-only — nada a reverter.
+- **Decisão do José (16/10/2026):** saldo aberto. *"Implementa o saldo aberto no KPI: em campo, na escala e fora da escala, com o motivo de cada equipe (encerrando turno até 30 min, prorrogação, sem escala)."* E, vendo a 1ª versão: *"esse card ficou muito grande"* → a lista virou balão flutuante.
+- **Feito:**
+  - `db/escalaQueries.js`: `classificarExcedente` saiu do diag e mora aqui (tela e diag usam a mesma regra); `grupoForaDaEscala` (até `ENCERRANDO_TURNO_MIN` = 30 min depois do fim = "encerrando turno"; passou = "prorrogação"; mais "antes do turno", "sem escala", "folga na escala", "escala sem horário", "escala em outra regional", "fora da whitelist"); `foraDaEscalaAgora`.
+  - `GET /api/escala/agora?emCampo=SIGLA,...` devolve `foraDaEscala` (motivo por equipe). Falha nesse pedaço não derruba o KPI.
+  - Front (`public/index.html`, bloco "SALDO DA ESCALA (regras puras)"): o "N a mais que o previsto" / "faltam N" virou `X na escala · Y fora · faltam Z ▾`; o clique abre um balão no `<body>` com as equipes por motivo e os minutos. Aritmética por construção: em campo = na escala + fora; esperadas = na escala + faltando. O número de ESPERADAS passa a respeitar o filtro de equipes e a busca por sigla (antes só a regional — comparava um subconjunto do campo com a escala inteira); quem está em campo nunca é refiltrado.
+  - Testes: `test/escalaForaDaEscala.test.js` (8). Visual conferido num harness com o CSS real; **não conferido no painel real** (sem banco local).
+- **Rollback:** `git revert` do commit; o campo novo da API é aditivo.
 - **Relacionado:** P2-47 (sem escala), P2-33 (catálogo), P2-64 (atrasadas), P1-26/P2-24 (`escala_dia`).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)

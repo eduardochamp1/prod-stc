@@ -57,14 +57,11 @@
 require('dotenv').config({ override: true });
 
 const { dateBRT } = require('../services/timeUtil');
-const { isFolga } = require('../services/escalaDia');
 const {
   equipesEsperadasAgora, minutosDoDia, diaAnterior,
+  classificarExcedente, janelaContem, LIMIAR_POS_TURNO_ONTEM_MIN,
 } = require('../db/escalaQueries');
 
-// Turno de ONTEM que acabou há mais que isto não explica a equipe em campo hoje
-// se hoje ela está de folga — aí o motivo é a folga, não a prorrogação.
-const LIMIAR_POS_TURNO_ONTEM_MIN = 240;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FUNÇÕES PURAS (exportadas pra teste)
@@ -115,115 +112,6 @@ function unirSessoes(linhas, hoje) {
     });
   }
   return out;
-}
-
-/** A janela [inicio, fim) — com virada de meia-noite — contém `agora`? */
-function janelaContem(inicio, fim, agora) {
-  if (inicio == null || fim == null || agora == null || inicio === fim) return false;
-  return fim > inicio ? (agora >= inicio && agora < fim) : (agora >= inicio || agora < fim);
-}
-
-/**
- * Por que uma equipe EM CAMPO não está entre as esperadas?
- *
- * @param {object} c
- *   sigla, naWhitelist, regionalWl, regionalSessao, refLogon, shiftType, turnoV2
- *   linhas: [{data, codigo_escala, no_catalogo, prefixo_catalogo, inicio_escala, fim_escala}]
- *           (escala_dia da equipe em ONTEM e HOJE, LEFT JOIN catálogo exato)
- *   agoraMin, hoje
- * @returns {{motivo: string, detalhe: string, minutos: number|null, flags: string[]}}
- */
-function classificarExcedente(c) {
-  const flags = [];
-  const linhas = c.linhas || [];
-  const hojeL  = linhas.filter(l => l.data === c.hoje);
-  const ontemL = linhas.filter(l => l.data !== c.hoje);
-  const trab   = hojeL.filter(l => !isFolga(l.codigo_escala));
-
-  if (c.refLogon && String(c.refLogon).slice(0, 10) < c.hoje) flags.push('sessao-de-dia-anterior');
-  if (c.regionalSessao && c.regionalWl && c.regionalSessao !== c.regionalWl) flags.push('regional-diverge');
-  if (c.shiftType) {
-    const tokHoje = new Set(hojeL.map(l => token(l.codigo_escala)));
-    if (!tokHoje.has(token(c.shiftType))) flags.push('v2-turno-diferente');
-    const v2 = c.turnoV2 || {};
-    if (janelaContem(minutosDoDia(v2.inicio), minutosDoDia(v2.fim), c.agoraMin)) {
-      flags.push('v2-turno-cobre-agora');
-    }
-  }
-
-  if (!c.naWhitelist) {
-    return { motivo: 'fora-whitelist', detalhe: 'não está ativa em equipes_oficiais', minutos: null, flags };
-  }
-
-  const janela = (l) => {
-    const ini = minutosDoDia(l.inicio_escala), fim = minutosDoDia(l.fim_escala);
-    return (l.no_catalogo && ini != null && fim != null && ini !== fim) ? { ini, fim } : null;
-  };
-  if (trab.some(l => !janela(l))) flags.push('codigo-orfao-junto');
-
-  // Candidatos: a que distância ela está de um turno cadastrado?
-  const cand = [];
-  const agora = c.agoraMin;
-  for (const l of trab) {
-    const j = janela(l);
-    if (!j) continue;
-    if (janelaContem(j.ini, j.fim, agora) && (j.fim > j.ini || agora >= j.ini)) {
-      // Cobriria pela regra do KPI — não deveria estar aqui. Fica visível.
-      cand.push({ motivo: 'inconsistente', minutos: 0, l, j });
-    } else if (agora < j.ini) {
-      cand.push({ motivo: 'antes-do-turno', minutos: j.ini - agora, l, j });
-    } else if (j.fim > j.ini && agora >= j.fim) {
-      cand.push({ motivo: 'depois-do-turno', minutos: agora - j.fim, l, j });
-    }
-  }
-  for (const l of ontemL) {
-    if (isFolga(l.codigo_escala)) continue;
-    const j = janela(l);
-    if (!j) continue;
-    // Fim do turno de ontem, em minutos relativos à meia-noite de HOJE.
-    const fimRel = j.fim > j.ini ? j.fim - 1440 : j.fim;
-    if (agora >= fimRel) cand.push({ motivo: 'depois-do-turno', minutos: agora - fimRel, l, j, ontem: true });
-  }
-  cand.sort((a, b) => a.minutos - b.minutos);
-  const melhor = cand[0];
-  const fmtJ = (x) => `${x.l.codigo_escala} ${String(x.l.inicio_escala).slice(0, 5)}→${String(x.l.fim_escala).slice(0, 5)}`;
-
-  // Sem janela HOJE, só um turno de ontem que acabou há pouco explica; um que
-  // acabou há 15h não explica nada — aí o motivo é o que há (ou falta) hoje.
-  const temJanelaHoje = cand.some(x => !x.ontem);
-  if (melhor && (temJanelaHoje || melhor.minutos <= LIMIAR_POS_TURNO_ONTEM_MIN)) {
-    const quando = melhor.motivo === 'antes-do-turno' ? `${melhor.minutos} min antes do início`
-      : melhor.motivo === 'depois-do-turno' ? `${melhor.minutos} min depois do fim`
-      : 'a janela cobre agora (divergência com escalaQueries)';
-    return {
-      motivo: melhor.motivo, minutos: melhor.minutos, flags,
-      detalhe: `${fmtJ(melhor)}${melhor.ontem ? ' (ontem)' : ''} · ${quando}`,
-    };
-  }
-
-  if (hojeL.length === 0) {
-    return { motivo: 'sem-escala-hoje', minutos: null, flags,
-      detalhe: ontemL.length ? 'tem escala ontem, nada hoje' : 'nenhuma linha ontem nem hoje' };
-  }
-  const codigos = [...new Set(hojeL.map(l => l.codigo_escala))].join(', ');
-  if (trab.length === 0) {
-    return { motivo: 'folga-no-cadastro', minutos: null, flags, detalhe: `códigos de hoje: ${codigos}` };
-  }
-  const semCat = trab.filter(l => !l.no_catalogo);
-  if (semCat.length === trab.length) {
-    const comPrefixo = semCat.find(l => l.prefixo_catalogo);
-    return comPrefixo
-      ? { motivo: 'codigo-com-grafia-diferente', minutos: null, flags,
-          detalhe: `"${comPrefixo.codigo_escala}" ≠ catálogo "${comPrefixo.prefixo_catalogo}"` }
-      : { motivo: 'codigo-fora-do-catalogo', minutos: null, flags, detalhe: `códigos: ${codigos}` };
-  }
-  const ambigua = trab.find(l => l.no_catalogo && l.inicio_escala != null
-    && minutosDoDia(l.inicio_escala) === minutosDoDia(l.fim_escala));
-  if (ambigua) {
-    return { motivo: 'janela-ambigua', minutos: null, flags,
-      detalhe: `${ambigua.codigo_escala} ${String(ambigua.inicio_escala).slice(0, 5)}→${String(ambigua.fim_escala).slice(0, 5)}` };
-  }
-  return { motivo: 'codigo-sem-horario', minutos: null, flags, detalhe: `códigos: ${codigos}` };
 }
 
 /** Faixa de minutos pro histograma de antecipação/prorrogação. */

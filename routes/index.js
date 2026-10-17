@@ -4036,7 +4036,24 @@ router.get('/escala/agora', async (req, res) => {
   try {
     const regionais = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length > 0)
       ? req.scope.regionals : null;
-    res.json(await _escalaQ.equipesEsperadasAgora(regionais));
+    const quando = new Date();
+    const esp = await _escalaQ.equipesEsperadasAgora(regionais, quando);
+    // ?emCampo=SIGLA,SIGLA — quem a tela conta como em campo (16/10/2026, P2-65).
+    // Volta `foraDaEscala`: as que não estão esperadas, com o motivo. Sigla é
+    // validada pelo formato; a resposta só traz motivo e regional, nada de
+    // dado operacional de outra regional.
+    const emCampo = String(req.query.emCampo || '').split(',')
+      .map(s => s.trim().toUpperCase()).filter(s => /^[A-Z0-9_-]{1,20}$/.test(s)).slice(0, 400);
+    if (req.query.emCampo != null) {
+      try {
+        esp.foraDaEscala = await _escalaQ.foraDaEscalaAgora(emCampo, regionais, quando, esp);
+      } catch (err) {
+        // Sem o detalhe a tela ainda mostra os números — não derruba o KPI.
+        console.warn('[escala/agora] foraDaEscala:', err.message);
+        esp.foraDaEscala = null;
+      }
+    }
+    res.json(esp);
   } catch (err) {
     // Não derruba o Monitor: o KPI simplesmente não mostra o esperado. A tabela
     // escala_dia depende de migration (013) e de cron — se faltar, o resto da

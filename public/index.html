@@ -5055,6 +5055,123 @@ ${acumuladoHTML}
     }
     /* ── fim ALERTA DE SESSÃO ─────────────────────────────────────────────── */
 
+    /* ── SALDO DA ESCALA (regras puras) ──────────────────────────────────────
+     * 16/10/2026 (P2-65). O card mostrava "N a mais que o previsto" — um SALDO
+     * entre duas listas que ninguém cruzava: às 17:00 a escala tira ~70 equipes
+     * de uma vez e a maioria desloga em até 30 min, então o "+70" era gente
+     * encerrando o turno, não equipe sobrando. O José escolheu o saldo ABERTO:
+     * em campo, na escala, fora da escala com o motivo de cada uma, e faltando.
+     * Nada some e nenhum número é ajustado — o que muda é que a conta aparece.
+     *
+     * Aritmética por construção: em campo = na escala + fora da escala;
+     * esperadas = na escala + faltando. Cada sigla cai em exatamente um lado.
+     */
+    // emCampo: siglas que o card conta como em campo. detalhe: /escala/agora.
+    // filtroEsperada: os MESMOS filtros da tela (regional, equipes, busca) —
+    // sem isso, com filtro de equipe ligado, o card comparava um subconjunto do
+    // campo com a escala inteira. Quem está em campo nunca é filtrado de novo
+    // (a busca por nome de colaborador só existe do lado do campo).
+    function saldoEscala({ emCampo, detalhe, foraDaEscala, filtroEsperada }) {
+      // A ordem fica DENTRO da função: renderMetrics pode rodar antes desta
+      // linha do script, e uma constante solta estaria em TDZ (ou undefined).
+      const ordem = ['encerrando', 'prorrogacao', 'antes', 'sem-escala',
+        'folga', 'sem-horario', 'regional', 'whitelist', 'sem-classificacao'];
+      const norm = s => String(s || '').toUpperCase().trim();
+      const campo = [...new Set((emCampo || []).map(norm).filter(Boolean))];
+      const campoSet = new Set(campo);
+      const esperadas = (detalhe || []).filter(e => e && e.sigla &&
+        (campoSet.has(norm(e.sigla)) || !filtroEsperada || filtroEsperada(e)));
+      const espSet = new Set(esperadas.map(e => norm(e.sigla)));
+      const motivo = new Map((foraDaEscala || []).map(f => [norm(f.sigla), f]));
+      const fora = campo.filter(s => !espSet.has(s)).map(s => ({
+        sigla: s, ...(motivo.get(s) || { grupo: 'sem-classificacao', rotulo: 'sem classificação', minutos: null }),
+      }));
+      const faltando = esperadas.filter(e => !campoSet.has(norm(e.sigla)));
+      const porGrupo = new Map();
+      for (const f of fora) {
+        if (!porGrupo.has(f.grupo)) porGrupo.set(f.grupo, { grupo: f.grupo, rotulo: f.rotulo, equipes: [] });
+        porGrupo.get(f.grupo).equipes.push(f);
+      }
+      const grupos = [...porGrupo.values()]
+        .sort((a, b) => ordem.indexOf(a.grupo) - ordem.indexOf(b.grupo));
+      for (const g of grupos) {
+        g.equipes.sort((a, b) => (b.minutos ?? -1) - (a.minutos ?? -1) || a.sigla.localeCompare(b.sigla));
+      }
+      return {
+        emCampo: campo.length, esperadas: esperadas.length,
+        naEscala: campo.length - fora.length, fora, faltando, grupos,
+      };
+    }
+
+    function _escSaldo(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // HTML do saldo, logo abaixo de EM CAMPO / ESPERADAS.
+    function htmlSaldoEscala(s) {
+      const pl = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+      const linha = `<b>${s.naEscala}</b> na escala · `
+        + `<b>${s.fora.length}</b> fora · `
+        + `<span style="white-space:nowrap;color:${s.faltando.length ? '#e74c3c' : 'inherit'}">faltam <b>${s.faltando.length}</b></span>`;
+      if (!s.fora.length && !s.faltando.length) return linha;
+      const tempo = f => {
+        if (!Number.isFinite(f.minutos)) return '';
+        return f.grupo === 'antes' ? ` −${fmtMinutos(f.minutos)}` : ` +${fmtMinutos(f.minutos)}`;
+      };
+      const grupos = s.grupos.map(g =>
+        `<div style="margin-top:3px"><b>${_escSaldo(g.rotulo)}</b> (${g.equipes.length}): `
+        + g.equipes.map(f => `<span title="${_escSaldo(f.detalhe || '')}">${_escSaldo(f.sigla)}${tempo(f)}</span>`).join(', ')
+        + `</div>`).join('');
+      const falt = s.faltando.length
+        ? `<div style="margin-top:3px"><b>faltando</b> (${s.faltando.length}): `
+          + s.faltando.map(e => `<span title="turno ${_escSaldo(e.codigo || '')} desde ${_escSaldo(e.inicio || '')}">${_escSaldo(e.sigla)}</span>`).join(', ')
+          + `</div>`
+        : '';
+      // A lista abre num balão FLUTUANTE sobre o painel: dentro do card ela
+      // empurrava a grade inteira (às 17:00 são ~70 equipes) — pedido do José,
+      // 16/10/2026: "esse card ficou muito grande". O card só ganha a linha.
+      // O balão é desenhado no <body> (_posSaldoPop): .metric-card tem
+      // overflow:hidden e transform no hover — prende até position:fixed.
+      return `<details ontoggle="_posSaldoPop(this)"><summary style="cursor:pointer;list-style:none" `
+        + `title="Clique para ver as ${pl(s.fora.length + s.faltando.length, 'equipe', 'equipes')}">${linha} ▾</summary>`
+        + `<div class="saldo-pop" style="display:none;position:fixed;z-index:500;width:300px;max-height:280px;`
+        + `overflow:auto;background:var(--branco,#fff);color:var(--text,#222);border:1px solid var(--cinza2,#ddd);`
+        + `border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:8px 10px;font-size:11px;`
+        + `line-height:1.45;text-align:left">${grupos}${falt}</div></details>`;
+    }
+    // Mostra uma CÓPIA do balão no <body>, logo abaixo da linha clicada e sem
+    // sair da tela. Fecha ao clicar fora, ao rolar a página ou ao clicar de novo
+    // na linha (o re-render de 5 min também fecha: o <details> é recriado).
+    function _posSaldoPop(det) {
+      const ID = 'saldo-pop-flutuante';
+      const velho = document.getElementById(ID);
+      if (velho) velho.remove();
+      if (!det || !det.open) return;
+      const fonte = det.querySelector('.saldo-pop');
+      const sum = det.querySelector('summary');
+      if (!fonte || !sum) return;
+      const pop = fonte.cloneNode(true);
+      pop.id = ID;
+      pop.classList.remove('saldo-pop');
+      const r = sum.getBoundingClientRect();
+      const larg = Math.min(300, window.innerWidth - 16);
+      pop.style.display = '';
+      pop.style.width = larg + 'px';
+      pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - larg - 8)) + 'px';
+      pop.style.top = (r.bottom + 4) + 'px';
+      document.body.appendChild(pop);
+      const fechar = (ev) => {
+        if (ev && ev.type === 'click' && (pop.contains(ev.target) || sum.contains(ev.target))) return;
+        det.open = false; pop.remove();
+        window.removeEventListener('scroll', fechar, true);
+        document.removeEventListener('click', fechar, true);
+      };
+      window.addEventListener('scroll', fechar, true);
+      setTimeout(() => document.addEventListener('click', fechar, true), 0);
+    }
+    /* ── fim SALDO DA ESCALA ──────────────────────────────────────────────── */
+
     // Retorna true se o BeginTime é de um dia anterior ao dia de hoje (BRT)
     function sessaoAnterior(iso) {
       if (!iso) return false;
@@ -8678,8 +8795,13 @@ ${acumuladoHTML}
         // em histórico, e mostrar o turno de hoje ao lado do campo de 12/08
         // seria comparar coisas de dias diferentes.
         let escalaAgora = null;
+        // Quem o card conta como em campo — mesma regra do `ativas` acima. Vai
+        // pro backend, que devolve o motivo de cada uma que está fora da escala.
+        const _siglasEmCampo = [...new Set(teamsVisible.filter(t => !t.sessionEnd && t.isOnline)
+          .map(t => String(t.sigla || t.teamName || '').toUpperCase().trim()).filter(Boolean))];
         if (isLiveToday) {
-          escalaAgora = await fetch(`${API}/escala/agora?regionals=${_regionalsCsv}`)
+          escalaAgora = await fetch(`${API}/escala/agora?regionals=${_regionalsCsv}`
+            + `&emCampo=${encodeURIComponent(_siglasEmCampo.join(','))}`)
             .then(r => r.json()).catch(() => null);
         }
         // Mesma resposta alimenta as ⏰ atrasadas do aviso (15/10/2026). Fora do
@@ -8689,18 +8811,26 @@ ${acumuladoHTML}
         const espEl = document.getElementById('m-esperadas');
         const gapEl = document.getElementById('m-escala-gap');
         if (espEl) {
-          const esp = escalaAgora && Number.isFinite(escalaAgora.esperadas) ? escalaAgora.esperadas : null;
-          espEl.textContent = esp == null ? '—' : esp;
-          if (esp != null && gapEl) {
-            const falta = esp - ativas;
-            // Verde quando há gente igual ou acima do previsto; vermelho quando
-            // falta equipe em campo. O número cru vem junto: "faltam 3" é
-            // acionável, "-3" obriga o leitor a interpretar o sinal.
-            espEl.style.color = falta > 0 ? 'var(--vermelho, #e74c3c)' : 'var(--verde)';
-            gapEl.textContent = falta > 0
-              ? `faltam ${falta} equipe${falta > 1 ? 's' : ''} em campo`
-              : (falta < 0 ? `${-falta} a mais que o previsto` : 'escala completa');
-            gapEl.style.color = falta > 0 ? '#e74c3c' : 'var(--text2)';
+          const temEsc = escalaAgora && Number.isFinite(escalaAgora.esperadas) && Array.isArray(escalaAgora.detalhe);
+          // 16/10/2026 (P2-65) — saldo ABERTO no lugar de "N a mais que o
+          // previsto" / "faltam N". O texto antigo era ativas − esperadas, um
+          // saldo de duas listas que nunca se cruzavam: às 17:00 dava "+70" com
+          // as equipes só encerrando o turno. Ver SALDO DA ESCALA (regras puras).
+          const equipesSel = _monEquipesSelecionadas();
+          const saldo = temEsc ? saldoEscala({
+            emCampo: _siglasEmCampo, detalhe: escalaAgora.detalhe,
+            foraDaEscala: escalaAgora.foraDaEscala,
+            filtroEsperada: e => _regionalMatch(e.regional)
+              && (!equipesSel || equipesSel.has(e.sigla))
+              && (!currentFilter || String(e.sigla).toLowerCase().includes(currentFilter)),
+          }) : null;
+          espEl.textContent = saldo ? saldo.esperadas : '—';
+          if (saldo && gapEl) {
+            // Vermelho só quando falta equipe escalada em campo; quem está fora
+            // da escala aparece na lista, com o motivo, sem pintar o número.
+            espEl.style.color = saldo.faltando.length ? 'var(--vermelho, #e74c3c)' : 'var(--verde)';
+            gapEl.innerHTML = htmlSaldoEscala(saldo);
+            gapEl.style.color = 'var(--text2)';
             gapEl.style.display = '';
           } else if (gapEl) {
             // Sem dado de escala o KPI não inventa: mostra "—" e explica.
