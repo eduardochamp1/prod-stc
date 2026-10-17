@@ -30,6 +30,7 @@
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
 | P0-6 | Auto-reparo do drift APAGAVA produção legítima toda noite (07-22 perdeu 172 OS) | Dados | **done** (25/07 código; 31/07 histórico re-consolidado no apply de julho) |
 | P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo monotônico + rota manual corrigida; causa-raiz era o P1-16 |
+| P0-9 | **INCIDENTE 16/10/2026 ~21:15–21:30:** a Web API da EDP passou a recusar o IP da nossa VM (403 "blocked your access") — painel sem coleta | Ops/Contrato | **aberto** — falta: TI dizer se o IP de saída mudou; EDP liberar; backfill do período |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -5828,6 +5829,27 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   senha_provisoria`. Ninguém perde acesso; quem já trocou fica com a senha nova.
 - **Fora de escopo:** recuperação por e-mail, histórico de senhas, expiração
   periódica, forçar os 5 migrados a trocar (spec §8).
+
+## P0-9 — Incidente 16/10/2026: a Web API da EDP bloqueou o IP da VM
+
+- **Categoria:** Ops/Contrato
+- **Status:** **aberto** (16/10/2026, 22h). Nada a mudar no código.
+- **Sintoma:** a partir do ciclo das 21:30 BRT de 16/10 (o das 21:15 coletou normal), todo pedido da VM a `edp-wpa-web-api.azurewebsites.net` — 4 setores, contas `es` e `sp` — volta 403. O `wpaFetch` trata como cold-start do Azure, tenta 3x e desiste (`cold-start persistente (3 tentativas) — desistindo` no `logs/err.log`). Sem setor coletado, o ciclo não grava (`snapshot_error`); o painel mostra "coleta indisponível" com "—" (comportamento certo, P1-39).
+- **Evidência de que é bloqueio do IP da VM, e não queda da EDP:**
+  - Na VM: `curl https://edp-wpa-web-api.azurewebsites.net/` → 403, corpo "Error 403 - Forbidden … blocked your access" (página de restrição de acesso do Azure App Service). IP de saída da VM: `144.22.240.169` (faixa da Oracle Cloud).
+  - Do navegador do José, na rede da Engelmig, no mesmo minuto: o portal chama `edp-wpa-web-api.azurewebsites.net/api/teamsstatus/V2?sectorId=DESG` e recebe **200 OK** (22:04 BRT). O portal `edp-wpa-po` responde normal também da VM (302).
+  - O portal é usado de qualquer rede pelas equipes, então não é lista de IPs liberados: é uma restrição que pega o IP da VM.
+- **Descartado que fomos nós:** volume estável — 198 linhas `[WPA]` no log em cada ciclo de 20:30 a 21:15, sem rajada; nenhum comando rodado na VM nesse horário chama a EDP (`diag-escala-a-mais`/`diag-ciclo-em-campo` só leem o banco; `diag-rotina` só chama a EDP para a data de HOJE e foi rodado com 04/09); `git pull` não reinicia o app; o deploy do c129625 foi às ~21:50, depois do bloqueio; e restrição de IP do App Service é regra configurada, nada que um cliente consiga escrever.
+- **Hipóteses abertas:** (1) o IP de saída da VM mudou nessa hora (OCI/TI) e o novo cai numa regra da EDP — não temos o IP anterior registrado; (2) regra de segurança da EDP, manual em janela noturna ou automática.
+- **O que NÃO fazer:** contornar o bloqueio (proxy, outro IP de saída) sem falar com a EDP — é driblar controle de acesso de um cliente que audita o contrato.
+- **Recuperação depois de liberado:** a coleta volta sozinha no ciclo seguinte. A produção do período é recuperável pelo backfill por data (`POST /admin/backfill/range`, API-WPA-EDP.md §11) + re-consolidação (`scripts/backfill-consolidate.js`). Perde-se de vez só o que é ao vivo: `isOnline`, localização, intervalos do momento, snapshots de 15 min.
+- **Critério de aceite:**
+  - [ ] TI responde se o IP de saída da VM mudou em 16/10 ~21:15.
+  - [ ] EDP contatada (IP `144.22.240.169`, desde 16/10 21:15–21:30, coleta a cada 15 min, ~200 linhas `[WPA]` de log por ciclo, + painel ao vivo) e o motivo registrado aqui.
+  - [ ] Coleta de volta (`diag-ciclo-em-campo.js` com ciclos normais) e backfill + re-consolidação do período rodados.
+  - [ ] Registrar o IP de saída da VM e o contato de suporte da EDP no cofre do P0-1 — hoje nenhum dos dois está anotado em lugar nenhum.
+- **Relacionado:** P2-66 (mesma noite; as falhas de horário comercial eram timeout/502, não isto), P0-1 (contato EDP e IP autorizado não estão registrados), P1-39.
+
 
 ## P0-1c — Excluir usuário (excluir = ocultar)
 
