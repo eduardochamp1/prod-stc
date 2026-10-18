@@ -561,6 +561,19 @@ async function runSyncEscalaCatalogo() {
 // é compartilhada com outro projeto da empresa (P1-25), e pendurar isso na cauda
 // do snapshot custaria ~384 requests/dia para um dado que muda uma vez ao dia.
 //
+// 18/10/2026 (P2-65): "muda uma vez ao dia" estava errado. Domingo, 15:00: 9
+// equipes em campo com DR gravado (sync das 05:20) e C08 no ShiftType do V2; um
+// sync manual às 15:11 trouxe C08 para 8 delas — a EDP lança a convocação no
+// collaboratorshifts DURANTE o dia. Agora roda a cada 30 min, 05:20–22:20
+// (35 execuções × 4 setores = 140 requests/dia, ainda ~1/3 do que o comentário
+// acima temia).
+//
+// No mesmo dia: 61 linhas de HOJE que o sync não trazia mais seguiam gravadas
+// (upsert sem DELETE) — colaborador que a EDP tirou da escala continuava
+// "esperado". Depois de gravar um setor, apaga as linhas dele de hoje até o fim
+// do mês que este sync não tocou. Dias PASSADOS ficam como estão: são o
+// registro do que estava planejado, e a EDP pode reescrevê-los depois.
+//
 // Tolera a migration 013 não ter rodado: loga e segue, e o health degrada pro
 // comportamento antigo em vez de suprimir equipe no escuro.
 async function runSyncEscalaDia() {
@@ -575,10 +588,15 @@ async function runSyncEscalaDia() {
   // mês acontecer 3h antes aqui do que na operação.
   const hoje = dateBRT();                       // 'YYYY-MM-DD'
   const [ano, mes] = hoje.split('-').map(Number);
+  const proximoMes = mes === 12 ? `${ano + 1}-01-01` : `${ano}-${String(mes + 1).padStart(2, '0')}-01`;
+  // Um carimbo só para a execução inteira: o que ficar com updated_at anterior a
+  // ele no setor gravado é linha que a EDP não devolveu mais.
+  const syncAt = new Date().toISOString();
 
   const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];
   let linhasTotal = 0;
   let gravadas    = 0;
+  let orfasApagadas = 0;
 
   for (const sectorId of SETORES) {
     if (setorDesativado(sectorId)) continue;     // conta desativada — não cutuca (P1-21)
@@ -600,7 +618,7 @@ async function runSyncEscalaDia() {
       colaborador_codigo: l.colaboradorCodigo || '',   // PK não aceita nulo
       colaborador_nome:   l.colaboradorNome,
       codigo_escala:      l.codigoEscala,
-      updated_at:         new Date().toISOString(),
+      updated_at:         syncAt,
     }));
 
     const { error } = await sb
@@ -617,12 +635,28 @@ async function runSyncEscalaDia() {
       continue;
     }
     gravadas += rows.length;
+
+    // Só chega aqui com resposta NÃO vazia e upsert ok — resposta vazia ou erro
+    // nunca apaga a escala do setor.
+    const { error: errDel, count } = await sb
+      .from('escala_dia')
+      .delete({ count: 'exact' })
+      .eq('sector_id', sectorId)
+      .gte('data', hoje)
+      .lt('data', proximoMes)
+      .lt('updated_at', syncAt);
+    if (errDel) {
+      log.warn('escala_dia_limpeza_falhou', { sectorId, msg: errDel.message });
+    } else if (count) {
+      orfasApagadas += count;
+      log.info('escala_dia_orfas_apagadas', { sectorId, apagadas: count });
+    }
   }
 
   if (gravadas > 0) {
-    log.info('escala_dia_ok', { mes, ano, linhas: linhasTotal, gravadas });
+    log.info('escala_dia_ok', { mes, ano, linhas: linhasTotal, gravadas, orfasApagadas });
   }
-  return { mes, ano, linhas: linhasTotal, gravadas };
+  return { mes, ano, linhas: linhasTotal, gravadas, orfasApagadas };
 }
 
 // ── INTERVALOS DA SESSÃO (sessions/{id}/break → sessao_intervalo) ─────────────
@@ -1580,9 +1614,16 @@ function startCron() {
   // /sessions/current após logoff) e atualiza sessionEnd nos snapshots.
   // Escala cadastrada do dia, às 05:20 — antes da janela de snapshot (05:30),
   // pra que o primeiro /admin/health do dia já saiba quem está de folga.
-  const escalaDiaJob = cron.schedule('20 5 * * *', () => runSyncEscalaDia(), {
+  // 18/10/2026 (P2-65): e depois a cada 30 min até 22:20 — convocação de folga
+  // é lançada pela EDP ao longo do dia. Duas expressões porque uma só
+  // ('20,50 5-22') rodaria também às 22:50.
+  const escalaDiaJob = cron.schedule('20 5-22 * * *', () => runSyncEscalaDia(), {
     timezone: 'America/Sao_Paulo',
   });
+  const escalaDiaMeiaJob = cron.schedule('50 5-21 * * *', () => runSyncEscalaDia(), {
+    timezone: 'America/Sao_Paulo',
+  });
+  global._extraCronJobs.push(escalaDiaJob, escalaDiaMeiaJob);
 
   // Intervalos das sessões de ontem, às 03:10 — depois do sync-logoffs, com o
   // dia já fechado. 1 request por sessão, ver o comentário da função.
