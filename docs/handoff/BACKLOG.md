@@ -30,7 +30,8 @@
 | P0-5 | POST `/metas` quebrado para não-admin | Backend | **done** (a8dcbab, 08/07) |
 | P0-6 | Auto-reparo do drift APAGAVA produção legítima toda noite (07-22 perdeu 172 OS) | Dados | **done** (25/07 código; 31/07 histórico re-consolidado no apply de julho) |
 | P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo monotônico + rota manual corrigida; causa-raiz era o P1-16 |
-| P0-9 | **INCIDENTE 16/10/2026 ~21:15–21:30:** a Web API da EDP passou a recusar o IP da nossa VM (403 "blocked your access") — painel sem coleta | Ops/Contrato | **aberto** — falta: TI dizer se o IP de saída mudou; EDP liberar; backfill do período |
+| P0-9 | **INCIDENTE 16/10/2026 ~21:15–21:30:** a Web API da EDP passou a recusar o IP da nossa VM (403 "blocked your access") — painel sem coleta | Ops/Contrato | **aberto** — falta: TI dizer se o IP de saída mudou; EDP liberar; backfill do período. ⚠️ 18/10: a VM voltou a alcançar a API; o que seguia zerando a coleta era o P0-10 |
+| P0-10 | **INCIDENTE 16/10/2026 ~21:30:** a EDP passou a devolver 200 "Nenhum dado encontrado" para o User-Agent do node-fetch — coleta zerada SEM erro no log | Backend/Dados | **código done** (b634816, a4b9371 — 18/10) — falta deploy, reparo do `notas_daily_agg` 17–18/10, backfill + re-consolidação 16–18/10, avisar a EDP do UA |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -5834,6 +5835,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 
 - **Categoria:** Ops/Contrato
 - **Status:** **aberto** (16/10/2026, 22h). Nada a mudar no código.
+- **Atualização 18/10/2026:** a matriz de testes do P0-10 mostra a VM alcançando a API normalmente (`23.97.96.32`, mesmo token, 73 sessões em DESG/16-10 com outro User-Agent). O que mantinha a coleta zerada desde 17/10 00:30 UTC era o filtro de User-Agent (P0-10), que responde 200 vazio, não 403. As perguntas abaixo (o IP mudou? o 403 era regra da EDP?) seguem sem resposta — e podem ser a MESMA mudança da EDP na mesma noite.
 - **Sintoma:** a partir do ciclo das 21:30 BRT de 16/10 (o das 21:15 coletou normal), todo pedido da VM a `edp-wpa-web-api.azurewebsites.net` — 4 setores, contas `es` e `sp` — volta 403. O `wpaFetch` trata como cold-start do Azure, tenta 3x e desiste (`cold-start persistente (3 tentativas) — desistindo` no `logs/err.log`). Sem setor coletado, o ciclo não grava (`snapshot_error`); o painel mostra "coleta indisponível" com "—" (comportamento certo, P1-39).
 - **Evidência de que é bloqueio do IP da VM, e não queda da EDP:**
   - Na VM: `curl https://edp-wpa-web-api.azurewebsites.net/` → 403, corpo "Error 403 - Forbidden … blocked your access" (página de restrição de acesso do Azure App Service). IP de saída da VM: `144.22.240.169` (faixa da Oracle Cloud).
@@ -5853,6 +5855,69 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - [ ] Coleta de volta (`diag-ciclo-em-campo.js` com ciclos normais) e backfill + re-consolidação do período rodados.
   - [ ] Registrar o IP de saída da VM e o contato de suporte da EDP no cofre do P0-1 — hoje nenhum dos dois está anotado em lugar nenhum.
 - **Relacionado:** P2-66 (mesma noite; as falhas de horário comercial eram timeout/502, não isto), P0-1 (contato EDP e IP autorizado não estão registrados), P1-39.
+
+
+## P0-10 — Incidente 16/10/2026: a EDP devolve "Nenhum dado encontrado" para o User-Agent do node-fetch
+
+- **Categoria:** Backend/Dados
+- **Status:** **código done** (18/10/2026 — `b634816` User-Agent; `a4b9371` detecção + travas + script de reparo). Falta: deploy, reparo, backfill e avisar a EDP (aceite abaixo).
+- **Sintoma:** desde a noite de 16/10, toda consulta à WPA volta **HTTP 200** com `{"Message":"Nenhum dado encontrado."}`, nos 4 setores (DESG, DEPT, DESC, DSSJ), inclusive para datas passadas que comprovadamente tinham dados. Nenhum erro no log: é um "sucesso vazio". O tratamento de token morto do `wpaFetch` (que espera 500 "Token is invalid!") nunca dispara.
+- **Causa:** a EDP passou a filtrar o User-Agent padrão do node-fetch (`node-fetch/1.0 (+https://github.com/bitinn/node-fetch)`). Com qualquer outro UA, a mesma requisição, com o mesmo token, da mesma máquina, devolve os dados. Provavelmente regra de WAF/aplicação ativada na sexta à noite, que responde vazio em vez de 403.
+- **Linha do tempo (UTC; BRT = UTC−3):**
+
+  | Momento | Evento |
+  |---|---|
+  | 17/10 00:15 | Último snapshot bom: 4 setores, 178 equipes (DESG com 73 sessões) |
+  | 17/10 00:30 | `getTeams` com setores: 0, equipes: 0 |
+  | 17/10 00:40 e 05:00 | Reinícios do processo; token da `es` carregado do cache do banco normalmente |
+  | 17/10 em diante | Todos os setores com "0 sessões totais", sem erro |
+  | 18/10 02:05 | Coleta de notas registra `total: 0, deleted: 4610` (ver "o que NÃO foi perda" abaixo) |
+
+- **Prova** — matriz de testes, todos na VM, mesmo token, `POST /api/Sessions/all/date?sectorId=DESG&date=10/16/2026`:
+
+  | Cliente | User-Agent | Resultado |
+  |---|---|---|
+  | node-fetch | padrão (`node-fetch/1.0`) | 0, "Nenhum dado encontrado" |
+  | node-fetch | `EngelmigWpaMonitor/1.0` | 73 |
+  | node-fetch | `curl/8.5.0` | 73 |
+  | node-fetch | padrão + `Accept-Encoding: identity` | 0 |
+  | curl | `node-fetch/1.0 ...` | 0 |
+  | curl | padrão | 73 |
+  | curl | padrão + `--compressed` | 73 |
+
+  Também: token gerado no Windows, usado na VM via curl → 73. O login (`/identity/signin`) é idêntico no curl e no Node: `{ Token, UserIdId, Data: true, Error: null }`.
+- **Hipóteses descartadas (não perder tempo):** rede/VPN/IP de origem (a VM alcança a API; `edp-wpa-po` pelo caminho privado `10.161.228.10` do `/etc/hosts`, `edp-wpa-web-api` pelo público `23.97.96.32`; o alias privatelink não bloqueia; VPN desnecessária) · IPv6 (DNS só devolve IPv4; `family: 4` não muda nada) · token velho/cache do banco (login novo, na hora, dá o mesmo) · senha do `.env` (idêntica à atual, comparada por hash) · conta da Clarissa sem acesso (ela vê tudo no portal; o mesmo token funciona com outro UA) · `Wpa-Data-Context`, `Content-Type`, gzip, data/fuso (nenhum altera) · `rejectionService tipo=SM ... SEM path` (desde agosto, sem relação).
+- **O que NÃO foi perda de dados:** o `deleted: 4610` de 18/10 02:05 UTC é a **retenção de 30 dias** do `notas_snapshots` (`_cleanupOld` em `services/notasMonitor.js`, `DELETE ... WHERE snapshot_ts < now() - interval '30 days'`), que roda toda hora e apaga por idade. Não tem relação com a resposta vazia — e restaurar essas linhas dos dumps seria desfeito pela retenção seguinte. **Não é preciso restore** dos dumps em `~/backups/preservar-2026-10-16/`; mantê-los até o fechamento do item, por segurança. Confirmar na VM que a retenção apagava volume parecido antes do incidente: `grep collect_done ~/prod-stc/logs/out.log | grep -o '"deleted":[0-9]*' | tail -50`.
+- **O que FOI dano:**
+  1. `notas_daily_agg` de 17 e 18/10 (datas UTC): sem nenhum snapshot no dia, o `updateDailyAgg` leu "último snapshot do dia" vazio e gravou `pendentes_fim_dia = 0` com toda a carteira de 16/10 em `sairam_no_dia`.
+  2. Produção de 17 e 18/10 não coletada (o snapshot de 15 min não gravou nada — `snapshot_skipped_empty`, sem gravar zero). Recuperável por backfill por data, que usa o mesmo `Sessions/all/date` agora com o UA certo.
+  3. O `consolidateDay` das 20:30 de 17/10 reconsolidou 16/10 só com os snapshots de 16/10 (wipe de D-1 normal). Re-consolidar 16–18/10 depois do backfill fecha isso.
+- **O que mudou no código:**
+  - `services/wpaHttp.js` — ponto único de saída HTTP para a EDP, com `User-Agent: EngelmigWpaMonitor/1.0` (`WPA_USER_AGENT`). `wpaService.js` e `/admin/wpa-diag` usam ele. O UA é honesto: identifica o sistema, não imita navegador nem curl.
+  - `cronService._classifySnapshotOutcome` — 0 sessões (de qualquer empresa) em todos os setores coletados, entre 7h e 19h BRT, vira `'suspeito'`: `snapshot_vazio_suspeito` + `snapshot_error` (o watchdog vê). Antes era `snapshot_skipped_empty` em nível info.
+  - `notasMonitor.collectSnapshot` — zero notas em todos os setores não grava, não agrega e não roda a retenção (`notas_vazio_suspeito`). `updateDailyAgg` não grava dia sem snapshot.
+  - Testes: `test/wpaUserAgent.test.js` (login e `wpaFetch` contra servidor local; falha se alguém importar `node-fetch` direto) e `test/respostaVaziaSuspeita.test.js`.
+- **Ação (VM, nesta ordem):**
+  1. `cd ~/prod-stc && git pull && pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save` (regra 4 do CLAUDE.md — não `restart --update-env`).
+  2. Acompanhar: `pm2 logs wpa-monitor --lines 0 | grep -E "sessões totais|getTeams|snapshot_vazio_suspeito"` — DESG deve voltar com dezenas de sessões.
+  3. Reparo do agregado de notas: `node scripts/reparar-notas-agg-sem-snapshot.js --desde 2026-10-17 --ate 2026-10-18` (dry-run), conferir, repetir com `--apply`. Dia sem snapshot tem o agregado apagado ("sem dado" é a verdade; a carteira de devolvidas é estado do momento e não se reconstrói); dia com snapshot é recalculado.
+  4. Produção: backfill por data de 16 a 18/10 (`POST /admin/backfill/range`, API-WPA-EDP.md §11) + re-consolidação (`scripts/backfill-consolidate.js`), dry-run antes, como sempre.
+  5. Apagar a sonda `scripts/_probe-sessoes-vazias.js` da VM, se ainda existir (nunca foi commitada).
+- **Critério de aceite:**
+  - [x] Todo HTTP para a EDP sai com UA próprio; teste garante login e `wpaFetch`.
+  - [x] Zero em todos os setores, em expediente, vira erro e não é gravado como verdade (snapshot e notas).
+  - [x] Agregado de notas não grava dia sem snapshot.
+  - [ ] Deploy feito e coleta de volta (DESG com sessões no log).
+  - [ ] `notas_daily_agg` 17–18/10 reparado (saída do dry-run e do apply anotada aqui).
+  - [ ] Backfill + re-consolidação de 16–18/10 rodados e conferidos com o portal (contar por UUID).
+  - [ ] EDP avisada do UA `EngelmigWpaMonitor/1.0` — e perguntada se o filtro foi intencional (ver risco abaixo).
+- **Risco a registrar:** se o filtro de UA foi **deliberado** (a EDP querendo barrar acesso automatizado), trocar o UA é contornar um controle do cliente — exatamente o que o P0-9 diz para não fazer sem falar com a EDP. O UA escolhido se identifica (não se disfarça de navegador), o que é defensável, mas o aviso à EDP não é opcional. Melhor ainda: pedir uma **conta de serviço dedicada** para a integração, em vez da conta pessoal da Clarissa (P1-25).
+- **Rollback:** `git revert a4b9371 b634816` + deploy. Voltar o UA padrão volta a zerar a coleta — só faz sentido se a EDP pedir.
+- **Fora do escopo do wpa-monitor (anotado, não tratado):**
+  - `gseq`: a conta terciária (`EDP3_*`, Ismael) está com "Usuário ou senha inválidos" e bloqueada na EDP; precisa da senha atual antes de reiniciar. Verificar se o `gseq` também usa node-fetch (ou outro UA filtrado) nas chamadas à WPA.
+  - O token `engelmig-wpa-cron-2026` usado no crontab ficou exposto e deve ser trocado.
+  - A WPA invalida o token anterior quando a mesma conta loga de novo, e o `gseq` loga com a conta da Clarissa diariamente às 05:00 UTC (`edp-renovar-token-2.sh`) — mesma classe do P1-25.
+- **Relacionado:** P0-9 (mesma noite), P1-25 (conta compartilhada), P1-39 (setor sem aviso), P1-40 (testes não tocam a EDP).
 
 
 ## P0-1c — Excluir usuário (excluir = ocultar)

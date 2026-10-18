@@ -156,7 +156,9 @@ O que ele faz, em ordem:
 1. **resolve a conta** — `options.account` explícito, ou inferido do `sectorId`
    do path, ou a default (`es`);
 2. **pega o token** via `getToken` (memória → banco → login);
-3. **injeta** `Authorization: Bearer` e `Accept: application/json`;
+3. **injeta** `Authorization: Bearer` e `Accept: application/json` — e o
+   `User-Agent` próprio vem do `services/wpaHttp.js`, por onde sai TODO HTTP
+   pra EDP, login incluso (ver armadilha 8 da §16);
 4. **timeout de 45s** (`WPA_HTTP_TIMEOUT_MS`);
 5. **retry** com backoff `[3s, 6s]`, até 3 tentativas, **só** para erro de rede
    e cold-start do Azure. **Timeout não é retentado** — o cold-start real chega
@@ -804,6 +806,21 @@ fallback cross-setor. Não confirmado — 1 probe resolve (P2-16).
 chamadas da aba Deslocamento e não coalescia; e o mapeamento de endpoint de
 rejeição dizendo "desconhecido" para tipos que a auto-descoberta já resolvia.
 Meça antes de confiar.
+
+**8. A EDP filtra o User-Agent do node-fetch — e responde com SUCESSO vazio.**
+Desde 16/10/2026 (~21:30 BRT), requisição com
+`node-fetch/1.0 (+https://github.com/bitinn/node-fetch)` recebe **HTTP 200** com
+`{"Message":"Nenhum dado encontrado."}`, em todo setor e toda data, inclusive
+dias passados que tinham dados. Com qualquer outro UA, mesmo token, mesma VM:
+dados normais. Sem 403 e sem 500, nada de token/cold-start dispara e o painel
+fica zerado **sem um erro no log** — foi o que aconteceu de 16 a 18/10 (P0-10).
+**Solução:** todo HTTP para a EDP sai por `services/wpaHttp.js`, com
+`User-Agent: EngelmigWpaMonitor/1.0` (`WPA_USER_AGENT`). Não importe `node-fetch`
+direto em código que fala com a EDP (`test/wpaUserAgent.test.js` falha). Para
+reproduzir: `curl -A 'node-fetch/1.0 (+https://github.com/bitinn/node-fetch)'`
+→ "Nenhum dado encontrado"; `curl` com o UA padrão dele → dados. E zero sessões
+em todos os setores, em expediente, agora é `snapshot_vazio_suspeito` (erro),
+não mais `snapshot_skipped_empty`.
 
 ---
 
