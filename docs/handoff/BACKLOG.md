@@ -178,6 +178,7 @@
 | P2-66 | "Em campo" do snapshot cai ~35–45 equipes por UM ciclo e volta no seguinte → "faltam N" falso no KPI do Monitor | Dados/Ops | **causa confirmada** (16/10/2026, `scripts/diag-ciclo-em-campo.js` + log): a Web API da EDP dá timeout 45s ou 502/503 num setor e ele não entra no INSERT do ciclo (165/165); 11 falhas em 2 dias, 09h–15h30 — **conserto (a) feito** (16/10/2026, c129625): o cron repete 1x o setor que falhou; falta deploy e medir `snapshot_sector_recovered` × `snapshot_partial` |
 | P2-67 | GUA tem DOIS setores (DESG e DEPT) e a equipe é transferida entre eles; a tela de Equipes mostrava o setor do CADASTRO e o diag do P2-55 olhava só DESG | Dados/Frontend | **código done** (16/10/2026) — coluna Setor = setor da coleta mais recente (cadastro ao lado se divergir); `diag-nota-interrompida --setor GUA` roda os dois; falta deploy e conferir na tela |
 | P2-68 | Plantão noturno sumia do Monitor depois da meia-noite: `Sessions/all/date` só com a data de hoje → "0 em campo" e as equipes de 16:00–20:00 como "atrasada +8h" (já era assim antes do P0-10) | Backend/Frontend | **no ar** (18/10/2026, `4266a33`) — só exibição; log conferido de madrugada (DESG 7, DEPT 1, DESC 9, DSSJ 7) e nada gravado para 18/10; falta tela + horário diurno; produção pós-meia-noite do plantão é Fase 2 (medir) |
+| P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6591,6 +6592,22 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - **Pista (18/10):** o backfill de 17/10 rodado de madrugada, com o plantão ainda aberto, levou 17/10 de 321 (backfill de 00:46) para **326**. O `getTeamsByDate` busca `notes/executed` por sessão, então pega também o que a sessão de 17/10 concluiu depois da meia-noite, e lança no dia 17. Rodar o backfill de D **na manhã de D+1**, com o plantão já encerrado, pode ser o caminho da Fase 2 sem mexer no fluxo ao vivo. Antes, conferir equipe por equipe que os +5 são de fato notas do plantão concluídas depois de 00:46, e lembrar que o backfill de D também recalcula D-1 (o caso do −25 do P0-10).
 - **Rollback:** `git revert` do commit + deploy. Sem migration e sem dado gravado, então reverter não deixa nada para limpar.
 - **Relacionado:** P0-10 (onde a limitação foi notada), P1-14 (vira-noite na produção), P2-13 (upsert parcial de dia antigo), P2-36 (sessões de outras datas no `Sessions/all/date`), P2-64 (aviso de sessões), P2-65 (em campo × esperadas).
+
+## P2-69 — Tabela "Equipes atrasadas pela escala" na aba Gráficos
+
+- **Categoria:** Produto/Dados
+- **Status:** **código done** (18/10/2026) — falta deploy e conferir na tela com dado real (sem banco local: o SQL não rodou contra o Postgres).
+- **Pedido (José, 18/10/2026):** *"vamos fazer uma tabela na aba de graficos com a lista de equipes atrasadas, dai temos as equipes atrasadas, horario de login horario da escala e tempo de atraso."*
+- **Regras (decisão do José, 18/10/2026):** atrasada = **qualquer atraso**, primeiro login ≥ 1 min depois do início da escala (minutos inteiros: 08:00:59 num T08 não entra). Escalada que **não logou** entra como "não logou", contada à parte no resumo.
+- **Feito:**
+  - `db/atrasoQueries.js` — `equipesAtrasadas(de, ate, {regionais, teams, tipo})`. Escala = `escala_dia × escalas_catalogo × equipes_oficiais` (o mesmo JOIN do KPI "esperadas"; código sem horário, como DR/FOL/FER, não entra). Com códigos diferentes no dia, vale o turno que começa primeiro (a regra do alerta ⏰). Login = primeiro `session_begin` dos snapshots entre 6h antes do início e o fim do turno. Sessão de antes disso que ainda cobria o início (plantão emendado) = estava em campo, não atrasou. Hora de parede dos dois lados (`msParede` da medição HE). Hoje: turno que não começou não é avaliado, e "não logou" só depois de 15 min do início (ciclo da coleta: o login pode ainda não estar em snapshot).
+  - `GET /api/escala/atrasadas?de=&ate=&regionals=&team=&tipo=` — escopo de regional e `enforceTeamRegional` como as outras rotas da aba.
+  - Front: seção "⏰ Equipes Atrasadas pela Escala" no fim da aba Gráficos (`loadAtrasadasGraf`/`renderAtrasadasHTML`), com os mesmos filtros de período, regional, tipo, equipe e supervisor. Colunas: data, equipe, regional, escala (início, código e fim), login, atraso. Resumo: atrasadas, não logou, turnos avaliados, atraso médio e mediano.
+  - Testes: `test/atrasoEscala.test.js` (20). Suíte 1818/1818.
+- **Limites conhecidos:** sessão aberta e fechada entre dois snapshots (15 min) não existe para nós, e a equipe sai "não logou". Até 18/10 a escala era lida só às 05:20 (P2-65), mas os dias passados já foram reescritos pelos syncs seguintes, porque a EDP devolve o mês inteiro. Equipe sem escala cadastrada (P2-47) não aparece. Não entra no XLSX da aba.
+- **Conferir depois do deploy:** 18/10 em GUA deve mostrar `ECGPR54` e `ETGPR15` como "não logou" (os dois ⏰ do Monitor), e o atraso de `ECGPR53` (logon 09:19 num C08) como 1h19.
+- **Rollback:** `git revert` do commit. Só leitura, sem migration.
+- **Relacionado:** P2-64 (alerta ⏰ atrasada no Monitor), P2-65 (sync da escala), P2-47 (sem escala).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 

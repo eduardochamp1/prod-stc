@@ -4350,6 +4350,7 @@
         // O contador agora vive DENTRO do graf-content (entre KPIs e gauges),
         // então é recriado a cada render — popula logo após.
         loadContadorTransgressao();
+        loadAtrasadasGraf(de, ate, regionalsCsv, tipo, teamQs);
       } catch (err) {
         cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
       }
@@ -4865,7 +4866,73 @@ ${equipes.length > 0 ? `<div class="perf-section">
 </div>` : ''}
 ${matrizHTML}
 ${acumuladoHTML}
+
+<!-- Equipes atrasadas pela escala (18/10/2026). Populado por
+     loadAtrasadasGraf() após o render do graf-content. -->
+<div class="perf-section" id="graf-atrasadas-wrap">
+  <div class="perf-section-title">⏰ Equipes Atrasadas pela Escala</div>
+  <div id="graf-atrasadas"><div class="empty-state" style="font-size:12px">Carregando…</div></div>
+</div>
 `;
+    }
+
+    // ── EQUIPES ATRASADAS PELA ESCALA (aba Gráficos) ────────────────────────
+    // Pedido do José em 18/10/2026: equipe, horário de login, horário da escala
+    // e tempo de atraso. Regra (dele, no mesmo dia): qualquer atraso ≥ 1 min
+    // conta; escalada que não logou aparece como "não logou". O cálculo é do
+    // backend (db/atrasoQueries.js) — aqui só se desenha.
+    function fmtAtrasoMin(min) {
+      if (min == null) return '—';
+      if (min < 60) return `${min} min`;
+      const h = Math.floor(min / 60), m = min % 60;
+      return `${h}h${String(m).padStart(2, '0')}`;
+    }
+
+    async function loadAtrasadasGraf(de, ate, regionalsCsv, tipo, teamQs) {
+      const el = document.getElementById('graf-atrasadas');
+      if (!el) return;
+      try {
+        const r = await fetch(`${API}/escala/atrasadas?de=${de}&ate=${ate}&regionals=${regionalsCsv}&tipo=${encodeURIComponent(tipo)}${teamQs}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        // A tela pode ter trocado de filtro enquanto o fetch corria.
+        if (document.getElementById('graf-atrasadas') !== el) return;
+        el.innerHTML = renderAtrasadasHTML(d);
+      } catch (err) {
+        el.innerHTML = `<div class="empty-state" style="font-size:12px;color:var(--vermelho)">Erro ao carregar atrasadas: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderAtrasadasHTML(d) {
+      const s = d.resumo || {};
+      const linhas = d.linhas || [];
+      const resumo = `<div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+        <b style="color:var(--vermelho)">${s.atrasadas || 0}</b> atrasada(s) ·
+        <b>${s.nao_logou || 0}</b> não logou ·
+        de <b>${s.turnos_avaliados || 0}</b> turnos escalados no período${s.atraso_medio_min != null
+          ? ` · atraso médio <b>${fmtAtrasoMin(s.atraso_medio_min)}</b> · mediana <b>${fmtAtrasoMin(s.atraso_mediano_min)}</b>` : ''}
+        <div style="font-size:11px;margin-top:4px">Atrasada = primeiro login 1 min ou mais depois do início da escala. Escala do WPA (relida a cada 30 min desde 18/10/2026); login pelo snapshot de 15 em 15 min.</div>
+      </div>`;
+      if (!linhas.length) return resumo + `<div class="empty-state" style="font-size:12px">Nenhuma equipe atrasada no período.</div>`;
+      const rows = linhas.map(l => {
+        const nao = l.status === 'nao-logou';
+        const login = l.login ? (l.login.slice(0, 10) === l.dia ? l.login.slice(11) : `${fmtDateBR(l.login.slice(0, 10))} ${l.login.slice(11)}`) : '';
+        return `<tr>
+          <td>${fmtDateBR(l.dia)}</td>
+          <td><b>${escapeHtml(l.equipe)}</b></td>
+          <td>${escapeHtml(l.regional || '')}</td>
+          <td>${escapeHtml(l.escala_inicio)} <span style="color:var(--text2);font-size:11px">${escapeHtml(l.codigo || '')} · até ${escapeHtml(l.escala_fim)}</span></td>
+          <td>${nao ? '<span style="color:var(--vermelho);font-weight:700">não logou</span>' : escapeHtml(login)}</td>
+          <td style="font-weight:700;color:${nao ? 'var(--text2)' : 'var(--vermelho)'}">${nao ? '—' : fmtAtrasoMin(l.atraso_min)}</td>
+        </tr>`;
+      }).join('');
+      return resumo + `
+<div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:480px">
+  <table class="perf-tipo-table">
+    <thead><tr><th>Data</th><th>Equipe</th><th>Regional</th><th>Escala</th><th>Login</th><th>Atraso</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+</div>`;
     }
 
     // ── METAS (banco de dados via API) ─────────────────────────────────────

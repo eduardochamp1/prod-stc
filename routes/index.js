@@ -4080,6 +4080,33 @@ router.get('/escala/agora', async (req, res) => {
   }
 });
 
+// GET /api/escala/atrasadas?de=&ate=&regionals=&team=&tipo=
+// Equipes que logaram depois do início da escala (qualquer atraso) e escaladas
+// que não logaram, no período. Tabela da aba Gráficos (18/10/2026) — regra em
+// db/atrasoQueries.js. Mesmo escopo de regional/equipe das outras rotas da aba.
+router.get('/escala/atrasadas', async (req, res) => {
+  try {
+    const today = dateBRT();
+    const de  = req.query.de  || today;
+    const ate = req.query.ate || de;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate) || de > ate) {
+      return res.status(400).json({ error: 'período inválido' });
+    }
+    const team = req.query.team || null;
+    if (!(await enforceTeamRegional(req, res, team))) return;
+    const teams = team && team !== 'ALL'
+      ? String(team).split(',').map(s => s.trim()).filter(Boolean) : null;
+    const regionais = (req.scope && Array.isArray(req.scope.regionals) && req.scope.regionals.length > 0)
+      ? req.scope.regionals : null;
+    const out = await require('../db/atrasoQueries')
+      .equipesAtrasadas(de, ate, { regionais, teams, tipo: req.query.tipo || 'TODAS' });
+    res.json(out);
+  } catch (err) {
+    console.warn('[escala/atrasadas]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── TMA (PO) — reparo apontado × fim do trabalho ─────────────────────────────
 // Distância entre o "Horário do Reparo" e o checkpoint "Finalizando Trabalho"
 // nas notas PO. Critério da operação: mínimo de 10 minutos.
