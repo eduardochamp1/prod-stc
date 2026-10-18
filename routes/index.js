@@ -3538,7 +3538,9 @@ router.post('/admin/equipes/refresh', async (_req, res) => {
 // GET /api/admin/wpa-diag — diagnóstico ZERO-retry: descobre por que WPA falha em produção.
 // Usar quando o /admin/warm sempre falha — esse endpoint mostra o que tá realmente acontecendo.
 router.get('/admin/wpa-diag', async (_req, res) => {
-  const fetch = require('node-fetch');
+  // 16/10/2026 (P0-10): mesmo caminho do wpaService — UA próprio, senão a EDP
+  // responde "Nenhum dado encontrado" e o diagnóstico mente.
+  const { wpaHttpFetch: fetch } = require('../services/wpaHttp');
   const out = { env: {}, login: null, sessions: null, runtime: {} };
 
   // 1) Quais envs estão setadas (sem expor valores)

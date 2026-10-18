@@ -28,7 +28,9 @@
  *   O código trata ambos com fallback defensivo.
  */
 
-const fetch = require('node-fetch');
+// 16/10/2026 (P0-10): todo HTTP pra EDP sai pelo wpaHttp, com User-Agent próprio.
+// A EDP devolve "Nenhum dado encontrado" pro UA padrão do node-fetch.
+const { wpaHttpFetch: fetch } = require('./wpaHttp');
 const { dateBRT } = require('./timeUtil');
 
 // Timeout de TODA chamada HTTP à EDP. Antes não havia nenhum: um socket
@@ -2374,6 +2376,12 @@ async function _getTeamsBySectorUncached(sectorId) {
   if (fantasmas > 0) {
     console.log(`[WPA] _acc: ${fantasmas} equipe(s) fantasma com notas acumuladas (deslogadas no dia)`);
   }
+  // P0-10 (16/10/2026): quantas sessões a EDP devolveu no setor — de TODAS as
+  // empresas, antes do filtro Engelmig. Zero em horário de expediente não é
+  // "dia vazio": é a EDP respondendo {"Message":"Nenhum dado encontrado."} com
+  // 200. O runSnapshot usa isso pra tratar como falha (não-enumerável: não vaza
+  // pra JSON nem pra snapshot).
+  Object.defineProperty(augmented, '_sessoesTotaisEdp', { value: sessions.length });
   return augmented;
 }
 
