@@ -680,6 +680,10 @@ async function _coletarSetores(setores, { coletar, desativado, repetirFalhos = f
       }
     }
   }
+  // P0-10 (16/10/2026): setor que "coletou" mas a EDP devolveu ZERO sessões (de
+  // qualquer empresa). Sozinho não é erro; todos juntos em expediente é — quem
+  // decide é o _classifySnapshotOutcome do cron.
+  report.semSessoes = setores.filter(s => porSetor.has(s) && porSetor.get(s)?._sessoesTotaisEdp === 0);
   const resultados = setores.filter(s => porSetor.has(s)).map(s => porSetor.get(s));
   return { resultados, report };
 }

@@ -137,6 +137,18 @@ async function saveSnapshot(notas, snapshotTs) {
  */
 async function updateDailyAgg(data) {
   const pool = _getPool();
+  // P0-10 (16/10/2026): dia SEM nenhum snapshot não tem "último snapshot do dia".
+  // Sem esta guarda o SQL abaixo lia ult_dia vazio e gravava pendentes 0 com TODA
+  // a carteira do dia anterior em sairam_no_dia — número inventado.
+  const tem = await pool.query(
+    `SELECT 1 FROM notas_snapshots
+      WHERE snapshot_ts >= $1::date AND snapshot_ts < ($1::date + interval '1 day') LIMIT 1`,
+    [data]
+  );
+  if (!tem.rowCount) {
+    log.warn('daily_agg_sem_snapshot', { data });
+    return 0;
+  }
   const sql = `
     WITH ts_ult AS (
       SELECT max(snapshot_ts) AS ts FROM notas_snapshots
@@ -258,6 +270,20 @@ async function collectSnapshot() {
     }
   });
   const todasNotas = [...seen.values()];
+
+  // ⚠️ P0-10 (16/10/2026): a EDP passou a responder 200 com "Nenhum dado
+  // encontrado" (filtro de User-Agent) e cada ciclo seguiu como se não houvesse
+  // nota devolvida em lugar nenhum. Nada se perdeu do notas_snapshots por isso
+  // (o `deleted: 4610` do log de 18/10 02:05 UTC é a retenção de 30 dias, abaixo),
+  // mas o updateDailyAgg gravou 17 e 18/10 com pendentes 0 e TODAS as notas como
+  // "saíram". Zero notas nos setores todos é cegueira, não carteira zerada: não
+  // grava, não agrega, e não roda a retenção enquanto não há dado novo.
+  if (_coletaNotasSuspeita(activeSectors.length, todasNotas.length)) {
+    const ms = Date.now() - t0;
+    log.error('notas_vazio_suspeito', { setores: activeSectors, ms });
+    return { total: 0, engelmig: 0, inserted: 0, deleted: 0, ms, suspeito: true };
+  }
+
   const eng       = filterEngelmig(todasNotas, mapa);
   const ts        = new Date().toISOString();
   const inserted  = await saveSnapshot(eng, ts);
@@ -268,6 +294,16 @@ async function collectSnapshot() {
   const stats     = { total: todasNotas.length, engelmig: eng.length, inserted, deleted, ms };
   log.info('collect_done', stats);
   return stats;
+}
+
+/**
+ * FUNÇÃO PURA (P0-10): a coleta veio vazia em TODOS os setores consultados?
+ * A carteira de devolvidas tem milhares de notas; zero em DESG, DEPT, DESC e
+ * DSSJ ao mesmo tempo é a fonte cega (resposta vazia, ou todo setor caindo no
+ * `.catch(() => [])` acima), nunca o estado real.
+ */
+function _coletaNotasSuspeita(setoresConsultados, totalNotas) {
+  return setoresConsultados > 0 && totalNotas === 0;
 }
 
 async function _cleanupOld() {
@@ -281,4 +317,5 @@ async function _cleanupOld() {
 module.exports = {
   filterEngelmig, buildTeamCompanyMap, saveSnapshot, updateDailyAgg,
   collectSnapshot, ENGELMIG_COMPANY_IDS,
+  _coletaNotasSuspeita,
 };

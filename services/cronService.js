@@ -118,9 +118,24 @@ async function _recordSectorLastOk(sectorsOk) {
 //   0 equipes e algum setor FALHOU     → 'error' (queda real, não "dia vazio")
 //   0 equipes e nada falhou            → 'empty' (legítimo: madrugada, ninguém logado,
 //                                                  ou só contas desativadas)
-function _classifySnapshotOutcome(teamsCount, report) {
+//   0 equipes, TODO setor coletado veio
+//   com 0 sessões na EDP, em expediente → 'suspeito' (P0-10, abaixo)
+//
+// ⚠️ 'suspeito' — INCIDENTE 16/10/2026: a EDP passou a responder 200 com
+// {"Message":"Nenhum dado encontrado."} (filtro do User-Agent do node-fetch). Nada
+// "falhava", então o ciclo caía em 'empty' e logava `snapshot_skipped_empty` em
+// nível info — dois dias de painel zerado sem um único erro no log. Zero sessões
+// de QUALQUER empresa em DESG/DEPT/DESC/DSSJ ao mesmo tempo, entre 7h e 19h BRT,
+// não acontece: é falha da fonte, e vira snapshot_error (o watchdog vê).
+const EXPEDIENTE_BRT = { inicio: 7, fim: 19 };   // [inicio, fim)
+function _classifySnapshotOutcome(teamsCount, report, horaBRT) {
   if (teamsCount > 0) return 'ok';
   if (report && Array.isArray(report.failed) && report.failed.length > 0) return 'error';
+  const ok = (report && Array.isArray(report.ok)) ? report.ok : [];
+  const semSessoes = new Set((report && Array.isArray(report.semSessoes)) ? report.semSessoes : []);
+  const emExpediente = Number.isInteger(horaBRT)
+    && horaBRT >= EXPEDIENTE_BRT.inicio && horaBRT < EXPEDIENTE_BRT.fim;
+  if (emExpediente && ok.length > 0 && ok.every(s => semSessoes.has(s))) return 'suspeito';
   return 'empty';
 }
 
@@ -253,10 +268,17 @@ async function runSnapshot() {
     if (teams.length === 0) {
       // Distingue "dia vazio" de QUEDA REAL: se todos os setores ativos falharam,
       // é queda da WPA — tem de virar snapshot_error (senão o watchdog não vê).
-      if (_classifySnapshotOutcome(0, sectorReport) === 'error') {
+      const desfecho = _classifySnapshotOutcome(0, sectorReport, hourBRT());
+      if (desfecho === 'error') {
         log.error('snapshot_all_sectors_failed', { failed: sectorReport.failed });
         await _recordSnapshotError(new Error(
           `todos os setores ativos falharam: ${sectorReport.failed.map(f => f.sector).join(', ')}`));
+      } else if (desfecho === 'suspeito') {
+        // P0-10: nada gravado (não há o que gravar), mas o ciclo é FALHA.
+        log.error('snapshot_vazio_suspeito', { setores: sectorReport.ok });
+        await _recordSnapshotError(new Error(
+          `EDP devolveu 0 sessões em todos os setores (${sectorReport.ok.join(', ')}) em horário de expediente — ` +
+          `"Nenhum dado encontrado" é falha da fonte, não dia vazio (P0-10)`));
       } else {
         log.info('snapshot_skipped_empty', { skipped: sectorReport.skipped });
       }
