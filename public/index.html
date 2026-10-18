@@ -4970,6 +4970,12 @@ ${acumuladoHTML}
      */
     const ALERTA_SEM_COM_MIN    = 30;
     const ALERTA_ATRASO_TOL_MIN = 15;
+    // 18/10/2026 (P2-68): depois da meia-noite o Monitor passou a mostrar o
+    // plantão noturno (escala 16:00–20:00), cuja sessão começou ONTEM. Isso é o
+    // turno normal, não "esqueceu de deslogar". Sessão de ontem aberta há menos
+    // que isto é plantão; passou disso (turno de 8h + refeição + folga para HE),
+    // volta a ser 📅. Sessão de antes de ontem é sempre 📅.
+    const PLANTAO_VIRA_NOITE_MAX_H = 14;
 
     // LastUpdate do V2 → epoch ms, ou null quando não dá pra confiar no valor.
     // Sem fuso (ex.: "2026-10-15T09:12:00") é BRT, como o SessionBegin do mesmo
@@ -5003,6 +5009,19 @@ ${acumuladoHTML}
       return tipo.includes('USO MUTUO') || tipo.includes('USO MÚTUO');
     }
 
+    // Sessão que começou ONTEM e está aberta há menos de PLANTAO_VIRA_NOITE_MAX_H:
+    // plantão noturno atravessando a meia-noite (P2-68). Horário ilegível → false
+    // (na dúvida, mantém o 📅 que já existia).
+    function plantaoViraNoite(refLogon, hoje, agoraMs) {
+      if (!refLogon || !hoje) return false;
+      const d = new Date(`${hoje}T12:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      if (String(refLogon).slice(0, 10) !== d.toISOString().slice(0, 10)) return false;
+      const ms = _parseHoraEDP(refLogon, agoraMs);
+      if (ms == null) return false;
+      return agoraMs - ms < PLANTAO_VIRA_NOITE_MAX_H * 3600000;
+    }
+
     // Classifica a sessão de UMA equipe logada. `refLogon` é o _refLogon(t) do
     // chamador e `hoje` o dia BRT 'YYYY-MM-DD'.
     // USO MÚTUO não opera o app (nunca tem V2) — fica fora do "sem comunicação",
@@ -5010,7 +5029,8 @@ ${acumuladoHTML}
     function classificarSessao(t, { agoraMs, hoje, refLogon }) {
       const aberta = !!t && !t.sessionEnd;
       const usoMutuo = _ehTipoUsoMutuo(t);
-      const diaAnterior = aberta && !!refLogon && String(refLogon).slice(0, 10) < hoje;
+      const diaAnterior = aberta && !!refLogon && String(refLogon).slice(0, 10) < hoje
+        && !plantaoViraNoite(refLogon, hoje, agoraMs);
       const semComMin = (aberta && !usoMutuo) ? minutosSemComunicacao(t, agoraMs) : null;
       const semComunicacao = semComMin != null && semComMin >= ALERTA_SEM_COM_MIN;
       return {
@@ -9234,7 +9254,10 @@ ${acumuladoHTML}
                        : pendente ? (_clsSessao.semComunicacao ? `📵 Sem comunicação · ${fmtMinutos(_clsSessao.semComMin)}` : '⚠ Sessão pendente')
                        : '○ Encerrada';
         // Borda laranja marca sessão anômala — uso mútuo NÃO é anômalo
-        const isStale = sessaoAberta && !ehUsoMutuo && (sessaoAnterior(_refLogon(t)) || pendente);
+        // Plantão noturno depois da meia-noite não é anômalo (P2-68, 18/10/2026).
+        const _ref = _refLogon(t);
+        const isStale = sessaoAberta && !ehUsoMutuo
+          && ((sessaoAnterior(_ref) && !plantaoViraNoite(_ref, todayBRT(), Date.now())) || pendente);
         // Resolve a contagem de re-logins de forma consistente com o badge "⚠ relogou":
         // - Em snapshots persistidos, t.relogins quase sempre eh 0 (nao persistimos
         //   essa info por equipe). Mas t.relogouNoDia eh detectado pos-fato comparando

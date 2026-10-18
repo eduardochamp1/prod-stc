@@ -1494,6 +1494,121 @@ async function getSessionsByDate(sectorId, isoDate) {
   return unicas;
 }
 
+// ── SESSÕES ABERTAS DE DIA ANTERIOR (P2-68, 18/10/2026) ───────────────────────
+// `Sessions/all/date` só devolve as sessões que COMEÇARAM na data pedida. Depois
+// das 00:00 BRT o plantão noturno (escala 16:00–20:00) sumia do Monitor: "0 em
+// campo" e as equipes acusadas de "atrasada +8h", com o teamsstatus/V2 listando
+// todas elas (18/10 00:14 BRT: DESG 0 sessões / 8 entradas V2; DESC 0/10; DSSJ
+// 0/7). O José viu o painel zerado e achou que ainda era o incidente P0-10.
+//
+// O V2 é quem diz quem está logado agora. Equipe no V2 sem sessão de hoje é
+// "órfã", e a data de início dela diz qual dia consultar. Só esses dias são
+// pedidos, e só quando há órfã: nas horas sem plantão noturno a coleta não muda.
+//
+// SÓ EXIBIÇÃO: o time vem marcado `sessaoDiaAnterior: true` e fica fora do
+// `_acc`, do snapshot e dos totais (cronService.runSnapshot). A produção do
+// plantão continua com o dia em que o turno começou, pelo caminho de sempre.
+
+const SESSAO_ANTERIOR_MAX_DIAS  = 7;   // sessão mais velha que isto não é procurada
+const SESSAO_ANTERIOR_MAX_DATAS = 3;   // teto de consultas extras por setor/ciclo
+
+/** 'YYYY-MM-DD' menos `n` dias (aritmética de calendário, sem fuso). */
+function _diaISOmenos(iso, n) {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * FUNÇÃO PURA: equipes que o V2 mostra logadas mas que não têm sessão na resposta
+ * de HOJE, com o dia em que a sessão começou.
+ *
+ * Compara com TODAS as sessões de hoje, antes do filtro Engelmig: o V2 não traz
+ * CompanyId, e uma equipe de outra empresa com sessão de hoje não pode virar
+ * órfã (custaria uma consulta à toa a cada ciclo).
+ *
+ * Dia: `Session.BeginTime` (início físico da sessão) e, sem ele, `SessionBegin`
+ * (apresentação). Sem data legível, ou com data de hoje (re-checkin numa sessão
+ * física antiga), assume ontem — o caso do plantão noturno.
+ *
+ * @returns {Array<{id, nome, dia}>}
+ */
+function _orfasV2(statusList, sessionsHoje, hojeBRT, maxDias = SESSAO_ANTERIOR_MAX_DIAS) {
+  const ids = new Set();
+  const nomes = new Set();
+  for (const s of (sessionsHoje || [])) {
+    if (s?.Team?.Id != null) ids.add(s.Team.Id);
+    const n = (s?.Team?.Name || '').trim();
+    if (n) nomes.add(n);
+  }
+  const ontem  = _diaISOmenos(hojeBRT, 1);
+  const limite = _diaISOmenos(hojeBRT, maxDias);
+  const out = [];
+  for (const item of (statusList || [])) {
+    const sess = item && item.Session;
+    const id   = sess?.Team?.Id || sess?.TeamId || null;
+    const nome = (sess?.Team?.Name || '').trim();
+    if (!id && !nome) continue;
+    if ((id && ids.has(id)) || (nome && nomes.has(nome))) continue;
+    const ini = String(sess?.BeginTime || item.SessionBegin || '').slice(0, 10);
+    const dia = (/^\d{4}-\d{2}-\d{2}$/.test(ini) && ini < hojeBRT) ? ini : ontem;
+    if (dia < limite) continue;
+    out.push({ id, nome, dia });
+  }
+  return out;
+}
+
+/**
+ * FUNÇÃO PURA: das sessões candidatas (respostas de dias anteriores), as que
+ * ainda estão ABERTAS, começaram antes de hoje, pertencem a uma equipe órfã e
+ * não vieram já na resposta de hoje. Encerrada fica de fora: não está em campo,
+ * e o turno dela já foi visto pelo snapshot do próprio dia.
+ */
+function _sessoesAbertasDasOrfas(candidatas, orfas, sessionsHoje, hojeBRT) {
+  const ids   = new Set(orfas.map(o => o.id).filter(Boolean));
+  const nomes = new Set(orfas.map(o => o.nome).filter(Boolean));
+  const vistos = new Set((sessionsHoje || [])
+    .map(s => s && s.Id).filter(id => id !== null && id !== undefined)
+    .map(id => `${typeof id}:${id}`));
+  return _dedupSessionsById(candidatas).filter(s => {
+    if (!s || s.EndTime || !s.BeginTime) return false;
+    if (String(s.BeginTime).slice(0, 10) >= hojeBRT) return false;
+    if (s.Id !== null && s.Id !== undefined && vistos.has(`${typeof s.Id}:${s.Id}`)) return false;
+    const nome = (s.Team?.Name || '').trim();
+    return (s.Team?.Id != null && ids.has(s.Team.Id)) || (!!nome && nomes.has(nome));
+  });
+}
+
+/**
+ * Sessões abertas de dias anteriores para as órfãs do V2. Uma consulta por dia
+ * distinto (no máximo SESSAO_ANTERIOR_MAX_DATAS, os mais recentes). Falha numa
+ * consulta extra NÃO derruba o setor: as sessões de hoje seguem, só o plantão
+ * de ontem fica fora daquele ciclo (como era antes).
+ *
+ * `buscar` é injetável para teste; em produção é getSessionsByDate.
+ */
+async function _buscarSessoesAbertasAnteriores(sectorId, sessionsHoje, statusList, hojeBRT,
+                                               buscar = getSessionsByDate) {
+  const orfas = _orfasV2(statusList, sessionsHoje, hojeBRT);
+  if (orfas.length === 0) return [];
+  const dias = [...new Set(orfas.map(o => o.dia))].sort().reverse()
+    .slice(0, SESSAO_ANTERIOR_MAX_DATAS);
+  const candidatas = [];
+  for (const dia of dias) {
+    try {
+      candidatas.push(...(await buscar(sectorId, dia)));
+    } catch (err) {
+      console.warn(`[WPA] ${sectorId}: sessões de ${dia} (plantão aberto) falhou: ${err.message}`);
+    }
+  }
+  const abertas = _sessoesAbertasDasOrfas(candidatas, orfas, sessionsHoje, hojeBRT);
+  console.log(
+    `[WPA] ${sectorId}: ${orfas.length} equipe(s) no V2 sem sessão de hoje → consultei ${dias.join(', ')}` +
+    ` → ${abertas.length} sessão(ões) aberta(s) de dia anterior (só exibição, fora de snapshot/totais)`
+  );
+  return abertas;
+}
+
 /**
  * Notas de execução de um dia específico.
  * GET /api/notes/execution?sectorId={sid}&date=M/D/YYYY
@@ -1801,6 +1916,19 @@ function _accRecord(teams) {
   });
 }
 
+/**
+ * _accRecord + _accApply só nas equipes de sessão do dia (P2-68, 18/10/2026).
+ * A sessão aberta de dia anterior passa intacta: se entrasse no _acc (zerado à
+ * meia-noite), as concluídas do plantão de ontem seriam re-injetadas no card de
+ * HOJE da mesma sigla — e contadas de novo no dia seguinte.
+ */
+function _accAplicarDoDia(teams) {
+  const doDia      = teams.filter(t => !t.sessaoDiaAnterior);
+  const anteriores = teams.filter(t => t.sessaoDiaAnterior);
+  _accRecord(doDia);
+  return [...anteriores, ..._accApply(doDia)];
+}
+
 function _accApply(teams) {
   _accReset();
   // NÃO retorna cedo aqui (mesmo com _acc.notes vazio) — precisamos injetar
@@ -2090,12 +2218,20 @@ async function _getTeamsBySectorUncached(sectorId) {
   // Filtra apenas sessões Engelmig (CompanyId só existe em sessions/current).
   // Não filtramos por data: sessões abertas de dias anteriores (equipe esqueceu de encerrar)
   // devem aparecer — a data de início fica visível no card para identificação.
+  //
+  // 18/10/2026 (P2-68): a intenção acima nunca valeu com `Sessions/all/date` —
+  // ele não devolve sessão que começou ONTEM, então o plantão noturno sumia à
+  // meia-noite. As sessões abertas de dia anterior agora vêm de uma consulta
+  // extra, guiada pelo V2 (ver _buscarSessoesAbertasAnteriores), e entram SÓ na
+  // exibição: `sessaoDiaAnterior` as tira do _acc, do snapshot e dos totais.
+  const anteriores = await _buscarSessoesAbertasAnteriores(sectorId, sessions, statusList, todayBRT);
+  const _ehAnterior = new Set(anteriores);
 
-  const allEngelmig     = sessions.filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
+  const allEngelmig     = [...anteriores, ...sessions].filter(s => s.Team?.CompanyId === ENGELMIG_COMPANY_ID);
   const engelmigSessions = allEngelmig; // sem corte de data — todas as sessões abertas
 
   // Loga quantas sessões são de dias anteriores (informativo)
-  const antigas = allEngelmig.filter(s => s.BeginTime && s.BeginTime.slice(0, 10) < todayBRT);
+  const antigas = allEngelmig.filter(s => !_ehAnterior.has(s) && s.BeginTime && s.BeginTime.slice(0, 10) < todayBRT);
   if (antigas.length > 0) {
     console.warn(
       `[WPA] ${sectorId}: ℹ️ ${antigas.length} sessão(ões) de dias anteriores ainda abertas` +
@@ -2304,6 +2440,10 @@ async function _getTeamsBySectorUncached(sectorId) {
       date:         s.BeginTime?.slice(0, 10) || new Date().toISOString().slice(0, 10),
       sessionBegin: s.BeginTime,
       sessionEnd:   s.EndTime || null,
+      // Sessão aberta de dia anterior trazida pela consulta extra (P2-68): só
+      // exibição. O runSnapshot a tira do snapshot e dos totais, e o _acc não a
+      // registra — a produção dela é do dia em que o turno começou.
+      sessaoDiaAnterior: _ehAnterior.has(s),
       // Placa: só existe em sessions/current (V2 tem apenas VehicleCategory)
       vehiclePlate: s.Vehicle?.Code || '—',
       // Colaboradores: resolvidos acima pela cascata (P2-14/P2-28). A estrutura
@@ -2370,8 +2510,7 @@ async function _getTeamsBySectorUncached(sectorId) {
     );
   }
 
-  _accRecord(result);
-  const augmented = _accApply(result);
+  const augmented = _accAplicarDoDia(result);
   const fantasmas = augmented.length - result.length;
   if (fantasmas > 0) {
     console.log(`[WPA] _acc: ${fantasmas} equipe(s) fantasma com notas acumuladas (deslogadas no dia)`);
@@ -2471,7 +2610,7 @@ module.exports = {
   REGIONAL_MAP,
   ENGELMIG_COMPANY_ID,   // filtro da empresa — o cron de intervalos também precisa
   // Exportados pra teste (P3-11) — acumulador diário.
-  _accRecord, _accApply, _acc,
+  _accRecord, _accApply, _acc, _accAplicarDoDia,
   // Exportados pra teste (P1-20) — circuit breaker de login.
   _classifyLoginError, _computeUnlockUntil, _breakerRemaining, _openBreaker, _clearBreaker, _breaker,
   // Kill-switch de conta (WPA_ACCOUNTS_DISABLED).
@@ -2484,6 +2623,7 @@ module.exports = {
   _breakerHydration, _hydrateBreaker,
   // Exportado pra teste (P2-36) — dedup de sessões repetidas na mesma resposta.
   _dedupSessionsById,
+  _orfasV2, _sessoesAbertasDasOrfas, _buscarSessoesAbertasAnteriores,   // P2-68
   _isTokenInvalidBody, _isTokenInvalidResponse, _invalidateToken, _needsTokenRefresh,
   _tokens, _deadTokens,
   // Exportado pra teste (P2-14/P2-28) — lista, objeto, dict único ou Data:null.

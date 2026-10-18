@@ -127,6 +127,17 @@ async function _recordSectorLastOk(sectorsOk) {
 // nível info — dois dias de painel zerado sem um único erro no log. Zero sessões
 // de QUALQUER empresa em DESG/DEPT/DESC/DSSJ ao mesmo tempo, entre 7h e 19h BRT,
 // não acontece: é falha da fonte, e vira snapshot_error (o watchdog vê).
+/**
+ * Tira da coleta as sessões abertas de dia anterior (P2-68, 18/10/2026). Elas vêm
+ * do getTeams só para o Monitor mostrar o plantão noturno depois da meia-noite;
+ * se entrassem no snapshot (gravado com a data de HOJE) e nos totais, o upsert
+ * intraday reescreveria a linha de ONTEM com a visão parcial de uma só sessão
+ * (família do P2-13).
+ */
+function _semSessaoDiaAnterior(teams) {
+  return (teams || []).filter(t => !(t && t.sessaoDiaAnterior));
+}
+
 const EXPEDIENTE_BRT = { inicio: 7, fim: 19 };   // [inicio, fim)
 function _classifySnapshotOutcome(teamsCount, report, horaBRT) {
   if (teamsCount > 0) return 'ok';
@@ -252,7 +263,13 @@ async function runSnapshot() {
     const sectorOut = {};
     // P2-66 (16/10/2026): o setor que falhar ganha 1 nova tentativa, depois dos
     // outros. Só aqui — o /api/teams do navegador não espera mais 45s.
-    const allTeams = await getTeams({ repetirSetorFalho: true }, sectorOut);
+    const coletadas = await getTeams({ repetirSetorFalho: true }, sectorOut);
+    // P2-68 (18/10/2026): sessão aberta de dia anterior (plantão noturno depois
+    // da meia-noite) é SÓ exibição do Monitor. Nada persistido muda: fora do
+    // snapshot, do teams_current e dos totais. A produção do plantão segue com o
+    // dia em que o turno começou, pelos snapshots do próprio dia — exatamente
+    // como antes desta consulta existir.
+    const allTeams = _semSessaoDiaAnterior(coletadas);
     const sectorReport = sectorOut.report || getLastSectorReport();   // { ok, failed, skipped } por setor
 
     // Separa equipes reais (vindas do WPA) das equipes-fantasma (_ghostFromAcc).
@@ -1726,6 +1743,7 @@ module.exports = {
   runAlertaProdutividade,
   // Exportado pra teste — desfecho do ciclo de snapshot (resiliência por setor).
   _classifySnapshotOutcome,
+  _semSessaoDiaAnterior,   // P2-68
   // Exportado pra teste (P1-39) — merge do carimbo por setor.
   _mergeSectorLastOk,
 };

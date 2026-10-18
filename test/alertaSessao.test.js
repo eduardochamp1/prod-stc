@@ -24,7 +24,7 @@ assert.ok(INI > 0 && FIM > INI, 'bloco ALERTA DE SESSÃO não encontrado no inde
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(HTML.slice(INI, FIM) + `
-  this.api = { _parseHoraEDP, minutosSemComunicacao, classificarSessao,
+  this.api = { _parseHoraEDP, minutosSemComunicacao, classificarSessao, plantaoViraNoite,
     siglasLogadasHoje, equipesAtrasadas, fmtMinutos };`, ctx);
 const A = ctx.api;
 
@@ -148,4 +148,42 @@ test('fmtMinutos', () => {
   assert.equal(A.fmtMinutos(45), '45 min');
   assert.equal(A.fmtMinutos(80), '1h20');
   assert.equal(A.fmtMinutos(1500), '1d1h');
+});
+
+// ── Plantão noturno depois da meia-noite (P2-68, 18/10/2026) ────────────────
+// O Monitor passou a mostrar o plantão de escala 16:00–20:00 depois das 00:00.
+// A sessão começou ONTEM, mas é o turno normal: não pode virar 📅 "esqueceu de
+// deslogar". Horários do print do portal de 18/10, 00:58.
+
+const MADRUGADA = Date.parse('2026-10-18T00:58:00-03:00');
+const cls18 = (ref, agora = MADRUGADA) => A.classificarSessao(
+  logada({ isOnline: true, sessionBegin: ref }), { agoraMs: agora, hoje: '2026-10-18', refLogon: ref });
+
+test('plantão de ontem 16:00 à 00:58 não é dia anterior', () => {
+  const c = cls18('2026-10-17T16:03:00-03:00');
+  assert.equal(c.diaAnterior, false);
+  assert.equal(c.entra, false);
+  assert.equal(A.plantaoViraNoite('2026-10-17T19:53:00-03:00', '2026-10-18', MADRUGADA), true);
+});
+
+test('presentationTime e BeginTime sem fuso valem igual (BRT)', () => {
+  assert.equal(A.plantaoViraNoite('2026-10-17T16:03:00', '2026-10-18', MADRUGADA), true);
+});
+
+test('sessão de ontem aberta além de 14h volta a ser dia anterior', () => {
+  // 16:03 de ontem → 06:10 de hoje = 14h07: o turno acabou há muito
+  const c = cls18('2026-10-17T16:03:00-03:00', Date.parse('2026-10-18T06:10:00-03:00'));
+  assert.equal(c.diaAnterior, true);
+  // Turno da manhã de ontem ainda aberto à 00:58 (17h): esqueceu de deslogar
+  assert.equal(cls18('2026-10-17T07:46:00-03:00').diaAnterior, true);
+});
+
+test('sessão de antes de ontem é sempre dia anterior (ETGPR22, aberta desde 13/10)', () => {
+  assert.equal(cls18('2026-10-13T07:46:00-03:00').diaAnterior, true);
+  assert.equal(A.plantaoViraNoite('2026-10-16T23:30:00-03:00', '2026-10-18', MADRUGADA), false);
+});
+
+test('horário ilegível não esconde o 📅', () => {
+  assert.equal(A.plantaoViraNoite('2026-10-17Tlixo', '2026-10-18', MADRUGADA), false);
+  assert.equal(A.plantaoViraNoite(null, '2026-10-18', MADRUGADA), false);
 });
