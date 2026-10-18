@@ -5907,8 +5907,9 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - [x] Todo HTTP para a EDP sai com UA próprio; teste garante login e `wpaFetch`.
   - [x] Zero em todos os setores, em expediente, vira erro e não é gravado como verdade (snapshot e notas).
   - [x] Agregado de notas não grava dia sem snapshot.
-  - [ ] Deploy feito e coleta de volta (DESG com sessões no log).
-  - [ ] `notas_daily_agg` 17–18/10 reparado (saída do dry-run e do apply anotada aqui).
+  - [ ] Deploy feito e coleta de volta (DESG com sessões no log). **Deploy feito em 18/10 03:14 UTC (00:14 BRT)** — os logs logo depois mostram `0 sessões totais` nos 4 setores, mas é meia-noite de domingo e o `Sessions/all/date` só devolve sessão INICIADA na data BRT (18/10). O plantão aberto em 17/10 aparece no V2 (DESG 8, DEPT 1, DESC 10, DSSJ 7 entradas) e não no all/date. Esse log não prova nada nem pra um lado nem pro outro. A prova é consultar uma data que já teve dados (16/10 → DESG 73) com o código deployado.
+  - [ ] `notas_daily_agg` 17–18/10 reparado (saída do dry-run e do apply anotada aqui). **Dry-run 18/10:** 17/10 e 18/10 com 0 snapshots cada e 128 linhas de agregado, `pendentes=0 entraram=0 sairam=3440` — o dano exatamente como descrito acima → APAGAR os dois.
+- **Retenção confirmada na VM (18/10):** as últimas 50 linhas `collect_done` têm `deleted` entre ~4.400 e ~5.360 por hora (trazendo o 4.610 de 02:05), com `0` seguido de valor dobrado (9.783, 9.526, 9.311) quando uma hora é pulada. O 4.610 é a retenção normal, não efeito do incidente.
   - [ ] Backfill + re-consolidação de 16–18/10 rodados e conferidos com o portal (contar por UUID).
   - [ ] EDP avisada do UA `EngelmigWpaMonitor/1.0` — e perguntada se o filtro foi intencional (ver risco abaixo).
 - **Risco a registrar:** se o filtro de UA foi **deliberado** (a EDP querendo barrar acesso automatizado), trocar o UA é contornar um controle do cliente — exatamente o que o P0-9 diz para não fazer sem falar com a EDP. O UA escolhido se identifica (não se disfarça de navegador), o que é defensável, mas o aviso à EDP não é opcional. Melhor ainda: pedir uma **conta de serviço dedicada** para a integração, em vez da conta pessoal da Clarissa (P1-25).
