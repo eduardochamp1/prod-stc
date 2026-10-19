@@ -173,6 +173,17 @@ para não esconder problema real.
 `cron:<job>`, `cron-http:…`, `interno`). Para ler: `GET /api/admin/wpa-requisicoes`
 (memória, 48 h) ou `grep wpa_requisicoes_hora logs/out.log` (sobrevive a restart).
 
+**Limite em voo (19/10/2026, P0-11 item 4 / P2-30):** o `wpaHttp.js` também
+passa toda chamada pela fila de `services/wpaFila.js` — no máximo
+`WPA_MAX_EM_VOO` (6) ao mesmo tempo contra a EDP, somando tudo do processo, com
+o painel na frente. A vaga envolve só a chamada HTTP; o timeout conta a partir
+de quando ela sai.
+
+**Sessão encerrada (19/10/2026, P0-11 item 3):** colaboradores buscados 1 vez
+por sessão; notas congelam depois de `WPA_ENCERRADA_CONGELA_MIN` (desligado por
+padrão — escolha pelo `scripts/diag-sessao-encerrada.js`). Ver
+`services/coletaIncremental.js`.
+
 ---
 
 ## 5. Endpoints: equipes e sessões
