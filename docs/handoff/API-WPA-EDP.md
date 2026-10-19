@@ -167,6 +167,12 @@ O que ele faz, em ordem:
 Erros legítimos da API (401, 404, 500 com JSON) são **propagados sem retry**,
 para não esconder problema real.
 
+**Contador (19/10/2026, P0-11):** todo HTTP que sai pelo `services/wpaHttp.js`
+(login, Web API e retries, cada tentativa uma vez) é contado em
+`services/wpaContador.js` por hora BRT, endpoint e origem (`painel:…`,
+`cron:<job>`, `cron-http:…`, `interno`). Para ler: `GET /api/admin/wpa-requisicoes`
+(memória, 48 h) ou `grep wpa_requisicoes_hora logs/out.log` (sobrevive a restart).
+
 ---
 
 ## 5. Endpoints: equipes e sessões

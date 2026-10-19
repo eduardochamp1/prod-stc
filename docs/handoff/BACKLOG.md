@@ -32,6 +32,7 @@
 | P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo monotônico + rota manual corrigida; causa-raiz era o P1-16 |
 | P0-9 | **INCIDENTE 16/10/2026 ~21:15–21:30:** a Web API da EDP passou a recusar o IP da nossa VM (403 "blocked your access") — painel sem coleta | Ops/Contrato | **aberto** — falta: TI dizer se o IP de saída mudou; EDP liberar; backfill do período. ⚠️ 18/10: a VM voltou a alcançar a API; o que seguia zerando a coleta era o P0-10 |
 | P0-10 | **INCIDENTE 16/10/2026 ~21:30:** a EDP passou a devolver 200 "Nenhum dado encontrado" para o User-Agent do node-fetch — coleta zerada SEM erro no log | Backend/Dados | **código done** (b634816, a4b9371 — 18/10) — falta deploy, reparo do `notas_daily_agg` 17–18/10, backfill + re-consolidação 16–18/10, avisar a EDP do UA |
+| P0-11 | **EDP questionou (19/10/2026) "diversas requisições" congestionando a WPA** — e não tínhamos como dizer quantas são nossas. Pelo código, o painel aberto no navegador faz uma coleta COMPLETA na EDP a cada 5 min **por aba**, sem cache (~200–270 requests cada) | Ops/Contrato | **contador no ar no código** (a23d6bc, 19/10) — falta: deploy, medir 1 dia útil, responder a EDP com o número, e cortar o painel da EDP |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -5849,6 +5850,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - **O WPA Monitor não é o único cliente da EDP nesse IP:** o `gseq` (outro sistema na mesma VM, `~/gseq`, pm2 `gseq` + crontab do `usr_jose`) também coleta da `edp-wpa-web-api` com outra conta ("secondary", `edp-renovar-token-2.sh`): `api/sessions/today` (5 setores, incl. `DEPG-CCM`/`DEPC-CCM`; Teams, V2, Vehicles) e `sync-endtimes` a cada 15 min, `sync-wpa-executadas` 4x/h, `refresh-wpa-day`, `sync-wpa-escala`, `wpa-health`. Desde ~21:30 o `gseq-error.log` também está cheio de 403. **Nada no `gseq` mudou em 16/10** (sem commit; scripts alterados por último em 13/10), e o WPA Monitor teve volume estável — do nosso lado não houve mudança de comportamento que explique o corte. Mas a EDP vê a SOMA dos dois sistemas (e da `rpa-ismael`) vindo de um IP só: se a regra for de volume, é essa soma que conta. Achado lateral: `~/gseq/logs/wpa-cron.log` tem 3,8 GB (a saída do `curl` do `sessions/today` é anexada a cada 15 min, sem rotação).
   - **Pergunta que decide:** a VM sempre saiu pelo `144.22.240.169`, ou até 16/10 saía por um IP da Engelmig que a EDP aceita? Se mudou, é rota (TI); se não mudou, é regra nova da EDP.
 - **Descartado que fomos nós:** volume estável — 198 linhas `[WPA]` no log em cada ciclo de 20:30 a 21:15, sem rajada; nenhum comando rodado na VM nesse horário chama a EDP (`diag-escala-a-mais`/`diag-ciclo-em-campo` só leem o banco; `diag-rotina` só chama a EDP para a data de HOJE e foi rodado com 04/09); `git pull` não reinicia o app; o deploy do c129625 foi às ~21:50, depois do bloqueio; e restrição de IP do App Service é regra configurada, nada que um cliente consiga escrever.
+  - **Ressalva de 19/10/2026 (P0-11):** esse descarte olhou só o cron. As ~198 linhas `[WPA]` são por setor, não por requisição, e o painel aberto no navegador (coleta completa na EDP a cada 5 min, por aba, sem cache) não entrou na conta. "Volume estável" não foi medido. A EDP questionou o volume em 19/10, e o contador do P0-11 é o que vai dizer.
 - **Hipóteses abertas:** (1) o IP de saída da VM mudou nessa hora (OCI/TI) e o novo cai numa regra da EDP — não temos o IP anterior registrado; (2) regra de segurança da EDP, manual em janela noturna ou automática.
 - **O que NÃO fazer:** contornar o bloqueio (proxy, outro IP de saída) sem falar com a EDP — é driblar controle de acesso de um cliente que audita o contrato.
 - **Recuperação depois de liberado:** a coleta volta sozinha no ciclo seguinte. A produção do período é recuperável pelo backfill por data (`POST /admin/backfill/range`, API-WPA-EDP.md §11) + re-consolidação (`scripts/backfill-consolidate.js`). Perde-se de vez só o que é ao vivo: `isOnline`, localização, intervalos do momento, snapshots de 15 min.
@@ -5931,6 +5933,44 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - O token `engelmig-wpa-cron-2026` usado no crontab ficou exposto e deve ser trocado.
   - A WPA invalida o token anterior quando a mesma conta loga de novo, e o `gseq` loga com a conta da Clarissa diariamente às 05:00 UTC (`edp-renovar-token-2.sh`) — mesma classe do P1-25.
 - **Relacionado:** P0-9 (mesma noite), P1-25 (conta compartilhada), P1-39 (setor sem aviso), P1-40 (testes não tocam a EDP).
+
+
+## P0-11 — A EDP questionou o volume de requisições à WPA, e não sabíamos quantas eram nossas
+
+- **Categoria:** Ops/Contrato
+- **Status:** **contador no ar no código** (19/10/2026, `a23d6bc`). Falta: deploy, medir, responder a EDP e reduzir o volume (aceite abaixo).
+- **Fonte:** José, 19/10/2026: *"fomos questionados quanto a diversas requisições ao wpa, segundo a edp alguém está acessando e congestionando o sistema, fiquei na dúvida se poderia ser nosso sistema"*.
+- **Por que é P0:** é o cliente que audita o contrato dizendo que alguém está congestionando o sistema dele, três dias depois de bloquear o IP de saída (P0-9) e de filtrar o User-Agent do node-fetch (P0-10). Se formos nós e não soubermos, a próxima medida da EDP pode ser cortar o acesso de vez.
+- **O que o P0-9 não mediu:** o P0-9 descartou "fomos nós" porque o log tinha volume estável, *"198 linhas `[WPA]` no log em cada ciclo"*. Só que essas linhas são **por setor**, não por requisição, e só cobrem o cron. O painel aberto no navegador nunca entrou na conta. Até `a23d6bc` não existia nenhum contador de requisições.
+- **Evidência (código, conferida em 19/10/2026):**
+  - `public/index.html:10211` — `setInterval` de 5 min que chama `loadData()` sempre que o filtro está no dia de hoje. Roda em **cada aba aberta**, inclusive em segundo plano e fora do expediente.
+  - `routes/index.js:595` — `GET /api/teams` chama `getTeams` (`services/dataService.js:694`), que coleta **ao vivo** na EDP os setores do escopo do usuário.
+  - `services/wpaService.js:2181-2201` — `_singleFlight` só junta chamadas que estão **em voo ao mesmo tempo**. O comentário diz: *"Não é cache: nenhum dado é reaproveitado depois que a coleta termina"*. Duas abas que atualizam com 10 s de diferença fazem duas varreduras completas.
+  - `services/wpaService.js:2262` — cada sessão Engelmig com V2 custa 2 requisições (`notes/rejected` e `notes/executed`), mais `Sessions/all/date` e o V2 por setor (o V2 tem cache de 3 min).
+  - Cron: `services/cronService.js:1607,1614` — snapshot a cada 15 min das 05h às 23h45, mais 3 de madrugada (~79 ciclos/dia), cada um com o mesmo custo de uma coleta do painel, mais as caudas sem await (P2-30).
+- **Estimativa (antes da medição, NÃO usar como resposta à EDP):** ~200–270 requisições por coleta com ~100 equipes ativas. O cron dá ~20 mil/dia. **Cada aba aberta no Monitor** dá até 12 coletas/h, ou seja 2.400–3.200 requisições/h por aba, dezenas de milhares por dia se ela ficar aberta. Com 5 abas abertas no expediente, o painel passa fácil o cron.
+- **O que mudou de 16 a 18/10 e soma volume:** retry de setor que falha (P2-66, 16/10 — repete a varredura justamente quando a EDP está sob pressão); sync da escala de 1×/dia para 35×/dia (P2-65, 18/10, ~140 requests); job novo da Saída da nota (P2-70). E, desde o P0-10, todo pedido nosso sai como `User-Agent: EngelmigWpaMonitor/1.0`: a EDP identifica a Engelmig pelo UA, mesmo com a conta `es` compartilhada com outro projeto (P1-25) e o IP compartilhado com o `gseq` e a `rpa-ismael` (P0-9).
+- **O que foi feito (`a23d6bc`):**
+  - `services/wpaContador.js` — conta cada requisição que sai pelo `services/wpaHttp.js` (o ponto único de saída: login, Web API, `/admin/wpa-diag`; retry conta uma vez por tentativa, que é o que a EDP recebe). Agrupa por hora BRT, endpoint normalizado (UUID vira `{id}`, número longo vira `{n}`, a query some) e origem. Retém 48 h em memória.
+  - Origem por AsyncLocalStorage: `painel:<MÉTODO> <rota>` para `/api` (montado em `server.js` depois dos body parsers, porque eles leem o corpo por eventos de stream e perderiam o contexto), `cron-http:` para `/api/cron`, `cron:<nome>` para cada job (`_agendar` em `cronService.js`), e `interno` para o resto (boot, warm do token). As caudas sem await do snapshot herdam `cron:snapshot`.
+  - `GET /api/admin/wpa-requisicoes` — o resumo da memória, só admin, não toca a rede.
+  - Linha de log `wpa_requisicoes_hora` a cada virada de hora, com total, erros, por origem e os 8 endpoints mais chamados. É o histórico que sobrevive a restart.
+  - Testes: `test/wpaContador.test.js` (11, contra servidor local) e 2 em `test/routes.test.js`. A origem atravessando a cadeia real do Express com POST/JSON foi conferida à parte.
+- **Ação (nesta ordem):**
+  1. Deploy: `cd ~/prod-stc && git pull && pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save`.
+  2. Medir **um dia útil inteiro**: `grep wpa_requisicoes_hora ~/prod-stc/logs/out.log`, ou `GET /api/admin/wpa-requisicoes` antes de qualquer restart. Separar o `painel:GET /teams` do `cron:snapshot`.
+  3. Responder a EDP com o número medido (total/dia, pico/h, quanto é cron e quanto é painel) e perguntar o limite aceitável. Perguntar também se o filtro de UA de 16/10 (P0-10) foi intencional.
+  4. Cortar o painel da EDP (item próprio, depois da medição): o `/api/teams` passa a servir o último snapshot, ou um cache de 1–2 min compartilhado entre abas. O volume deixa de crescer com o número de abas abertas.
+  5. Rever os jobs que somam volume (P2-65 a cada 30 min, retry do P2-66), e o semáforo global do P2-30.
+- **Critério de aceite:**
+  - [x] Toda requisição à EDP é contada por hora, endpoint e origem; teste garante (`a23d6bc`).
+  - [ ] Deploy feito e um dia útil medido; números anotados aqui.
+  - [ ] EDP respondida com o número medido, e a resposta dela anotada aqui.
+  - [ ] Volume do painel independente do número de abas abertas (item próprio).
+- **Esforço:** contador 2 h (feito); medição 1 dia; corte do painel ~4 h + testes.
+- **Rollback:** `git revert a23d6bc` + deploy. O contador não muda nenhuma requisição, só observa: reverter só tira a medida.
+- **O que NÃO fazer:** responder à EDP com a estimativa acima como se fosse medida; reduzir o volume escondendo a origem (trocar UA, IP ou conta). O UA próprio é justamente o que permite à EDP separar a gente dos outros sistemas.
+- **Relacionado:** P0-9 (bloqueio de IP, mesma semana), P0-10 (filtro de UA), P1-25 (conta compartilhada), P2-30 (sem orçamento global de concorrência), P2-65, P2-66.
 
 
 ## P0-1c — Excluir usuário (excluir = ocultar)
