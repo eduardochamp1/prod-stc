@@ -21,8 +21,10 @@ const SRC = fs.readFileSync(path.join(__dirname, '..', 'services', 'cronService.
 
 describe('agendamento (fonte)', () => {
   test('a cada 30 min de 05:20 a 22:20, sem 22:50', () => {
-    assert.match(SRC, /cron\.schedule\('20 5-22 \* \* \*', \(\) => runSyncEscalaDia\(\)/);
-    assert.match(SRC, /cron\.schedule\('50 5-21 \* \* \*', \(\) => runSyncEscalaDia\(\)/);
+    // 19/10/2026 (P0-11): os jobs passaram a ser agendados por `_agendar(nome, …)`,
+    // que marca a origem para o contador de requisições à EDP.
+    assert.match(SRC, /_agendar\('escala-dia', '20 5-22 \* \* \*', \(\) => runSyncEscalaDia\(\)/);
+    assert.match(SRC, /_agendar\('escala-dia', '50 5-21 \* \* \*', \(\) => runSyncEscalaDia\(\)/);
     assert.ok(!/'20 5 \* \* \*', \(\) => runSyncEscalaDia/.test(SRC), 'o 1x/dia antigo saiu');
   });
   test('os dois jobs entram em _extraCronJobs (stopCron consegue parar)', () => {

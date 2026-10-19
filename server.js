@@ -93,6 +93,14 @@ app.use(requestTiming);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Origem das requisições à EDP (19/10/2026, P0-11): tudo que uma chamada de /api
+// disparar contra a WPA é contado como `painel:<MÉTODO> <rota>` (ou `cron-http:`
+// para /api/cron). DEPOIS dos body parsers de propósito: eles leem o corpo por
+// eventos de stream, que não carregam o contexto do AsyncLocalStorage — montado
+// antes, um POST perderia a marca. Ver services/wpaContador.js.
+const wpaContador = require('./services/wpaContador');
+app.use('/api', (req, _res, next) => wpaContador.comOrigem(wpaContador.origemDaRota(req.method, req.path), next));
+
 // Cron endpoints (autenticados via CRON_SECRET, não via JWT de usuário)
 // Devem ser montados ANTES de /api → /routes para escapar do authMiddleware
 app.use('/api/cron', cronRoutes);

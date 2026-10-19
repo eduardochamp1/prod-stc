@@ -3535,6 +3535,14 @@ router.post('/admin/equipes/refresh', async (_req, res) => {
   }
 });
 
+// GET /api/admin/wpa-requisicoes — quantas requisições saíram daqui para a EDP,
+// por hora BRT, origem (painel × cron) e endpoint. Só memória, NÃO toca a rede.
+// 19/10/2026 (P0-11): a EDP questionou o volume e não tínhamos o número. Restart
+// zera; o histórico que sobrevive é `grep wpa_requisicoes_hora logs/out.log`.
+router.get('/admin/wpa-requisicoes', (_req, res) => {
+  res.json(require('../services/wpaContador').resumo());
+});
+
 // GET /api/admin/wpa-diag — diagnóstico ZERO-retry: descobre por que WPA falha em produção.
 // Usar quando o /admin/warm sempre falha — esse endpoint mostra o que tá realmente acontecendo.
 router.get('/admin/wpa-diag', async (_req, res) => {

@@ -438,3 +438,20 @@ test('P1-38: a suíte NUNCA chama a WPA de verdade (DATA_MODE=mock não toca a r
   assert.equal(json.debug?.mode, 'mock');
   assert.match(json.error, /mock/i);
 });
+
+// ── P0-11: contador de requisições à EDP ─────────────────────────────────────
+
+test('P0-11: /admin/wpa-requisicoes devolve o resumo para admin, sem tocar a rede', async () => {
+  const t = await loginAs('admin', 'adminpass');
+  const { status, json } = await get('/api/admin/wpa-requisicoes', t);
+  assert.equal(status, 200);
+  assert.equal(typeof json.total, 'number');
+  assert.ok(Array.isArray(json.horas));
+  assert.equal(json.horasRetidas, 48);
+});
+
+test('P0-11: /admin/wpa-requisicoes exige admin', async () => {
+  const t = await loginAs('guarapari', 'guapass');
+  const { status } = await get('/api/admin/wpa-requisicoes', t);
+  assert.equal(status, 403);
+});

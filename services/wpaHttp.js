@@ -16,6 +16,7 @@
  */
 
 const _nodeFetch = require('node-fetch');
+const { medir } = require('./wpaContador');
 
 const WPA_USER_AGENT_PADRAO = 'EngelmigWpaMonitor/1.0';
 
@@ -38,11 +39,15 @@ function _comoObjeto(headers) {
  * chama: um diagnóstico pode sobrescrever de propósito (ex.: reproduzir o UA do
  * node-fetch para provar o filtro), o dia a dia nunca sai com o padrão.
  */
+//
+// 19/10/2026 (P0-11): toda chamada é contada aqui (hora BRT × endpoint × origem)
+// — a EDP questionou o volume de requisições e não tínhamos o número. Ver
+// services/wpaContador.js.
 function wpaHttpFetch(url, opts = {}) {
-  return _nodeFetch(url, {
+  return medir(url, opts.method, _nodeFetch(url, {
     ...opts,
     headers: { 'User-Agent': wpaUserAgent(), ..._comoObjeto(opts.headers) },
-  });
+  }));
 }
 
 module.exports = { wpaHttpFetch, wpaUserAgent, WPA_USER_AGENT_PADRAO };

@@ -1576,6 +1576,15 @@ async function runDailyDriftSweep() {
 
 // ── START / STOP ──────────────────────────────────────────────────────────────
 
+// 19/10/2026 (P0-11): cada job roda marcado como `cron:<nome>`, para o contador
+// de requisições à EDP separar o que é cron do que é painel. As caudas sem await
+// (ex.: as do snapshot) herdam a marca de quem as disparou. Os argumentos que o
+// node-cron passa seguem intactos para a função do job.
+function _agendar(nome, expr, fn, opts) {
+  const { comOrigem } = require('./wpaContador');
+  return cron.schedule(expr, (...args) => comOrigem(`cron:${nome}`, () => fn(...args)), opts);
+}
+
 function startCron() {
   if (process.env.DATA_MODE !== 'wpa') {
     console.log('[CRON] Modo mock — cron desativado.');
@@ -1585,7 +1594,7 @@ function startCron() {
   // Heartbeat de token 24/7. ATENÇÃO: no campo de minutos isso dispara às :00 e
   // :45 (intervalos alternados de 45 e 15 min), não "a cada 45 min" — ver P2-29.
   // Desde 22/08/2026 o disparo é barato: só faz /signin dentro da margem do exp.
-  tokenJob = cron.schedule('*/45 * * * *', runTokenRefresh, {
+  tokenJob = _agendar('token', '*/45 * * * *', runTokenRefresh, {
     timezone: 'America/Sao_Paulo',
   });
 
@@ -1595,14 +1604,14 @@ function startCron() {
   //   - logoff de plantão noturno até 23:30
   // Antes era 06-20h, perdíamos logoffs após 20h — equipes ficavam pra sempre
   // "em campo" no histórico mesmo tendo deslogado.
-  snapshotJob = cron.schedule('*/15 5-23 * * *', runSnapshot, {
+  snapshotJob = _agendar('snapshot', '*/15 5-23 * * *', runSnapshot, {
     timezone: 'America/Sao_Paulo',
   });
 
   // Snapshot extra de madrugada (00:30, 02:00, 04:00) pra capturar logoffs
   // tardios de equipes que viraram a noite. Sem isso o sessionEnd só
   // entra no banco no primeiro snap do dia seguinte (= consolidação atrasada).
-  const madrugadaJob = cron.schedule('30 0,2,4 * * *', runSnapshot, {
+  const madrugadaJob = _agendar('snapshot-madrugada', '30 0,2,4 * * *', runSnapshot, {
     timezone: 'America/Sao_Paulo',
   });
   // Guarda referência pra stopCron poder limpar
@@ -1617,63 +1626,63 @@ function startCron() {
   // 18/10/2026 (P2-65): e depois a cada 30 min até 22:20 — convocação de folga
   // é lançada pela EDP ao longo do dia. Duas expressões porque uma só
   // ('20,50 5-22') rodaria também às 22:50.
-  const escalaDiaJob = cron.schedule('20 5-22 * * *', () => runSyncEscalaDia(), {
+  const escalaDiaJob = _agendar('escala-dia', '20 5-22 * * *', () => runSyncEscalaDia(), {
     timezone: 'America/Sao_Paulo',
   });
-  const escalaDiaMeiaJob = cron.schedule('50 5-21 * * *', () => runSyncEscalaDia(), {
+  const escalaDiaMeiaJob = _agendar('escala-dia', '50 5-21 * * *', () => runSyncEscalaDia(), {
     timezone: 'America/Sao_Paulo',
   });
   global._extraCronJobs.push(escalaDiaJob, escalaDiaMeiaJob);
 
   // Intervalos das sessões de ontem, às 03:10 — depois do sync-logoffs, com o
   // dia já fechado. 1 request por sessão, ver o comentário da função.
-  const intervalosJob = cron.schedule('10 3 * * *', () => runSyncIntervalos(), {
+  const intervalosJob = _agendar('intervalos', '10 3 * * *', () => runSyncIntervalos(), {
     timezone: 'America/Sao_Paulo',
   });
 
   // Saída da nota (P2-70): D-1 às 04:30, depois dos intervalos das 03:10.
-  const saidaNotaJob = cron.schedule('30 4 * * *', () => runSaidaNota(), {
+  const saidaNotaJob = _agendar('saida-nota', '30 4 * * *', () => runSaidaNota(), {
     timezone: 'America/Sao_Paulo',
   });
   global._extraCronJobs.push(saidaNotaJob);
 
-  const syncLogoffsJob = cron.schedule('0 3 * * *', () => runSyncLogoffs(), {
+  const syncLogoffsJob = _agendar('sync-logoffs', '0 3 * * *', () => runSyncLogoffs(), {
     timezone: 'America/Sao_Paulo',
   });
   global._extraCronJobs.push(syncLogoffsJob);
 
   // Consolidação diária às 23:50 (logo após o último snapshot do dia)
-  consolidaJob = cron.schedule('50 23 * * *', runConsolidate, {
+  consolidaJob = _agendar('consolidacao', '50 23 * * *', runConsolidate, {
     timezone: 'America/Sao_Paulo',
   });
 
   // Health-check de UUID 1x por hora durante o expediente (06-20h)
   // Detecção precoce de regressão no scraper que possa invalidar a classificação
-  uuidHealthJob = cron.schedule('5 6-20 * * *', runUuidHealthCheck, {
+  uuidHealthJob = _agendar('uuid-health', '5 6-20 * * *', runUuidHealthCheck, {
     timezone: 'America/Sao_Paulo',
   });
 
   // Retry de DD/OUTROS recentes (até 24h) — reclassifica caso Activities[]
   // tenha sido populada após classificação inicial. Roda no minuto 25 pra
   // não bater com snapshots (00,15,30,45) nem uuid-health (05).
-  retryOutrosJob = cron.schedule('25 6-20 * * *', runRetryRecentOutros, {
+  retryOutrosJob = _agendar('retry-outros', '25 6-20 * * *', runRetryRecentOutros, {
     timezone: 'America/Sao_Paulo',
   });
 
   // Retry das rejeições gravadas vazias por falha de coleta (14/10/2026).
   // Minuto 40: fora de snapshots (00/15/30/45), uuid-health (05) e retry-outros (25).
-  retryRejJob = cron.schedule('40 6-20 * * *', () => runRetryRejeicoesVazias().catch(err =>
+  retryRejJob = _agendar('retry-rejeicoes', '40 6-20 * * *', () => runRetryRejeicoesVazias().catch(err =>
     console.warn('[CRON] retry-rej falhou:', err.message)), {
     timezone: 'America/Sao_Paulo',
   });
 
   // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
-  driftJob = cron.schedule('0 2 * * *', runDailyDriftSweep, {
+  driftJob = _agendar('drift-sweep', '0 2 * * *', runDailyDriftSweep, {
     timezone: 'America/Sao_Paulo',
   });
 
   // Notas devolvidas: a cada hora no minuto 5 (offset para não colidir com outros jobs)
-  notasJob = cron.schedule('5 * * * *', runNotasCollect, {
+  notasJob = _agendar('notas-devolvidas', '5 * * * *', runNotasCollect, {
     timezone: 'America/Sao_Paulo',
   });
 
