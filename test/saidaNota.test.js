@@ -139,6 +139,18 @@ test('avaliarNota: veículo já longe no início é fora_no_inicio, não "saiu"'
   assert.equal(r.km, 0);
 });
 
+test('descontarIntervalos: pausa apontada some com a saída; parcial só desconta', () => {
+  const s = { inicio: T0 + 20 * MIN, fim: T0 + 60 * MIN, minutos: 40 };
+  const almoco = { ini: T0 + 15 * MIN, fim: T0 + 65 * MIN };
+  assert.equal(S.descontarIntervalos([s], [almoco], 15).saidas.length, 0);
+  const parcial = S.descontarIntervalos([s], [{ ini: T0 + 25 * MIN, fim: T0 + 35 * MIN }], 15);
+  assert.equal(parcial.saidas[0].minutosLiquidos, 30);
+  assert.equal(parcial.descontadoMin, 10);
+  // dois intervalos sobrepostos não descontam mais que a própria saída
+  assert.equal(S.descontarIntervalos([s], [almoco, almoco], 15).descontadoMin, 40);
+  assert.equal(S.descontarIntervalos([s], [], 15).saidas.length, 1);
+});
+
 test('maiorBuracoFrotaMin: frota calada por 25 min na janela', () => {
   const b0 = Math.floor(T0 / 300000);
   const baldes = new Set();
@@ -259,6 +271,9 @@ test('executar: cruza nota × rastreador ponta a ponta com bancos falsos', async
       if (/note_details/.test(sql)) return { rows: [NOTA_OK, NOTA_SAIU, NOTA_SEM_PLACA, NOTA_DIV, NOTA_SEM_PONTO].map((id, i) => ({
         note_id: id, numero: String(100 + i), tipo: 'CS', checkpoints: cps,
         endereco: { latitude: LOCAL.lat, longitude: LOCAL.lon } })) };
+      // EQ2 apontou 10 min de pausa (parede 10:25–10:35) no meio da saída de 10:20–11:00.
+      if (/sessao_intervalo/.test(sql)) return { rows: [
+        { equipe: 'EQ2', motivo: '15 - Horário de Refeição', inicio: '2026-10-15T10:25:00', fim: '2026-10-15T10:35:00' }] };
       throw new Error('sql inesperado: ' + sql);
     },
   };
@@ -294,5 +309,6 @@ test('executar: cruza nota × rastreador ponta a ponta com bancos falsos', async
   assert.equal(res.funil.sem_placa, 1);
   assert.equal(res.fontePlaca.cadastro, 1);
   assert.equal(res.piores[0].equipe, 'EQ2');
+  assert.equal(res.piores[0].minFora, 30);          // 40 min fora − 10 min de pausa apontada
   assert.match(saida.join('\n'), /1 de 2 notas saíram/);
 });

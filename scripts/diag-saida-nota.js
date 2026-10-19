@@ -152,6 +152,28 @@ async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) 
      WHERE note_id = ANY($1::uuid[])`, [doDia.map(n => n.note_id)]);
   const detPorId = new Map(det.map(d => [d.note_id, d]));
 
+  // Intervalos apontados na sessão (dia ±1: execução pode cruzar meia-noite).
+  // ⚠️ FUSO (P1-48): `inicio`/`fim` são hora de PAREDE gravada com 'Z' errado —
+  // `AT TIME ZONE 'UTC'` desfaz o 'Z', como em db/heQueries.js:519-521.
+  const intervalos = new Map();
+  try {
+    const { rows: ivs } = await pool.query(`
+      SELECT upper(btrim(equipe)) AS equipe, motivo,
+             to_char(inicio AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS inicio,
+             to_char(fim    AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS fim
+        FROM public.sessao_intervalo
+       WHERE data BETWEEN ($1::date - 1) AND ($1::date + 1)
+         AND fim IS NOT NULL`, [data]);
+    for (const r of ivs) {
+      const ini = Date.parse(`${r.inicio}-03:00`), fim = Date.parse(`${r.fim}-03:00`);
+      if (!Number.isFinite(ini) || !Number.isFinite(fim) || fim <= ini) continue;
+      if (!intervalos.has(r.equipe)) intervalos.set(r.equipe, []);
+      intervalos.get(r.equipe).push({ ini, fim, motivo: r.motivo });
+    }
+  } catch (err) {
+    console.error(`[diag-saida-nota] sessao_intervalo indisponível (${err.message}) — sem desconto de pausa`);
+  }
+
   const linhas = [];
   for (const n of doDia) {
     const equipe = String(n.team_name).toUpperCase();
@@ -254,6 +276,21 @@ async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) 
       l.statusOriginal = l.status;
       l.status = 'patrulha';
     }
+    // Pausa apontada (refeição, retorno à base…) não é deslocamento escondido.
+    l.intervalos = intervalos.get(l.equipe) || [];
+    if (l.status === 'saiu') {
+      const d = S.descontarIntervalos(l.saidas, l.intervalos, args.minFora);
+      l.descontadoMin = d.descontadoMin;
+      if (d.saidas.length === 0) {
+        l.statusOriginal = l.status;
+        l.status = 'saiu_em_intervalo';
+        l.motivosIntervalo = [...new Set(l.intervalos
+          .filter(iv => l.saidas.some(s => iv.ini < s.fim && iv.fim > s.inicio)).map(iv => iv.motivo))];
+      } else {
+        l.saidas = d.saidas;
+        l.minFora = Math.round(d.saidas.reduce((s, x) => s + x.minutosLiquidos, 0));
+      }
+    }
     // Qualidade da âncora: quão longe o cadastro está de onde a equipe apontou o
     // início, e de onde o veículo estava nessa hora.
     if (l.cadastro && l.janela.cpInicio) l.dCadInicio = S.distanciaM(l.cadastro, l.janela.cpInicio);
@@ -285,17 +322,19 @@ function deduplicar(linhas) {
 function resumir(linhas, args) {
   const funil = {};
   for (const l of linhas) funil[l.status] = (funil[l.status] || 0) + 1;
-  const aval = linhas.filter(l => l.status === 'ok' || l.status === 'saiu');
+  const DENOM = new Set(['ok', 'saiu', 'saiu_em_intervalo']);   // avaliadas: a pausa apontada conta como avaliada e não marcada
+  const aval = linhas.filter(l => DENOM.has(l.status));
 
   // Para cada raio, o denominador são as notas em que o veículo estava DENTRO
   // dele no início (quem já estava fora não "sai") — por isso muda com o raio.
-  const comTrilha = linhas.filter(l => AVALIAVEIS.has(l.status));
+  const comTrilha = linhas.filter(l => AVALIAVEIS.has(l.status) || l.status === 'saiu_em_intervalo');
   const gradeDe = (base) => GRADE_RAIOS.map(raioM => {
     const eleg = base.filter(l => l.pts[0].d <= raioM);
     return {
       raioM, elegiveis: eleg.length,
       porMin: GRADE_MIN.map(minForaMin => {
-        const n = eleg.filter(l => S.saidasDoRaio(l.pts, l.janela, { raioM, minForaMin }).length > 0).length;
+        const n = eleg.filter(l => S.descontarIntervalos(S.saidasDoRaio(l.pts, l.janela, { raioM, minForaMin }),
+          l.intervalos, minForaMin).saidas.length > 0).length;
         return { minForaMin, n, pct: eleg.length ? Math.round((n / eleg.length) * 1000) / 10 : 0 };
       }),
     };
@@ -340,7 +379,23 @@ function resumir(linhas, args) {
   }
   const semJanela = linhas.filter(x => x.status === 'sem_trilha_janela');
 
+  // Hora (BRT) em que cada saída começou — almoço se denuncia aqui.
+  const horaBRT = (ms) => Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(new Date(ms)));
+  const porHora = {};
+  for (const l of linhas.filter(x => x.status === 'saiu' || x.status === 'saiu_em_intervalo')) {
+    const h = horaBRT(l.saidas[0].inicio);
+    if (!porHora[h]) porHora[h] = { saiu: 0, intervalo: 0 };
+    porHora[h][l.status === 'saiu' ? 'saiu' : 'intervalo']++;
+  }
+  const motivos = {};
+  for (const l of linhas.filter(x => x.status === 'saiu_em_intervalo')) {
+    for (const m of l.motivosIntervalo || []) motivos[m] = (motivos[m] || 0) + 1;
+  }
+
   return {
+    porHora,
+    motivos,
     gradePorPrefixo,
     foraNoInicio: {
       n: foraIni.length,
@@ -372,7 +427,7 @@ function resumir(linhas, args) {
       const k = l.equipe.slice(0, 2);
       if (!m.has(k)) m.set(k, { prefixo: k, total: 0, avaliadas: 0, saiu: 0 });
       const g = m.get(k); g.total++;
-      if (l.status === 'ok' || l.status === 'saiu') g.avaliadas++;
+      if (DENOM.has(l.status)) g.avaliadas++;
       if (l.status === 'saiu') g.saiu++;
       return m;
     }, new Map()).values()].sort((a, b) => b.total - a.total),
@@ -406,15 +461,16 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`         Trilha só grava mudança: o último ponto antes do início vale como posição (até ${S.MAX_IDADE_ANTERIOR_MIN / 60}h).`);
   escrever(`         Frota inteira sem ponto por > ${args.maxBuracoFrota} min na execução = rastreador_fora (fora da conta).`);
   escrever(`         Placa: gseq Equipes × Veículos → sessão do WPA → equipes_oficiais.`);
-  escrever(`         Patrulha (fora da conta): ${args.patrulha.length ? args.patrulha.map(p => p.join(' em ')).join(', ') : 'nenhuma'}.`);
+  escrever(`         Pausa apontada (sessao_intervalo) é descontada da saída; coberta inteira = saiu_em_intervalo.`);
+  escrever(`         Patrulha (fora da conta):${args.patrulha.length ? args.patrulha.map(p => p.join(' em ')).join(', ') : 'nenhuma'}.`);
 
   escrever(`\nFUNIL (notas concluídas de equipes oficiais, sem repetição entre dias: ${res.total})`);
-  const ordem = ['ok', 'saiu', 'fora_no_inicio', 'patrulha', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
+  const ordem = ['ok', 'saiu', 'saiu_em_intervalo', 'fora_no_inicio', 'patrulha', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
     'sem_ancora', 'sem_inicio', 'sem_fim', 'janela_invalida', 'sem_checkpoint', 'sem_detalhe'];
   for (const k of ordem.concat(Object.keys(res.funil).filter(k => !ordem.includes(k)))) {
     if (res.funil[k]) escrever(`  ${k.padEnd(16)} ${String(res.funil[k]).padStart(6)}  ${pct(res.funil[k], res.total)}`);
   }
-  escrever(`  → avaliadas: ${res.avaliadas}  (só ok + saiu entram no denominador)`);
+  escrever(`  → avaliadas: ${res.avaliadas}  (ok + saiu + saiu_em_intervalo)`);
   escrever(`  âncora: ${JSON.stringify(res.fonteAncora)}   placa: ${JSON.stringify(res.fontePlaca)}`);
 
   escrever(`\nRESULTADO com a regra acima: ${res.saiu} de ${res.avaliadas} notas saíram (${pct(res.saiu, res.avaliadas)})`);
@@ -477,6 +533,16 @@ function imprimir(res, { args, dias }, escrever) {
     escrever(`  ${String(t.tipo).padEnd(6)} avaliadas ${String(t.avaliadas).padStart(5)}   saíram ${String(t.saiu).padStart(4)} (${pct(t.saiu, t.avaliadas)})   dist p90 ${fmtM(t.p90)}`);
   }
 
+  escrever(`\nHORA EM QUE A SAÍDA COMEÇOU (BRT) — saiu = sem pausa apontada · intervalo = coberta por pausa apontada`);
+  const horas = Object.keys(res.porHora).map(Number).sort((a, b) => a - b);
+  if (horas.length === 0) escrever('  nenhuma');
+  for (const h of horas) {
+    const { saiu, intervalo } = res.porHora[h];
+    escrever(`  ${String(h).padStart(2, '0')}h  saiu ${String(saiu).padStart(3)} ${'█'.repeat(saiu)}`
+      + `   intervalo ${String(intervalo).padStart(3)} ${'░'.repeat(intervalo)}`);
+  }
+  escrever(`  pausas que cobriram saídas: ${Object.entries(res.motivos).map(([m, n]) => `${m}: ${n}`).join('   ') || 'nenhuma'}`);
+
   escrever(`\nEQUIPES COM SAÍDA (top 15)`);
   if (res.porEquipe.length === 0) escrever('  nenhuma');
   for (const e of res.porEquipe.slice(0, 15)) {
@@ -528,7 +594,7 @@ async function executar({ pool, poolGseq, args, hoje = dateBRT(), escrever = con
     const t0 = Date.now();
     const doDia = await lerDia({ pool, poolGseq, data, oficiais, alocacoes, args });
     brutas.push(...doDia);
-    const av = doDia.filter(l => l.status === 'ok' || l.status === 'saiu').length;
+    const av = doDia.filter(l => ['ok', 'saiu', 'saiu_em_intervalo'].includes(l.status)).length;
     console.error(`[diag-saida-nota] ${data}: ${doDia.length} notas, ${av} avaliadas (${Date.now() - t0} ms)`);
   }
   const linhas = deduplicar(brutas);

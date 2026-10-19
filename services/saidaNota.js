@@ -242,6 +242,35 @@ function saidasDoRaio(pts, janela, { raioM, minForaMin }) {
   return out;
 }
 
+/**
+ * Desconta das saídas o tempo coberto por intervalos que a equipe APONTOU
+ * (refeição, retorno à base… — `sessao_intervalo`). Saída cujo tempo líquido
+ * fica abaixo de `minForaMin` some: a equipe declarou a pausa.
+ *
+ * Por quê (5º backtest, 18/10/2026): das saídas das equipes comerciais, quase
+ * todas começavam entre 11h e 13h e duravam 20–55 min — cara de almoço. Almoço
+ * apontado não é deslocamento escondido; almoço NÃO apontado, dentro da nota, é.
+ *
+ * @param {Array<{inicio,fim,minutos}>} saidas
+ * @param {Array<{ini:number, fim:number}>} intervalos  ms
+ * @returns {{saidas: Array, descontadoMin: number}}
+ */
+function descontarIntervalos(saidas, intervalos, minForaMin) {
+  const out = [];
+  let descontado = 0;
+  for (const s of saidas || []) {
+    let cobre = 0;
+    for (const iv of intervalos || []) {
+      cobre += Math.max(0, Math.min(s.fim, iv.fim) - Math.max(s.inicio, iv.ini));
+    }
+    cobre = Math.min(cobre, s.fim - s.inicio) / 60000;   // intervalos sobrepostos não descontam 2×
+    descontado += cobre;
+    const liquido = s.minutos - cobre;
+    if (liquido >= minForaMin) out.push({ ...s, minutosLiquidos: liquido });
+  }
+  return { saidas: out, descontadoMin: Math.round(descontado) };
+}
+
 /** Km percorridos na janela (soma dos trechos entre pontos consecutivos). */
 function kmNaJanela(pts) {
   let m = 0;
@@ -328,6 +357,6 @@ module.exports = {
   EV_INICIO_TRABALHO, EV_FIM_TRABALHO, EV_FINALIZANDO,
   utmParaLatLon, normalizaCoord, distanciaM,
   instanteCp, janelaExecucao, ancoraDaNota,
-  MAX_IDADE_ANTERIOR_MIN, pontosNaJanela, maiorBuracoMin, maiorBuracoFrotaMin, saidasDoRaio, kmNaJanela, avaliarNota,
+  MAX_IDADE_ANTERIOR_MIN, pontosNaJanela, maiorBuracoMin, maiorBuracoFrotaMin, saidasDoRaio, descontarIntervalos, kmNaJanela, avaliarNota,
   pontoMaisProximo, veiculoConfere, placaChave, percentil,
 };
