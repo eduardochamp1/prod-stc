@@ -73,6 +73,7 @@ const DINAMICAS = [
   'WPA_USERNAME_SP', 'WPA_PASSWORD_SP',      // process.env[acc.userEnv]
   'WPA_USERNAME_SP2', 'WPA_PASSWORD_SP2',
   'PG_POOL_MAX', 'PG_IDLE_MS', 'PG_STATEMENT_TIMEOUT_MS', 'PG_SSL',  // env.NOME
+  'GSEQ_DATABASE_URL',                       // env.NOME em configGseqPool (services/gseqPool.js, P2-70)
 ];
 
 test('.env.example documenta TODA variável lida como process.env.NOME', () => {

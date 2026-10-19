@@ -421,6 +421,62 @@ nota que a EDP rejeitará depois (SF "Conta Paga"; ver P2-61). O efeito é o ale
 **Rollback:** `ativo:false` (acima) desliga na hora. Código: `git revert`. A tabela
 pode ficar.
 
+### Saída da nota (aba que substituiu o Ranking) — desde 19/10/2026
+
+Equipe apontou que estava executando a nota e o veículo saiu do local. Spec:
+`SPEC-saida-da-nota-2026-10-18.md`; backlog P2-70. O job das **04:30** avalia
+**D-1** e grava em `saida_nota`; a aba só lê. Não chama a EDP.
+
+**Primeira implantação — nesta ordem:**
+
+1. **Acesso de leitura ao gseq.** Como dono do banco gseq (sem sudo):
+   ```bash
+   psql -d gseq -c "CREATE ROLE wpa_leitura_gseq LOGIN PASSWORD 'troque-esta-senha'"
+   psql -d gseq -c "GRANT CONNECT ON DATABASE gseq TO wpa_leitura_gseq"
+   psql -d gseq -c "GRANT USAGE ON SCHEMA public TO wpa_leitura_gseq"
+   psql -d gseq -c "GRANT SELECT ON vehicle_positions, equipes_veiculos TO wpa_leitura_gseq"
+   ```
+   Se o seu usuário não puder criar papel (`permission denied to create role`),
+   use a URL do próprio gseq (`grep ^DATABASE_URL ~/gseq/.env.local`), sem o
+   `?schema=public`. O pool do WPA Monitor abre a sessão com
+   `default_transaction_read_only=on`, então não escreve no gseq mesmo assim.
+2. **`.env`:** `GSEQ_DATABASE_URL=postgresql://wpa_leitura_gseq:SENHA@localhost:5432/gseq`
+   (modelo no `.env.example`). Senha no lugar das outras senhas (seção do topo).
+3. **Migration:** `psql -d wpa_monitor -f supabase/migrations/017_saida_nota.sql`
+   e conferir `psql -d wpa_monitor -c "\d saida_nota"` (Owner `wpa_app`).
+4. **Deploy** (seção "Deploy de mudança nova"): `pm2 delete` + `start` + `save`
+   — o `.env` novo só entra assim.
+5. **Retroativo** (a trilha do gseq só guarda 60 dias):
+   ```bash
+   node scripts/backfill-saida-nota.js --de 2026-09-01 --ate <ontem>           # só avalia, mostra o resumo
+   node scripts/backfill-saida-nota.js --de 2026-09-01 --ate <ontem> --apply   # grava
+   ```
+   `--de` mais antigo que 60 dias é recusado.
+
+**Conferir que rodou:** `pm2 logs wpa-monitor --lines 300 | grep saida-nota` às
+04:31 mostra o resumo do dia (`notas`, `porStatus`, `gravadas`). Os avisos que importam:
+- `GSEQ_DATABASE_URL não configurada` → passo 2;
+- `nenhuma pausa apontada coletada` → o sync de intervalos das 03:10 falhou; as
+  saídas daquele dia saem **sem** desconto de pausa;
+- `saida_nota_falhou` → erro (ex.: migration não aplicada).
+
+**Depois que a operação cadastrar placas no gseq** (Veículos → Equipes ×
+Veículos): rode o backfill do período afetado com `--apply`. O cadastro é por
+vigência e vale para trás — sem reprocessar, os dias já gravados continuam
+"sem placa". A lista do que cadastrar está na própria aba (seção Cobertura) e em
+`node scripts/diag-sugere-placa.js`.
+
+**Ajustar a regra** (raio, minutos, patrulha) sem deploy — valores da SPEC §2:
+```bash
+psql -d wpa_monitor -c "INSERT INTO app_settings (key, data) VALUES ('saida_nota', '{\"raioM\":500,\"minForaMin\":15,\"patrulha\":[[\"EP\",\"PO\"],[\"*\",\"OS\"]]}') ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data"
+```
+Vale a partir do próximo job; dias já gravados só mudam reprocessando com o
+backfill. Cada linha guarda a regra usada (`regra_versao`). Config inválida →
+o job usa o padrão e avisa no log.
+
+**Rollback:** `git revert` dos commits do P2-70 (o Ranking volta junto). A
+tabela pode ficar; sem a `GSEQ_DATABASE_URL`, o job não roda.
+
 ## Backfills
 
 > ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**

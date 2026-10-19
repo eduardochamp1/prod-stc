@@ -1,6 +1,6 @@
 # SPEC — Saída da nota (aba que substitui o Ranking)
 
-> Data: 2026-10-18 · Pedido do José. Status: **especificado, nada implementado** (backlog **P2-70**).
+> Data: 2026-10-18 · Pedido do José. Status: **código done (19/10/2026)**, falta implantar na VM (backlog **P2-70**; passos no RUNBOOK → "Saída da nota").
 > A regra foi calibrada em 6 rodadas de backtest na VM (11–17/10/2026) com
 > `scripts/diag-saida-nota.js` e a lógica pura de `services/saidaNota.js`
 > (commits e74f935 → c7bd57e). A aba usa **essas mesmas funções**: o que foi
@@ -167,14 +167,22 @@ linhas/dia; a `trilha` é o maior campo (dezenas de pontos por nota).
 
 ## 8. API
 
-- `GET /api/saida-nota?de=&ate=&regionals=&supervisor=&prefixo=` → KPIs +
-  ocorrências (`saiu` e `longe_do_local`), escopo por `req.scope.regionals`
-  (lição do P1-12).
-- `GET /api/saida-nota/cobertura?de=&ate=&regionals=` → por equipe: notas,
-  avaliadas, e os motivos de não avaliar (§9.3).
-- `GET /api/saida-nota/nota/:noteId` → detalhe: janela, saídas, trilha, pausas.
-- As três entram no catálogo de rotas por aba do P0-1e quando ele for
-  implementado (hoje a aba Ranking tem `/ranking/equipes` e `/carteira/equipes`).
+Como implementado em 19/10/2026 (`routes/index.js`, bloco "SAÍDA DA NOTA"):
+
+- `GET /api/saida-nota?de=&ate=&team=CSV` → `{ gseqConfigurado, regra, kpis,
+  ocorrencias, cobertura }` numa resposta só (a tela faz uma chamada). Teto de
+  93 dias. A montagem é pura: `services/saidaNotaPainel.js#montarPainel`. O que
+  a v1 da spec chamava de `/cobertura` virou o bloco `cobertura` desta resposta.
+- `GET /api/saida-nota/nota/:noteId` → detalhe (janela, saídas, trilha, regra)
+  + as notas executadas junto. Fora do escopo responde **404**, igual a "não
+  existe".
+- Toda consulta leva `regional IN (...)` do `req.scope.regionals` (P1-12) —
+  coberto de ponta a ponta em `test/saidaNotaEscopo.test.js`. Erro → 500 com
+  mensagem fixa (não vaza `err.message`).
+- Supervisor e "tipo de equipe" (prefixo EC/EP/EB/ET) viram siglas no `team=`
+  no front, como em Gráficos — os KPIs saem recortados pelo servidor.
+- Ainda não estão no catálogo de rotas por aba do P0-1e (não implementado);
+  quando estiverem: aba `saida`.
 
 ## 9. Tela
 

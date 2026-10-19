@@ -179,7 +179,7 @@
 | P2-67 | GUA tem DOIS setores (DESG e DEPT) e a equipe é transferida entre eles; a tela de Equipes mostrava o setor do CADASTRO e o diag do P2-55 olhava só DESG | Dados/Frontend | **código done** (16/10/2026) — coluna Setor = setor da coleta mais recente (cadastro ao lado se divergir); `diag-nota-interrompida --setor GUA` roda os dois; falta deploy e conferir na tela |
 | P2-68 | Plantão noturno sumia do Monitor depois da meia-noite: `Sessions/all/date` só com a data de hoje → "0 em campo" e as equipes de 16:00–20:00 como "atrasada +8h" (já era assim antes do P0-10) | Backend/Frontend | **no ar** (18/10/2026, `4266a33`) — só exibição; log conferido de madrugada (DESG 7, DEPT 1, DESC 9, DSSJ 7) e nada gravado para 18/10; falta tela + horário diurno; produção pós-meia-noite do plantão é Fase 2 (medir) |
 | P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
-| P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **especificado** (18/10/2026) — `SPEC-saida-da-nota-2026-10-18.md`; backtest pronto (2,3% das avaliadas; placa do WPA errada em 74 de 131 equipes); Q1 respondida 19/10 (Aproveitamento da Carteira vai para Gráficos) — pronto para implementar |
+| P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **código done** (19/10/2026) — aba no lugar do Ranking, job 04:30 (D-1), migration 017, Carteira em Gráficos; falta na VM: papel de leitura no gseq + `GSEQ_DATABASE_URL`, migration, deploy, backfill, operação cadastrar placas |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6613,7 +6613,15 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P2-70 — Aba "Saída da nota" (substitui o Ranking): equipe apontou execução e o veículo saiu do local
 
 - **Categoria:** Produto/Dados
-- **Status:** **especificado** (18/10/2026) — `SPEC-saida-da-nota-2026-10-18.md`. Backtest e regra prontos; aba, job e tabela não.
+- **Status:** **código done** (19/10/2026) — falta implantar na VM (RUNBOOK → "Saída da nota", nesta ordem: papel de leitura no gseq, `GSEQ_DATABASE_URL`, migration 017, deploy, backfill dos 60 dias).
+- **Feito em 19/10/2026:**
+  - `services/saidaNota.js` → `classificarNota` na precedência da SPEC §4 (inclui `longe_do_local` × `fora_no_inicio`), config validada (`app_settings.saida_nota`), agrupamento de notas executadas juntas.
+  - `services/saidaNotaJob.js` + cron 04:30 (D-1) + `scripts/backfill-saida-nota.js` (`--apply`, ≤ 60 dias). Placa **só** do cadastro do gseq; sugestão de placa (veículos junto do tablet) gravada para `sem_placa`/`veiculo_divergente`, só exibição.
+  - `services/gseqPool.js` (sessão read-only), `db/saidaNotaQueries.js`, migration `017_saida_nota.sql` (trilha copiada — o gseq apaga com 60 dias).
+  - Rotas `GET /api/saida-nota` e `/api/saida-nota/nota/:id` com escopo regional em todas as consultas.
+  - Front: aba 🚚 Saída da nota no lugar do Ranking (KPIs com cobertura sempre visível, ocorrências com detalhe e link de mapa, cobertura por equipe com sugestão de placa, XLSX); **Aproveitamento da Carteira** movido para Gráficos (Q1).
+  - Testes: `saidaNotaRegra`, `saidaNotaJob`, `saidaNotaEscopo`, `saidaNotaFront` + os do backtest. Suíte 1889/1889.
+  - Conferido no navegador em modo mock (sem banco): aba, filtros, aviso "rastreador não configurado", e — com dados fictícios injetados — KPIs, ocorrências, detalhe e cobertura; Carteira renderizando em Gráficos. **Nada rodou contra o Postgres real nem o gseq real.**
 - **Pedido (José, 18/10/2026):** *"vamos acabar com a aba de ranking, gostaria de criar uma aba de monitoria de deslocamento dentro da nota … quando uma equipe faz o apontamento que está executando uma nota e desloca grandes distâncias enquanto deveria estar executando essa nota."*
 - **Feito até aqui (só leitura, nada na tela):**
   - `services/saidaNota.js` — a regra pura (janela ev 2→3, âncora no cadastro da nota, posição herdada, saída ≥ 2 pontos ou ignição, desconto de pausa apontada, veículo divergente). 27 testes em `test/saidaNota.test.js`.

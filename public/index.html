@@ -106,7 +106,7 @@
       <button class="tab-btn" id="tab-btn-desloc" onclick="switchTab('desloc')">📍 Deslocamentos</button>
       <button class="tab-btn" id="tab-btn-notas" onclick="switchTab('notas')">📝 Notas</button>
       <button class="tab-btn" id="tab-btn-graficos" onclick="switchTab('graficos')">📈 Gráficos</button>
-      <button class="tab-btn" id="tab-btn-ranking" onclick="switchTab('ranking')">🏆 Ranking</button>
+      <button class="tab-btn" id="tab-btn-saida" onclick="switchTab('saida')">🚚 Saída da nota</button>
       <button class="tab-btn" id="tab-btn-mapa" onclick="switchTab('mapa')">🗓️ Rotina</button>
       <button class="tab-btn" id="tab-btn-historico" onclick="switchTab('historico')">📋 Histórico</button>
       <!-- Metas oculta (regra de produto 25/05/2026 — nao esta fazendo sentido).
@@ -413,19 +413,28 @@
 
     </div>
 
-    <!-- ── TAB: RANKING ──────────────────────────────────────────────────── -->
-    <div class="tab-panel" id="tab-ranking">
+    <!-- ── TAB: SAÍDA DA NOTA (P2-70, 19/10/2026) ────────────────────────── -->
+    <!-- Substituiu o Ranking. Equipe apontou que estava executando a nota e o
+         veículo saiu do local (rastreador do gseq × nota). Spec:
+         docs/handoff/SPEC-saida-da-nota-2026-10-18.md. O cálculo é do job das
+         04:30 (D-1); aqui só se lê. O "Aproveitamento da Carteira", que vivia no
+         Ranking, foi para a aba Gráficos (decisão do José, Q1 da spec). -->
+    <div class="tab-panel" id="tab-saida">
 
       <div class="filter-bar">
-        <div class="date-label">Ranking de equipes — <strong id="ranking-mes-label"></strong></div>
+        <div class="date-label">Saída da nota — <strong id="saida-periodo-label"></strong></div>
         <div class="filter-controls">
           <div class="filter-group">
-            <span class="filter-label">Mês</span>
-            <input type="month" class="month-input" id="ranking-mes-input" onchange="loadRanking()" />
+            <span class="filter-label">De</span>
+            <input type="date" class="filter-select" id="saida-de-input" style="min-width:140px" onchange="loadSaidaNota()" />
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Até</span>
+            <input type="date" class="filter-select" id="saida-ate-input" style="min-width:140px" onchange="loadSaidaNota()" />
           </div>
           <div class="filter-group">
             <span class="filter-label">Regional</span>
-            <select class="filter-select" id="ranking-regional-select" onchange="loadRanking()">
+            <select class="filter-select" id="saida-regional-select" onchange="loadSaidaNota()">
               <option value="ALL">Todas</option>
               <option value="GUA">Guarapari</option>
               <option value="CAC">Cachoeiro</option>
@@ -433,35 +442,27 @@
             </select>
           </div>
           <div class="filter-group">
+            <span class="filter-label">Equipes</span>
+            <select class="filter-select" id="saida-prefixo-select" onchange="loadSaidaNota()">
+              <option value="ALL">Todas</option>
+              <option value="EC">EC</option>
+              <option value="EP">EP</option>
+              <option value="EB">EB</option>
+              <option value="ET">ET</option>
+            </select>
+          </div>
+          <div class="filter-group">
             <span class="filter-label">Supervisor</span>
-            <select class="filter-select" id="ranking-supervisor-select" onchange="loadRanking()" style="min-width:150px">
+            <select class="filter-select" id="saida-supervisor-select" onchange="loadSaidaNota()" style="min-width:150px">
               <option value="ALL">Todos</option>
             </select>
           </div>
+          <button class="btn-refresh" onclick="downloadSaidaXLSX()" title="Ocorrências e cobertura em Excel">⬇ Baixar XLSX</button>
         </div>
       </div>
 
-      <div id="ranking-content">
+      <div id="saida-content">
         <div class="empty-state">Carregando…</div>
-      </div>
-
-      <!-- ── APROVEITAMENTO DA CARTEIRA ─────────────────────────────────── -->
-      <!-- % executado sobre o que estava DISPONÍVEL na carteira da equipe.  -->
-      <!-- Fonte: team_daily_carteira (cron + backfill). Export XLSX cru.    -->
-      <div class="perf-section" style="margin-top:24px">
-        <div class="section-header" style="margin-bottom:12px">
-          <div>
-            <span class="section-title">Aproveitamento da Carteira</span>
-            <span style="font-size:11px;color:var(--text2);margin-left:8px">
-              executadas vs disponíveis por equipe (mesmo mês/regional do ranking acima)
-            </span>
-          </div>
-          <button class="btn-refresh" id="btn-carteira-xlsx" onclick="downloadCarteiraXLSX()"
-                  title="Baixar dados crus (dia × equipe) em Excel">⬇ Baixar XLSX</button>
-        </div>
-        <div id="carteira-content">
-          <div class="empty-state" style="font-size:12px">Carrega junto com o ranking.</div>
-        </div>
       </div>
 
     </div>
@@ -1008,7 +1009,7 @@
             <div class="modal-section-title">Equipes Oficiais</div>
             <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
               Whitelist editável — apenas equipes ativas aqui entram nos cálculos
-              de Monitor, Gráficos, Ranking e Histórico. Mudanças refletem em até 60s.
+              de Monitor, Gráficos, Saída da nota e Histórico. Mudanças refletem em até 60s.
             </div>
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
               <button class="btn-refresh" onclick="loadEquipesOficiais()" style="height:36px;padding:0 16px;font-size:12px">
@@ -1762,7 +1763,7 @@
         : `Todas (${regionalNome(userReg)})`;
 
       const ids = [
-        'regional-select', 'ranking-regional-select', 'hist-regional-select',
+        'regional-select', 'saida-regional-select', 'hist-regional-select',
         'graf-regional-select', 'rej-regional-select', 'desloc-regional-select',
         'mapa-regional-select', 'notas-regional-select',
       ];
@@ -2420,7 +2421,7 @@
       document.getElementById('tab-btn-' + tab).classList.add('active');
 
       if (tab === 'metas')    loadMetasCalculadas();
-      if (tab === 'ranking')  loadRanking();
+      if (tab === 'saida')    loadSaidaNota();
       if (tab === 'historico') loadHistorico();
       if (tab === 'graficos') loadGraficos();
       if (tab === 'mapa') initMapa();
@@ -2437,7 +2438,7 @@
           rejeicoes:  'rej-regional-select',
           notas:      'notas-regional-select',
           graficos:   'graf-regional-select',
-          ranking:    'ranking-regional-select',
+          saida:      'saida-regional-select',
           historico:  'hist-regional-select',
           desloc:     'desloc-regional-select',
           mapa:       'mapa-regional-select',
@@ -4351,6 +4352,7 @@
         // então é recriado a cada render — popula logo após.
         loadContadorTransgressao();
         loadAtrasadasGraf(de, ate, regionalsCsv, tipo, teamQs);
+        loadCarteiraAproveitamento(de, ate, regionalsCsv, _teamsEf);
       } catch (err) {
         cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${err.message}</div>`;
       }
@@ -4872,6 +4874,18 @@ ${acumuladoHTML}
 <div class="perf-section" id="graf-atrasadas-wrap">
   <div class="perf-section-title">⏰ Equipes Atrasadas pela Escala</div>
   <div id="graf-atrasadas"><div class="empty-state" style="font-size:12px">Carregando…</div></div>
+</div>
+
+<!-- Aproveitamento da Carteira (veio do Ranking em 19/10/2026 — P2-70, Q1).
+     Populado por loadCarteiraAproveitamento() após o render do graf-content.
+     O botão fica FORA do título: clicar no título recolhe a seção. -->
+<div class="perf-section" id="graf-carteira-wrap">
+  <div class="perf-section-title">Aproveitamento da Carteira</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+    <span style="font-size:11px;color:var(--text2)">executadas vs disponíveis por equipe — mesmo período, regional, equipes e supervisor dos filtros acima (o filtro de tipo não se aplica)</span>
+    <button class="btn-refresh" id="btn-carteira-xlsx" onclick="downloadCarteiraXLSX()" title="Baixar dados crus (dia × equipe) em Excel">⬇ Baixar XLSX</button>
+  </div>
+  <div id="carteira-content"><div class="empty-state" style="font-size:12px">Carregando…</div></div>
 </div>
 `;
     }
@@ -5675,88 +5689,32 @@ ${acumuladoHTML}
       }).join('');
     }
 
-    // ── RANKING ───────────────────────────────────────────────────────────
-    let _rankingMultiInited = false;
-    async function loadRanking() {
-      // Lazy init do multi-select de regional (igual outras abas)
-      if (!_rankingMultiInited && typeof MultiSelect !== 'undefined'
-          && document.getElementById('ranking-regional-select')) {
-        MultiSelect.init('ranking-regional-select', {
-          onChange: () => {
-            syncRegionalDropdowns('ranking-regional-select', MultiSelect.getValues('ranking-regional-select'));
-            loadRanking();
-          },
-          allLabel: 'Todas as Regionais',
-        });
-        _rankingMultiInited = true;
-        // Re-aplica restrição de regional se o usuário tem perfil regional.
-        // 16/09/2026 — era o mesmo defeito do P1-19: testava `currentRegional`
-        // (o FILTRO corrente) em vez do escopo, então bastava o admin estreitar o
-        // Monitor pra 1 regional e abrir o Ranking pela 1ª vez pra ele travar até
-        // o reload. Resíduo que ficou de fora da correção de 13/08.
-        _travarRegionalPorEscopo('ranking-regional-select');
-      }
+    // ── APROVEITAMENTO DA CARTEIRA (aba Gráficos) ───────────────────────────
+    // Vivia na aba Ranking até 19/10/2026; quando o Ranking deu lugar à Saída da
+    // nota, foi para Gráficos (decisão do José, Q1 da SPEC-saida-da-nota). Usa o
+    // período, a regional e as equipes (equipe + supervisor) dos filtros de
+    // Gráficos. Linhas cruas (dia × equipe) vêm do backend; agrega por equipe pra
+    // tabela e guarda as cruas pro export XLSX (aba separada).
+    let _carteiraRaw = [];      // linhas dia × equipe do último load
+    let _carteiraPeriodo = '';  // "de_ate", para o nome do XLSX
 
-      const input = document.getElementById('ranking-mes-input');
-      const ym = input?.value || mesAtualInput();
-      if (input && !input.value) input.value = ym;
-      const { clientFilter, regionalsCsv } = _readMultiRegional('ranking-regional-select');
-      document.getElementById('ranking-mes-label').textContent = fmtMes(ym);
-      document.getElementById('ranking-content').innerHTML =
-        '<div class="empty-state"><div class="spinner"></div><br>Carregando...</div>';
-
-      try {
-        await _supPopularSelect('ranking-supervisor-select');
-        const url = `${API}/ranking/equipes?m=${ym}&regionals=${regionalsCsv}`;
-        const data = await fetch(url).then(r => r.json());
-        let ranking = data.ranking || [];
-        // Multi-regional (2 de 3): backend trouxe tudo, filtra aqui
-        if (clientFilter) ranking = ranking.filter(r => clientFilter.has(_regOfRow(r)));
-        // Supervisor (07/10/2026): cada linha já é o total de UMA equipe vindo
-        // do servidor, então recortar no cliente não distorce número nenhum —
-        // só a posição passa a ser entre as equipes do supervisor.
-        const _sup = _supSiglasDoSelect('ranking-supervisor-select');
-        if (_sup) ranking = ranking.filter(r => _sup.has(String(r.team_name || '').toUpperCase()));
-        renderRanking(ranking);
-      } catch (err) {
-        document.getElementById('ranking-content').innerHTML =
-          `<div class="empty-state">Erro: ${err.message}</div>`;
-      }
-
-      // Aproveitamento da carteira — mesma janela (mês) e regionais do ranking
-      loadCarteiraAproveitamento(ym, regionalsCsv);
-    }
-
-    // ── APROVEITAMENTO DA CARTEIRA ──────────────────────────────────────────
-    // Linhas cruas (dia × equipe) vêm do backend; agrega por equipe pra tabela
-    // e guarda as cruas pro export XLSX (aba separada).
-    let _carteiraRaw = [];   // linhas dia × equipe do último load
-
-    function _ymRange(ym) {
-      // 'YYYY-MM' → { de: 1º dia, ate: min(último dia do mês, hoje BRT) }
-      const [y, m] = ym.split('-').map(Number);
-      const de  = `${ym}-01`;
-      const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-      const hoje = todayISO();
-      return { de, ate: last < hoje ? last : hoje };
-    }
-
-    async function loadCarteiraAproveitamento(ym, regionalsCsv) {
+    // `teams`: Set de siglas (equipe ∩ supervisor de Gráficos) ou null = todas.
+    async function loadCarteiraAproveitamento(de, ate, regionalsCsv, teams) {
       const cont = document.getElementById('carteira-content');
       if (!cont) return;
       cont.innerHTML = '<div class="empty-state" style="font-size:12px"><div class="spinner"></div><br>Carregando aproveitamento…</div>';
       try {
-        const { de, ate } = _ymRange(ym);
         const j = await fetch(`${API}/carteira/equipes?de=${de}&ate=${ate}&regionals=${regionalsCsv}`)
           .then(r => r.json());
+        // A tela pode ter sido redesenhada enquanto o fetch corria.
+        if (document.getElementById('carteira-content') !== cont) return;
         _carteiraRaw = j.rows || [];
-        // Supervisor (07/10/2026): recorta as linhas cruas (dia × equipe) ANTES
-        // de agregar — a tabela e o XLSX (que lê _carteiraRaw) saem iguais.
-        const _sup = _supSiglasDoSelect('ranking-supervisor-select');
-        if (_sup) _carteiraRaw = _carteiraRaw.filter(r => _sup.has(String(r.team_name || '').toUpperCase()));
+        // Recorta as linhas cruas ANTES de agregar — a tabela e o XLSX saem iguais.
+        if (teams) _carteiraRaw = _carteiraRaw.filter(r => teams.has(String(r.team_name || '').toUpperCase()));
+        _carteiraPeriodo = `${de}_${ate}`;
         renderCarteiraAproveitamento(_carteiraRaw);
       } catch (err) {
-        cont.innerHTML = `<div class="empty-state" style="font-size:12px">Erro: ${err.message}</div>`;
+        cont.innerHTML = `<div class="empty-state" style="font-size:12px">Erro: ${escapeHtml(err.message)}</div>`;
       }
     }
 
@@ -5808,8 +5766,8 @@ ${acumuladoHTML}
             ${agg.map((t, i) => `
               <tr>
                 <td>${i + 1}</td>
-                <td><strong>${t.team_name}</strong></td>
-                <td>${t.regional}</td>
+                <td><strong>${escapeHtml(t.team_name)}</strong></td>
+                <td>${escapeHtml(t.regional)}</td>
                 <td>${t.dias}</td>
                 <td>${t.disponivel}</td>
                 <td>${t.concluidas}</td>
@@ -5823,7 +5781,7 @@ ${acumuladoHTML}
     }
 
     function downloadCarteiraXLSX() {
-      if (!_carteiraRaw.length) { alert('Sem dados carregados — atualiza o ranking primeiro.'); return; }
+      if (!_carteiraRaw.length) { alert('Sem dados carregados — atualize a aba Gráficos primeiro.'); return; }
       const wb = XLSX.utils.book_new();
 
       // Aba 1: dados crus (dia × equipe) — pro user tratar como quiser
@@ -5852,50 +5810,284 @@ ${acumuladoHTML}
       })).sort((a, b) => b['Aproveitamento %'] - a['Aproveitamento %']);
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(aggRows), 'Por equipe');
 
-      const ym = document.getElementById('ranking-mes-input')?.value || 'periodo';
-      XLSX.writeFile(wb, `aproveitamento-carteira-${ym}.xlsx`);
+      XLSX.writeFile(wb, `aproveitamento-carteira-${_carteiraPeriodo || 'periodo'}.xlsx`);
     }
 
-    function renderRanking(ranking) {
-      if (ranking.length === 0) {
-        document.getElementById('ranking-content').innerHTML =
-          '<div class="empty-state">Nenhum dado encontrado para o período selecionado.</div>';
-        return;
+    // ── SAÍDA DA NOTA (P2-70, 19/10/2026) ───────────────────────────────────
+    // Equipe apontou que estava executando a nota e o veículo saiu do local.
+    // Spec: docs/handoff/SPEC-saida-da-nota-2026-10-18.md. O backend devolve
+    // KPIs, ocorrências (notas executadas juntas = 1 ocorrência) e cobertura por
+    // equipe numa resposta só (GET /api/saida-nota); aqui só se desenha.
+    // ⚠️ Nota sem rastreador NUNCA conta como "não saiu": a cobertura fica sempre
+    // visível no topo, e a taxa é sobre as AVALIADAS.
+    let _saidaMultiInited = false;
+    let _saidaUltimo = null;      // última resposta (para o XLSX)
+
+    const SAIDA_STATUS = {
+      ok:                 'Ficou no local',
+      saiu:               'Saiu do local',
+      saiu_em_intervalo:  'Saiu em pausa apontada',
+      longe_do_local:     'Executou longe do local',
+      fora_no_inicio:     'Veículo longe, tablet no local',
+      patrulha:           'Patrulha (fora da conta)',
+      veiculo_divergente: 'Placa cadastrada ≠ veículo junto do tablet',
+      rastreador_fora:    'Rastreador fora do ar',
+      sem_trilha:         'Placa sem ponto no rastreador',
+      sem_placa:          'Sem placa cadastrada no gseq',
+      sem_janela:         'Sem início/fim do trabalho',
+    };
+
+    // Hora BRT de um instante ISO. PURA.
+    function _saidaHora(iso) {
+      if (!iso) return '—';
+      return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    }
+    // Metros → "850 m" / "1,2 km". PURA.
+    function _saidaDist(m) {
+      if (m == null) return '—';
+      return m < 1000 ? `${m} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0).replace('.', ',')} km`;
+    }
+    // "TDY1C61" → "TDY-1C61": o formato que o gseq guarda e que a operação vai
+    // digitar no cadastro. Qualquer outra coisa passa como veio. PURA.
+    function _saidaPlaca(p) {
+      const s = String(p || '');
+      return /^[A-Z]{3}[0-9][A-Z0-9][0-9]{2}$/.test(s) ? s.slice(0, 3) + '-' + s.slice(3) : s;
+    }
+    function _saidaMapa(lat, lon, rotulo) {
+      if (lat == null || lon == null) return '';
+      return `<a href="https://www.google.com/maps?q=${encodeURIComponent(lat + ',' + lon)}" target="_blank" rel="noopener noreferrer">${escapeHtml(rotulo)}</a>`;
+    }
+
+    // Últimos 7 dias até ontem (o job das 04:30 grava D-1; hoje nunca tem dado).
+    function _saidaPeriodoPadrao() {
+      const ontem = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
+      const de = new Date(Date.parse(ontem + 'T12:00:00Z') - 6 * 86400000).toISOString().slice(0, 10);
+      return { de, ate: ontem };
+    }
+
+    /**
+     * Siglas a mandar no `team=`: equipes do escopo × prefixo × supervisor.
+     * null = sem recorte (todas). Set vazio = nada passa (nunca vira "todas").
+     */
+    function _saidaEquipesFiltro(regionalsArr) {
+      const prefixo = document.getElementById('saida-prefixo-select')?.value || 'ALL';
+      const sup = _supSiglasDoSelect('saida-supervisor-select');
+      if (prefixo === 'ALL' && !sup) return null;
+      const regSet = new Set(regionalsArr);
+      return new Set((_supEquipes || [])
+        .filter(e => regSet.has(e.regional))
+        .map(e => String(e.sigla).toUpperCase())
+        .filter(s => prefixo === 'ALL' || s.startsWith(prefixo))
+        .filter(s => !sup || sup.has(s)));
+    }
+
+    async function loadSaidaNota() {
+      if (!_saidaMultiInited && typeof MultiSelect !== 'undefined'
+          && document.getElementById('saida-regional-select')) {
+        MultiSelect.init('saida-regional-select', {
+          onChange: () => {
+            syncRegionalDropdowns('saida-regional-select', MultiSelect.getValues('saida-regional-select'));
+            loadSaidaNota();
+          },
+          allLabel: 'Todas as Regionais',
+        });
+        _saidaMultiInited = true;
+        _travarRegionalPorEscopo('saida-regional-select');
+      }
+      const deEl = document.getElementById('saida-de-input');
+      const ateEl = document.getElementById('saida-ate-input');
+      if (deEl && !deEl.value) { const p = _saidaPeriodoPadrao(); deEl.value = p.de; ateEl.value = p.ate; }
+      const de = deEl.value, ate = ateEl.value;
+      const lbl = document.getElementById('saida-periodo-label');
+      if (lbl) lbl.textContent = de === ate ? fmtDateBR(de) : `${fmtDateBR(de)} — ${fmtDateBR(ate)}`;
+
+      const cont = document.getElementById('saida-content');
+      cont.innerHTML = '<div class="empty-state"><div class="spinner"></div><br>Carregando…</div>';
+      try {
+        await _supPopularSelect('saida-supervisor-select');
+        const { regionalsCsv, regionalsArr } = _readMultiRegional('saida-regional-select');
+        const equipes = _saidaEquipesFiltro(regionalsArr);
+        if (equipes && equipes.size === 0) {
+          cont.innerHTML = '<div class="empty-state">Nenhuma equipe no filtro atual.</div>';
+          _saidaUltimo = null;
+          return;
+        }
+        const teamQs = equipes ? `&team=${encodeURIComponent([...equipes].join(','))}` : '';
+        const r = await fetch(`${API}/saida-nota?de=${de}&ate=${ate}&regionals=${regionalsCsv}${teamQs}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        if (document.getElementById('saida-content') !== cont) return;
+        _saidaUltimo = d;
+        cont.innerHTML = renderSaidaHTML(d);
+      } catch (err) {
+        cont.innerHTML = `<div class="empty-state" style="color:var(--vermelho)">Erro ao carregar: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderSaidaHTML(d) {
+      const k = d.kpis;
+      const regra = d.regra || {};
+      const patrulha = (regra.patrulha || []).map(([p, t]) => p === '*' ? `qualquer equipe em ${t}` : `${p} em ${t}`).join(', ') || 'nenhuma';
+      const regraTxt = `<div style="font-size:11px;color:var(--text2);margin:6px 0 14px">
+        Regra: <b>saiu</b> = começou no local e ficou ≥ ${regra.minForaMin} min a mais de ${_saidaDist(regra.raioM)} da nota,
+        entre o Início e o Fim do Trabalho, com a pausa apontada descontada. Fora da conta: ${escapeHtml(patrulha)}.
+        Placa: só o cadastro do gseq (Veículos → Equipes × Veículos). Calculado toda madrugada para o dia anterior.</div>`;
+
+      if (!k || !k.concluidas) {
+        const aviso = !d.gseqConfigurado
+          ? 'Rastreador não configurado no servidor (GSEQ_DATABASE_URL) — nada foi avaliado.'
+          : 'Sem notas avaliadas no período. O cálculo roda toda madrugada para o dia anterior; dias antigos dependem do backfill.';
+        return regraTxt + `<div class="empty-state">${aviso}</div>`;
       }
 
-      const medals = ['🥇', '🥈', '🥉'];
-      const allTipos = [...new Set(ranking.flatMap(t => Object.keys(t.por_tipo || {})))].sort();
+      const kpis = `<div class="perf-kpi-grid">
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Cobertura</div>
+    <div class="perf-kpi-value">${k.pctAvaliadas}%</div>
+    <div class="perf-kpi-sub">${k.avaliadas} de ${k.concluidas} notas avaliadas</div>
+  </div>
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Saíram do local</div>
+    <div class="perf-kpi-value" style="color:var(--vermelho)">${k.ocorrenciasSaiu}</div>
+    <div class="perf-kpi-sub">${k.notasSaiu} nota(s) · ${k.pctSaiu}% das avaliadas</div>
+  </div>
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Executaram longe do local</div>
+    <div class="perf-kpi-value" style="color:var(--vermelho)">${k.ocorrenciasLonge}</div>
+    <div class="perf-kpi-sub">tablet e veículo longe da nota no início</div>
+  </div>
+  <div class="perf-kpi-card">
+    <div class="perf-kpi-label">Pausa descontada</div>
+    <div class="perf-kpi-value">${k.saiuEmIntervalo}</div>
+    <div class="perf-kpi-sub">saídas cobertas por pausa apontada</div>
+  </div>
+</div>`;
 
-      document.getElementById('ranking-content').innerHTML = `
-      <div class="ranking-table-wrap">
-        <table class="ranking-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Equipe</th>
-              <th>Setor</th>
-              ${allTipos.map(t => `<th>${t}</th>`).join('')}
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${ranking.map((t, i) => {
-        const rankCls = i < 3 ? `rank-${i + 1}` : '';
-        return `
-                <tr>
-                  <td><span class="rank-num ${rankCls}">${medals[i] || (i + 1)}</span></td>
-                  <td>
-                    <span class="rank-team">${t.team_name}</span>
-                    <span class="rank-reg reg-${t.regional}">${t.regional}</span>
-                  </td>
-                  <td style="color:var(--text2);font-size:12px">${t.sector_id}</td>
-                  ${allTipos.map(tipo => `<td style="text-align:center;color:var(--text2)">${t.por_tipo[tipo] || '—'}</td>`).join('')}
-                  <td><span class="rank-total">${t.total}</span></td>
-                </tr>`;
-      }).join('')}
-          </tbody>
-        </table>
-      </div>`;
+      const linhas = (d.ocorrencias || []).map((o, i) => {
+        const notas = o.notas.map(n => `${escapeHtml(n.numero || '—')} <span style="color:var(--text2)">${escapeHtml(n.tipo || '')}</span>`).join('<br>');
+        const ind = o.status === 'saiu'
+          ? '<span style="color:var(--vermelho);font-weight:700">Saiu do local</span>'
+          : '<span style="color:#c49000;font-weight:700">Executou longe</span>';
+        return `<tr style="cursor:pointer" onclick="toggleSaidaDetalhe(${i}, '${escapeJsAttr(o.notas[0].note_id)}')" title="Clique para ver o detalhe">
+          <td>${fmtDateBR(o.data)}</td>
+          <td><b>${escapeHtml(o.equipe)}</b><br><span style="font-size:11px;color:var(--text2)">${escapeHtml(_saidaPlaca(o.placa))}</span></td>
+          <td>${notas}</td>
+          <td>${ind}</td>
+          <td>${_saidaHora(o.inicio)} → ${_saidaHora(o.fim)}</td>
+          <td style="font-weight:700">${o.status === 'saiu' ? o.minFora + ' min' : '—'}</td>
+          <td>${_saidaDist(o.distMaxM)}</td>
+          <td>${o.km != null ? String(o.km).replace('.', ',') + ' km' : '—'}</td>
+        </tr>
+        <tr id="saida-det-${i}" style="display:none"><td colspan="8" id="saida-det-cel-${i}"></td></tr>`;
+      }).join('');
+      const ocorr = `<div class="perf-section">
+  <div class="perf-section-title">Ocorrências (${(d.ocorrencias || []).length})</div>
+  ${linhas ? `<div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:560px">
+  <table class="perf-tipo-table">
+    <thead><tr><th>Data</th><th>Equipe</th><th>Nota(s)</th><th>Indicador</th><th>Execução</th><th>Fora</th><th>Dist. máx.</th><th>Km rodados</th></tr></thead>
+    <tbody>${linhas}</tbody>
+  </table></div>` : '<div class="empty-state" style="font-size:12px">Nenhuma ocorrência no período.</div>'}
+  <div style="font-size:11px;color:var(--text2);margin-top:6px">É triagem: há saída legítima (material, poste do outro lado do bairro, obra extensa). Confira o caso antes de concluir.</div>
+</div>`;
+
+      const st = (c, s) => c.porStatus[s] || 0;
+      const cobLinhas = (d.cobertura || []).map(c => `<tr>
+          <td><b>${escapeHtml(c.equipe)}</b></td>
+          <td>${escapeHtml(c.regional)}</td>
+          <td>${c.total}</td>
+          <td style="font-weight:700;color:${c.pctAvaliadas >= 70 ? 'var(--verde)' : c.pctAvaliadas >= 30 ? '#c49000' : 'var(--vermelho)'}">${c.avaliadas} (${c.pctAvaliadas}%)</td>
+          <td>${c.saiu || ''}</td>
+          <td>${c.longe || ''}</td>
+          <td>${st(c, 'sem_placa') || ''}</td>
+          <td>${st(c, 'veiculo_divergente') || ''}</td>
+          <td>${st(c, 'sem_trilha') || ''}</td>
+          <td>${st(c, 'rastreador_fora') || ''}</td>
+          <td>${escapeHtml((c.placas || []).map(_saidaPlaca).join(', '))}</td>
+          <td>${c.sugestao ? `${escapeHtml(_saidaPlaca(c.sugestao.placa))} <span style="color:var(--text2);font-size:11px">${c.sugestao.notas} notas (${c.sugestao.pct}%)</span>` : ''}</td>
+        </tr>`).join('');
+      const cob = `<div class="perf-section">
+  <div class="perf-section-title">Cobertura por equipe — o que cadastrar ou corrigir</div>
+  <div style="font-size:11px;color:var(--text2);margin-bottom:8px">
+    Sem placa / placa ≠ tablet: cadastrar ou corrigir no gseq (Veículos → Equipes × Veículos). A sugestão é o veículo que o rastreador viu junto do tablet no início das notas — conferir antes de cadastrar; ela não entra no cálculo.
+    Placa sem ponto no rastreador: veículo sem rastreador (ex.: equipes ET).</div>
+  <div style="background:var(--branco);border-radius:var(--radius-lg);box-shadow:var(--shadow-sm);overflow:auto;max-height:480px">
+  <table class="perf-tipo-table">
+    <thead><tr><th>Equipe</th><th>Regional</th><th>Notas</th><th>Avaliadas</th><th>Saiu</th><th>Longe</th>
+      <th>Sem placa</th><th>Placa ≠ tablet</th><th>Sem rastreador</th><th>Rastreador fora</th><th>Placa cadastrada</th><th>Sugestão do rastreador</th></tr></thead>
+    <tbody>${cobLinhas}</tbody>
+  </table></div>
+</div>`;
+
+      return regraTxt + kpis + ocorr + cob;
+    }
+
+    async function toggleSaidaDetalhe(i, noteId) {
+      const tr = document.getElementById(`saida-det-${i}`);
+      const cel = document.getElementById(`saida-det-cel-${i}`);
+      if (!tr || !cel) return;
+      if (tr.style.display !== 'none') { tr.style.display = 'none'; return; }
+      tr.style.display = '';
+      cel.innerHTML = '<div class="spinner"></div>';
+      try {
+        const r = await fetch(`${API}/saida-nota/nota/${encodeURIComponent(noteId)}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        cel.innerHTML = renderSaidaDetalhe(d);
+      } catch (err) {
+        cel.innerHTML = `<span style="color:var(--vermelho)">Erro: ${escapeHtml(err.message)}</span>`;
+      }
+    }
+
+    function renderSaidaDetalhe(d) {
+      const eventos = [`<li><b>${_saidaHora(d.inicio)}</b> Início do Trabalho</li>`];
+      for (const s of d.saidas || []) {
+        eventos.push(`<li><b>${_saidaHora(s.inicio)}</b> saiu do raio — até ${_saidaDist(s.distMaxM)} da nota</li>`);
+        eventos.push(`<li><b>${_saidaHora(s.fim)}</b> voltou (ou fim da janela) · <b>${s.minutos} min</b> fora</li>`);
+      }
+      eventos.push(`<li><b>${_saidaHora(d.fim)}</b> Fim do Trabalho</li>`);
+      const pm = d.ponto_max || {};
+      const juntas = (d.juntas || []).length > 1
+        ? `<div>Executada junto com: ${d.juntas.filter(j => j.note_id !== d.note_id).map(j => escapeHtml(`${j.numero || '—'} ${j.tipo || ''}`)).join(', ')}</div>` : '';
+      return `<div style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px;padding:6px 4px">
+  <div><div style="font-weight:700;margin-bottom:4px">Linha do tempo (BRT)</div><ul style="margin:0;padding-left:16px">${eventos.join('')}</ul></div>
+  <div style="line-height:1.7">
+    <div>Status: <b>${escapeHtml(SAIDA_STATUS[d.status] || d.status)}</b></div>
+    <div>Veículo: <b>${escapeHtml(_saidaPlaca(d.placa) || '—')}</b> (${escapeHtml(d.placa_fonte || '')})</div>
+    <div>Local da nota: ${escapeHtml(d.ancora_fonte === 'inicio' ? 'GPS do tablet no início' : 'cadastro da EDP')} · ${_saidaMapa(d.ancora_lat, d.ancora_lon, 'abrir no mapa')}</div>
+    <div>Ponto mais longe: ${_saidaDist(d.dist_max_m)} ${pm.t ? 'às ' + _saidaHora(new Date(pm.t).toISOString()) : ''} · ${_saidaMapa(pm.lat, pm.lon, 'abrir no mapa')}</div>
+    <div>Tablet × local da nota no início: ${_saidaDist(d.d_cadastro_tablet_m)} · veículo × tablet: ${_saidaDist(d.d_veiculo_tablet_m)}</div>
+    <div>Pausa apontada descontada: ${d.pausa_descontada_min || 0} min · ${(d.trilha || []).length} pontos do rastreador</div>
+    ${juntas}
+    <div style="color:var(--text2);font-size:11px">Regra ${escapeHtml(d.regra_versao || '')}</div>
+  </div>
+</div>`;
+    }
+
+    function downloadSaidaXLSX() {
+      const d = _saidaUltimo;
+      if (!d || !d.kpis) { alert('Sem dados carregados — atualize a aba primeiro.'); return; }
+      const wb = XLSX.utils.book_new();
+      const oc = (d.ocorrencias || []).map(o => ({
+        Data: o.data, Equipe: o.equipe, Regional: o.regional, Placa: _saidaPlaca(o.placa),
+        Indicador: SAIDA_STATUS[o.status] || o.status,
+        'Nota(s)': o.notas.map(n => `${n.numero || ''} ${n.tipo || ''}`.trim()).join(' | '),
+        'Início (BRT)': _saidaHora(o.inicio), 'Fim (BRT)': _saidaHora(o.fim),
+        'Minutos fora': o.status === 'saiu' ? o.minFora : null,
+        'Distância máx. (m)': o.distMaxM, 'Km rodados': o.km,
+        'Pausa descontada (min)': o.pausaDescontadaMin,
+        'Local lat': o.ancora ? o.ancora.lat : null, 'Local lon': o.ancora ? o.ancora.lon : null,
+        'Mais longe lat': o.pontoMax ? o.pontoMax.lat : null, 'Mais longe lon': o.pontoMax ? o.pontoMax.lon : null,
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(oc.length ? oc : [{ Aviso: 'Nenhuma ocorrência no período' }]), 'Ocorrências');
+      const cob = (d.cobertura || []).map(c => ({
+        Equipe: c.equipe, Regional: c.regional, Notas: c.total, Avaliadas: c.avaliadas, '% avaliadas': c.pctAvaliadas,
+        'Saiu (ocorrências)': c.saiu, 'Longe (ocorrências)': c.longe,
+        ...Object.fromEntries(Object.keys(SAIDA_STATUS).map(s => [SAIDA_STATUS[s], c.porStatus[s] || 0])),
+        'Placa cadastrada': (c.placas || []).map(_saidaPlaca).join(', '),
+        'Sugestão do rastreador': c.sugestao ? `${_saidaPlaca(c.sugestao.placa)} (${c.sugestao.notas} notas, ${c.sugestao.pct}%)` : '',
+      }));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cob), 'Cobertura');
+      XLSX.writeFile(wb, `saida-da-nota-${d.de}_${d.ate}.xlsx`);
     }
 
     // ── HISTÓRICO ─────────────────────────────────────────────────────────
@@ -7759,7 +7951,7 @@ ${acumuladoHTML}
         _syncCurrentRegional();
         // Mantém value legado no select pra UI (CSV ou sigla única).
         regSel.value = currentRegional;
-        ['ranking-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
+        ['saida-regional-select', 'hist-regional-select', 'graf-regional-select'].forEach(id => {
           const el = document.getElementById(id);
           if (el && !el.disabled) el.value = currentRegional;
         });
@@ -8103,7 +8295,7 @@ ${acumuladoHTML}
     // "adicionei os supervisores, porém o filtro não está funcionando".
     // Chamada após salvar equipe/renomear supervisor: descarta o cache e
     // remonta os 6 selects que já estão no DOM.
-    const _SUP_SELECTS = ['mon', 'graf', 'rej', 'ranking', 'hist', 'mapa', 'avisos'].map(p => `${p}-supervisor-select`);
+    const _SUP_SELECTS = ['mon', 'graf', 'rej', 'saida', 'hist', 'mapa', 'avisos'].map(p => `${p}-supervisor-select`);
     async function _supInvalidar() {
       _supEquipes = null;
       _supEquipesPromise = null;
@@ -8243,7 +8435,7 @@ ${acumuladoHTML}
         'rej-regional-select',      // Rejeições
         'notas-regional-select',    // Notas
         'graf-regional-select',     // Gráficos
-        'ranking-regional-select',  // Ranking
+        'saida-regional-select',    // Saída da nota
         'hist-regional-select',     // Histórico
         'desloc-regional-select',   // Deslocamentos
         'mapa-regional-select',     // Mapa
@@ -13193,7 +13385,7 @@ ${acumuladoHTML}
       // metade certa é a segunda.
       notas:     { fn: () => loadNotasAll(),        rotulo: 'Notas' },
       graficos:  { fn: () => loadGraficos(),        rotulo: 'Gráficos' },
-      ranking:   { fn: () => loadRanking(),         rotulo: 'Ranking' },
+      saida:     { fn: () => loadSaidaNota(),       rotulo: 'Saída da nota' },
       mapa:      { fn: () => loadMapa(),            rotulo: 'Rotina' },
       historico: { fn: () => loadHistorico(),       rotulo: 'Histórico' },
       metas:     { fn: () => loadMetasCalculadas(), rotulo: 'Metas' },

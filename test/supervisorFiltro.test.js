@@ -89,8 +89,8 @@ test('_filtrarEquipes (Admin): filtro e busca por supervisor', () => {
   assert.equal(fns._filtrarEquipes(EQS, base).length, 5);
 });
 
-test('as 6 abas têm o select de Supervisor', () => {
-  for (const id of ['mon', 'graf', 'rej', 'ranking', 'hist', 'mapa']) {
+test('as 6 abas têm o select de Supervisor (Ranking virou Saída da nota em 19/10/2026)', () => {
+  for (const id of ['mon', 'graf', 'rej', 'saida', 'hist', 'mapa']) {
     assert.ok(SRC.includes(`id="${id}-supervisor-select"`), `falta ${id}-supervisor-select`);
     assert.ok(SRC.includes(`_supPopularSelect('${id}-supervisor-select')`), `${id}: select nunca é populado`);
   }
