@@ -13,18 +13,25 @@
  *  (3a) COLABORADORES de sessão encerrada — buscados 1 vez e guardados. Risco
  *       zero: a lista de quem estava na sessão não muda depois que ela fechou.
  *
- *  (3b) NOTAS de sessão encerrada — continuam sendo buscadas durante uma JANELA
- *       depois que a vimos encerrada (o app transmite com atraso); a primeira
- *       busca feita DEPOIS da janela é a última, e o resultado fica congelado.
- *       DESLIGADO por padrão: `WPA_ENCERRADA_CONGELA_MIN` vazio/0 = busca a cada
- *       ciclo, como antes. A janela sai do histórico, não de palpite:
- *       `node scripts/diag-sessao-encerrada.js` mede, nos snapshots guardados,
- *       quanto tempo depois de encerrada uma sessão ainda muda de notas.
- *       ⚠️ A janela conta pelo NOSSO relógio (quando o coletor viu a sessão
- *       encerrada pela 1ª vez), NÃO pelo `EndTime` da EDP: o fuso desse campo é
- *       ambíguo (família do P1-48), e um erro de 3h ali congelaria cedo demais.
- *       Só congela com as DUAS buscas bem-sucedidas: falha de rede volta [] no
- *       _safeNotes, e congelar um [] de falha seria apagar produção.
+ *  (3b) NOTAS de sessão encerrada — rebuscadas DE HORA EM HORA, não a cada
+ *       ciclo de 15 min (`WPA_ENCERRADA_REBUSCA_MIN`, default 60; 0 = todo
+ *       ciclo, como era antes). Nos ciclos a partir das 23h BRT a rebusca é
+ *       OBRIGATÓRIA: o último snapshot do dia (23h45), que a consolidação das
+ *       23h50 lê, sai sempre com o dado fresco. Entre uma rebusca e outra, o
+ *       painel mostra a última busca bem-sucedida — até ~45 min de atraso para
+ *       equipe já deslogada, aceito pelo José em 19/10/2026.
+ *       Se a rebusca FALHA e há memória, o bucket usa a memória em vez do []
+ *       que o _safeNotes devolvia (vazio de falha não é "sem produção").
+ *       Só guarda na memória com as DUAS buscas bem-sucedidas.
+ *
+ *       ⚠️ HISTÓRICO (19/10/2026): a 1ª versão desta peça CONGELAVA as notas
+ *       depois de uma janela (`WPA_ENCERRADA_CONGELA_MIN`). O
+ *       scripts/diag-sessao-encerrada.js (v2), rodado na VM sobre 14 dias de
+ *       snapshots, derrubou a ideia: 623 de 1535 sessões encerradas (40,6%)
+ *       MUDAM depois de encerradas — 270 ganham executada, 249 ganham
+ *       rejeitada — até 21h depois. Congelar perderia produção e a rejeição que
+ *       a regra rejeitada>concluída usa. Rebuscar com menos frequência não perde
+ *       nada no fechamento do dia; congelar perdia.
  *
  *  (5)  SINAL DO V2 para sessão ATIVA — só em MODO SOMBRA: nada deixa de ser
  *       buscado. Mede quantas vezes "o V2 não mudou" teria permitido pular a
@@ -35,17 +42,33 @@
  *       EDP não se arrisca por economia).
  *
  * Estado de PROCESSO (PM2 instances=1, regra 8). Restart zera: a sessão volta a
- * ser buscada e a janela recomeça — mais requisições, nunca dado a menos. As
+ * ser buscada no ciclo seguinte — mais requisições, nunca dado a menos. As
  * memórias são zeradas na virada do dia BRT.
  */
 
 'use strict';
 
-const { dateBRT } = require('./timeUtil');
+const { dateBRT, hourBRT } = require('./timeUtil');
 
-function congelaMsDoEnv() {
-  const n = Number(process.env.WPA_ENCERRADA_CONGELA_MIN);
-  return Number.isFinite(n) && n > 0 ? n * 60_000 : 0;
+/** Relógio do módulo — trocável em teste (a rebusca obrigatória depende da hora BRT). */
+const relogio = { agora: () => Date.now() };
+
+const REBUSCA_MIN_PADRAO = 60;
+/** A partir desta hora BRT, toda sessão encerrada é rebuscada em todo ciclo. */
+const HORA_REBUSCA_OBRIGATORIA = 23;
+/**
+ * Folga: o ciclo de 15 min não cai no mesmo segundo. Sem ela, a busca de
+ * 60 min atrás feita 2 s mais tarde passaria por "59:58 < 60" e a rebusca
+ * escorregaria para o ciclo seguinte (75 min de atraso).
+ */
+const FOLGA_MS = 5 * 60_000;
+
+/** Intervalo de rebusca da sessão encerrada, em ms. 0 = todo ciclo. */
+function rebuscaMsDoEnv() {
+  const raw = process.env.WPA_ENCERRADA_REBUSCA_MIN;
+  if (raw === undefined || raw === '') return REBUSCA_MIN_PADRAO * 60_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n * 60_000 : REBUSCA_MIN_PADRAO * 60_000;
 }
 
 // ── memórias, zeradas na virada do dia ──────────────────────────────────────
@@ -53,7 +76,7 @@ function congelaMsDoEnv() {
 function criarMemoria() {
   const m = { dia: null, encerradas: new Map(), sombra: new Map(),
               contSombra: { comparadas: 0, pularia: 0, divergiu: 0, exemplos: [] } };
-  m.garantirDia = (agora = Date.now()) => {
+  m.garantirDia = (agora = relogio.agora()) => {
     const d = dateBRT(agora);
     if (m.dia !== d) {
       m.dia = d;
@@ -68,7 +91,7 @@ function criarMemoria() {
 // ── (3a) + (3b) sessão encerrada ────────────────────────────────────────────
 
 /** Registro da sessão encerrada; cria na 1ª vez que é vista encerrada. */
-function registroEncerrada(mem, sessionId, agora = Date.now()) {
+function registroEncerrada(mem, sessionId, agora = relogio.agora()) {
   mem.garantirDia(agora);
   let r = mem.encerradas.get(sessionId);
   if (!r) {
@@ -79,26 +102,28 @@ function registroEncerrada(mem, sessionId, agora = Date.now()) {
 }
 
 /**
- * Sessão vista ABERTA de novo (reabriu): esquece o registro de encerrada, e a
- * janela recomeça quando ela fechar outra vez. A memória da sombra (aberta)
- * fica — é ela que compara um ciclo com o anterior.
+ * Sessão vista ABERTA de novo (reabriu): esquece o registro de encerrada — ao
+ * fechar outra vez, é buscada na hora. A memória da sombra (aberta) fica — é
+ * ela que compara um ciclo com o anterior.
  */
 function esquecerEncerrada(mem, sessionId) {
   mem.encerradas.delete(sessionId);
 }
 
 /**
- * FUNÇÃO PURA: as notas desta sessão encerrada podem ser servidas da memória?
- * Só se a janela está ligada e a última busca bem-sucedida foi feita DEPOIS de
- * `vistaEncerradaEm + janela`.
+ * FUNÇÃO PURA: as notas desta sessão encerrada podem vir da memória neste ciclo?
+ * Sim só se: a rebusca espaçada está ligada, há uma busca bem-sucedida guardada,
+ * ela tem menos de (intervalo − folga), e ainda não são 23h BRT (a partir daí,
+ * todo ciclo rebusca, para o fechamento do dia sair fresco).
  */
-function notasCongeladas(r, congelaMs) {
-  if (!(congelaMs > 0) || !r || !r.notas) return false;
-  return r.notas.buscadoEm >= r.vistaEncerradaEm + congelaMs;
+function servirDaMemoria(r, rebuscaMs, agora = relogio.agora()) {
+  if (!(rebuscaMs > 0) || !r || !r.notas) return false;
+  if (hourBRT(agora) >= HORA_REBUSCA_OBRIGATORIA) return false;
+  return agora - r.notas.buscadoEm < Math.max(0, rebuscaMs - FOLGA_MS);
 }
 
 /** Guarda o resultado de uma busca — só quando as DUAS buscas responderam. */
-function guardarNotas(r, rejRaw, execRaw, agora = Date.now()) {
+function guardarNotas(r, rejRaw, execRaw, agora = relogio.agora()) {
   if (!Array.isArray(rejRaw) || !Array.isArray(execRaw)) return;
   r.notas = { rej: structuredClone(rejRaw), exec: structuredClone(execRaw), buscadoEm: agora };
 }
@@ -128,7 +153,7 @@ function assinaturaNotas(rejRaw, execRaw) {
  * 'divergiu'. 'divergiu' = o V2 estava igual ao ciclo anterior, mas as notas
  * NÃO — pular teria perdido dado.
  */
-function registrarSombra(mem, sessionId, v2Sig, notasSig, meta = {}, agora = Date.now()) {
+function registrarSombra(mem, sessionId, v2Sig, notasSig, meta = {}, agora = relogio.agora()) {
   mem.garantirDia(agora);
   const anterior = mem.sombra.get(sessionId);
   mem.sombra.set(sessionId, { v2Sig, notasSig });
@@ -147,7 +172,8 @@ function estado(mem) {
   return {
     dia: mem.dia,
     encerradasNaMemoria: mem.encerradas.size,
-    congelaMin: congelaMsDoEnv() / 60_000 || 0,
+    rebuscaMin: rebuscaMsDoEnv() / 60_000,
+    horaRebuscaObrigatoria: HORA_REBUSCA_OBRIGATORIA,
     sombraV2: { ...mem.contSombra, exemplos: [...mem.contSombra.exemplos] },
   };
 }
@@ -155,10 +181,10 @@ function estado(mem) {
 const _memoria = criarMemoria();
 
 module.exports = {
-  congelaMsDoEnv,
+  rebuscaMsDoEnv, HORA_REBUSCA_OBRIGATORIA, relogio,
   criarMemoria,
   registroEncerrada, esquecerEncerrada,
-  notasCongeladas, guardarNotas, lerNotas,
+  servirDaMemoria, guardarNotas, lerNotas,
   assinaturaV2, assinaturaNotas, registrarSombra,
   estado: () => estado(_memoria),
   memoria: _memoria,

@@ -5,8 +5,9 @@
  * sessão encerrada era rebuscada a cada ciclo até 23h45 (3 requisições por
  * sessão: rejected, executed, collaborators). Estes testes travam:
  *   3a  colaboradores de sessão encerrada: 1 busca, depois memória;
- *   3b  notas de sessão encerrada: congelam SÓ depois da janela, SÓ com as duas
- *       buscas bem-sucedidas, e a janela é DESLIGADA por padrão;
+ *   3b  notas de sessão encerrada: rebuscadas de hora em hora (todo ciclo a partir
+ *       das 23h BRT), memória só com as duas buscas bem-sucedidas, e falha usa a
+ *       última busca boa em vez de [];
  *   5   sinal do V2 em modo sombra: mede `pularia`/`divergiu` sem deixar de
  *       buscar nada.
  * Coleta real contra servidor LOCAL (127.0.0.1) — a suíte não toca a EDP (P1-40).
@@ -22,34 +23,45 @@ const incr = require('../services/coletaIncremental');
 
 // ── funções puras ──────────────────────────────────────────────────────────
 
-describe('janela da sessão encerrada (pura)', () => {
-  const T0 = Date.parse('2026-10-19T19:00:00Z');   // 16:00 BRT
+describe('rebusca espaçada da sessão encerrada (pura)', () => {
+  const MEIO_DIA = Date.parse('2026-10-19T15:00:00Z');   // 12:00 BRT
+  const H = 60 * 60_000;
+  const reg = (buscadoEm) => ({ vistaEncerradaEm: buscadoEm, notas: { rej: [], exec: [], buscadoEm } });
 
-  test('desligada (0) nunca congela', () => {
-    const r = { vistaEncerradaEm: T0, notas: { buscadoEm: T0 + 10 * 3600_000 } };
-    assert.equal(incr.notasCongeladas(r, 0), false);
+  test('sem memória, ou com rebusca 0, sempre busca', () => {
+    assert.equal(incr.servirDaMemoria({ notas: null }, H, MEIO_DIA), false);
+    assert.equal(incr.servirDaMemoria(reg(MEIO_DIA), 0, MEIO_DIA), false);
   });
 
-  test('congela só com busca feita DEPOIS de vista + janela', () => {
-    const jan = 60 * 60_000;
-    assert.equal(incr.notasCongeladas({ vistaEncerradaEm: T0, notas: { buscadoEm: T0 + jan - 1 } }, jan), false);
-    assert.equal(incr.notasCongeladas({ vistaEncerradaEm: T0, notas: { buscadoEm: T0 + jan } }, jan), true);
-    assert.equal(incr.notasCongeladas({ vistaEncerradaEm: T0, notas: null }, jan), false);
+  test('serve da memória nos ciclos de :15, :30 e :45 e rebusca no de +60 (com folga de 5 min)', () => {
+    const r = reg(MEIO_DIA);
+    for (const min of [15, 30, 45]) assert.equal(incr.servirDaMemoria(r, H, MEIO_DIA + min * 60_000), true, `+${min}`);
+    assert.equal(incr.servirDaMemoria(r, H, MEIO_DIA + 55 * 60_000), false, '+55 já rebusca');
+    // O ciclo de +60 que cai 2 s ANTES do horário da última busca ainda rebusca.
+    assert.equal(incr.servirDaMemoria(r, H, MEIO_DIA + H - 2000), false);
   });
 
-  test('guardarNotas ignora busca que falhou (null) — congelar [] de falha apagaria produção', () => {
-    const r = { vistaEncerradaEm: T0, notas: null };
-    incr.guardarNotas(r, [], null, T0);
+  test('a partir das 23h BRT, rebusca em todo ciclo (o fechamento do dia sai fresco)', () => {
+    const as2259 = Date.parse('2026-10-20T01:59:00Z');   // 22:59 BRT
+    const as2300 = Date.parse('2026-10-20T02:00:00Z');   // 23:00 BRT
+    assert.equal(incr.servirDaMemoria(reg(as2259 - 60_000), H, as2259), true);
+    assert.equal(incr.servirDaMemoria(reg(as2300 - 60_000), H, as2300), false);
+    assert.equal(incr.HORA_REBUSCA_OBRIGATORIA, 23);
+  });
+
+  test('guardarNotas ignora busca que falhou (null) — guardar [] de falha seria apagar produção', () => {
+    const r = { vistaEncerradaEm: MEIO_DIA, notas: null };
+    incr.guardarNotas(r, [], null, MEIO_DIA);
     assert.equal(r.notas, null);
-    incr.guardarNotas(r, null, [{ Id: 'n1' }], T0);
+    incr.guardarNotas(r, null, [{ Id: 'n1' }], MEIO_DIA);
     assert.equal(r.notas, null);
-    incr.guardarNotas(r, [], [{ Id: 'n1' }], T0);
+    incr.guardarNotas(r, [], [{ Id: 'n1' }], MEIO_DIA);
     assert.deepEqual(r.notas.exec, [{ Id: 'n1' }]);
   });
 
   test('lerNotas devolve cópia', () => {
     const r = { notas: null };
-    incr.guardarNotas(r, [], [{ Id: 'n1' }], T0);
+    incr.guardarNotas(r, [], [{ Id: 'n1' }], MEIO_DIA);
     incr.lerNotas(r).exec.push({ Id: 'x' });
     assert.equal(incr.lerNotas(r).exec.length, 1);
   });
@@ -62,15 +74,17 @@ describe('janela da sessão encerrada (pura)', () => {
     assert.equal(m.encerradas.size, 0);
   });
 
-  test('congelaMsDoEnv: vazio/0/lixo = desligado; número = minutos', () => {
-    const antes = process.env.WPA_ENCERRADA_CONGELA_MIN;
-    for (const v of [undefined, '', '0', 'abc', '-5']) {
-      if (v === undefined) delete process.env.WPA_ENCERRADA_CONGELA_MIN; else process.env.WPA_ENCERRADA_CONGELA_MIN = v;
-      assert.equal(incr.congelaMsDoEnv(), 0, `valor ${v}`);
+  test('rebuscaMsDoEnv: vazio/lixo = 60 min; 0 = todo ciclo; número = minutos', () => {
+    const antes = process.env.WPA_ENCERRADA_REBUSCA_MIN;
+    for (const v of [undefined, '', 'abc', '-5']) {
+      if (v === undefined) delete process.env.WPA_ENCERRADA_REBUSCA_MIN; else process.env.WPA_ENCERRADA_REBUSCA_MIN = v;
+      assert.equal(incr.rebuscaMsDoEnv(), H, `valor ${v}`);
     }
-    process.env.WPA_ENCERRADA_CONGELA_MIN = '90';
-    assert.equal(incr.congelaMsDoEnv(), 90 * 60_000);
-    if (antes === undefined) delete process.env.WPA_ENCERRADA_CONGELA_MIN; else process.env.WPA_ENCERRADA_CONGELA_MIN = antes;
+    process.env.WPA_ENCERRADA_REBUSCA_MIN = '0';
+    assert.equal(incr.rebuscaMsDoEnv(), 0);
+    process.env.WPA_ENCERRADA_REBUSCA_MIN = '30';
+    assert.equal(incr.rebuscaMsDoEnv(), 30 * 60_000);
+    if (antes === undefined) delete process.env.WPA_ENCERRADA_REBUSCA_MIN; else process.env.WPA_ENCERRADA_REBUSCA_MIN = antes;
   });
 });
 
@@ -110,6 +124,10 @@ let wpa;
 let hits;            // path (sem query) → contagem
 let executedS2 = [];
 let falharExecuted = false;
+let executedFechada;
+// Relógio do coletaIncremental (a rebusca depende da hora BRT). 12:00 BRT por padrão.
+let relogioTeste;
+const avancar = (min) => { relogioTeste += min * 60_000; };
 
 before(async () => {
   server = http.createServer((req, res) => {
@@ -133,7 +151,7 @@ before(async () => {
     }
     if (p === '/api/notes/executed/s-fechada/session') {
       if (falharExecuted) { res.statusCode = 500; return res.end('{"Message":"erro"}'); }
-      return res.end(JSON.stringify({ Data: [{ Id: 'n-exec-1', Number: '111', ExecutionStatus: 4 }] }));
+      return res.end(JSON.stringify({ Data: executedFechada }));
     }
     if (p === '/api/notes/executed/s-aberta/session') return res.end(JSON.stringify({ Data: executedS2 }));
     res.end(JSON.stringify({ Data: [] }));
@@ -145,14 +163,15 @@ before(async () => {
   process.env.WPA_USERNAME = 'teste@local';
   process.env.WPA_PASSWORD = 'senha-de-teste';
   delete process.env.WPA_ACCOUNTS_DISABLED;
-  delete process.env.WPA_ENCERRADA_CONGELA_MIN;
+  delete process.env.WPA_ENCERRADA_REBUSCA_MIN;
   require('../services/wpaContador')._aoFecharHora(() => {});
   wpa = require('../services/wpaService');
   wpa._breakerHydration.done = true;
 });
 
 after(() => {
-  delete process.env.WPA_ENCERRADA_CONGELA_MIN;
+  incr.relogio.agora = () => Date.now();
+  delete process.env.WPA_ENCERRADA_REBUSCA_MIN;
   require('../services/wpaContador')._aoFecharHora(null);
   return new Promise(r => server.close(r));
 });
@@ -164,7 +183,10 @@ beforeEach(() => {
   incr.memoria.contSombra = { comparadas: 0, pularia: 0, divergiu: 0, exemplos: [] };
   executedS2 = [];
   falharExecuted = false;
-  delete process.env.WPA_ENCERRADA_CONGELA_MIN;
+  executedFechada = [{ Id: 'n-exec-1', Number: '111', ExecutionStatus: 4 }];
+  relogioTeste = Date.parse('2026-10-19T15:00:00Z');
+  incr.relogio.agora = () => relogioTeste;
+  delete process.env.WPA_ENCERRADA_REBUSCA_MIN;
 });
 
 const coletar = () => wpa.getTeamsBySector('DESG');
@@ -177,43 +199,54 @@ describe('coleta real', () => {
     assert.equal(n('/api/collaborators/s-fechada/session'), 1);
   });
 
-  test('3b DESLIGADO (padrão): notas da encerrada rebuscadas a cada ciclo, como antes', async () => {
-    await coletar(); await coletar();
-    assert.equal(n('/api/notes/executed/s-fechada/session'), 2);
-    assert.equal(n('/api/notes/rejected/s-fechada/session'), 2);
+  test('3b padrão (60 min): busca 1×, serve da memória em :15/:30/:45 e rebusca em +60', async () => {
+    await coletar();
+    for (let k = 0; k < 3; k++) { avancar(15); await coletar(); }
+    assert.equal(n('/api/notes/executed/s-fechada/session'), 1, 'só a 1ª busca dentro da hora');
+    assert.equal(n('/api/notes/rejected/s-fechada/session'), 1);
+    avancar(15);
+    await coletar();
+    assert.equal(n('/api/notes/executed/s-fechada/session'), 2, 'rebusca na hora seguinte');
   });
 
-  test('3b LIGADO: dentro da janela rebusca; depois da janela, congela e devolve as mesmas notas', async () => {
-    process.env.WPA_ENCERRADA_CONGELA_MIN = '60';
+  test('3b: nota que chega depois aparece na rebusca seguinte (nada se perde, só atrasa)', async () => {
     const t1 = sessaoFechada(await coletar());
-    assert.equal(n('/api/notes/executed/s-fechada/session'), 1);
-    await coletar();   // ainda dentro da janela (vista agora)
-    assert.equal(n('/api/notes/executed/s-fechada/session'), 2);
-
-    // Volta o relógio: vista encerrada há 2h, última busca há 1h30 (ainda DENTRO
-    // da janela de 60 min). A próxima busca é a primeira pós-janela…
-    const reg = incr.memoria.encerradas.get('s-fechada');
-    reg.vistaEncerradaEm = Date.now() - 2 * 3600_000;
-    reg.notas.buscadoEm  = Date.now() - 90 * 60_000;
-    await coletar();
-    assert.equal(n('/api/notes/executed/s-fechada/session'), 3, 'a primeira busca pós-janela ainda vai à EDP');
-    // …e a partir dela, congela.
-    const t4 = sessaoFechada(await coletar());
-    const t5 = sessaoFechada(await coletar());
-    assert.equal(n('/api/notes/executed/s-fechada/session'), 3, 'congelada: nenhuma busca nova');
-    assert.equal(n('/api/notes/rejected/s-fechada/session'), 3);
-    assert.deepEqual(t4.notasExecutadas.map(x => x.id), t1.notasExecutadas.map(x => x.id));
-    assert.deepEqual(t5.notasExecutadas.map(x => x.id), ['n-exec-1']);
+    assert.deepEqual(t1.notasExecutadas.map(x => x.id), ['n-exec-1']);
+    executedFechada = [{ Id: 'n-exec-1', Number: '111', ExecutionStatus: 4 }, { Id: 'n-tardia', Number: '333', ExecutionStatus: 4 }];
+    avancar(30);
+    assert.equal(sessaoFechada(await coletar()).notasExecutadas.length, 1, 'ainda da memória');
+    avancar(30);
+    assert.deepEqual(sessaoFechada(await coletar()).notasExecutadas.map(x => x.id).sort(), ['n-exec-1', 'n-tardia']);
   });
 
-  test('3b LIGADO: busca que FALHOU não congela — continua indo à EDP', async () => {
-    process.env.WPA_ENCERRADA_CONGELA_MIN = '60';
+  test('3b: a partir das 23h BRT, rebusca em todo ciclo', async () => {
+    relogioTeste = Date.parse('2026-10-20T02:05:00Z');   // 23:05 BRT de 19/10
+    await coletar(); avancar(15); await coletar(); avancar(15); await coletar();
+    assert.equal(n('/api/notes/executed/s-fechada/session'), 3);
+  });
+
+  test('3b: WPA_ENCERRADA_REBUSCA_MIN=0 volta ao comportamento antigo (todo ciclo)', async () => {
+    process.env.WPA_ENCERRADA_REBUSCA_MIN = '0';
+    await coletar(); avancar(15); await coletar();
+    assert.equal(n('/api/notes/executed/s-fechada/session'), 2);
+  });
+
+  test('3b: rebusca que FALHA usa a última bem-sucedida (não vira []), e tenta de novo no ciclo seguinte', async () => {
+    await coletar();
+    avancar(60);
     falharExecuted = true;
+    const t = sessaoFechada(await coletar());
+    assert.deepEqual(t.notasExecutadas.map(x => x.id), ['n-exec-1'], 'vazio de falha não é "sem produção"');
+    falharExecuted = false;
+    avancar(15);
     await coletar();
-    incr.memoria.encerradas.get('s-fechada').vistaEncerradaEm = Date.now() - 2 * 3600_000;
-    await coletar();
-    await coletar();
-    assert.equal(n('/api/notes/executed/s-fechada/session'), 3, 'sem busca bem-sucedida, nada congela');
+    assert.equal(n('/api/notes/executed/s-fechada/session'), 3, 'a falha não conta como busca: tenta no ciclo seguinte');
+  });
+
+  test('3b: sem memória, falha segue virando [] (como sempre foi)', async () => {
+    falharExecuted = true;
+    const t = sessaoFechada(await coletar());
+    assert.deepEqual(t.notasExecutadas, []);
     assert.equal(incr.memoria.encerradas.get('s-fechada').notas, null);
   });
 

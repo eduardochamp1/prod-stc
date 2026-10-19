@@ -35,6 +35,12 @@
  * 1ª rodada na VM (19/10/2026, 14 dias, versão 1): 1845 encerradas, 735
  * "mudaram" (39,8%), máximo +1395 min. Número inflado por falha de coleta lida
  * como mudança — ver o comentário de `analisar`. Por isso a versão 2.
+ *
+ * 2ª rodada (versão 2, 14 dias sem 16–18/10): 623 de 1535 (40,6%) mudam DE
+ * VERDADE — 270 ganham executada, 249 ganham rejeitada — até 21h depois. O
+ * congelamento (WPA_ENCERRADA_CONGELA_MIN) foi DESCARTADO e virou rebusca de
+ * hora em hora (WPA_ENCERRADA_REBUSCA_MIN, services/coletaIncremental.js). O
+ * script segue útil para conferir se esse padrão muda.
  */
 
 'use strict';

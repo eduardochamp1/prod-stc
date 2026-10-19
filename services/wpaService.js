@@ -2425,7 +2425,8 @@ async function _getTeamsBySectorUncached(sectorId) {
       // por _enrichConcluidasDeEncerradas (dataService) via snapshot do dia.
       const sessionId = s.Id;
       // P0-11 item 3b (19/10/2026): falha devolve null (não []) — só assim dá pra
-      // saber se a busca RESPONDEU. Para o bucket, null segue virando [] como antes.
+      // saber se a busca RESPONDEU. Para o bucket, null vira a última busca
+      // bem-sucedida (se houver) ou [] como antes — ver logo abaixo.
       const _safeNotes = async (status) => {
         if (!sessionId) return null;
         try {
@@ -2436,12 +2437,14 @@ async function _getTeamsBySectorUncached(sectorId) {
           return Array.isArray(arr) ? arr : [];
         } catch (_) { return null; }
       };
-      // Congelamento (desligado por padrão — WPA_ENCERRADA_CONGELA_MIN): depois
-      // da janela, a última busca bem-sucedida é servida da memória. Ver
-      // services/coletaIncremental.js e scripts/diag-sessao-encerrada.js.
+      // Rebusca de HORA EM HORA (WPA_ENCERRADA_REBUSCA_MIN, default 60), e em
+      // todo ciclo a partir das 23h BRT. Nos ciclos do meio, a última busca
+      // bem-sucedida vem da memória. Não é congelamento — esse foi descartado
+      // pelo diag (40,6% das encerradas ganham nota horas depois). Ver
+      // services/coletaIncremental.js.
       const reg = sessionId ? incr.registroEncerrada(incr.memoria, sessionId) : null;
       let rejRaw, execRaw;
-      if (reg && incr.notasCongeladas(reg, incr.congelaMsDoEnv())) {
+      if (reg && incr.servirDaMemoria(reg, incr.rebuscaMsDoEnv())) {
         ({ rej: rejRaw, exec: execRaw } = incr.lerNotas(reg));
       } else {
         const [rejResp, execResp] = await Promise.all([
@@ -2449,8 +2452,14 @@ async function _getTeamsBySectorUncached(sectorId) {
           _safeNotes('executed'),
         ]);
         if (reg) incr.guardarNotas(reg, rejResp, execResp);   // só guarda se as DUAS responderam
-        rejRaw  = rejResp  || [];
-        execRaw = execResp || [];
+        // Busca que FALHOU: com memória, usa a última bem-sucedida; sem memória,
+        // [] como sempre foi. Vazio de timeout não é "sessão sem produção".
+        const mem = (reg && reg.notas) ? incr.lerNotas(reg) : null;
+        if ((rejResp === null || execResp === null) && mem) {
+          console.warn(`[WPA] ${sectorId}/${teamName}: notas da sessão encerrada falharam — usando a última busca bem-sucedida`);
+        }
+        rejRaw  = rejResp  ?? (mem ? mem.rej  : []);
+        execRaw = execResp ?? (mem ? mem.exec : []);
       }
       baixadas    = [];
       concluidas  = [];   // restaurado em _enrichConcluidasDeEncerradas
