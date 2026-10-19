@@ -1631,6 +1631,12 @@ function startCron() {
     timezone: 'America/Sao_Paulo',
   });
 
+  // Saída da nota (P2-70): D-1 às 04:30, depois dos intervalos das 03:10.
+  const saidaNotaJob = cron.schedule('30 4 * * *', () => runSaidaNota(), {
+    timezone: 'America/Sao_Paulo',
+  });
+  global._extraCronJobs.push(saidaNotaJob);
+
   const syncLogoffsJob = cron.schedule('0 3 * * *', () => runSyncLogoffs(), {
     timezone: 'America/Sao_Paulo',
   });
@@ -1767,6 +1773,25 @@ async function runSyncLogoffs(targetDate) {
   // `date` mantido no retorno pra não quebrar chamador antigo (scripts que
   // passam targetDate e leem res.date/res.updated).
   return { date: dias[0], dias, updated: totalUpdated, semPar, porDia };
+}
+
+// ── SAÍDA DA NOTA (P2-70, 19/10/2026) ─────────────────────────────────────────
+// Avalia D-1 às 04:30: depois do sync-logoffs (03:00), dos intervalos (03:10) e
+// do drift-sweep (02:00). Não chama a EDP — lê o banco e a trilha do gseq.
+// Spec: docs/handoff/SPEC-saida-da-nota-2026-10-18.md §6.
+async function runSaidaNota(date) {
+  if (process.env.DATA_MODE === 'mock') return;
+  const { getGseqPool } = require('./gseqPool');
+  const { runSaidaNota: avaliarEGravar } = require('./saidaNotaJob');
+  const { _getPool } = require('./pgShim');
+  const { getSetting } = require('../db/queries');
+  try {
+    return await avaliarEGravar({
+      data: date || dateBRTMinusDays(1), pool: _getPool(), poolGseq: getGseqPool(), getSetting,
+    });
+  } catch (err) {
+    log.warn('saida_nota_falhou', { msg: err.message });
+  }
 }
 
 module.exports = {

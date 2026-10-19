@@ -102,26 +102,9 @@ const fmtHora = (ms) => new Intl.DateTimeFormat('pt-BR', {
 const fmtM = (m) => (m === null || m === undefined) ? '—'
   : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`;
 
-/** A nota é patrulha (prefixo da equipe × tipo da nota em `regras`)? Pura. */
-function ehPatrulha(equipe, tipo, regras) {
-  const pre = String(equipe || '').toUpperCase(), t = String(tipo || '').toUpperCase();
-  return (regras || []).some(([p, tp]) => (p === '*' || pre.startsWith(p)) && t === tp);
-}
-
-/**
- * Placa da equipe em `data` pelo cadastro do gseq (`equipes_veiculos`, aba
- * Veículos → Equipes × Veículos): correção do DIA vence VIGÊNCIA; entre
- * vigências, a de `desde` mais recente. Casa pela sigla. Pura.
- */
-function placaGseqNaData(alocacoes, sigla, data) {
-  let dia = null, vig = null;
-  for (const a of alocacoes) {
-    if (a.sigla !== sigla || a.desde > data || (a.ate && a.ate < data)) continue;
-    if (a.tipo === 'DIA') dia = a;
-    else if (!vig || a.desde > vig.desde) vig = a;
-  }
-  return (dia || vig || {}).placa || null;
-}
+// ehPatrulha e placaGseqNaData moraram aqui até 19/10/2026; hoje vêm de
+// services/saidaNota.js, o mesmo código que a aba (P2-70) usa.
+const { ehPatrulha, placaGseqNaData } = S;
 
 /**
  * Lê um dia e devolve uma linha por nota concluída (avaliada ou com o motivo de

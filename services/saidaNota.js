@@ -353,10 +353,223 @@ function percentil(valores, p) {
   return v[i];
 }
 
+// ── Placa da equipe e veículos por perto ─────────────────────────────────────
+
+/**
+ * Placa da equipe em `data` pelo cadastro do gseq (`equipes_veiculos`, aba
+ * Veículos → Equipes × Veículos): correção do DIA vence VIGÊNCIA; entre
+ * vigências, a de `desde` mais recente. Casa pela sigla (maiúscula).
+ * @returns {{placa:string, fonte:'gseq-dia'|'gseq-vigencia'} | null}
+ */
+function placaCadastradaNaData(alocacoes, sigla, data) {
+  let dia = null, vig = null;
+  for (const a of alocacoes || []) {
+    if (a.sigla !== sigla || a.desde > data || (a.ate && a.ate < data)) continue;
+    if (a.tipo === 'DIA') dia = a;
+    else if (!vig || a.desde > vig.desde) vig = a;
+  }
+  const a = dia || vig;
+  return a ? { placa: a.placa, fonte: dia ? 'gseq-dia' : 'gseq-vigencia' } : null;
+}
+
+/** Só a placa de `placaCadastradaNaData` (forma usada pelos scripts de diagnóstico). */
+function placaGseqNaData(alocacoes, sigla, data) {
+  const r = placaCadastradaNaData(alocacoes, sigla, data);
+  return r ? r.placa : null;
+}
+
+/**
+ * Placa (sem separador) de dentro do nome da unidade do rastreador
+ * ("CAMINHAO TZW-7G19 / 24H" → "TZW7G19"). Letras grudadas antes da placa não
+ * formam placa falsa: começar 1 letra antes exigiria um dígito onde a placa tem
+ * a 3ª letra. LGPD: o nome às vezes traz o motorista — só a placa sai daqui.
+ */
+function placaDoNome(nome) {
+  const m = String(nome || '').toUpperCase().replace(/[^A-Z0-9]/g, '').match(/[A-Z]{3}\d[A-Z0-9]\d{2}/);
+  return m ? m[0] : null;
+}
+
+/**
+ * Posição do veículo no instante `t`: último ponto ≤ t (até 6h antes — a trilha
+ * só grava mudança), senão o primeiro até 15 min depois. `pts` ordenado. Busca binária.
+ */
+function posicaoNoInstante(pts, t, maxAntesMin = MAX_IDADE_ANTERIOR_MIN, maxDepoisMin = 15) {
+  let lo = 0, hi = pts.length - 1, idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].t <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  if (idx >= 0 && t - pts[idx].t <= maxAntesMin * 60000) return pts[idx];
+  const prox = pts[idx + 1];
+  if (prox && prox.t - t <= maxDepoisMin * 60000) return prox;
+  return null;
+}
+
+/** Placas de veículos a até `raioM` de `ref` no instante `t`. `frota`: Map placa → pts ordenados. */
+function veiculosPerto(frota, ref, t, raioM) {
+  const out = [];
+  for (const [placa, pts] of frota) {
+    const p = posicaoNoInstante(pts, t);
+    if (p && distanciaM(ref, p) <= raioM) out.push(placa);
+  }
+  return out;
+}
+
+// ── Configuração e classificação (aba Saída da nota, P2-70) ─────────────────
+
+/**
+ * Regra calibrada nas 6 rodadas de backtest (11–17/10/2026) —
+ * docs/handoff/SPEC-saida-da-nota-2026-10-18.md §2–§4. Editável por admin em
+ * `app_settings.saida_nota`; o que não vier usa estes valores.
+ *
+ * `patrulha`: [prefixo da equipe, tipo da nota], `*` = qualquer equipe.
+ *   EP em PO — decisão do José (18/10/2026): plantão percorre a rede atrás do defeito.
+ *   * em OS  — hipótese do José ("acredito que sim", 18/10/2026): OS de SJC é emergência.
+ */
+const CONFIG_PADRAO = Object.freeze({
+  raioM: 500,
+  minForaMin: 15,
+  limiteVeiculoM: 5000,
+  maxBuracoFrotaMin: 20,
+  patrulha: [['EP', 'PO'], ['*', 'OS']],
+});
+
+/** Normaliza a config de `app_settings`. Pura. Campo inválido → erro, nunca valor silencioso. */
+function validarConfig(raw) {
+  const erros = [];
+  const cfg = { ...CONFIG_PADRAO, patrulha: CONFIG_PADRAO.patrulha.map(p => [...p]) };
+  if (raw && typeof raw === 'object') {
+    const inteiro = (k, min, max) => {
+      if (raw[k] === undefined) return;
+      const n = Number(raw[k]);
+      if (!Number.isInteger(n) || n < min || n > max) erros.push(`${k} deve ser inteiro entre ${min} e ${max}`);
+      else cfg[k] = n;
+    };
+    inteiro('raioM', 50, 5000);
+    inteiro('minForaMin', 1, 240);
+    inteiro('limiteVeiculoM', 500, 100000);
+    inteiro('maxBuracoFrotaMin', 5, 240);
+    if (raw.patrulha !== undefined) {
+      const ok = Array.isArray(raw.patrulha) && raw.patrulha.every(p =>
+        Array.isArray(p) && p.length === 2 && p.every(x => typeof x === 'string' && x.trim()));
+      if (!ok) erros.push('patrulha deve ser lista de [prefixo, tipo]');
+      else cfg.patrulha = raw.patrulha.map(([p, t]) => [p.trim().toUpperCase(), t.trim().toUpperCase()]);
+    }
+  }
+  return { ok: erros.length === 0, config: cfg, erros };
+}
+
+/** Rótulo dos parâmetros em vigor — gravado em cada linha (reprocessar fica rastreável). */
+function regraVersao(cfg) {
+  return `r${cfg.raioM}-m${cfg.minForaMin}-v${cfg.limiteVeiculoM}-f${cfg.maxBuracoFrotaMin}`
+    + `-p${cfg.patrulha.map(p => p.join(':')).join(',')}`;
+}
+
+/** A nota é patrulha (prefixo da equipe × tipo da nota)? */
+function ehPatrulha(equipe, tipo, regras) {
+  const pre = String(equipe || '').toUpperCase(), t = String(tipo || '').toUpperCase();
+  return (regras || []).some(([p, tp]) => (p === '*' || pre.startsWith(p)) && t === tp);
+}
+
+/**
+ * Classifica UMA nota concluída. Devolve exatamente um status, na ordem de
+ * precedência da SPEC §4:
+ *   sem_janela → sem_placa → sem_trilha → rastreador_fora → veiculo_divergente
+ *   → patrulha → longe_do_local | fora_no_inicio | saiu | saiu_em_intervalo | ok
+ *
+ * `fora_no_inicio` e `longe_do_local` (3º e 5º backtests, 18/10/2026): o veículo
+ * já estava fora do raio quando o trabalho começou — não "saiu", nunca esteve.
+ * Se o TABLET também estava longe, é a nota executada longe do local (ex.: LN
+ * executada em 1 min a 61 km da nota); se o tablet estava perto, a equipe foi
+ * a pé ou em outro carro.
+ *
+ * @param {object} e
+ * @param {object} e.janela        saída de janelaExecucao (ou {motivo})
+ * @param {{lat,lon}|null} e.cadastro   coordenada cadastrada da nota
+ * @param {string|null} e.placa    placa do cadastro (null = sem cadastro)
+ * @param {Array} e.pontos         trilha do veículo [{t, lat, lon, ign}]
+ * @param {Set<number>} e.baldesFrota   baldes de 5 min com ingestão da frota
+ * @param {Array} e.intervalos     pausas apontadas da equipe [{ini, fim}]
+ * @param {string} e.equipe, e.tipo
+ */
+function classificarNota(e, cfg = CONFIG_PADRAO) {
+  const { janela } = e;
+  if (!janela || janela.motivo) return { status: 'sem_janela', motivo: (janela && janela.motivo) || 'sem_detalhe' };
+  const ancora = ancoraDaNota({ cadastro: e.cadastro, cpInicio: janela.cpInicio });
+  if (!ancora) return { status: 'sem_janela', motivo: 'sem_coordenada' };
+  const dCadastroTabletM = e.cadastro && janela.cpInicio ? distanciaM(e.cadastro, janela.cpInicio) : null;
+  const base = { ancora, dCadastroTabletM };
+  if (!e.placa) return { ...base, status: 'sem_placa' };
+
+  const r = avaliarNota({ pontos: e.pontos, janela, ancora },
+    { raioM: cfg.raioM, minForaMin: cfg.minForaMin, minPontos: 1 });
+  if (r.status === 'sem_trilha') return { ...base, status: 'sem_trilha' };
+
+  const metricas = {
+    ...base,
+    distMaxM: r.distMaxM, km: r.km, pontoMax: r.pontoMax,
+    trilha: r.pts.map(p => ({ t: p.t, lat: p.lat, lon: p.lon, ign: p.ign })),
+  };
+  const buracoFrotaMin = maiorBuracoFrotaMin(e.baldesFrota || new Set(), janela);
+  if (buracoFrotaMin > cfg.maxBuracoFrotaMin) return { ...metricas, status: 'rastreador_fora', buracoFrotaMin };
+
+  const vc = veiculoConfere({ pontos: e.pontos, janela, ref: janela.cpInicio || ancora, limiteM: cfg.limiteVeiculoM });
+  if (vc) metricas.dVeiculoTabletM = vc.distM;
+  if (vc && !vc.confere) return { ...metricas, status: 'veiculo_divergente' };
+
+  if (ehPatrulha(e.equipe, e.tipo, cfg.patrulha)) return { ...metricas, status: 'patrulha' };
+
+  if (r.pts[0].d > cfg.raioM) {
+    const tabletLonge = dCadastroTabletM !== null && dCadastroTabletM > cfg.raioM;
+    return { ...metricas, status: tabletLonge ? 'longe_do_local' : 'fora_no_inicio' };
+  }
+
+  if (r.saidas.length) {
+    const d = descontarIntervalos(r.saidas, e.intervalos, cfg.minForaMin);
+    const fmt = (s) => ({ inicio: s.inicio, fim: s.fim, minutos: Math.round(s.minutosLiquidos ?? s.minutos), distMaxM: s.distMaxM });
+    if (d.saidas.length === 0) {
+      return { ...metricas, status: 'saiu_em_intervalo', saidas: r.saidas.map(fmt), minFora: 0, pausaDescontadaMin: d.descontadoMin };
+    }
+    return {
+      ...metricas, status: 'saiu', saidas: d.saidas.map(fmt),
+      minFora: Math.round(d.saidas.reduce((s, x) => s + x.minutosLiquidos, 0)),
+      pausaDescontadaMin: d.descontadoMin,
+    };
+  }
+  return { ...metricas, status: 'ok', minFora: 0 };
+}
+
+/**
+ * Notas da MESMA equipe com janelas que se sobrepõem viram UMA ocorrência
+ * (SPEC A4 — 5º backtest: EPPIU31 executou SO + SM juntas e a mesma saída
+ * contou duas vezes). Grava `ocorrenciaId` em cada linha que tem janela.
+ * `linhas`: [{equipe, janela:{inicio, fim}}]. Muta e devolve as linhas.
+ */
+function agruparOcorrencias(linhas) {
+  const porEquipe = new Map();
+  for (const l of linhas) {
+    if (!l.janela || l.janela.motivo || !Number.isFinite(l.janela.inicio)) continue;
+    if (!porEquipe.has(l.equipe)) porEquipe.set(l.equipe, []);
+    porEquipe.get(l.equipe).push(l);
+  }
+  for (const [equipe, ls] of porEquipe) {
+    ls.sort((a, b) => a.janela.inicio - b.janela.inicio);
+    let grupoIni = null, grupoFim = -Infinity;
+    for (const l of ls) {
+      if (l.janela.inicio >= grupoFim) grupoIni = l.janela.inicio;   // não sobrepõe: grupo novo
+      grupoFim = Math.max(grupoFim, l.janela.fim);
+      l.ocorrenciaId = `${equipe}|${new Date(grupoIni).toISOString()}`;
+    }
+  }
+  return linhas;
+}
+
 module.exports = {
   EV_INICIO_TRABALHO, EV_FIM_TRABALHO, EV_FINALIZANDO,
   utmParaLatLon, normalizaCoord, distanciaM,
   instanteCp, janelaExecucao, ancoraDaNota,
   MAX_IDADE_ANTERIOR_MIN, pontosNaJanela, maiorBuracoMin, maiorBuracoFrotaMin, saidasDoRaio, descontarIntervalos, kmNaJanela, avaliarNota,
   pontoMaisProximo, veiculoConfere, placaChave, percentil,
+  placaCadastradaNaData, placaGseqNaData, placaDoNome, posicaoNoInstante, veiculosPerto,
+  CONFIG_PADRAO, validarConfig, regraVersao, ehPatrulha, classificarNota, agruparOcorrencias,
 };

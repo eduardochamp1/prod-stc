@@ -4107,6 +4107,71 @@ router.get('/escala/atrasadas', async (req, res) => {
   }
 });
 
+// ── SAÍDA DA NOTA (P2-70, 19/10/2026) ───────────────────────────────────────
+// Equipe apontou que estava executando a nota e o veículo saiu do local.
+// Spec: docs/handoff/SPEC-saida-da-nota-2026-10-18.md. Quem GRAVA é o job das
+// 04:30 (services/saidaNotaJob.js); aqui só se LÊ `saida_nota`. A regional vem
+// do `req.scope` (P1-12), nunca da query crua.
+const _saidaQ = require('../db/saidaNotaQueries');
+
+// GET /api/saida-nota?de=&ate=&team=CSV — KPIs, ocorrências e cobertura numa resposta.
+router.get('/saida-nota', async (req, res) => {
+  try {
+    const ontem = dateBRT(new Date(Date.now() - 86400000));
+    const de  = req.query.de  || dateBRT(new Date(Date.now() - 7 * 86400000));
+    const ate = req.query.ate || ontem;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(de) || !/^\d{4}-\d{2}-\d{2}$/.test(ate) || de > ate) {
+      return res.status(400).json({ error: 'período inválido' });
+    }
+    // Teto de 93 dias, como /he/medicao: a contagem varre o período inteiro.
+    if (new Date(ate + 'T12:00:00Z') - new Date(de + 'T12:00:00Z') > 93 * 86400000) {
+      return res.status(400).json({ error: 'Período máximo: 93 dias.' });
+    }
+    const team = req.query.team || null;
+    if (!(await enforceTeamRegional(req, res, team))) return;
+    const equipes = team && team !== 'ALL'
+      ? String(team).split(',').map(s => s.trim()).filter(Boolean) : null;
+    const { configGseqPool } = require('../services/gseqPool');
+    const gseqConfigurado = !!configGseqPool();
+    const sq = sbq();
+    const { lerConfig } = require('../services/saidaNotaJob');
+    const regra = await lerConfig(sq ? sq.getSetting : null);
+    if (!sq) {
+      return res.json({ de, ate, gseqConfigurado, regra, kpis: null, ocorrencias: [], cobertura: [] });
+    }
+    const pool = require('../services/pgShim')._getPool();
+    const f = { de, ate, regionals: req.scope.regionals, equipes };
+    const [contagens, linhas, junto] = await Promise.all([
+      _saidaQ.contagemPorEquipeStatus(pool, f),
+      _saidaQ.ocorrencias(pool, f),
+      _saidaQ.veiculosJuntoPorEquipe(pool, f),
+    ]);
+    const { montarPainel } = require('../services/saidaNotaPainel');
+    res.json({ de, ate, gseqConfigurado, regra, ...montarPainel(contagens, linhas, junto) });
+  } catch (err) {
+    console.error('[saida-nota]', err.message);
+    res.status(500).json({ error: 'Falha ao ler a saída da nota' });
+  }
+});
+
+// GET /api/saida-nota/nota/:noteId — detalhe (janela, saídas, trilha) de uma nota.
+router.get('/saida-nota/nota/:noteId', async (req, res) => {
+  try {
+    const noteId = String(req.params.noteId || '');
+    if (!/^[0-9a-f-]{36}$/i.test(noteId)) return res.status(400).json({ error: 'nota inválida' });
+    if (!sbq()) return res.status(404).json({ error: 'sem banco' });
+    const pool = require('../services/pgShim')._getPool();
+    const d = await _saidaQ.detalhe(pool, noteId, req.scope.regionals);
+    // Fora do escopo responde igual a "não existe": não confirma a existência.
+    if (!d) return res.status(404).json({ error: 'nota não encontrada' });
+    const juntas = await _saidaQ.notasDaOcorrencia(pool, d.ocorrencia_id, req.scope.regionals);
+    res.json({ ...d, juntas });
+  } catch (err) {
+    console.error('[saida-nota/nota]', err.message);
+    res.status(500).json({ error: 'Falha ao ler a nota' });
+  }
+});
+
 // ── TMA (PO) — reparo apontado × fim do trabalho ─────────────────────────────
 // Distância entre o "Horário do Reparo" e o checkpoint "Finalizando Trabalho"
 // nas notas PO. Critério da operação: mínimo de 10 minutos.

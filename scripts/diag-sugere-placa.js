@@ -33,7 +33,8 @@
 
 const S = require('../services/saidaNota');
 const { dateBRT } = require('../services/timeUtil');
-const { diasDoPeriodo, configGseq, placaGseqNaData, deduplicar } = require('./diag-saida-nota');
+const { diasDoPeriodo, configGseq, deduplicar } = require('./diag-saida-nota');
+const { placaGseqNaData } = S;
 
 const MIN_ANTES = 360;   // posição herdada vale até 6h antes do instante
 const MIN_DEPOIS = 15;   // sem ponto antes, aceita o primeiro até 15 min depois
@@ -57,42 +58,12 @@ function lerArgs(argv) {
   return out;
 }
 
-/** Placa (sem separador) de dentro do nome da unidade ("CAMINHAO TZW-7G19 / 24H" → "TZW7G19"). */
-function placaDoNome(nome) {
-  // Letras grudadas antes da placa não formam placa falsa: começar 1 letra antes
-  // exigiria um dígito onde a placa tem a 3ª letra.
-  const m = String(nome || '').toUpperCase().replace(/[^A-Z0-9]/g, '').match(/[A-Z]{3}\d[A-Z0-9]\d{2}/);
-  return m ? m[0] : null;
-}
-
 /** "TZW7G19" → "TZW-7G19" (o formato que o gseq guarda). */
 const fmtPlaca = (p) => (p ? `${p.slice(0, 3)}-${p.slice(3)}` : '—');
 
-/**
- * Posição do veículo no instante `t`: último ponto ≤ t (até MIN_ANTES), senão o
- * primeiro até MIN_DEPOIS depois. `pts` ordenado por t. Busca binária. Pura.
- */
-function posicaoNoInstante(pts, t) {
-  let lo = 0, hi = pts.length - 1, idx = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (pts[mid].t <= t) { idx = mid; lo = mid + 1; } else hi = mid - 1;
-  }
-  if (idx >= 0 && t - pts[idx].t <= MIN_ANTES * 60000) return pts[idx];
-  const prox = pts[idx + 1];
-  if (prox && prox.t - t <= MIN_DEPOIS * 60000) return prox;
-  return null;
-}
-
-/** Placas de veículos a até `raioM` de `ref` no instante `t`. Pura. */
-function veiculosPerto(frota, ref, t, raioM) {
-  const out = [];
-  for (const [placa, pts] of frota) {
-    const p = posicaoNoInstante(pts, t);
-    if (p && S.distanciaM(ref, p) <= raioM) out.push(placa);
-  }
-  return out;
-}
+// placaDoNome, posicaoNoInstante e veiculosPerto moram em services/saidaNota.js
+// desde 19/10/2026 — a aba (P2-70) usa as mesmas para sugerir a placa.
+const { placaDoNome, posicaoNoInstante, veiculosPerto } = S;
 
 /**
  * Veredito de uma equipe. `contagem`: Map placa → nº de notas junto; `n`: notas
