@@ -243,6 +243,30 @@ function pontoMaisProximo(pontos, alvoMs, janelaMin = 10) {
   return bestDiff <= janelaMin * 60000 ? best : null;
 }
 
+/**
+ * O veículo da trilha é mesmo o da equipe? Compara a posição do rastreador no
+ * início do trabalho com o GPS do TABLET no mesmo evento (sem ele, com a âncora).
+ *
+ * Achado do 1º backtest (18/10/2026): ≥10% das notas tinham o veículo a 78–755 km
+ * da nota no instante do início, com o tablet a poucos metros dela — e a trilha
+ * inteira longe (máx 351 km com só 26 km rodados). Não é saída: é a placa do WPA
+ * apontando para outro veículo. Sem este corte, "saiu" mede erro de cadastro.
+ *
+ * @returns {{distM:number, confere:boolean} | null}  null = sem ponto para comparar
+ */
+function veiculoConfere({ pontos, janela, ref, limiteM, janelaMin = 15 }) {
+  if (!ref) return null;
+  let p = pontoMaisProximo(pontos, janela.inicio, janelaMin);
+  if (!p) {
+    const dentro = (pontos || []).filter(x => x.t >= janela.inicio && x.t <= janela.fim)
+      .sort((a, b) => a.t - b.t);
+    p = dentro[0] || null;
+  }
+  if (!p) return null;
+  const distM = distanciaM(ref, p);
+  return { distM, confere: distM <= limiteM };
+}
+
 /** Placa só com letras e dígitos, maiúscula ("TZW-7G19" → "TZW7G19"). Vazio → null. */
 function placaChave(placa) {
   const s = String(placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -262,5 +286,5 @@ module.exports = {
   utmParaLatLon, normalizaCoord, distanciaM,
   instanteCp, janelaExecucao, ancoraDaNota,
   pontosNaJanela, maiorBuracoMin, saidasDoRaio, kmNaJanela, avaliarNota,
-  pontoMaisProximo, placaChave, percentil,
+  pontoMaisProximo, veiculoConfere, placaChave, percentil,
 };

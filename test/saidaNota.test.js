@@ -118,6 +118,32 @@ test('avaliarNota: sem pontos na janela é sem_trilha, nunca ok', () => {
   assert.equal(r.buracoMin, 90);
 });
 
+test('veiculoConfere: veículo longe do tablet no início não é o da equipe', () => {
+  const longeDemais = { lat: -22.45, lon: -43.65 };              // RJ, ~350 km
+  const v = S.veiculoConfere({ pontos: [pt(1, longeDemais), pt(30, longeDemais)], janela, ref: LOCAL, limiteM: 5000 });
+  assert.equal(v.confere, false);
+  assert.ok(v.distM > 300000);
+  assert.equal(S.veiculoConfere({ pontos: [pt(2, LOCAL)], janela, ref: LOCAL, limiteM: 5000 }).confere, true);
+  // sem ponto perto do início usa o 1º da janela
+  assert.equal(S.veiculoConfere({ pontos: [pt(40, LONGE)], janela, ref: LOCAL, limiteM: 5000 }).confere, true);
+  assert.equal(S.veiculoConfere({ pontos: [], janela, ref: LOCAL, limiteM: 5000 }), null);
+  assert.equal(S.veiculoConfere({ pontos: [pt(0, LOCAL)], janela, ref: null, limiteM: 5000 }), null);
+});
+
+test('deduplicar: nota repetida entre dias fica no dia em que a execução começou', () => {
+  const j = { inicio: T0, fim: T0 + 60 * MIN };                  // 15/10 10:00 BRT
+  const r = D.deduplicar([
+    { note_id: 'a', data: '2026-10-14', janela: j, status: 'saiu' },
+    { note_id: 'a', data: '2026-10-15', janela: j, status: 'saiu' },
+    { note_id: 'a', data: '2026-10-16', janela: j, status: 'saiu' },
+    { note_id: 'b', data: '2026-10-14', status: 'sem_detalhe' },
+    { note_id: 'b', data: '2026-10-15', status: 'sem_detalhe' },
+  ]);
+  assert.equal(r.length, 2);
+  assert.equal(r.find(x => x.note_id === 'a').data, '2026-10-15');
+  assert.equal(r.find(x => x.note_id === 'b').data, '2026-10-14');
+});
+
 test('placaChave e percentil', () => {
   assert.equal(S.placaChave('tzw-7g19'), 'TZW7G19');
   assert.equal(S.placaChave('ABC1234'), 'ABC1234');
@@ -157,18 +183,24 @@ test('executar: cruza nota × rastreador ponta a ponta com bancos falsos', async
   const NOTA_OK = '11111111-1111-1111-1111-111111111111';
   const NOTA_SAIU = '22222222-2222-2222-2222-222222222222';
   const NOTA_SEM_PLACA = '33333333-3333-3333-3333-333333333333';
+  const NOTA_DIV = '55555555-5555-5555-5555-555555555555';
+  const NOTA_SEM_PONTO = '66666666-6666-6666-6666-666666666666';
+  const RJ = { lat: -22.45, lon: -43.65 };
   const cps = [cp(2, 0), cp(3, 90)];
   const pool = {
     query: async (sql) => {
       if (/equipes_oficiais/.test(sql)) return { rows: [
-        { sigla: 'EQ1', placa: 'ABC1D23' }, { sigla: 'EQ2', placa: 'XYZ9876' }, { sigla: 'EQ3', placa: null }] };
+        { sigla: 'EQ1', placa: 'ABC1D23' }, { sigla: 'EQ2', placa: 'XYZ9876' }, { sigla: 'EQ3', placa: null },
+        { sigla: 'EQ4', placa: 'RJX1A23' }, { sigla: 'EQ5', placa: 'NOP1234' }] };
       if (/snapshots/.test(sql)) return { rows: [
         { note_id: NOTA_OK, team_name: 'EQ1', regional: 'GUA', placa_wpa: 'ABC-1D23' },
         { note_id: NOTA_SAIU, team_name: 'EQ2', regional: 'GUA', placa_wpa: '—' },   // cai no cadastro
         { note_id: NOTA_SEM_PLACA, team_name: 'EQ3', regional: 'GUA', placa_wpa: null },
         { note_id: '44444444-4444-4444-4444-444444444444', team_name: 'FORA', regional: 'GUA', placa_wpa: null },
+        { note_id: NOTA_DIV, team_name: 'EQ4', regional: 'GUA', placa_wpa: 'RJX1A23' },
+        { note_id: NOTA_SEM_PONTO, team_name: 'EQ5', regional: 'GUA', placa_wpa: 'NOP1234' },
       ] };
-      if (/note_details/.test(sql)) return { rows: [NOTA_OK, NOTA_SAIU, NOTA_SEM_PLACA].map((id, i) => ({
+      if (/note_details/.test(sql)) return { rows: [NOTA_OK, NOTA_SAIU, NOTA_SEM_PLACA, NOTA_DIV, NOTA_SEM_PONTO].map((id, i) => ({
         note_id: id, numero: String(100 + i), tipo: 'CS', checkpoints: cps,
         endereco: { latitude: LOCAL.lat, longitude: LOCAL.lon } })) };
       throw new Error('sql inesperado: ' + sql);
@@ -177,17 +209,22 @@ test('executar: cruza nota × rastreador ponta a ponta com bancos falsos', async
   const pos = (v, m, c) => ({ v, t: new Date(T0 + m * MIN), lat: c.lat, lon: c.lon });
   const poolGseq = { query: async (sql, params) => {
     assert.match(sql, /vehicle_positions/);
-    assert.deepStrictEqual(params[2].sort(), ['%ABC1D23%', '%XYZ9876%']);
+    assert.deepStrictEqual(params[2].sort(), ['%ABC1D23%', '%NOP1234%', '%RJX1A23%', '%XYZ9876%']);
     return { rows: [
       pos('ABC1D23', 0, LOCAL), pos('ABC1D23', 45, LOCAL), pos('ABC1D23', 90, LOCAL),
       pos('XYZ987624HORAS', 0, LOCAL), pos('XYZ987624HORAS', 20, LONGE), pos('XYZ987624HORAS', 40, LONGE),
       pos('XYZ987624HORAS', 60, LOCAL),
+      pos('RJX1A23', 0, RJ), pos('RJX1A23', 45, RJ), pos('RJX1A23', 90, RJ),
     ] };
   } };
   const saida = [];
   const res = await D.executar({ pool, poolGseq, args: { ...D.lerArgs(['--dias=1', '--ate=2026-10-15']) },
     hoje: '2026-10-18', escrever: (s) => saida.push(s) });
-  assert.equal(res.total, 3);                       // FORA não é oficial
+  assert.equal(res.total, 5);                       // FORA não é oficial
+  assert.equal(res.funil.veiculo_divergente, 1);
+  assert.equal(res.funil.sem_trilha_placa, 1);
+  assert.equal(res.divergentes[0].placa, 'RJX1A23');
+  assert.equal(res.semPlaca[0].placa, 'NOP1234');
   assert.equal(res.funil.ok, 1);
   assert.equal(res.funil.saiu, 1);
   assert.equal(res.funil.sem_placa, 1);

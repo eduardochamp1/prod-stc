@@ -45,10 +45,11 @@ const GRADE_MIN = [5, 10, 20, 30];
 /** Lê `--chave=valor`. Pura. */
 function lerArgs(argv) {
   const out = { dias: 7, ate: null, raio: 300, minFora: 10, minPontos: 2,
-    ancora: 'cadastro', top: 25, csv: null, erros: [] };
+    ancora: 'cadastro', top: 25, csv: null, limiteVeiculo: 5000, erros: [] };
   for (const a of argv) {
     let m;
     if ((m = a.match(/^--dias=(\d+)$/))) out.dias = Number(m[1]);
+    else if ((m = a.match(/^--limite-veiculo=(\d+)$/))) out.limiteVeiculo = Number(m[1]);
     else if ((m = a.match(/^--ate=(\d{4}-\d{2}-\d{2})$/))) out.ate = m[1];
     else if ((m = a.match(/^--raio=(\d+)$/))) out.raio = Number(m[1]);
     else if ((m = a.match(/^--min-fora=(\d+)$/))) out.minFora = Number(m[1]);
@@ -148,6 +149,7 @@ async function lerDia({ pool, poolGseq, data, oficiais, args }) {
   // cobre posições que chegaram atrasadas (eventAt < recordedAt).
   const pend = linhas.filter(l => l.status === 'pendente');
   const porPlaca = new Map();
+  const unidades = new Map();   // placa → Set de unidades do rastreador que casaram
   if (pend.length) {
     const ini = Math.min(...pend.map(l => l.janela.inicio)) - 30 * 60000;
     const fim = Math.max(...pend.map(l => l.janela.fim)) + 30 * 60000;
@@ -165,16 +167,31 @@ async function lerDia({ pool, poolGseq, data, oficiais, args }) {
       // O nome no rastreador traz sufixo ("TLF3E65 / 24 HORAS") — casa por substring.
       const placa = placas.find(pl => p.v.includes(pl));
       if (!placa) continue;
-      if (!porPlaca.has(placa)) porPlaca.set(placa, []);
+      if (!porPlaca.has(placa)) { porPlaca.set(placa, []); unidades.set(placa, new Set()); }
       porPlaca.get(placa).push({ t, lat: Number(p.lat), lon: Number(p.lon) });
+      unidades.get(placa).add(p.v);
     }
   }
 
   for (const l of pend) {
     const pontos = porPlaca.get(l.placa) || [];
+    l.unidades = unidades.has(l.placa) ? unidades.get(l.placa).size : 0;
+    l.duracaoMin = Math.round((l.janela.fim - l.janela.inicio) / 60000);
     const r = S.avaliarNota({ pontos, janela: l.janela, ancora: l.ancora },
       { raioM: args.raio, minForaMin: args.minFora, minPontos: args.minPontos });
     Object.assign(l, r);
+    // "Sem trilha" tem duas causas que pedem ações diferentes: a placa não tem
+    // NENHUM ponto no dia (casamento placa × rastreador) ou tem, mas a execução
+    // foi curta demais para cair ≥ minPontos dentro dela (frequência do rastreador).
+    if (l.status === 'sem_trilha') l.status = pontos.length ? 'sem_trilha_janela' : 'sem_trilha_placa';
+    // Veículo da trilha longe do tablet no início → não é o veículo da equipe.
+    const vc = S.veiculoConfere({ pontos, janela: l.janela,
+      ref: l.janela.cpInicio || l.ancora, limiteM: args.limiteVeiculo });
+    if (vc) l.dVeiculoM = vc.distM;
+    if (vc && !vc.confere && (l.status === 'ok' || l.status === 'saiu')) {
+      l.statusOriginal = l.status;
+      l.status = 'veiculo_divergente';
+    }
     // Qualidade da âncora: quão longe o cadastro está de onde a equipe apontou o
     // início, e de onde o veículo estava nessa hora.
     if (l.cadastro && l.janela.cpInicio) l.dCadInicio = S.distanciaM(l.cadastro, l.janela.cpInicio);
@@ -182,6 +199,24 @@ async function lerDia({ pool, poolGseq, data, oficiais, args }) {
     if (pIni) l.dAncoraVeiculoInicio = S.distanciaM(l.ancora, pIni);
   }
   return linhas;
+}
+
+/**
+ * Uma linha por nota no período. A mesma nota aparece em `notasConcluidas` de
+ * snapshots de mais de um dia (1º backtest, 18/10/2026: nota 045006456830 em
+ * 14/10 E 15/10, mesmo horário) — sem isto, ela conta duas vezes e a equipe
+ * "sai" em dobro. Fica a linha do dia (BRT) em que a execução começou; sem
+ * janela, a primeira vista.
+ */
+function deduplicar(linhas) {
+  const porId = new Map();
+  for (const l of linhas) {
+    const atual = porId.get(l.note_id);
+    if (!atual) { porId.set(l.note_id, l); continue; }
+    const doDia = (x) => x.janela && x.janela.inicio && dateBRT(new Date(x.janela.inicio)) === x.data;
+    if (!doDia(atual) && doDia(l)) porId.set(l.note_id, l);
+  }
+  return [...porId.values()];
 }
 
 /** Junta tudo e calcula o que o relatório mostra. Pura. */
@@ -213,7 +248,30 @@ function resumir(linhas, args) {
     g.avaliadas++; if (l.status === 'saiu') { g.saiu++; g.minFora += l.minFora; }
   }
 
+  // Veículo divergente, agrupado por placa: é lista de conferência de cadastro.
+  const divPorPlaca = new Map();
+  for (const l of linhas.filter(x => x.status === 'veiculo_divergente')) {
+    const k = `${l.placa} ${l.equipe}`;
+    if (!divPorPlaca.has(k)) divPorPlaca.set(k, { placa: l.placa, equipe: l.equipe, notas: 0, dist: [], unidades: l.unidades });
+    const g = divPorPlaca.get(k); g.notas++; g.dist.push(l.dVeiculoM);
+  }
+  // Placas sem NENHUM ponto do rastreador — casamento placa × rastreador.
+  const semPlacaPorPlaca = new Map();
+  for (const l of linhas.filter(x => x.status === 'sem_trilha_placa')) {
+    const k = `${l.placa} ${l.equipe}`;
+    if (!semPlacaPorPlaca.has(k)) semPlacaPorPlaca.set(k, { placa: l.placa, equipe: l.equipe, notas: 0 });
+    semPlacaPorPlaca.get(k).notas++;
+  }
+  const semJanela = linhas.filter(x => x.status === 'sem_trilha_janela');
+
   return {
+    divergentes: [...divPorPlaca.values()].map(g => ({ ...g, p50: S.percentil(g.dist, 50) }))
+      .sort((a, b) => b.notas - a.notas),
+    dVeiculoAval: pcts(aval.map(l => l.dVeiculoM).filter(v => v !== undefined)),
+    semPlaca: [...semPlacaPorPlaca.values()].sort((a, b) => b.notas - a.notas),
+    duracaoSemJanela: pcts(semJanela.map(l => l.duracaoMin)),
+    duracaoAval: pcts(aval.map(l => l.duracaoMin)),
+    buracoSemJanela: pcts(semJanela.map(l => l.buracoMin)),
     total: linhas.length,
     funil,
     avaliadas: aval.length,
@@ -250,10 +308,11 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`Período: ${dias[0]} → ${dias[dias.length - 1]} (${dias.length} dias)`);
   escrever(`Regra:   saiu = ≥ ${args.minFora} min e ≥ 2 pontos do rastreador a mais de ${args.raio} m da âncora,`);
   escrever(`         entre o Início do Trabalho (ev 2) e o Fim do Trabalho (ev 3). Âncora: ${args.ancora} primeiro.`);
+  escrever(`         Veículo a mais de ${fmtM(args.limiteVeiculo)} do tablet no início = veiculo_divergente (fora da conta).`);
 
-  escrever(`\nFUNIL (notas concluídas de equipes oficiais: ${res.total})`);
-  const ordem = ['ok', 'saiu', 'sem_trilha', 'sem_placa', 'sem_ancora', 'sem_inicio', 'sem_fim',
-    'janela_invalida', 'sem_checkpoint', 'sem_detalhe'];
+  escrever(`\nFUNIL (notas concluídas de equipes oficiais, sem repetição entre dias: ${res.total})`);
+  const ordem = ['ok', 'saiu', 'veiculo_divergente', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
+    'sem_ancora', 'sem_inicio', 'sem_fim', 'janela_invalida', 'sem_checkpoint', 'sem_detalhe'];
   for (const k of ordem.concat(Object.keys(res.funil).filter(k => !ordem.includes(k)))) {
     if (res.funil[k]) escrever(`  ${k.padEnd(16)} ${String(res.funil[k]).padStart(6)}  ${pct(res.funil[k], res.total)}`);
   }
@@ -267,7 +326,25 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`QUALIDADE DA ÂNCORA:`);
   escrever(`  cadastro EDP × GPS do início:      ${fmtPcts(res.pctCadInicio)}`);
   escrever(`  âncora × veículo no início (±10min): ${fmtPcts(res.pctAncoraVeiculo)}`);
-  escrever(`  maior buraco sem ponto na janela:  ${fmtPcts(res.pctBuraco, v => v === null ? '—' : `${v} min`)}`);
+  const fMin = v => v === null ? '—' : `${v} min`;
+  escrever(`  maior buraco sem ponto na janela:  ${fmtPcts(res.pctBuraco, fMin)}`);
+  escrever(`  veículo × tablet no início (aval.): ${fmtPcts(res.dVeiculoAval)}`);
+
+  escrever(`\nVEÍCULO DIVERGENTE — a placa do WPA leva a um veículo longe do tablet (conferir cadastro)`);
+  if (res.divergentes.length === 0) escrever('  nenhum');
+  for (const g of res.divergentes.slice(0, 20)) {
+    escrever(`  ${g.placa.padEnd(8)} ${g.equipe.padEnd(10)} ${String(g.notas).padStart(3)} notas   distância mediana ${fmtM(g.p50).padStart(8)}`
+      + `   unidades no rastreador com essa placa: ${g.unidades}`);
+  }
+
+  escrever(`\nSEM TRILHA`);
+  escrever(`  placa sem nenhum ponto no rastreador no dia (top 20 — conferir placa × nome da unidade):`);
+  if (res.semPlaca.length === 0) escrever('    nenhuma');
+  for (const g of res.semPlaca.slice(0, 20)) escrever(`    ${g.placa.padEnd(8)} ${g.equipe.padEnd(10)} ${String(g.notas).padStart(4)} notas`);
+  escrever(`  tem pontos no dia, mas < ${args.minPontos} dentro da execução:`);
+  escrever(`    duração da execução: ${fmtPcts(res.duracaoSemJanela, fMin)}`);
+  escrever(`    maior buraco:        ${fmtPcts(res.buracoSemJanela, fMin)}`);
+  escrever(`  (duração das avaliadas, p/ comparar: ${fmtPcts(res.duracaoAval, fMin)})`);
 
   escrever(`\nGRADE DE CALIBRAÇÃO — % das avaliadas que seriam marcadas`);
   escrever(`  ${'raio'.padEnd(8)}` + GRADE_MIN.map(m => `≥${m} min`.padStart(16)).join(''));
@@ -290,7 +367,7 @@ function imprimir(res, { args, dias }, escrever) {
   for (const l of res.piores) {
     escrever(`  ${l.data} ${l.equipe.padEnd(9)} nota ${String(l.numero).padEnd(11)} ${String(l.tipo || '').padEnd(4)}`
       + ` ${fmtHora(l.janela.inicio)}→${fmtHora(l.janela.fim)}  fora ${String(l.minFora).padStart(3)} min`
-      + `  máx ${fmtM(l.distMaxM).padStart(7)}  ${String(l.km).replace('.', ',')} km  (${l.ancora.fonte}, ${l.pontos} pts)`);
+      + `  máx ${fmtM(l.distMaxM).padStart(7)}  ${String(l.km).replace('.', ',')} km  (${l.placa}, ${l.ancora.fonte}, ${l.pontos} pts)`);
     escrever(`      âncora ${l.ancora.lat},${l.ancora.lon}   mais longe ${l.pontoMax.lat},${l.pontoMax.lon} às ${fmtHora(l.pontoMax.t)}`);
   }
   escrever(`\n${linha}\n`);
@@ -298,7 +375,8 @@ function imprimir(res, { args, dias }, escrever) {
 
 const CSV_COLS = ['data', 'equipe', 'regional', 'numero', 'tipo', 'status', 'inicio', 'fim', 'ancora_fonte',
   'ancora_lat', 'ancora_lon', 'placa', 'placa_fonte', 'pontos', 'buraco_min', 'dist_max_m', 'min_fora', 'km',
-  'd_cadastro_inicio_m', 'd_ancora_veiculo_inicio_m'];
+  'd_cadastro_inicio_m', 'd_ancora_veiculo_inicio_m', 'd_veiculo_tablet_m', 'duracao_min', 'unidades_rastreador',
+  'status_antes_divergencia'];
 
 function linhaCsv(l) {
   const iso = (ms) => (ms ? new Date(ms).toISOString() : '');
@@ -306,7 +384,7 @@ function linhaCsv(l) {
     iso(l.janela && l.janela.inicio), iso(l.janela && l.janela.fim),
     l.ancora && l.ancora.fonte, l.ancora && l.ancora.lat, l.ancora && l.ancora.lon,
     l.placa, l.fontePlaca, l.pontos, l.buracoMin, l.distMaxM, l.minFora, l.km,
-    l.dCadInicio, l.dAncoraVeiculoInicio];
+    l.dCadInicio, l.dAncoraVeiculoInicio, l.dVeiculoM, l.duracaoMin, l.unidades, l.statusOriginal];
   return v.map(x => (x === undefined || x === null) ? '' : `"${String(x).replace(/"/g, '""')}"`).join(';');
 }
 
@@ -316,14 +394,16 @@ async function executar({ pool, poolGseq, args, hoje = dateBRT(), escrever = con
     SELECT upper(sigla) AS sigla, placa FROM public.equipes_oficiais WHERE ativo = true`);
   const oficiais = new Map(eqs.map(e => [e.sigla, e.placa]));
 
-  const linhas = [];
+  const brutas = [];
   for (const data of dias) {
     const t0 = Date.now();
     const doDia = await lerDia({ pool, poolGseq, data, oficiais, args });
-    linhas.push(...doDia);
+    brutas.push(...doDia);
     const av = doDia.filter(l => l.status === 'ok' || l.status === 'saiu').length;
     console.error(`[diag-saida-nota] ${data}: ${doDia.length} notas, ${av} avaliadas (${Date.now() - t0} ms)`);
   }
+  const linhas = deduplicar(brutas);
+  console.error(`[diag-saida-nota] ${brutas.length - linhas.length} linhas repetidas entre dias removidas`);
 
   const res = resumir(linhas, args);
   imprimir(res, { args, dias }, escrever);
@@ -353,7 +433,7 @@ async function main() {
   }
 }
 
-module.exports = { lerArgs, diasDoPeriodo, configGseq, lerDia, resumir, executar, linhaCsv };
+module.exports = { lerArgs, diasDoPeriodo, configGseq, lerDia, deduplicar, resumir, executar, linhaCsv };
 
 if (require.main === module) {
   main().then(() => process.exit(0)).catch(err => { console.error('ERRO:', err.message); process.exit(1); });
