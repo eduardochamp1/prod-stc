@@ -179,6 +179,7 @@
 | P2-67 | GUA tem DOIS setores (DESG e DEPT) e a equipe é transferida entre eles; a tela de Equipes mostrava o setor do CADASTRO e o diag do P2-55 olhava só DESG | Dados/Frontend | **código done** (16/10/2026) — coluna Setor = setor da coleta mais recente (cadastro ao lado se divergir); `diag-nota-interrompida --setor GUA` roda os dois; falta deploy e conferir na tela |
 | P2-68 | Plantão noturno sumia do Monitor depois da meia-noite: `Sessions/all/date` só com a data de hoje → "0 em campo" e as equipes de 16:00–20:00 como "atrasada +8h" (já era assim antes do P0-10) | Backend/Frontend | **no ar** (18/10/2026, `4266a33`) — só exibição; log conferido de madrugada (DESG 7, DEPT 1, DESC 9, DSSJ 7) e nada gravado para 18/10; falta tela + horário diurno; produção pós-meia-noite do plantão é Fase 2 (medir) |
 | P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
+| P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **especificado** (18/10/2026) — `SPEC-saida-da-nota-2026-10-18.md`; backtest pronto (2,3% das avaliadas; placa do WPA errada em 74 de 131 equipes); bloqueado pela Q1 (Aproveitamento da Carteira) |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6608,6 +6609,28 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Conferir depois do deploy:** 18/10 em GUA deve mostrar `ECGPR54` e `ETGPR15` como "não logou" (os dois ⏰ do Monitor), e o atraso de `ECGPR53` (logon 09:19 num C08) como 1h19.
 - **Rollback:** `git revert` do commit. Só leitura, sem migration.
 - **Relacionado:** P2-64 (alerta ⏰ atrasada no Monitor), P2-65 (sync da escala), P2-47 (sem escala).
+
+## P2-70 — Aba "Saída da nota" (substitui o Ranking): equipe apontou execução e o veículo saiu do local
+
+- **Categoria:** Produto/Dados
+- **Status:** **especificado** (18/10/2026) — `SPEC-saida-da-nota-2026-10-18.md`. Backtest e regra prontos; aba, job e tabela não.
+- **Pedido (José, 18/10/2026):** *"vamos acabar com a aba de ranking, gostaria de criar uma aba de monitoria de deslocamento dentro da nota … quando uma equipe faz o apontamento que está executando uma nota e desloca grandes distâncias enquanto deveria estar executando essa nota."*
+- **Feito até aqui (só leitura, nada na tela):**
+  - `services/saidaNota.js` — a regra pura (janela ev 2→3, âncora no cadastro da nota, posição herdada, saída ≥ 2 pontos ou ignição, desconto de pausa apontada, veículo divergente). 27 testes em `test/saidaNota.test.js`.
+  - `scripts/diag-saida-nota.js` — backtest (6 rodadas na VM, 11–17/10/2026). Commits e74f935, 7c49501, f06802c, f5eb11b, fdc7857, 07cd900, c7bd57e.
+  - `scripts/diag-sugere-placa.js` — placa que cada equipe usa de verdade, pelo veículo junto do tablet no início das notas (413b98f).
+- **Achados do backtest (evidência na SPEC §10):**
+  - Regra 500 m / 15 min: **25 de 1.104 notas avaliadas saíram (2,3%)**; equipes EC 1,6%. 14 das 25 saídas começam entre 11h e 13h, nenhuma coberta por pausa apontada.
+  - **Placa da sessão do WPA errada em 74 de 131 equipes** (26 com sugestão forte), boa parte pela troca de frota para a série TDY-1C60…1C73 que o WPA não acompanhou. `equipes_veiculos` do gseq não tinha linha para nenhuma das 6 equipes conferidas.
+  - Equipes ET quase todas **sem rastreador** (confirmado pelo José: "muitas ou quase todas não têm hoje").
+  - Sinal mais forte que "saiu": nota **executada longe do local** (ex.: ECLSJ90, LN executada em 1 min a 61 km, 0 km rodados).
+- **Decisões do José:** substitui o Ranking; EP em PO = patrulha (fora da conta); OS = patrulha para qualquer equipe (hipótese, "acredito que sim"); **placa só do cadastro do gseq** (a operação vai cadastrar); ET sem rastreador aparece como falta de cobertura.
+- **Bloqueia a implementação:** SPEC §13 Q1 — o que fazer com o "Aproveitamento da Carteira" que vive dentro da aba Ranking.
+- **Antes de ir ao ar:** papel só de leitura no gseq + `GSEQ_DATABASE_URL` (SPEC §5); operação cadastrar as placas (lista do `diag-sugere-placa`); conferir 10 ocorrências com a operação; responder Q2 (OS) e Q3 (almoço apontado?).
+- **Critério de aceite:** SPEC §15.
+- **Esforço:** 2–3 dias.
+- **Rollback:** `git revert`; a tabela `saida_nota` pode ficar.
+- **Relacionado:** P2-59 (tiles do mapa bloqueados — a v1 sai sem mapa), P1-48 (fuso de `sessao_intervalo`), P0-1e (catálogo de rotas por aba), P2-63 (padrão de config em `app_settings`).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 
