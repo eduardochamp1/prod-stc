@@ -16,7 +16,7 @@
  * A lógica está em services/saidaNota.js (pura, testada).
  *
  * USO (na VM, em ~/prod-stc):
- *   node scripts/diag-saida-nota.js                     # 7 dias até ontem, raio 300 m, 10 min
+ *   node scripts/diag-saida-nota.js                     # 7 dias até ontem, raio 500 m, 15 min
  *   node scripts/diag-saida-nota.js --dias=14 --raio=500 --min-fora=15
  *   node scripts/diag-saida-nota.js --ate=2026-10-16 --dias=3
  *   node scripts/diag-saida-nota.js --ancora=inicio     # centro = GPS do início, não o cadastro
@@ -40,15 +40,15 @@ const S = require('../services/saidaNota');
 const { dateBRT, dateBRTMinusDays } = require('../services/timeUtil');
 
 const GRADE_RAIOS = [200, 300, 500, 1000, 2000];
-const GRADE_MIN = [5, 10, 20, 30];
+const GRADE_MIN = [5, 10, 15, 20, 30];
 /** Status com trilha avaliada (os que os cortes de veículo/rastreador podem rebaixar). */
 const AVALIAVEIS = new Set(['ok', 'saiu', 'fora_no_inicio']);
 
 /** Lê `--chave=valor`. Pura. */
 function lerArgs(argv) {
-  const out = { dias: 7, ate: null, raio: 300, minFora: 10, minPontos: 1,
+  const out = { dias: 7, ate: null, raio: 500, minFora: 15, minPontos: 1,
     ancora: 'cadastro', top: 25, csv: null, limiteVeiculo: 5000, maxBuracoFrota: 20,
-    patrulha: [['EP', 'PO']], erros: [] };
+    patrulha: [['EP', 'PO'], ['*', 'OS']], erros: [] };
   for (const a of argv) {
     let m;
     if ((m = a.match(/^--dias=(\d+)$/))) out.dias = Number(m[1]);
@@ -105,7 +105,7 @@ const fmtM = (m) => (m === null || m === undefined) ? '—'
 /** A nota é patrulha (prefixo da equipe × tipo da nota em `regras`)? Pura. */
 function ehPatrulha(equipe, tipo, regras) {
   const pre = String(equipe || '').toUpperCase(), t = String(tipo || '').toUpperCase();
-  return (regras || []).some(([p, tp]) => pre.startsWith(p) && t === tp);
+  return (regras || []).some(([p, tp]) => (p === '*' || pre.startsWith(p)) && t === tp);
 }
 
 /**
@@ -245,6 +245,11 @@ async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) 
     }
     // Plantão em nota de ocorrência percorre a rede atrás do defeito — sair do
     // local é o serviço (decisão do José, 18/10/2026). Fica fora da conta.
+    // OS (numeração 1127…, SJC) entrou para QUALQUER equipe no mesmo dia: o José
+    // "acredita que sim" seja emergência como a PO — 4º backtest tinha OS em 18,5%
+    // contra 0,7–8% dos tipos comerciais. Hipótese, não confirmada: `--patrulha=EP:PO`
+    // volta ao comportamento anterior.
+    // A regra é de prefixo da equipe (`*` = qualquer) × tipo da nota.
     if (AVALIAVEIS.has(l.status) && ehPatrulha(l.equipe, l.tipo, args.patrulha)) {
       l.statusOriginal = l.status;
       l.status = 'patrulha';

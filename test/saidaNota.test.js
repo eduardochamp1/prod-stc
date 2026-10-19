@@ -199,7 +199,7 @@ test('placaChave e percentil', () => {
 
 test('lerArgs: padrões, valores e erros', () => {
   const a = D.lerArgs([]);
-  assert.equal(a.dias, 7); assert.equal(a.raio, 300); assert.equal(a.minFora, 10); assert.equal(a.ancora, 'cadastro');
+  assert.equal(a.dias, 7); assert.equal(a.raio, 500); assert.equal(a.minFora, 15); assert.equal(a.ancora, 'cadastro');
   const b = D.lerArgs(['--dias=3', '--raio=500', '--min-fora=15', '--ancora=inicio', '--ate=2026-10-16']);
   assert.deepStrictEqual([b.dias, b.raio, b.minFora, b.ancora, b.ate], [3, 500, 15, 'inicio', '2026-10-16']);
   assert.ok(D.lerArgs(['--dias=90']).erros.length);
@@ -210,8 +210,11 @@ test('lerArgs: padrões, valores e erros', () => {
 test('patrulha: EP em PO por padrão; --patrulha troca ou desliga', () => {
   const pad = D.lerArgs([]).patrulha;
   assert.equal(D.ehPatrulha('EPMFL30', 'PO', pad), true);
-  assert.equal(D.ehPatrulha('EPMFL30', 'OS', pad), false);
+  assert.equal(D.ehPatrulha('EPMFL30', 'OS', pad), true);
   assert.equal(D.ehPatrulha('ECCIT50', 'PO', pad), false);
+  assert.equal(D.ehPatrulha('ECCSJ84', 'OS', pad), true);     // OS: qualquer equipe
+  assert.equal(D.ehPatrulha('ECCSJ84', 'SF', pad), false);
+  assert.equal(D.ehPatrulha('ECCSJ84', 'OS', D.lerArgs(['--patrulha=EP:PO']).patrulha), false);
   const dois = D.lerArgs(['--patrulha=EP:PO,eb:po']).patrulha;
   assert.equal(D.ehPatrulha('EBGPR64', 'PO', dois), true);
   assert.deepStrictEqual(D.lerArgs(['--patrulha=']).patrulha, []);
