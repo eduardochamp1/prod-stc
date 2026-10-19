@@ -94,7 +94,7 @@ function origemAtual() {
 function _balde(rotulo) {
   let b = _horas.get(rotulo);
   if (!b) {
-    b = { total: 0, erros: 0, porOrigem: new Map(), porEndpoint: new Map() };
+    b = { total: 0, erros: 0, porOrigem: new Map(), porStatus: new Map(), porEndpoint: new Map() };
     _horas.set(rotulo, b);
     // Map preserva ordem de inserção: o primeiro é o mais antigo.
     while (_horas.size > HORAS_RETIDAS) _horas.delete(_horas.keys().next().value);
@@ -122,9 +122,14 @@ function registrar(r = {}) {
     b.total++;
     if (erro) b.erros++;
     b.porOrigem.set(origem, (b.porOrigem.get(origem) || 0) + 1);
-    const e = b.porEndpoint.get(endpoint) || { n: 0, erros: 0, msTotal: 0 };
+    // 19/10/2026: código HTTP (ou 'timeout' / 'rede') — no dia em que a EDP recusou 100%
+    // das requisições, o contador dizia "erro" sem dizer se era 403 ou timeout.
+    const status = r.status !== undefined && r.status !== null ? String(r.status) : (erro ? '?' : 'ok');
+    b.porStatus.set(status, (b.porStatus.get(status) || 0) + 1);
+    const e = b.porEndpoint.get(endpoint) || { n: 0, erros: 0, msTotal: 0, porStatus: new Map() };
     e.n++;
     if (erro) e.erros++;
+    e.porStatus.set(status, (e.porStatus.get(status) || 0) + 1);
     e.msTotal += Number.isFinite(r.ms) ? r.ms : 0;
     b.porEndpoint.set(endpoint, e);
   } catch { /* nunca lança */ }
@@ -133,9 +138,11 @@ function registrar(r = {}) {
 function _resumoHora(hora, b) {
   const porOrigem = Object.fromEntries([...b.porOrigem].sort((x, y) => y[1] - x[1]));
   const porEndpoint = [...b.porEndpoint]
-    .map(([endpoint, e]) => ({ endpoint, n: e.n, erros: e.erros, msMedio: Math.round(e.msTotal / e.n) }))
+    .map(([endpoint, e]) => ({ endpoint, n: e.n, erros: e.erros, msMedio: Math.round(e.msTotal / e.n),
+      porStatus: Object.fromEntries(e.porStatus) }))
     .sort((x, y) => y.n - x.n);
-  return { hora, total: b.total, erros: b.erros, porOrigem, porEndpoint };
+  const porStatus = Object.fromEntries([...b.porStatus].sort((x, y) => y[1] - x[1]));
+  return { hora, total: b.total, erros: b.erros, porStatus, porOrigem, porEndpoint };
 }
 
 /** Baldes retidos, hora mais recente primeiro. */
@@ -156,9 +163,15 @@ function _logarHoraFechada(h) {
     hora: h.hora,
     total: h.total,
     erros: h.erros,
+    porStatus: h.porStatus,
     porOrigem: h.porOrigem,
     top: h.porEndpoint.slice(0, 8).map(e => `${e.endpoint}=${e.n}`),
   });
+}
+
+/** Requisição que nem teve resposta HTTP: timeout (node-fetch) ou erro de rede. */
+function _statusDoErro(err) {
+  return err && err.type === 'request-timeout' ? 'timeout' : 'rede';
 }
 
 /** Mede e registra uma chamada de fetch (Promise). Usado pelo wpaHttp. */
@@ -167,8 +180,8 @@ function medir(url, method, promessa) {
   const origem = origemAtual();
   const endpoint = normalizarEndpoint(url, method);
   return promessa.then(
-    (res) => { registrar({ endpoint, origem, ok: !!res && res.ok !== false, ms: Date.now() - t0 }); return res; },
-    (err) => { registrar({ endpoint, origem, ok: false, ms: Date.now() - t0 }); throw err; },
+    (res) => { registrar({ endpoint, origem, ok: !!res && res.ok !== false, status: res && res.status, ms: Date.now() - t0 }); return res; },
+    (err) => { registrar({ endpoint, origem, ok: false, status: _statusDoErro(err), ms: Date.now() - t0 }); throw err; },
   );
 }
 

@@ -119,6 +119,37 @@ test('wpaHttpFetch conta cada requisição, com origem, status e erros', async (
   assert.equal(falha.erros, 1);
 });
 
+test('código HTTP por hora e por endpoint (19/10/2026: "erro" sem dizer se era 403 ou timeout)', async () => {
+  await wpaHttpFetch(`${base}/api/ok`);
+  await wpaHttpFetch(`${base}/falha`);
+  await wpaHttpFetch(`${base}/falha`);
+  await assert.rejects(wpaHttpFetch('http://127.0.0.1:1/x', { timeout: 2000 }));
+  const h = contador.resumo().horas[0];
+  assert.deepEqual(h.porStatus, { 503: 2, 200: 1, rede: 1 });
+  assert.deepEqual(h.porEndpoint.find(e => e.endpoint === 'GET /falha').porStatus, { 503: 2 });
+});
+
+test('timeout do node-fetch aparece como "timeout", não como "rede"', async () => {
+  const lento = http.createServer(() => { /* nunca responde */ });
+  await new Promise(r => lento.listen(0, '127.0.0.1', r));
+  try {
+    await assert.rejects(wpaHttpFetch(`http://127.0.0.1:${lento.address().port}/x`, { timeout: 50 }));
+  } finally {
+    lento.closeAllConnections?.();
+    await new Promise(r => lento.close(r));
+  }
+  assert.deepEqual(contador.resumo().horas[0].porStatus, { timeout: 1 });
+});
+
+test('a linha de log da hora leva o porStatus', () => {
+  const fechadas = [];
+  contador._aoFecharHora(h => fechadas.push(h));
+  const h0 = Date.parse('2026-10-19T12:10:00Z');
+  contador.registrar({ endpoint: 'GET /a', ok: false, status: 403, agora: h0 });
+  contador.registrar({ endpoint: 'GET /a', ok: true, status: 200, agora: h0 + 3600_000 });
+  assert.deepEqual(fechadas[0].porStatus, { 403: 1 });
+});
+
 test('erro de rede também é contado (como erro)', async () => {
   // Porta fechada: o fetch rejeita, mas a requisição SAIU daqui e tem de contar.
   await assert.rejects(wpaHttpFetch('http://127.0.0.1:1/x', { timeout: 2000 }));

@@ -111,6 +111,25 @@ pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
 `WPA_ACCOUNTS_DISABLED=sp` no `.env` + restart. Com a backup ativa, SJC segue via
 `sp2`. Reativar = tirar do `.env` + restart.
 
+**Parar TODA requisição à EDP** (19/10/2026, P0-11 — ex.: a EDP reclamou do
+volume ou está recusando tudo, e insistir só piora). Uma linha só, com as três
+contas (a `sp2` já está desativada de propósito, ver abaixo):
+
+```bash
+sed -i 's/^WPA_ACCOUNTS_DISABLED=.*/WPA_ACCOUNTS_DISABLED=sp2,es,sp/' ~/prod-stc/.env
+grep -c '^WPA_ACCOUNTS_DISABLED=' ~/prod-stc/.env   # tem de dar 1
+pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
+```
+
+Desde o P0-11 isso para **tudo**: login, coleta, snapshot, retries do cron,
+detalhe de nota. Antes, o `wpaFetch` seguia usando o token guardado no banco e os
+retries continuavam batendo na EDP. Confira que parou:
+`grep wpa_requisicoes_hora ~/prod-stc/logs/out.log | tail -2` → `total` perto de 0
+na hora seguinte. O painel mostra "coleta pausada". **Os dados do período não
+voltam pela coleta ao vivo**; a produção é recuperável depois pelo backfill por
+data (API-WPA-EDP.md §11). Para voltar: `WPA_ACCOUNTS_DISABLED=sp2` (só a `sp2`,
+como antes) + `delete + start + save`.
+
 > ### ⚠️ SJC roda SEM FAILOVER desde 26/08/2026 — decisão, não bug
 >
 > `WPA_ACCOUNTS_DISABLED=sp2` está ativo no `.env` **de propósito**. A senha da

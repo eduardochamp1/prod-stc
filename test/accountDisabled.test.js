@@ -63,3 +63,4 @@ test('desativar sp NÃO afeta es (isolamento por conta)', () => {
   assert.equal(wpa.isAccountDisabled('sp'), true);
   assert.equal(wpa.isAccountDisabled('es'), false);
 });
+

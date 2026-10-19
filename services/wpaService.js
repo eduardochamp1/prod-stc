@@ -783,6 +783,21 @@ async function wpaFetch(path, options = {}) {
     || _resolveUsableAccount(_sectorFromPath(path))
     || DEFAULT_ACCOUNT;
 
+  // KILL-SWITCH TOTAL (19/10/2026, P0-11). Até aqui, WPA_ACCOUNTS_DISABLED só
+  // barrava o login e a coleta por setor: o wpaFetch seguia usando o token já
+  // guardado (memória ou banco), e os retries do cron (retry-outros,
+  // retry-rejeicoes, detalhes de nota) continuavam batendo na EDP. Isso apareceu
+  // no dia em que a EDP passou a recusar 100% das nossas requisições depois de
+  // reclamar do volume: desligar tudo não desligava tudo. Agora conta
+  // desativada não faz NENHUMA requisição — a resolução acima só cai numa conta
+  // desativada quando toda a cadeia do setor está desativada.
+  if (isAccountDisabled(accountKey)) {
+    const err = new Error(
+      `WPA ${path.split('?')[0]} não enviado: conta ${accountKey} DESATIVADA (WPA_ACCOUNTS_DISABLED)`);
+    err.isAccountDisabled = true;
+    throw err;
+  }
+
   // Backoff mais curto que o do login: a Web API costuma estar quente quando
   // o auth está; só protege contra cold-start ocasional. Total ~9s.
   const BACKOFF_MS = [3000, 6000];
@@ -2230,6 +2245,30 @@ function _gravarCacheSetor(map, key, valor, agora = Date.now()) {
   map.set(key, { ts: agora, dia: dateBRT(agora), valor: _copiarColeta(valor) });
 }
 
+// ── ESPERA DO PAINEL DEPOIS DE FALHA DE SETOR (19/10/2026, P0-11) ────────────
+// O cache acima só guarda SUCESSO. No dia em que a EDP passou a recusar 100% das
+// nossas requisições (depois de reclamar do volume), cada aba aberta tentava a
+// coleta de novo a cada atualização: 972 requisições recusadas numa hora só do
+// painel — exatamente o "congestionando" de que a EDP reclamou. Agora, depois
+// que a coleta de um setor falha, o painel (`aceitaCache`) espera
+// PAINEL_ESPERA_FALHA_MS antes de tentar aquele setor de novo, e responde na
+// hora com a mesma falha (o card mostra "coleta indisponível", P1-39). O cron
+// (fresco) não espera: segue tentando a cada 15 min, com a 2ª tentativa do
+// P2-66, e é ele que limpa a marca quando a EDP volta. Para parar TUDO, o
+// caminho é o kill-switch (WPA_ACCOUNTS_DISABLED), que agora é total.
+const PAINEL_ESPERA_FALHA_MS = (() => {
+  const n = Number(process.env.WPA_PAINEL_ESPERA_FALHA_MS);
+  return process.env.WPA_PAINEL_ESPERA_FALHA_MS !== undefined && Number.isFinite(n) && n >= 0 ? n : 5 * 60_000;
+})();
+const _falhaSetor = new Map();   // sectorId → { ts, msg }
+
+/** FUNÇÃO PURA (testável): a falha registrada ainda está dentro da espera? */
+function _falhaRecente(map, key, esperaMs, agora = Date.now()) {
+  const f = map.get(key);
+  if (!f || !(esperaMs > 0) || agora - f.ts >= esperaMs) return null;
+  return f;
+}
+
 function getTeamsBySector(sectorId, opts = {}) {
   // Conta desativada (kill-switch): pula a extração sem tocar na rede. É o ponto
   // único por onde toda coleta de equipes passa, então isto cobre snapshot,
@@ -2245,9 +2284,23 @@ function getTeamsBySector(sectorId, opts = {}) {
   if (opts.aceitaCache) {
     const guardado = _lerCacheSetor(_cacheSetor, sectorId, PAINEL_CACHE_MS);
     if (guardado) return Promise.resolve(guardado);
+    const falha = _falhaRecente(_falhaSetor, sectorId, PAINEL_ESPERA_FALHA_MS);
+    if (falha) {
+      const faltaS = Math.ceil((PAINEL_ESPERA_FALHA_MS - (Date.now() - falha.ts)) / 1000);
+      const err = new Error(`${falha.msg} (painel aguarda ${faltaS}s antes de tentar ${sectorId} de novo — P0-11)`);
+      err.esperaPosFalha = true;
+      return Promise.reject(err);
+    }
   }
   const emVoo = _singleFlight(_inflightSector, sectorId, async () => {
-    const valor = await _getTeamsBySectorUncached(sectorId);
+    let valor;
+    try {
+      valor = await _getTeamsBySectorUncached(sectorId);
+    } catch (err) {
+      _falhaSetor.set(sectorId, { ts: Date.now(), msg: String((err && err.message) || err).slice(0, 200) });
+      throw err;
+    }
+    _falhaSetor.delete(sectorId);
     _gravarCacheSetor(_cacheSetor, sectorId, valor);
     return valor;
   });
@@ -2703,6 +2756,7 @@ module.exports = {
   getTeamsBySector,
   _singleFlight,   // exportado p/ teste (coalescência de coletas — incidente 30/07/2026)
   _lerCacheSetor, _gravarCacheSetor, _cacheSetor,   // P0-11: cache do painel por setor
+  _falhaRecente, _falhaSetor,                       // P0-11: espera do painel depois de falha
   // Histórico
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)
