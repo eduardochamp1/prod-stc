@@ -724,8 +724,12 @@ async function getTeams(filters = {}, out = null) {
   // o snapshot ficava tudo-ou-nada entre contas. Agora coleta o que der e expõe
   // o resultado por setor em getLastSectorReport(), que o runSnapshot usa pra
   // decidir sucesso × erro do ciclo (e não travar o snapshot_last_ok à toa).
+  // 19/10/2026 (P0-11): só o /api/teams do painel aceita a coleta guardada de até
+  // 5 min (wpaService, "CACHE DO PAINEL"). `=== true` de propósito: a rota
+  // espalha req.query em `filters`, e a string "true" de uma URL não liga nada.
+  const usarCache = filters.usarCachePainel === true;
   const { resultados, report } = await _coletarSetores(setores, {
-    coletar: getTeamsBySector, desativado: isSectorDisabled,
+    coletar: (s) => getTeamsBySector(s, { aceitaCache: usarCache }), desativado: isSectorDisabled,
     repetirFalhos: filters.repetirSetorFalho === true,
   });
   // 20/08/2026 (backlog P1-30): o report SÓ vivia no global `_lastSectorReport`,

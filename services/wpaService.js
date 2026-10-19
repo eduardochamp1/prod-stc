@@ -2186,7 +2186,49 @@ function _singleFlight(map, key, fn) {
   return p;
 }
 
-function getTeamsBySector(sectorId) {
+// ── CACHE DO PAINEL POR SETOR (19/10/2026, P0-11) ────────────────────────────
+// A EDP questionou o volume de requisições, e cada aba aberta no Monitor fazia
+// uma coleta COMPLETA a cada 5 min (~200–270 requisições), multiplicada pelo
+// número de abas. Agora a coleta de cada setor fica guardada PAINEL_CACHE_MS:
+//   - quem passa `aceitaCache` (só o /api/teams) lê o guardado, se tiver idade
+//     < PAINEL_CACHE_MS e for do MESMO dia BRT;
+//   - toda coleta fresca grava — inclusive a do snapshot do cron, que nunca lê.
+// 5 min = o intervalo de atualização da própria tela: o frescor para quem olha é
+// o de antes, e o volume do painel deixa de crescer com o número de abas.
+//
+// Guarda e devolve CÓPIA: os enriquecimentos do dataService alteram os objetos
+// de equipe no lugar (sessionBeginReal, sessions, notasConcluidas). Sem cópia, o
+// painel enriqueceria o mesmo objeto duas vezes e contaminaria o snapshot.
+// Por setor (e não por rota) de propósito: a rota só escolhe quais setores o
+// escopo do usuário vê, então o cache não tem como vazar regional (P1-12).
+const PAINEL_CACHE_MS = (() => {
+  const n = Number(process.env.WPA_PAINEL_CACHE_MS);
+  return process.env.WPA_PAINEL_CACHE_MS !== undefined && Number.isFinite(n) && n >= 0 ? n : 5 * 60_000;
+})();
+const _cacheSetor = new Map();   // sectorId → { ts, dia, valor }
+
+/** Cópia profunda de uma coleta, mantendo o `_sessoesTotaisEdp` não-enumerável (P0-10). */
+function _copiarColeta(valor) {
+  const copia = structuredClone(valor);
+  if (valor && valor._sessoesTotaisEdp !== undefined) {
+    Object.defineProperty(copia, '_sessoesTotaisEdp', { value: valor._sessoesTotaisEdp });
+  }
+  return copia;
+}
+
+/** FUNÇÃO PURA (testável): cópia do guardado, ou null se não há, venceu ou virou o dia. */
+function _lerCacheSetor(map, key, maxIdadeMs, agora = Date.now()) {
+  const e = map.get(key);
+  if (!e || !(maxIdadeMs > 0)) return null;
+  if (agora - e.ts >= maxIdadeMs || dateBRT(agora) !== e.dia) return null;
+  return _copiarColeta(e.valor);
+}
+
+function _gravarCacheSetor(map, key, valor, agora = Date.now()) {
+  map.set(key, { ts: agora, dia: dateBRT(agora), valor: _copiarColeta(valor) });
+}
+
+function getTeamsBySector(sectorId, opts = {}) {
   // Conta desativada (kill-switch): pula a extração sem tocar na rede. É o ponto
   // único por onde toda coleta de equipes passa, então isto cobre snapshot,
   // /teams e afins de uma vez. Devolve [] → a regional dessa conta fica vazia no
@@ -2198,7 +2240,18 @@ function getTeamsBySector(sectorId) {
     }
     return Promise.resolve([]);
   }
-  return _singleFlight(_inflightSector, sectorId, () => _getTeamsBySectorUncached(sectorId));
+  if (opts.aceitaCache) {
+    const guardado = _lerCacheSetor(_cacheSetor, sectorId, PAINEL_CACHE_MS);
+    if (guardado) return Promise.resolve(guardado);
+  }
+  const emVoo = _singleFlight(_inflightSector, sectorId, async () => {
+    const valor = await _getTeamsBySectorUncached(sectorId);
+    _gravarCacheSetor(_cacheSetor, sectorId, valor);
+    return valor;
+  });
+  // Quem aceita cache recebe cópia também quando pega carona na coleta em voo:
+  // o objeto original é do chamador fresco (o snapshot), que o enriquece.
+  return opts.aceitaCache ? emVoo.then(_copiarColeta) : emVoo;
 }
 
 async function _getTeamsBySectorUncached(sectorId) {
@@ -2604,6 +2657,7 @@ module.exports = {
   // Principal
   getTeamsBySector,
   _singleFlight,   // exportado p/ teste (coalescência de coletas — incidente 30/07/2026)
+  _lerCacheSetor, _gravarCacheSetor, _cacheSetor,   // P0-11: cache do painel por setor
   // Histórico
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)

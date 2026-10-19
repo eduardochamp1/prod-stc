@@ -592,7 +592,9 @@ router.get('/teams', async (req, res) => {
     // que falha some do painel sem aviso: a resposta vinha 200 com lista vazia,
     // igualzinho a um domingo (P1-39, incidente 24-25/08/2026).
     const outColeta = {};
-    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals }, outColeta);
+    // 19/10/2026 (P0-11): `usarCachePainel` — aceita a coleta de até 5 min que o
+    // snapshot (ou outra aba) acabou de fazer, em vez de ir à EDP por aba aberta.
+    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals, usarCachePainel: true }, outColeta);
 
     // ── Summary do dia (UUID-aware, deduplicado, com canceladas) ──────────
     // Compara PRIMEIRO e ÚLTIMO snapshot do dia de cada equipe pra detectar:

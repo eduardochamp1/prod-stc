@@ -10208,13 +10208,27 @@ ${acumuladoHTML}
       // ficam num <script> posterior a este.
       if (typeof carregarAvisos === 'function') carregarAvisos();
       // Auto-refresh só quando visualizando hoje
+      // 19/10/2026 (P0-11): e só com a aba do navegador VISÍVEL. O loadData de
+      // hoje chama o /api/teams, que vai à EDP quando o guardado de 5 min do
+      // servidor venceu — aba esquecida em segundo plano (à noite, no fim de
+      // semana) seguia pedindo coleta sem ninguém olhando, e a EDP questionou o
+      // volume. Ao voltar para a aba, atualiza na hora se o último ciclo tiver
+      // 5 min ou mais. Os avisos seguem rodando escondidos: são só do nosso
+      // banco, e o contador deles no <title> é justamente o que se vê na aba.
+      let _monitorUltimoRefresh = Date.now();
       setInterval(() => {
         // Aviso vale em QUALQUER aba e período, por isso fica FORA do `if`.
         if (typeof carregarAvisos === 'function') carregarAvisos();
         const de = document.getElementById('monitor-date-de')?.value;
         const ate = document.getElementById('monitor-date-ate')?.value;
-        if (isRangeToday(de, ate)) loadData();
+        if (isRangeToday(de, ate) && !document.hidden) { _monitorUltimoRefresh = Date.now(); loadData(); }
       }, 5 * 60 * 1000);
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || Date.now() - _monitorUltimoRefresh < 5 * 60 * 1000) return;
+        const de = document.getElementById('monitor-date-de')?.value;
+        const ate = document.getElementById('monitor-date-ate')?.value;
+        if (isRangeToday(de, ate)) { _monitorUltimoRefresh = Date.now(); loadData(); }
+      });
     }
 
     boot(); // ponto de entrada: verifica sessão e chama init() ou showLogin()
