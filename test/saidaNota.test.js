@@ -207,6 +207,17 @@ test('lerArgs: padrões, valores e erros', () => {
   assert.ok(D.lerArgs(['--xpto']).erros.length);
 });
 
+test('patrulha: EP em PO por padrão; --patrulha troca ou desliga', () => {
+  const pad = D.lerArgs([]).patrulha;
+  assert.equal(D.ehPatrulha('EPMFL30', 'PO', pad), true);
+  assert.equal(D.ehPatrulha('EPMFL30', 'OS', pad), false);
+  assert.equal(D.ehPatrulha('ECCIT50', 'PO', pad), false);
+  const dois = D.lerArgs(['--patrulha=EP:PO,eb:po']).patrulha;
+  assert.equal(D.ehPatrulha('EBGPR64', 'PO', dois), true);
+  assert.deepStrictEqual(D.lerArgs(['--patrulha=']).patrulha, []);
+  assert.ok(D.lerArgs(['--patrulha=EP']).erros.length);
+});
+
 test('diasDoPeriodo: termina ontem por padrão e recusa hoje', () => {
   assert.deepStrictEqual(D.diasDoPeriodo({ dias: 3, ate: '2026-10-16' }, '2026-10-18'),
     ['2026-10-14', '2026-10-15', '2026-10-16']);

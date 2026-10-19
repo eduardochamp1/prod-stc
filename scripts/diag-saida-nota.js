@@ -47,10 +47,16 @@ const AVALIAVEIS = new Set(['ok', 'saiu', 'fora_no_inicio']);
 /** Lê `--chave=valor`. Pura. */
 function lerArgs(argv) {
   const out = { dias: 7, ate: null, raio: 300, minFora: 10, minPontos: 1,
-    ancora: 'cadastro', top: 25, csv: null, limiteVeiculo: 5000, maxBuracoFrota: 20, erros: [] };
+    ancora: 'cadastro', top: 25, csv: null, limiteVeiculo: 5000, maxBuracoFrota: 20,
+    patrulha: [['EP', 'PO']], erros: [] };
   for (const a of argv) {
     let m;
     if ((m = a.match(/^--dias=(\d+)$/))) out.dias = Number(m[1]);
+    else if ((m = a.match(/^--patrulha=(.*)$/))) {
+      // "EP:PO,EB:PO" — prefixo da equipe : tipo da nota. Vazio desliga.
+      out.patrulha = m[1].split(',').map(s => s.trim().toUpperCase()).filter(Boolean).map(s => s.split(':'));
+      if (out.patrulha.some(p => p.length !== 2 || !p[0] || !p[1])) out.erros.push('--patrulha no formato EP:PO,EB:PO');
+    }
     else if ((m = a.match(/^--max-buraco-frota=(\d+)$/))) out.maxBuracoFrota = Number(m[1]);
     else if ((m = a.match(/^--limite-veiculo=(\d+)$/))) out.limiteVeiculo = Number(m[1]);
     else if ((m = a.match(/^--ate=(\d{4}-\d{2}-\d{2})$/))) out.ate = m[1];
@@ -95,6 +101,12 @@ const fmtHora = (ms) => new Intl.DateTimeFormat('pt-BR', {
 
 const fmtM = (m) => (m === null || m === undefined) ? '—'
   : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`;
+
+/** A nota é patrulha (prefixo da equipe × tipo da nota em `regras`)? Pura. */
+function ehPatrulha(equipe, tipo, regras) {
+  const pre = String(equipe || '').toUpperCase(), t = String(tipo || '').toUpperCase();
+  return (regras || []).some(([p, tp]) => pre.startsWith(p) && t === tp);
+}
 
 /**
  * Placa da equipe em `data` pelo cadastro do gseq (`equipes_veiculos`, aba
@@ -230,6 +242,12 @@ async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) 
     if (vc && !vc.confere && AVALIAVEIS.has(l.status)) {
       l.statusOriginal = l.status;
       l.status = 'veiculo_divergente';
+    }
+    // Plantão em nota de ocorrência percorre a rede atrás do defeito — sair do
+    // local é o serviço (decisão do José, 18/10/2026). Fica fora da conta.
+    if (AVALIAVEIS.has(l.status) && ehPatrulha(l.equipe, l.tipo, args.patrulha)) {
+      l.statusOriginal = l.status;
+      l.status = 'patrulha';
     }
     // Qualidade da âncora: quão longe o cadastro está de onde a equipe apontou o
     // início, e de onde o veículo estava nessa hora.
@@ -383,9 +401,10 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`         Trilha só grava mudança: o último ponto antes do início vale como posição (até ${S.MAX_IDADE_ANTERIOR_MIN / 60}h).`);
   escrever(`         Frota inteira sem ponto por > ${args.maxBuracoFrota} min na execução = rastreador_fora (fora da conta).`);
   escrever(`         Placa: gseq Equipes × Veículos → sessão do WPA → equipes_oficiais.`);
+  escrever(`         Patrulha (fora da conta): ${args.patrulha.length ? args.patrulha.map(p => p.join(' em ')).join(', ') : 'nenhuma'}.`);
 
   escrever(`\nFUNIL (notas concluídas de equipes oficiais, sem repetição entre dias: ${res.total})`);
-  const ordem = ['ok', 'saiu', 'fora_no_inicio', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
+  const ordem = ['ok', 'saiu', 'fora_no_inicio', 'patrulha', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
     'sem_ancora', 'sem_inicio', 'sem_fim', 'janela_invalida', 'sem_checkpoint', 'sem_detalhe'];
   for (const k of ordem.concat(Object.keys(res.funil).filter(k => !ordem.includes(k)))) {
     if (res.funil[k]) escrever(`  ${k.padEnd(16)} ${String(res.funil[k]).padStart(6)}  ${pct(res.funil[k], res.total)}`);
@@ -538,7 +557,7 @@ async function main() {
   }
 }
 
-module.exports = { lerArgs, diasDoPeriodo, configGseq, placaGseqNaData, lerDia, deduplicar, resumir, executar, linhaCsv };
+module.exports = { lerArgs, diasDoPeriodo, configGseq, ehPatrulha, placaGseqNaData, lerDia, deduplicar, resumir, executar, linhaCsv };
 
 if (require.main === module) {
   main().then(() => process.exit(0)).catch(err => { console.error('ERRO:', err.message); process.exit(1); });
