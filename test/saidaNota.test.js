@@ -111,11 +111,34 @@ test('avaliarNota: saiu e não voltou conta até o fim da janela', () => {
   assert.equal(r.minFora, 30);
 });
 
-test('avaliarNota: sem pontos na janela é sem_trilha, nunca ok', () => {
-  const fora = [pt(-30, LOCAL), pt(120, LOCAL)];
+test('avaliarNota: sem ponto na janela nem nas 6h antes é sem_trilha, nunca ok', () => {
+  const fora = [pt(-400, LOCAL), pt(120, LOCAL)];
   const r = S.avaliarNota({ pontos: fora, janela, ancora: LOCAL }, params);
   assert.equal(r.status, 'sem_trilha');
   assert.equal(r.buracoMin, 90);
+});
+
+test('avaliarNota: trilha só grava mudança — parado desde antes do início é ok', () => {
+  // chegou às 09:40 e não se mexeu mais: nenhum ponto durante a execução
+  const r = S.avaliarNota({ pontos: [pt(-20, LOCAL)], janela, ancora: LOCAL }, params);
+  assert.equal(r.status, 'ok');
+  assert.equal(r.pts[0].herdado, true);
+  assert.equal(r.pts[0].t, T0);
+});
+
+test('avaliarNota: saiu dirigindo e parou longe (1 ponto, ignição ligada) → saiu', () => {
+  const pontos = [pt(-20, LOCAL), { ...pt(30, LONGE), ign: true }];
+  const r = S.avaliarNota({ pontos, janela, ancora: LOCAL }, params);
+  assert.equal(r.status, 'saiu');
+  assert.equal(r.minFora, 60);               // das 30 ao fim da janela (90)
+});
+
+test('maiorBuracoFrotaMin: frota calada por 25 min na janela', () => {
+  const b0 = Math.floor(T0 / 300000);
+  const baldes = new Set();
+  for (let i = 0; i <= 18; i++) if (i < 6 || i > 10) baldes.add(b0 + i);   // falta 6..10
+  assert.equal(S.maiorBuracoFrotaMin(baldes, janela), 25);
+  assert.equal(S.maiorBuracoFrotaMin(new Set(), { inicio: T0, fim: T0 + 9 * MIN }), 10);
 });
 
 test('veiculoConfere: veículo longe do tablet no início não é o da equipe', () => {
@@ -142,6 +165,19 @@ test('deduplicar: nota repetida entre dias fica no dia em que a execução come�
   assert.equal(r.length, 2);
   assert.equal(r.find(x => x.note_id === 'a').data, '2026-10-15');
   assert.equal(r.find(x => x.note_id === 'b').data, '2026-10-14');
+});
+
+test('placaGseqNaData: correção do dia vence vigência; vigência fechada não vale', () => {
+  const al = [
+    { sigla: 'EQ1', placa: 'AAA-1A11', tipo: 'VIGENCIA', desde: '2026-09-01', ate: null },
+    { sigla: 'EQ1', placa: 'BBB-2B22', tipo: 'VIGENCIA', desde: '2026-10-01', ate: null },
+    { sigla: 'EQ1', placa: 'CCC-3C33', tipo: 'DIA', desde: '2026-10-15', ate: '2026-10-15' },
+    { sigla: 'EQ2', placa: 'DDD-4D44', tipo: 'VIGENCIA', desde: '2026-09-01', ate: '2026-09-30' },
+  ];
+  assert.equal(D.placaGseqNaData(al, 'EQ1', '2026-10-14'), 'BBB-2B22');
+  assert.equal(D.placaGseqNaData(al, 'EQ1', '2026-10-15'), 'CCC-3C33');
+  assert.equal(D.placaGseqNaData(al, 'EQ1', '2026-09-10'), 'AAA-1A11');
+  assert.equal(D.placaGseqNaData(al, 'EQ2', '2026-10-15'), null);
 });
 
 test('placaChave e percentil', () => {
@@ -208,6 +244,13 @@ test('executar: cruza nota × rastreador ponta a ponta com bancos falsos', async
   };
   const pos = (v, m, c) => ({ v, t: new Date(T0 + m * MIN), lat: c.lat, lon: c.lon });
   const poolGseq = { query: async (sql, params) => {
+    if (/equipes_veiculos/.test(sql)) return { rows: [
+      { sigla: 'EQ1', placa: 'ABC-1D23', tipo: 'VIGENCIA', desde: '2026-10-01', ate: null }] };
+    if (/DISTINCT floor/.test(sql)) {           // ingestão viva o tempo todo
+      const rows = [];
+      for (let b = Math.floor((T0 - 7 * 3600000) / 300000); b <= Math.floor((T0 + 3 * 3600000) / 300000); b++) rows.push({ b: String(b) });
+      return { rows };
+    }
     assert.match(sql, /vehicle_positions/);
     assert.deepStrictEqual(params[2].sort(), ['%ABC1D23%', '%NOP1234%', '%RJX1A23%', '%XYZ9876%']);
     return { rows: [
@@ -221,6 +264,7 @@ test('executar: cruza nota × rastreador ponta a ponta com bancos falsos', async
   const res = await D.executar({ pool, poolGseq, args: { ...D.lerArgs(['--dias=1', '--ate=2026-10-15']) },
     hoje: '2026-10-18', escrever: (s) => saida.push(s) });
   assert.equal(res.total, 5);                       // FORA não é oficial
+  assert.equal(res.fontePlaca.gseq, 1);
   assert.equal(res.funil.veiculo_divergente, 1);
   assert.equal(res.funil.sem_trilha_placa, 1);
   assert.equal(res.divergentes[0].placa, 'RJX1A23');

@@ -152,15 +152,50 @@ function ancoraDaNota({ cadastro, cpInicio }, preferir = 'cadastro') {
 
 // ── Trilha ───────────────────────────────────────────────────────────────────
 
+/** Quanto tempo antes do início o último ponto ainda vale como "onde o veículo estava". */
+const MAX_IDADE_ANTERIOR_MIN = 360;
+
 /**
- * Pontos do rastreador dentro da janela, com a distância à âncora.
- * `pontos`: [{t(ms), lat, lon}] em qualquer ordem.
+ * Pontos do rastreador na janela, com a distância à âncora — PRECEDIDOS da
+ * posição herdada no início.
+ *
+ * ⚠️ A trilha do gseq só grava ponto quando o veículo MUDA (posição > ~5 m ou
+ * ignição; git/gseq/src/lib/tracking-fetch.ts, dedup na ingestão a cada 5 min).
+ * Silêncio = parado, não falta de dado. Por isso o último ponto ANTES do início
+ * é a posição do veículo no início (marcado `herdado`). Sem isto, 32% das notas
+ * do 2º backtest (18/10/2026) caíam em "sem trilha" só por o veículo ter ficado
+ * quieto durante a execução — que é justamente o comportamento esperado.
+ * Ingestão fora do ar também é silêncio: quem chama corta isso pela frota
+ * (maiorBuracoFrotaMin).
+ *
+ * `pontos`: [{t(ms), lat, lon, ign?}] em qualquer ordem.
  */
-function pontosNaJanela(pontos, janela, ancora) {
-  return (pontos || [])
-    .filter(p => p.t >= janela.inicio && p.t <= janela.fim)
-    .sort((a, b) => a.t - b.t)
-    .map(p => ({ t: p.t, lat: p.lat, lon: p.lon, d: distanciaM(ancora, p) }));
+function pontosNaJanela(pontos, janela, ancora, maxIdadeAnteriorMin = MAX_IDADE_ANTERIOR_MIN) {
+  const ord = (pontos || []).slice().sort((a, b) => a.t - b.t);
+  const corte = janela.inicio - maxIdadeAnteriorMin * 60000;
+  let anterior = null;
+  for (const p of ord) if (p.t < janela.inicio && p.t >= corte) anterior = p;
+  const serie = ord.filter(p => p.t >= janela.inicio && p.t <= janela.fim);
+  if (anterior && (serie.length === 0 || serie[0].t > janela.inicio)) {
+    serie.unshift({ ...anterior, t: janela.inicio, herdado: true });
+  }
+  return serie.map(p => ({ t: p.t, lat: p.lat, lon: p.lon, ign: p.ign === true,
+    herdado: !!p.herdado, d: distanciaM(ancora, p) }));
+}
+
+/**
+ * Maior buraco (min) da FROTA INTEIRA dentro da janela. `baldes` = Set de
+ * índices de 5 min (floor(epoch_s/300)) em que a ingestão gravou algum ponto.
+ * Frota toda calada = gseq/SSX fora do ar, e aí o silêncio do veículo não
+ * significa "parado".
+ */
+function maiorBuracoFrotaMin(baldes, janela) {
+  const ini = Math.floor(janela.inicio / 300000), fim = Math.floor(janela.fim / 300000);
+  let max = 0, corrida = 0;
+  for (let b = ini; b <= fim; b++) {
+    if (baldes.has(b)) corrida = 0; else { corrida++; max = Math.max(max, corrida); }
+  }
+  return max * 5;
 }
 
 /** Maior intervalo sem ponto (min), contando as bordas da janela. */
@@ -174,10 +209,12 @@ function maiorBuracoMin(pts, janela) {
 
 /**
  * Saídas do raio. Uma saída começa no primeiro ponto fora e termina no primeiro
- * ponto de volta (ou no fim da janela). Conta só se ficou ≥ `minForaMin` E teve
- * ≥ 2 pontos fora — um ponto solto fora é salto de GPS, não deslocamento.
+ * ponto de volta (ou no fim da janela). Conta se ficou ≥ `minForaMin` E houve
+ * movimento de verdade: ≥ 2 pontos fora, OU ignição ligada em algum deles.
+ * Um ponto solto fora com ignição desligada é salto de GPS de veículo parado —
+ * e, como a trilha só grava mudança, esse salto "dura" até o próximo ponto.
  *
- * @param {Array<{t,d}>} pts  saída de pontosNaJanela
+ * @param {Array<{t,d,ign}>} pts  saída de pontosNaJanela
  * @returns {Array<{inicio, fim, minutos, distMaxM, pontos}>}
  */
 function saidasDoRaio(pts, janela, { raioM, minForaMin }) {
@@ -185,13 +222,17 @@ function saidasDoRaio(pts, janela, { raioM, minForaMin }) {
   let aberta = null;
   const fecha = (fimMs) => {
     const minutos = (fimMs - aberta.inicio) / 60000;
-    if (minutos >= minForaMin && aberta.pontos >= 2) out.push({ ...aberta, fim: fimMs, minutos });
+    if (minutos >= minForaMin && (aberta.pontos >= 2 || aberta.ign)) {
+      const { ign, ...s } = aberta;
+      out.push({ ...s, fim: fimMs, minutos });
+    }
     aberta = null;
   };
   for (const p of pts) {
     if (p.d > raioM) {
-      if (!aberta) aberta = { inicio: p.t, distMaxM: 0, pontos: 0 };
+      if (!aberta) aberta = { inicio: p.t, distMaxM: 0, pontos: 0, ign: false };
       aberta.pontos++;
+      aberta.ign = aberta.ign || p.ign === true;
       aberta.distMaxM = Math.max(aberta.distMaxM, p.d);
     } else if (aberta) {
       fecha(p.t);
@@ -209,12 +250,12 @@ function kmNaJanela(pts) {
 }
 
 /**
- * Avalia uma nota. `minPontos` = mínimo de pontos na janela para avaliar.
- * status: 'sem_trilha' | 'ok' | 'saiu'.
+ * Avalia uma nota. `minPontos` = mínimo de pontos na série (contando a posição
+ * herdada no início) para avaliar. status: 'sem_trilha' | 'ok' | 'saiu'.
  */
 function avaliarNota({ pontos, janela, ancora }, params) {
-  const minPontos = params.minPontos ?? 2;
-  const pts = pontosNaJanela(pontos, janela, ancora);
+  const minPontos = params.minPontos ?? 1;
+  const pts = pontosNaJanela(pontos, janela, ancora, params.maxIdadeAnteriorMin);
   const buracoMin = Math.round(maiorBuracoMin(pts, janela));
   if (pts.length < minPontos) return { status: 'sem_trilha', pontos: pts.length, buracoMin };
   const saidas = saidasDoRaio(pts, janela, params);
@@ -256,12 +297,9 @@ function pontoMaisProximo(pontos, alvoMs, janelaMin = 10) {
  */
 function veiculoConfere({ pontos, janela, ref, limiteM, janelaMin = 15 }) {
   if (!ref) return null;
+  // Ponto perto do início; sem ele, a posição herdada (ou o 1º da janela).
   let p = pontoMaisProximo(pontos, janela.inicio, janelaMin);
-  if (!p) {
-    const dentro = (pontos || []).filter(x => x.t >= janela.inicio && x.t <= janela.fim)
-      .sort((a, b) => a.t - b.t);
-    p = dentro[0] || null;
-  }
+  if (!p) p = pontosNaJanela(pontos, janela, ref)[0] || null;
   if (!p) return null;
   const distM = distanciaM(ref, p);
   return { distM, confere: distM <= limiteM };
@@ -285,6 +323,6 @@ module.exports = {
   EV_INICIO_TRABALHO, EV_FIM_TRABALHO, EV_FINALIZANDO,
   utmParaLatLon, normalizaCoord, distanciaM,
   instanteCp, janelaExecucao, ancoraDaNota,
-  pontosNaJanela, maiorBuracoMin, saidasDoRaio, kmNaJanela, avaliarNota,
+  MAX_IDADE_ANTERIOR_MIN, pontosNaJanela, maiorBuracoMin, maiorBuracoFrotaMin, saidasDoRaio, kmNaJanela, avaliarNota,
   pontoMaisProximo, veiculoConfere, placaChave, percentil,
 };

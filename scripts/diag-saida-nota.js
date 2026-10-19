@@ -44,11 +44,12 @@ const GRADE_MIN = [5, 10, 20, 30];
 
 /** Lê `--chave=valor`. Pura. */
 function lerArgs(argv) {
-  const out = { dias: 7, ate: null, raio: 300, minFora: 10, minPontos: 2,
-    ancora: 'cadastro', top: 25, csv: null, limiteVeiculo: 5000, erros: [] };
+  const out = { dias: 7, ate: null, raio: 300, minFora: 10, minPontos: 1,
+    ancora: 'cadastro', top: 25, csv: null, limiteVeiculo: 5000, maxBuracoFrota: 20, erros: [] };
   for (const a of argv) {
     let m;
     if ((m = a.match(/^--dias=(\d+)$/))) out.dias = Number(m[1]);
+    else if ((m = a.match(/^--max-buraco-frota=(\d+)$/))) out.maxBuracoFrota = Number(m[1]);
     else if ((m = a.match(/^--limite-veiculo=(\d+)$/))) out.limiteVeiculo = Number(m[1]);
     else if ((m = a.match(/^--ate=(\d{4}-\d{2}-\d{2})$/))) out.ate = m[1];
     else if ((m = a.match(/^--raio=(\d+)$/))) out.raio = Number(m[1]);
@@ -94,10 +95,25 @@ const fmtM = (m) => (m === null || m === undefined) ? '—'
   : m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1).replace('.', ',')} km`;
 
 /**
+ * Placa da equipe em `data` pelo cadastro do gseq (`equipes_veiculos`, aba
+ * Veículos → Equipes × Veículos): correção do DIA vence VIGÊNCIA; entre
+ * vigências, a de `desde` mais recente. Casa pela sigla. Pura.
+ */
+function placaGseqNaData(alocacoes, sigla, data) {
+  let dia = null, vig = null;
+  for (const a of alocacoes) {
+    if (a.sigla !== sigla || a.desde > data || (a.ate && a.ate < data)) continue;
+    if (a.tipo === 'DIA') dia = a;
+    else if (!vig || a.desde > vig.desde) vig = a;
+  }
+  return (dia || vig || {}).placa || null;
+}
+
+/**
  * Lê um dia e devolve uma linha por nota concluída (avaliada ou com o motivo de
  * não ter sido). `pool` = wpa_monitor, `poolGseq` = gseq.
  */
-async function lerDia({ pool, poolGseq, data, oficiais, args }) {
+async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) {
   // Notas concluídas do dia + equipe + placa da sessão (a do WPA, que é a do dia).
   const { rows: notas } = await pool.query(`
     SELECT DISTINCT ON (n->>'id')
@@ -137,7 +153,12 @@ async function lerDia({ pool, poolGseq, data, oficiais, args }) {
     const ancora = S.ancoraDaNota({ cadastro, cpInicio: janela.cpInicio }, args.ancora);
     if (!ancora) { linhas.push({ ...base, status: 'sem_ancora', janela }); continue; }
 
-    let placa = S.placaChave(n.placa_wpa), fontePlaca = 'wpa';
+    // Cascata da placa: o que a operação cadastrou no gseq (Equipes × Veículos,
+    // por dia/vigência) vence a placa declarada na sessão do WPA — o 2º backtest
+    // (18/10/2026) achou 163 notas com a placa do WPA levando a um veículo a
+    // dezenas/centenas de km do tablet. Por último, equipes_oficiais.placa.
+    let placa = S.placaChave(placaGseqNaData(alocacoes, equipe, data)), fontePlaca = 'gseq';
+    if (!placa) { placa = S.placaChave(n.placa_wpa); fontePlaca = 'wpa'; }
     if (!placa) { placa = S.placaChave(oficiais.get(equipe)); fontePlaca = 'cadastro'; }
     if (!placa) { linhas.push({ ...base, status: 'sem_placa', janela }); continue; }
 
@@ -145,22 +166,24 @@ async function lerDia({ pool, poolGseq, data, oficiais, args }) {
   }
 
   // Trilha: uma consulta por dia, só das placas envolvidas e só no intervalo
-  // coberto pelas janelas. O filtro em "recordedAt" usa o índice; a folga de 3h
-  // cobre posições que chegaram atrasadas (eventAt < recordedAt).
+  // coberto pelas janelas, recuando MAX_IDADE_ANTERIOR_MIN para achar a posição
+  // herdada no início (a trilha só grava mudança). O filtro em "recordedAt" usa
+  // o índice; a folga de 3h cobre posições que chegaram atrasadas.
   const pend = linhas.filter(l => l.status === 'pendente');
   const porPlaca = new Map();
   const unidades = new Map();   // placa → Set de unidades do rastreador que casaram
+  let baldesFrota = new Set();
   if (pend.length) {
-    const ini = Math.min(...pend.map(l => l.janela.inicio)) - 30 * 60000;
+    const ini = Math.min(...pend.map(l => l.janela.inicio)) - S.MAX_IDADE_ANTERIOR_MIN * 60000;
     const fim = Math.max(...pend.map(l => l.janela.fim)) + 30 * 60000;
     const placas = [...new Set(pend.map(l => l.placa))];
     const { rows: pos } = await poolGseq.query(`
       SELECT regexp_replace(upper(vehicle), '[^A-Z0-9]', '', 'g') AS v,
-             lat, lon, COALESCE("eventAt", "recordedAt") AS t
+             lat, lon, ignition, COALESCE("eventAt", "recordedAt") AS t
         FROM vehicle_positions
        WHERE "recordedAt" >= $1 AND "recordedAt" < $2
          AND regexp_replace(upper(vehicle), '[^A-Z0-9]', '', 'g') LIKE ANY ($3::text[])`,
-      [new Date(ini - 3600000), new Date(fim + 3 * 3600000), placas.map(p => `%${p}%`)]);
+      [new Date(ini), new Date(fim + 3 * 3600000), placas.map(p => `%${p}%`)]);
     for (const p of pos) {
       const t = new Date(p.t).getTime();
       if (t < ini || t > fim) continue;
@@ -168,22 +191,36 @@ async function lerDia({ pool, poolGseq, data, oficiais, args }) {
       const placa = placas.find(pl => p.v.includes(pl));
       if (!placa) continue;
       if (!porPlaca.has(placa)) { porPlaca.set(placa, []); unidades.set(placa, new Set()); }
-      porPlaca.get(placa).push({ t, lat: Number(p.lat), lon: Number(p.lon) });
+      porPlaca.get(placa).push({ t, lat: Number(p.lat), lon: Number(p.lon), ign: p.ignition === true });
       unidades.get(placa).add(p.v);
     }
+    // Pulso da ingestão: baldes de 5 min em que a FROTA gravou algo.
+    const { rows: bs } = await poolGseq.query(`
+      SELECT DISTINCT floor(extract(epoch FROM "recordedAt") / 300)::bigint AS b
+        FROM vehicle_positions
+       WHERE "recordedAt" >= $1 AND "recordedAt" < $2`,
+      [new Date(ini), new Date(fim)]);
+    baldesFrota = new Set(bs.map(r => Number(r.b)));
   }
 
   for (const l of pend) {
     const pontos = porPlaca.get(l.placa) || [];
     l.unidades = unidades.has(l.placa) ? unidades.get(l.placa).size : 0;
     l.duracaoMin = Math.round((l.janela.fim - l.janela.inicio) / 60000);
+    l.buracoFrotaMin = S.maiorBuracoFrotaMin(baldesFrota, l.janela);
     const r = S.avaliarNota({ pontos, janela: l.janela, ancora: l.ancora },
       { raioM: args.raio, minForaMin: args.minFora, minPontos: args.minPontos });
     Object.assign(l, r);
     // "Sem trilha" tem duas causas que pedem ações diferentes: a placa não tem
-    // NENHUM ponto no dia (casamento placa × rastreador) ou tem, mas a execução
-    // foi curta demais para cair ≥ minPontos dentro dela (frequência do rastreador).
+    // NENHUM ponto no período (casamento placa × rastreador) ou tem, mas nenhum
+    // nas 6h antes do início nem durante a execução.
     if (l.status === 'sem_trilha') l.status = pontos.length ? 'sem_trilha_janela' : 'sem_trilha_placa';
+    // Ingestão parada durante a execução: o silêncio não quer dizer "parado".
+    if ((l.status === 'ok' || l.status === 'saiu') && l.buracoFrotaMin > args.maxBuracoFrota) {
+      l.statusOriginal = l.status;
+      l.status = 'rastreador_fora';
+      continue;
+    }
     // Veículo da trilha longe do tablet no início → não é o veículo da equipe.
     const vc = S.veiculoConfere({ pontos, janela: l.janela,
       ref: l.janela.cpInicio || l.ancora, limiteM: args.limiteVeiculo });
@@ -283,6 +320,16 @@ function resumir(linhas, args) {
     pctAncoraVeiculo: pcts(aval.map(l => l.dAncoraVeiculoInicio).filter(v => v !== undefined)),
     pctBuraco: pcts(aval.map(l => l.buracoMin)),
     grade,
+    // Prefixo da sigla (EP/EC/ET/EB…): plantão e comercial têm rotina diferente —
+    // plantão patrulha rede atrás de defeito, e isso é deslocamento legítimo.
+    porPrefixo: [...linhas.reduce((m, l) => {
+      const k = l.equipe.slice(0, 2);
+      if (!m.has(k)) m.set(k, { prefixo: k, total: 0, avaliadas: 0, saiu: 0 });
+      const g = m.get(k); g.total++;
+      if (l.status === 'ok' || l.status === 'saiu') g.avaliadas++;
+      if (l.status === 'saiu') g.saiu++;
+      return m;
+    }, new Map()).values()].sort((a, b) => b.total - a.total),
     porTipo: [...porTipo.values()].map(g => ({ ...g, p90: S.percentil(g.dist, 90) }))
       .sort((a, b) => b.avaliadas - a.avaliadas),
     porEquipe: [...porEquipe.values()].filter(g => g.saiu > 0)
@@ -309,9 +356,12 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`Regra:   saiu = ≥ ${args.minFora} min e ≥ 2 pontos do rastreador a mais de ${args.raio} m da âncora,`);
   escrever(`         entre o Início do Trabalho (ev 2) e o Fim do Trabalho (ev 3). Âncora: ${args.ancora} primeiro.`);
   escrever(`         Veículo a mais de ${fmtM(args.limiteVeiculo)} do tablet no início = veiculo_divergente (fora da conta).`);
+  escrever(`         Trilha só grava mudança: o último ponto antes do início vale como posição (até ${S.MAX_IDADE_ANTERIOR_MIN / 60}h).`);
+  escrever(`         Frota inteira sem ponto por > ${args.maxBuracoFrota} min na execução = rastreador_fora (fora da conta).`);
+  escrever(`         Placa: gseq Equipes × Veículos → sessão do WPA → equipes_oficiais.`);
 
   escrever(`\nFUNIL (notas concluídas de equipes oficiais, sem repetição entre dias: ${res.total})`);
-  const ordem = ['ok', 'saiu', 'veiculo_divergente', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
+  const ordem = ['ok', 'saiu', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
     'sem_ancora', 'sem_inicio', 'sem_fim', 'janela_invalida', 'sem_checkpoint', 'sem_detalhe'];
   for (const k of ordem.concat(Object.keys(res.funil).filter(k => !ordem.includes(k)))) {
     if (res.funil[k]) escrever(`  ${k.padEnd(16)} ${String(res.funil[k]).padStart(6)}  ${pct(res.funil[k], res.total)}`);
@@ -341,7 +391,7 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`  placa sem nenhum ponto no rastreador no dia (top 20 — conferir placa × nome da unidade):`);
   if (res.semPlaca.length === 0) escrever('    nenhuma');
   for (const g of res.semPlaca.slice(0, 20)) escrever(`    ${g.placa.padEnd(8)} ${g.equipe.padEnd(10)} ${String(g.notas).padStart(4)} notas`);
-  escrever(`  tem pontos no dia, mas < ${args.minPontos} dentro da execução:`);
+  escrever(`  placa tem pontos no período, mas nenhum nas ${S.MAX_IDADE_ANTERIOR_MIN / 60}h antes do início nem durante:`);
   escrever(`    duração da execução: ${fmtPcts(res.duracaoSemJanela, fMin)}`);
   escrever(`    maior buraco:        ${fmtPcts(res.buracoSemJanela, fMin)}`);
   escrever(`  (duração das avaliadas, p/ comparar: ${fmtPcts(res.duracaoAval, fMin)})`);
@@ -350,6 +400,12 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`  ${'raio'.padEnd(8)}` + GRADE_MIN.map(m => `≥${m} min`.padStart(16)).join(''));
   for (const g of res.grade) {
     escrever(`  ${fmtM(g.raioM).padEnd(8)}` + g.porMin.map(c => `${c.pct}% (${c.n})`.padStart(16)).join(''));
+  }
+
+  escrever(`\nPOR PREFIXO DE EQUIPE (cobertura e resultado)`);
+  for (const g of res.porPrefixo) {
+    escrever(`  ${g.prefixo.padEnd(4)} notas ${String(g.total).padStart(5)}   avaliadas ${String(g.avaliadas).padStart(5)} (${pct(g.avaliadas, g.total)})`
+      + `   saíram ${String(g.saiu).padStart(4)} (${pct(g.saiu, g.avaliadas)})`);
   }
 
   escrever(`\nPOR TIPO DE NOTA`);
@@ -376,7 +432,7 @@ function imprimir(res, { args, dias }, escrever) {
 const CSV_COLS = ['data', 'equipe', 'regional', 'numero', 'tipo', 'status', 'inicio', 'fim', 'ancora_fonte',
   'ancora_lat', 'ancora_lon', 'placa', 'placa_fonte', 'pontos', 'buraco_min', 'dist_max_m', 'min_fora', 'km',
   'd_cadastro_inicio_m', 'd_ancora_veiculo_inicio_m', 'd_veiculo_tablet_m', 'duracao_min', 'unidades_rastreador',
-  'status_antes_divergencia'];
+  'status_antes_divergencia', 'buraco_frota_min'];
 
 function linhaCsv(l) {
   const iso = (ms) => (ms ? new Date(ms).toISOString() : '');
@@ -384,7 +440,7 @@ function linhaCsv(l) {
     iso(l.janela && l.janela.inicio), iso(l.janela && l.janela.fim),
     l.ancora && l.ancora.fonte, l.ancora && l.ancora.lat, l.ancora && l.ancora.lon,
     l.placa, l.fontePlaca, l.pontos, l.buracoMin, l.distMaxM, l.minFora, l.km,
-    l.dCadInicio, l.dAncoraVeiculoInicio, l.dVeiculoM, l.duracaoMin, l.unidades, l.statusOriginal];
+    l.dCadInicio, l.dAncoraVeiculoInicio, l.dVeiculoM, l.duracaoMin, l.unidades, l.statusOriginal, l.buracoFrotaMin];
   return v.map(x => (x === undefined || x === null) ? '' : `"${String(x).replace(/"/g, '""')}"`).join(';');
 }
 
@@ -394,10 +450,19 @@ async function executar({ pool, poolGseq, args, hoje = dateBRT(), escrever = con
     SELECT upper(sigla) AS sigla, placa FROM public.equipes_oficiais WHERE ativo = true`);
   const oficiais = new Map(eqs.map(e => [e.sigla, e.placa]));
 
+  let alocacoes = [];
+  try {
+    const { rows } = await poolGseq.query(`
+      SELECT upper(sigla) AS sigla, placa, tipo, desde, ate FROM equipes_veiculos`);
+    alocacoes = rows;
+  } catch (err) {
+    console.error(`[diag-saida-nota] equipes_veiculos do gseq indisponível (${err.message}) — placa só do WPA/cadastro`);
+  }
+
   const brutas = [];
   for (const data of dias) {
     const t0 = Date.now();
-    const doDia = await lerDia({ pool, poolGseq, data, oficiais, args });
+    const doDia = await lerDia({ pool, poolGseq, data, oficiais, alocacoes, args });
     brutas.push(...doDia);
     const av = doDia.filter(l => l.status === 'ok' || l.status === 'saiu').length;
     console.error(`[diag-saida-nota] ${data}: ${doDia.length} notas, ${av} avaliadas (${Date.now() - t0} ms)`);
@@ -433,7 +498,7 @@ async function main() {
   }
 }
 
-module.exports = { lerArgs, diasDoPeriodo, configGseq, lerDia, deduplicar, resumir, executar, linhaCsv };
+module.exports = { lerArgs, diasDoPeriodo, configGseq, placaGseqNaData, lerDia, deduplicar, resumir, executar, linhaCsv };
 
 if (require.main === module) {
   main().then(() => process.exit(0)).catch(err => { console.error('ERRO:', err.message); process.exit(1); });
