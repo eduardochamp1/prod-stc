@@ -41,6 +41,8 @@ const { dateBRT, dateBRTMinusDays } = require('../services/timeUtil');
 
 const GRADE_RAIOS = [200, 300, 500, 1000, 2000];
 const GRADE_MIN = [5, 10, 20, 30];
+/** Status com trilha avaliada (os que os cortes de veículo/rastreador podem rebaixar). */
+const AVALIAVEIS = new Set(['ok', 'saiu', 'fora_no_inicio']);
 
 /** Lê `--chave=valor`. Pura. */
 function lerArgs(argv) {
@@ -216,7 +218,7 @@ async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) 
     // nas 6h antes do início nem durante a execução.
     if (l.status === 'sem_trilha') l.status = pontos.length ? 'sem_trilha_janela' : 'sem_trilha_placa';
     // Ingestão parada durante a execução: o silêncio não quer dizer "parado".
-    if ((l.status === 'ok' || l.status === 'saiu') && l.buracoFrotaMin > args.maxBuracoFrota) {
+    if (AVALIAVEIS.has(l.status) && l.buracoFrotaMin > args.maxBuracoFrota) {
       l.statusOriginal = l.status;
       l.status = 'rastreador_fora';
       continue;
@@ -225,7 +227,7 @@ async function lerDia({ pool, poolGseq, data, oficiais, alocacoes = [], args }) 
     const vc = S.veiculoConfere({ pontos, janela: l.janela,
       ref: l.janela.cpInicio || l.ancora, limiteM: args.limiteVeiculo });
     if (vc) l.dVeiculoM = vc.distM;
-    if (vc && !vc.confere && (l.status === 'ok' || l.status === 'saiu')) {
+    if (vc && !vc.confere && AVALIAVEIS.has(l.status)) {
       l.statusOriginal = l.status;
       l.status = 'veiculo_divergente';
     }
@@ -262,13 +264,27 @@ function resumir(linhas, args) {
   for (const l of linhas) funil[l.status] = (funil[l.status] || 0) + 1;
   const aval = linhas.filter(l => l.status === 'ok' || l.status === 'saiu');
 
-  const grade = GRADE_RAIOS.map(raioM => ({
-    raioM,
-    porMin: GRADE_MIN.map(minForaMin => {
-      const n = aval.filter(l => S.saidasDoRaio(l.pts, l.janela, { raioM, minForaMin }).length > 0).length;
-      return { minForaMin, n, pct: aval.length ? Math.round((n / aval.length) * 1000) / 10 : 0 };
-    }),
-  }));
+  // Para cada raio, o denominador são as notas em que o veículo estava DENTRO
+  // dele no início (quem já estava fora não "sai") — por isso muda com o raio.
+  const comTrilha = linhas.filter(l => AVALIAVEIS.has(l.status));
+  const gradeDe = (base) => GRADE_RAIOS.map(raioM => {
+    const eleg = base.filter(l => l.pts[0].d <= raioM);
+    return {
+      raioM, elegiveis: eleg.length,
+      porMin: GRADE_MIN.map(minForaMin => {
+        const n = eleg.filter(l => S.saidasDoRaio(l.pts, l.janela, { raioM, minForaMin }).length > 0).length;
+        return { minForaMin, n, pct: eleg.length ? Math.round((n / eleg.length) * 1000) / 10 : 0 };
+      }),
+    };
+  });
+  const prefixos = [...new Set(comTrilha.map(l => l.equipe.slice(0, 2)))]
+    .map(p => [p, comTrilha.filter(l => l.equipe.startsWith(p))])
+    .filter(([, ls]) => ls.length >= 50)
+    .sort((a, b) => b[1].length - a[1].length);
+  const grade = gradeDe(comTrilha);
+  const gradePorPrefixo = prefixos.map(([p, ls]) => ({ prefixo: p, grade: gradeDe(ls) }));
+
+  const foraIni = linhas.filter(l => l.status === 'fora_no_inicio');
 
   const pcts = (vals) => [50, 75, 90, 95, 99].map(p => [p, S.percentil(vals, p)]);
   const porTipo = new Map();
@@ -302,6 +318,13 @@ function resumir(linhas, args) {
   const semJanela = linhas.filter(x => x.status === 'sem_trilha_janela');
 
   return {
+    gradePorPrefixo,
+    foraNoInicio: {
+      n: foraIni.length,
+      dVeiculo: pcts(foraIni.map(l => l.pts[0].d)),
+      dTablet: pcts(foraIni.map(l => l.dCadInicio).filter(v => v !== undefined)),
+      casos: foraIni.slice().sort((a, b) => b.pts[0].d - a.pts[0].d).slice(0, 10),
+    },
     divergentes: [...divPorPlaca.values()].map(g => ({ ...g, p50: S.percentil(g.dist, 50) }))
       .sort((a, b) => b.notas - a.notas),
     dVeiculoAval: pcts(aval.map(l => l.dVeiculoM).filter(v => v !== undefined)),
@@ -353,7 +376,8 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`\nBACKTEST — deslocamento dentro da nota   (SOMENTE LEITURA)`);
   escrever(linha);
   escrever(`Período: ${dias[0]} → ${dias[dias.length - 1]} (${dias.length} dias)`);
-  escrever(`Regra:   saiu = ≥ ${args.minFora} min e ≥ 2 pontos do rastreador a mais de ${args.raio} m da âncora,`);
+  escrever(`Regra:   saiu = começou dentro e ficou ≥ ${args.minFora} min a mais de ${args.raio} m da âncora (≥ 2 pontos fora,`);
+  escrever(`         ou 1 com ignição ligada),`);
   escrever(`         entre o Início do Trabalho (ev 2) e o Fim do Trabalho (ev 3). Âncora: ${args.ancora} primeiro.`);
   escrever(`         Veículo a mais de ${fmtM(args.limiteVeiculo)} do tablet no início = veiculo_divergente (fora da conta).`);
   escrever(`         Trilha só grava mudança: o último ponto antes do início vale como posição (até ${S.MAX_IDADE_ANTERIOR_MIN / 60}h).`);
@@ -361,7 +385,7 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`         Placa: gseq Equipes × Veículos → sessão do WPA → equipes_oficiais.`);
 
   escrever(`\nFUNIL (notas concluídas de equipes oficiais, sem repetição entre dias: ${res.total})`);
-  const ordem = ['ok', 'saiu', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
+  const ordem = ['ok', 'saiu', 'fora_no_inicio', 'veiculo_divergente', 'rastreador_fora', 'sem_trilha_janela', 'sem_trilha_placa', 'sem_placa',
     'sem_ancora', 'sem_inicio', 'sem_fim', 'janela_invalida', 'sem_checkpoint', 'sem_detalhe'];
   for (const k of ordem.concat(Object.keys(res.funil).filter(k => !ordem.includes(k)))) {
     if (res.funil[k]) escrever(`  ${k.padEnd(16)} ${String(res.funil[k]).padStart(6)}  ${pct(res.funil[k], res.total)}`);
@@ -396,10 +420,26 @@ function imprimir(res, { args, dias }, escrever) {
   escrever(`    maior buraco:        ${fmtPcts(res.buracoSemJanela, fMin)}`);
   escrever(`  (duração das avaliadas, p/ comparar: ${fmtPcts(res.duracaoAval, fMin)})`);
 
-  escrever(`\nGRADE DE CALIBRAÇÃO — % das avaliadas que seriam marcadas`);
-  escrever(`  ${'raio'.padEnd(8)}` + GRADE_MIN.map(m => `≥${m} min`.padStart(16)).join(''));
-  for (const g of res.grade) {
-    escrever(`  ${fmtM(g.raioM).padEnd(8)}` + g.porMin.map(c => `${c.pct}% (${c.n})`.padStart(16)).join(''));
+  const imprimeGrade = (titulo, grade) => {
+    escrever(`\n${titulo}`);
+    escrever(`  ${'raio'.padEnd(8)}${'base'.padStart(7)}` + GRADE_MIN.map(m => `≥${m} min`.padStart(16)).join(''));
+    for (const g of grade) {
+      escrever(`  ${fmtM(g.raioM).padEnd(8)}${String(g.elegiveis).padStart(7)}`
+        + g.porMin.map(c => `${c.pct}% (${c.n})`.padStart(16)).join(''));
+    }
+  };
+  imprimeGrade('GRADE DE CALIBRAÇÃO — % que seriam marcadas (base = veículo dentro do raio no início)', res.grade);
+  for (const g of res.gradePorPrefixo) imprimeGrade(`  … só equipes ${g.prefixo}`, g.grade);
+
+  const fi = res.foraNoInicio;
+  escrever(`\nFORA DO LOCAL JÁ NO INÍCIO (${fi.n} notas) — veículo a mais de ${fmtM(args.raio)} da nota ao começar o trabalho`);
+  escrever(`  veículo × nota no início: ${fmtPcts(fi.dVeiculo)}`);
+  escrever(`  tablet  × nota no início: ${fmtPcts(fi.dTablet)}`);
+  escrever(`  (tablet perto e veículo longe = foram a pé/outro carro; os dois longe = apontou longe ou cadastro da nota errado)`);
+  for (const l of fi.casos) {
+    escrever(`  ${l.data} ${l.equipe.padEnd(9)} nota ${String(l.numero).padEnd(11)} ${String(l.tipo || '').padEnd(4)}`
+      + ` ${fmtHora(l.janela.inicio)}→${fmtHora(l.janela.fim)}  veículo ${fmtM(l.pts[0].d).padStart(7)}`
+      + `  tablet ${fmtM(l.dCadInicio).padStart(7)}  ${String(l.km).replace('.', ',')} km rodados (${l.placa})`);
   }
 
   escrever(`\nPOR PREFIXO DE EQUIPE (cobertura e resultado)`);

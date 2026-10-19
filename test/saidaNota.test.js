@@ -133,6 +133,12 @@ test('avaliarNota: saiu dirigindo e parou longe (1 ponto, ignição ligada) → 
   assert.equal(r.minFora, 60);               // das 30 ao fim da janela (90)
 });
 
+test('avaliarNota: veículo já longe no início é fora_no_inicio, não "saiu"', () => {
+  const r = S.avaliarNota({ pontos: [pt(-20, LONGE), pt(60, LONGE)], janela, ancora: LOCAL }, params);
+  assert.equal(r.status, 'fora_no_inicio');
+  assert.equal(r.km, 0);
+});
+
 test('maiorBuracoFrotaMin: frota calada por 25 min na janela', () => {
   const b0 = Math.floor(T0 / 300000);
   const baldes = new Set();

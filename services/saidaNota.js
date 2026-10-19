@@ -261,8 +261,13 @@ function avaliarNota({ pontos, janela, ancora }, params) {
   const saidas = saidasDoRaio(pts, janela, params);
   let pMax = pts[0];
   for (const p of pts) if (p.d > pMax.d) pMax = p;
+  // Veículo já fora do raio no início do trabalho: não "saiu" — nunca esteve.
+  // É outra pergunta (apontou execução longe do local, ou o cadastro da nota está
+  // errado) e não pode inflar a taxa de saída. 3º backtest (18/10/2026): casos
+  // de 18–87 min "fora" com 0 km rodados eram o veículo parado longe a janela toda.
+  const foraNoInicio = pts[0].d > params.raioM;
   return {
-    status: saidas.length ? 'saiu' : 'ok',
+    status: foraNoInicio ? 'fora_no_inicio' : saidas.length ? 'saiu' : 'ok',
     pontos: pts.length,
     buracoMin,
     distMaxM: pMax.d,
