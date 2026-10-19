@@ -32,7 +32,7 @@
 | P0-7 | Auto-reparo do drift ainda podia SUBTRAIR (drift negativo) — 375 OS iriam sumir no sweep de 31/07 | Dados | **done** (31/07) — reparo monotônico + rota manual corrigida; causa-raiz era o P1-16 |
 | P0-9 | **INCIDENTE 16/10/2026 ~21:15–21:30:** a Web API da EDP passou a recusar o IP da nossa VM (403 "blocked your access") — painel sem coleta | Ops/Contrato | **aberto** — falta: TI dizer se o IP de saída mudou; EDP liberar; backfill do período. ⚠️ 18/10: a VM voltou a alcançar a API; o que seguia zerando a coleta era o P0-10 |
 | P0-10 | **INCIDENTE 16/10/2026 ~21:30:** a EDP passou a devolver 200 "Nenhum dado encontrado" para o User-Agent do node-fetch — coleta zerada SEM erro no log | Backend/Dados | **código done** (b634816, a4b9371 — 18/10) — falta deploy, reparo do `notas_daily_agg` 17–18/10, backfill + re-consolidação 16–18/10, avisar a EDP do UA |
-| P0-11 | **EDP questionou (19/10/2026) "diversas requisições" congestionando a WPA** — e não tínhamos como dizer quantas são nossas. Pelo código, o painel aberto no navegador faz uma coleta COMPLETA na EDP a cada 5 min **por aba**, sem cache (~200–270 requests cada) | Ops/Contrato | **contador no ar no código** (a23d6bc, 19/10) — falta: deploy, medir 1 dia útil, responder a EDP com o número, e cortar o painel da EDP |
+| P0-11 | **EDP questionou (19/10/2026) "diversas requisições" congestionando a WPA** — e não tínhamos como dizer quantas são nossas. Pelo código, o painel aberto no navegador faz uma coleta COMPLETA na EDP a cada 5 min **por aba**, sem cache (~200–270 requests cada) | Ops/Contrato | **contador + cache do painel no código** (a23d6bc, d5a3ae6 — 19/10): cache de 5 min por setor e sem refresh em aba escondida — falta: deploy, medir 1 dia útil, responder a EDP, congelar sessão encerrada (item 3) e limite global em voo (item 4) |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -5938,7 +5938,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P0-11 — A EDP questionou o volume de requisições à WPA, e não sabíamos quantas eram nossas
 
 - **Categoria:** Ops/Contrato
-- **Status:** **contador no ar no código** (19/10/2026, `a23d6bc`). Falta: deploy, medir, responder a EDP e reduzir o volume (aceite abaixo).
+- **Status:** **contador + itens 1 e 2 no código** (19/10/2026, `a23d6bc` e `d5a3ae6`). Falta: deploy, medir, responder a EDP, e os itens 3 e 4 do plano revisado (aceite abaixo).
 - **Fonte:** José, 19/10/2026: *"fomos questionados quanto a diversas requisições ao wpa, segundo a edp alguém está acessando e congestionando o sistema, fiquei na dúvida se poderia ser nosso sistema"*.
 - **Por que é P0:** é o cliente que audita o contrato dizendo que alguém está congestionando o sistema dele, três dias depois de bloquear o IP de saída (P0-9) e de filtrar o User-Agent do node-fetch (P0-10). Se formos nós e não soubermos, a próxima medida da EDP pode ser cortar o acesso de vez.
 - **O que o P0-9 não mediu:** o P0-9 descartou "fomos nós" porque o log tinha volume estável, *"198 linhas `[WPA]` no log em cada ciclo"*. Só que essas linhas são **por setor**, não por requisição, e só cobrem o cron. O painel aberto no navegador nunca entrou na conta. Até `a23d6bc` não existia nenhum contador de requisições.
@@ -5960,15 +5960,33 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   1. Deploy: `cd ~/prod-stc && git pull && pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save`.
   2. Medir **um dia útil inteiro**: `grep wpa_requisicoes_hora ~/prod-stc/logs/out.log`, ou `GET /api/admin/wpa-requisicoes` antes de qualquer restart. Separar o `painel:GET /teams` do `cron:snapshot`.
   3. Responder a EDP com o número medido (total/dia, pico/h, quanto é cron e quanto é painel) e perguntar o limite aceitável. Perguntar também se o filtro de UA de 16/10 (P0-10) foi intencional.
-  4. Cortar o painel da EDP (item próprio, depois da medição): o `/api/teams` passa a servir o último snapshot, ou um cache de 1–2 min compartilhado entre abas. O volume deixa de crescer com o número de abas abertas.
-  5. Rever os jobs que somam volume (P2-65 a cada 30 min, retry do P2-66), e o semáforo global do P2-30.
+  4. Cortar o painel da EDP (item próprio, depois da medição): o `/api/teams` passa a servir o último snapshot, ou um cache de 1–2 min compartilhado entre abas. O volume deixa de crescer com o número de abas abertas. → **substituído pelo plano revisado abaixo** (itens 1 e 2, feitos em `d5a3ae6`, com cache de 5 min).
+  5. Rever os jobs que somam volume (P2-65 a cada 30 min, retry do P2-66), e o semáforo global do P2-30. → **revisto abaixo**: P2-65 e o retry de rejeições saíram; o semáforo virou o item 4.
+- **Plano revisado de redução (19/10/2026, conferido no código):**
+  - **O que o primeiro esboço errava:**
+    - "Congelar sessão encerrada" parecia pequeno e é dos maiores. Toda sessão já encerrada do dia é rebuscada **a cada ciclo até o fim do dia**: `notes/rejected` + `notes/executed` (`wpaService.js`, ramo `else if (sessaoEncerrada)`) + `collaborators/{id}/session`, porque sessão fechada não está no V2. São 3 requisições por sessão por ciclo. Do fim da tarde a 23h45 dá ~27 ciclos × ~80 sessões × 3 ≈ **6 mil/dia** por dado que não muda mais (estimativa — conferir no contador).
+    - "Snapshot a cada 30 min à noite" saiu: o custo do ciclo acompanha o número de sessões do dia, não o horário. O que pesa à noite são as encerradas (item 3).
+    - "Retry de rejeições" e "escala do dia" saíram. `runRetryRejeicoesVazias` pega até 120 notas por hora, mas tipo sem path conhecido volta sem nenhuma chamada e o sem-path usa o cache negativo do processo. A escala custa ~140/dia (< 1%). Voltam só se o contador mostrar outra coisa.
+    - O cache do painel ficou **por setor** (em `getTeamsBySector`), não por rota. Por rota precisaria de chave por escopo (risco P1-12); por setor, a rota só escolhe os setores que o usuário vê.
+  - **O que o primeiro esboço não tinha visto:** os enriquecimentos do `dataService` alteram os objetos de equipe **no lugar** (`sessionBeginReal`, `sessions`, `notasConcluidas`). O cache tem de guardar e devolver **cópia**.
+  - **Outras rotas que chamam a EDP, conferidas:** `/wpa/nota` tem cache no banco (só `?fotos=1` vai à EDP, por clique); `/teams/:teamId` (varre 4 setores) e `/summary` não são chamados pelo front; `/debug/*` e `/wpa/probe` são admin, manuais. Nenhuma pesa.
+  - **Itens, na ordem:**
+    0. Deploy do contador e 1 dia útil medido.
+    1. ✅ **Cache por setor de 5 min para o painel** (`d5a3ae6`). `getTeamsBySector(setor, { aceitaCache })`: só o `/api/teams` lê (`usarCachePainel: true`, booleano — a query não forja); toda coleta fresca grava, inclusive a do snapshot, que nunca lê. Cópia na gravação e na leitura, `_sessoesTotaisEdp` (P0-10) preservado, não atravessa a virada do dia BRT. `WPA_PAINEL_CACHE_MS` (default 300000; 0 desliga). 5 min foi escolha do José: o mesmo frescor de hoje.
+    2. ✅ **Sem atualização em aba escondida** (`d5a3ae6`). O timer de 5 min só chama `loadData()` com `!document.hidden`; ao voltar para a aba, atualiza na hora se passaram 5 min. Os avisos seguem rodando escondidos (só banco; o contador no `<title>` é o que se vê na aba).
+    3. ⬜ **Congelar a sessão encerrada.** Colaboradores: 1 vez por sessão, guardado (risco zero). Notas: rebuscar até X min depois do `EndTime` (transmissão atrasada do app) e parar. **Validação sem custo de rede:** os snapshots ficam guardados para sempre — medir no histórico se alguma sessão encerrada mudou de notas depois de X min e escolher o X pelo dado.
+    4. ⬜ **Limite global de requisições em voo** no `wpaHttp.js` (P2-30), por exemplo 6. Não reduz o total, mas tira o pico que a EDP sente como congestionamento. O limite envolve só a chamada HTTP em si, então o login (que acontece dentro do `wpaFetch`) não trava esperando vaga; o timeout de 45 s começa quando a requisição sai, não durante a fila. O snapshot passa de ~10 s para ~30 s, bem abaixo do `MAX_RUN_MS` de 5 min.
+    5. ⬜ (Talvez) **Sessão ativa só quando o V2 mudar.** Por último, e só se o contador ainda mostrar volume alto. Não dá para validar pelo histórico: precisa rodar em paralelo alguns dias antes de valer para números reportados à EDP (regra 7).
+  - **Medição antes × depois:** o deploy de `d5a3ae6` leva o contador junto com o corte, então o dia medido já é o "depois". Para ter o "antes" do painel, subir o primeiro dia com `WPA_PAINEL_CACHE_MS=0` no `.env` (o item 2 continua valendo) e, no dia seguinte, tirar a variável (deploy com `delete + start`, regra 4).
 - **Critério de aceite:**
   - [x] Toda requisição à EDP é contada por hora, endpoint e origem; teste garante (`a23d6bc`).
   - [ ] Deploy feito e um dia útil medido; números anotados aqui.
   - [ ] EDP respondida com o número medido, e a resposta dela anotada aqui.
-  - [ ] Volume do painel independente do número de abas abertas (item próprio).
-- **Esforço:** contador 2 h (feito); medição 1 dia; corte do painel ~4 h + testes.
-- **Rollback:** `git revert a23d6bc` + deploy. O contador não muda nenhuma requisição, só observa: reverter só tira a medida.
+  - [x] Volume do painel independente do número de abas abertas (`d5a3ae6`; `test/wpaCachePainel.test.js`, 12 testes, e `test/monitorAbaEscondida.test.js`, 4). **Falta conferir em produção** pelo contador: `painel:GET /teams` com ≤ ~8 coletas/h por setor, qualquer que seja o número de abas.
+  - [ ] Item 3 (sessão encerrada) com o X validado no histórico.
+  - [ ] Item 4 (limite global em voo).
+- **Esforço:** contador 2 h (feito); medição 1 dia; itens 1+2 ~3 h (feito); item 3 ~4 h + validação; item 4 ~4 h + testes.
+- **Rollback:** `git revert a23d6bc` + deploy. O contador não muda nenhuma requisição, só observa: reverter só tira a medida. Itens 1 e 2: `WPA_PAINEL_CACHE_MS=0` no `.env` desliga o cache sem deploy de código; reverter tudo é `git revert d5a3ae6`.
 - **O que NÃO fazer:** responder à EDP com a estimativa acima como se fosse medida; reduzir o volume escondendo a origem (trocar UA, IP ou conta). O UA próprio é justamente o que permite à EDP separar a gente dos outros sistemas.
 - **Relacionado:** P0-9 (bloqueio de IP, mesma semana), P0-10 (filtro de UA), P1-25 (conta compartilhada), P2-30 (sem orçamento global de concorrência), P2-65, P2-66.
 

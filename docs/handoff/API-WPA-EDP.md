@@ -576,6 +576,10 @@ Por **setor**, em série (nunca em paralelo — ver seção 16):
    encerradas, carteira inicial
 ```
 
+**Cache do painel (19/10/2026, P0-11):** a coleta de cada setor fica guardada
+5 min (`WPA_PAINEL_CACHE_MS`). Só o `/api/teams` lê o guardado; o snapshot do
+cron sempre coleta fresco e grava. O Monitor não atualiza com a aba escondida.
+
 **Custo medido em 22/08/2026:** 3 setores, 83 equipes → **9,2s total, sendo
 8,75s (95%) na coleta da EDP**. Os enriquecimentos somam 450ms. Instrumentado em
 `dataService.js` — procure `[getTeams]` no log.
