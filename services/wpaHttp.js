@@ -16,7 +16,8 @@
  */
 
 const _nodeFetch = require('node-fetch');
-const { medir } = require('./wpaContador');
+const { medir, origemAtual } = require('./wpaContador');
+const { comVaga } = require('./wpaFila');
 
 const WPA_USER_AGENT_PADRAO = 'EngelmigWpaMonitor/1.0';
 
@@ -43,11 +44,16 @@ function _comoObjeto(headers) {
 // 19/10/2026 (P0-11): toda chamada é contada aqui (hora BRT × endpoint × origem)
 // — a EDP questionou o volume de requisições e não tínhamos o número. Ver
 // services/wpaContador.js.
+//
+// 19/10/2026 (P0-11 item 4): e passa pela fila global de services/wpaFila.js —
+// no máximo WPA_MAX_EM_VOO em voo contra a EDP, o painel na frente. A vaga
+// envolve SÓ a chamada: o `medir` e o timeout começam quando ela sai.
 function wpaHttpFetch(url, opts = {}) {
-  return medir(url, opts.method, _nodeFetch(url, {
+  const prioritaria = origemAtual().startsWith('painel:');
+  return comVaga(prioritaria, () => medir(url, opts.method, _nodeFetch(url, {
     ...opts,
     headers: { 'User-Agent': wpaUserAgent(), ..._comoObjeto(opts.headers) },
-  }));
+  })));
 }
 
 module.exports = { wpaHttpFetch, wpaUserAgent, WPA_USER_AGENT_PADRAO };

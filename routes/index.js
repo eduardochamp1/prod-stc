@@ -3542,7 +3542,12 @@ router.post('/admin/equipes/refresh', async (_req, res) => {
 // 19/10/2026 (P0-11): a EDP questionou o volume e não tínhamos o número. Restart
 // zera; o histórico que sobrevive é `grep wpa_requisicoes_hora logs/out.log`.
 router.get('/admin/wpa-requisicoes', (_req, res) => {
-  res.json(require('../services/wpaContador').resumo());
+  // `fila`: o limite global em voo (P0-11 item 4) — pico e maior espera desde o boot.
+  // `coleta`: sessões encerradas na memória, janela de congelamento e o modo
+  // sombra do V2 (P0-11 itens 3 e 5) — `sombraV2.divergiu` tem de ser 0.
+  res.json({ ...require('../services/wpaContador').resumo(),
+    fila: require('../services/wpaFila').estado(),
+    coleta: require('../services/coletaIncremental').estado() });
 });
 
 // GET /api/admin/wpa-diag — diagnóstico ZERO-retry: descobre por que WPA falha em produção.

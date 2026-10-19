@@ -32,6 +32,8 @@
 // A EDP devolve "Nenhum dado encontrado" pro UA padrão do node-fetch.
 const { wpaHttpFetch: fetch } = require('./wpaHttp');
 const { dateBRT } = require('./timeUtil');
+// 19/10/2026 (P0-11 itens 3 e 5): memória por sessão da coleta ao vivo.
+const incr = require('./coletaIncremental');
 
 // Timeout de TODA chamada HTTP à EDP. Antes não havia nenhum: um socket
 // derrubado pelo Fortinet sem FIN deixava a promise pendurada pra sempre, e
@@ -2395,6 +2397,18 @@ async function _getTeamsBySectorUncached(sectorId) {
         _safeNotes('executed'),
       ]);
 
+      // P0-11 item 5 (19/10/2026) — MODO SOMBRA, não muda nada do que é buscado:
+      // mede se "V2 igual ao ciclo anterior" bastaria para pular as duas buscas
+      // acima, e acusa quando as notas mudaram mesmo assim. Ver coletaIncremental.
+      if (sessionId && !sessaoEncerrada) {
+        incr.esquecerEncerrada(incr.memoria, sessionId);   // aberta: se reabriu, a janela recomeça
+        const desfecho = incr.registrarSombra(incr.memoria, sessionId,
+          incr.assinaturaV2(v2), incr.assinaturaNotas(rejRaw, execRaw), { sectorId, teamName });
+        if (desfecho === 'divergiu') {
+          console.warn(`[WPA] ${sectorId}/${teamName}: sombra-v2 DIVERGIU — V2 igual ao ciclo anterior, notas mudaram (pular teria perdido dado)`);
+        }
+      }
+
       // EXECUTADAS — merge endpoint novo + Downloaded com ExecutionStatus 3/6/7
       const execBase = execRaw.map(n => normalizarNotaV2(n, 'executada'));
       const execIds  = new Set(execBase.map(n => n.codigo));
@@ -2410,20 +2424,34 @@ async function _getTeamsBySectorUncached(sectorId) {
       // NÃO existe (HTTP 404) — concluídas são restauradas posteriormente
       // por _enrichConcluidasDeEncerradas (dataService) via snapshot do dia.
       const sessionId = s.Id;
+      // P0-11 item 3b (19/10/2026): falha devolve null (não []) — só assim dá pra
+      // saber se a busca RESPONDEU. Para o bucket, null segue virando [] como antes.
       const _safeNotes = async (status) => {
-        if (!sessionId) return [];
+        if (!sessionId) return null;
         try {
           const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
-          if (!r.ok) return [];
+          if (!r.ok) return null;
           const j = await r.json();
           const arr = Array.isArray(j) ? j : (j.Data || []);
           return Array.isArray(arr) ? arr : [];
-        } catch (_) { return []; }
+        } catch (_) { return null; }
       };
-      const [rejRaw, execRaw] = await Promise.all([
-        _safeNotes('rejected'),
-        _safeNotes('executed'),
-      ]);
+      // Congelamento (desligado por padrão — WPA_ENCERRADA_CONGELA_MIN): depois
+      // da janela, a última busca bem-sucedida é servida da memória. Ver
+      // services/coletaIncremental.js e scripts/diag-sessao-encerrada.js.
+      const reg = sessionId ? incr.registroEncerrada(incr.memoria, sessionId) : null;
+      let rejRaw, execRaw;
+      if (reg && incr.notasCongeladas(reg, incr.congelaMsDoEnv())) {
+        ({ rej: rejRaw, exec: execRaw } = incr.lerNotas(reg));
+      } else {
+        const [rejResp, execResp] = await Promise.all([
+          _safeNotes('rejected'),
+          _safeNotes('executed'),
+        ]);
+        if (reg) incr.guardarNotas(reg, rejResp, execResp);   // só guarda se as DUAS responderam
+        rejRaw  = rejResp  || [];
+        execRaw = execResp || [];
+      }
       baixadas    = [];
       concluidas  = [];   // restaurado em _enrichConcluidasDeEncerradas
       executadas  = execRaw.map(n => normalizarNotaV2(n, 'executada'));
@@ -2456,9 +2484,17 @@ async function _getTeamsBySectorUncached(sectorId) {
     if (collaborators.length === 0 && v2?.Session) {
       collaborators = _normalizeSessionCollaborators({ Data: { Collaborators: v2.Session.Collaborators } });
     }
-    if (collaborators.length === 0 && s.Id) {
+    // P0-11 item 3a (19/10/2026): sessão ENCERRADA (sem V2) — quem estava nela
+    // não muda mais, então a lista é buscada 1 vez e guardada. Antes era 1
+    // requisição por sessão encerrada a CADA ciclo até 23h45. Aberta segue
+    // buscando sempre (pode entrar colaborador).
+    const regColab = (sessaoEncerrada && !v2 && s.Id) ? incr.registroEncerrada(incr.memoria, s.Id) : null;
+    if (collaborators.length === 0 && regColab && regColab.colaboradores) {
+      collaborators = structuredClone(regColab.colaboradores);
+    } else if (collaborators.length === 0 && s.Id) {
       try {
         collaborators = await getSessionCollaborators(s.Id);
+        if (regColab) regColab.colaboradores = structuredClone(collaborators);
       } catch (err) {
         // Falha aqui não pode esvaziar a equipe: colaborador é enriquecimento,
         // não bucket de produção. Mas logamos — array vazio silencioso foi
