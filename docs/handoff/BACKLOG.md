@@ -179,7 +179,7 @@
 | P2-67 | GUA tem DOIS setores (DESG e DEPT) e a equipe é transferida entre eles; a tela de Equipes mostrava o setor do CADASTRO e o diag do P2-55 olhava só DESG | Dados/Frontend | **código done** (16/10/2026) — coluna Setor = setor da coleta mais recente (cadastro ao lado se divergir); `diag-nota-interrompida --setor GUA` roda os dois; falta deploy e conferir na tela |
 | P2-68 | Plantão noturno sumia do Monitor depois da meia-noite: `Sessions/all/date` só com a data de hoje → "0 em campo" e as equipes de 16:00–20:00 como "atrasada +8h" (já era assim antes do P0-10) | Backend/Frontend | **no ar** (18/10/2026, `4266a33`) — só exibição; log conferido de madrugada (DESG 7, DEPT 1, DESC 9, DSSJ 7) e nada gravado para 18/10; falta tela + horário diurno; produção pós-meia-noite do plantão é Fase 2 (medir) |
 | P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
-| P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **especificado** (18/10/2026) — `SPEC-saida-da-nota-2026-10-18.md`; backtest pronto (2,3% das avaliadas; placa do WPA errada em 74 de 131 equipes); bloqueado pela Q1 (Aproveitamento da Carteira) |
+| P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **especificado** (18/10/2026) — `SPEC-saida-da-nota-2026-10-18.md`; backtest pronto (2,3% das avaliadas; placa do WPA errada em 74 de 131 equipes); Q1 respondida 19/10 (Aproveitamento da Carteira vai para Gráficos) — pronto para implementar |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 
 ---
@@ -6625,7 +6625,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - Equipes ET quase todas **sem rastreador** (confirmado pelo José: "muitas ou quase todas não têm hoje").
   - Sinal mais forte que "saiu": nota **executada longe do local** (ex.: ECLSJ90, LN executada em 1 min a 61 km, 0 km rodados).
 - **Decisões do José:** substitui o Ranking; EP em PO = patrulha (fora da conta); OS = patrulha para qualquer equipe (hipótese, "acredito que sim"); **placa só do cadastro do gseq** (a operação vai cadastrar); ET sem rastreador aparece como falta de cobertura.
-- **Bloqueia a implementação:** SPEC §13 Q1 — o que fazer com o "Aproveitamento da Carteira" que vive dentro da aba Ranking.
+- **Q1 respondida (José, 19/10/2026):** o "Aproveitamento da Carteira" (tabela + XLSX), que vive dentro da aba Ranking, vai para a aba Gráficos no mesmo commit que tira o Ranking, usando os filtros de período e regional de Gráficos (SPEC §13). Nada mais bloqueia a implementação.
 - **Antes de ir ao ar:** papel só de leitura no gseq + `GSEQ_DATABASE_URL` (SPEC §5); operação cadastrar as placas (lista do `diag-sugere-placa`); conferir 10 ocorrências com a operação; responder Q2 (OS) e Q3 (almoço apontado?).
 - **Critério de aceite:** SPEC §15.
 - **Esforço:** 2–3 dias.

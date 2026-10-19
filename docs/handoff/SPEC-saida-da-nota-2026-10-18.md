@@ -241,9 +241,17 @@ dobrar quando o cadastro de placas cobrir as 26 equipes com sugestão forte
 
 ## 13. Perguntas em aberto
 
-- **Q1 — "Aproveitamento da Carteira"** (executadas ÷ disponíveis, XLSX) vive
-  hoje dentro da aba Ranking (`public/index.html:448-467`, JS em `:5730`). Ao apagar o Ranking:
-  mover para Gráficos ou Histórico, ou descartar? **Bloqueia a remoção do Ranking.**
+- ~~**Q1 — "Aproveitamento da Carteira"**~~ **respondida (José, 19/10/2026):**
+  *"mova o Aproveitamento da Carteira (tabela + XLSX) para a aba Gráficos quando
+  tirar o Ranking."* Hoje ele vive dentro da aba Ranking
+  (`public/index.html:448-467`, JS em `:5730`) e herda o mês e a regional dos
+  filtros do Ranking ("mesmo mês/regional do ranking acima"). Na mudança:
+  - a seção vai para a aba Gráficos, com tabela e botão XLSX iguais;
+  - passa a usar o período e a regional dos filtros da aba Gráficos — o
+    `/carteira/equipes` já aceita `de`/`ate`, então o backend não muda;
+  - no catálogo de rotas por aba do P0-1e, `/carteira/equipes` passa de
+    `ranking` para `graficos`;
+  - o mesmo commit que tira o Ranking move a seção (nunca um sem o outro).
 - **Q2 — OS em SJC é mesmo emergência?** Confirmar com a operação de SJC. Se
   não for, sai da patrulha e a taxa das EC deve subir.
 - **Q3 — Almoço:** nenhuma saída das 11h–13h foi coberta por pausa. Antes de ir
@@ -265,7 +273,7 @@ dobrar quando o cadastro de placas cobrir as 26 equipes com sugestão forte
 
 ## 15. Aceite
 
-- [ ] Q1 respondida; Ranking removido sem perder o que for decidido manter.
+- [ ] Ranking removido e o Aproveitamento da Carteira (tabela + XLSX) funcionando na aba Gráficos (Q1).
 - [ ] `GSEQ_DATABASE_URL` com papel só de leitura na VM (§5).
 - [ ] Migration 017 aplicada; job das 04:30 grava D-1; backfill dos 60 dias.
 - [ ] Soma dos status = notas concluídas do período (teste + conferência na VM).
