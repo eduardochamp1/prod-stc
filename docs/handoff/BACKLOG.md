@@ -182,7 +182,7 @@
 | P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
 | P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **código done** (19/10/2026) — aba no lugar do Ranking, job 04:30 (D-1), migration 017, Carteira em Gráficos; falta na VM: papel de leitura no gseq + `GSEQ_DATABASE_URL`, migration, deploy, backfill, operação cadastrar placas |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
-| P3-22 | `API-WPA-EDP.md` §6.2.2 e §9 diziam "sem wrapper / nenhum implementado" para 5 endpoints que existem no `wpaService` desde 22–23/08 (e listavam o path errado dos colaboradores); 2 endpoints em uso não estavam no documento | Docs | **§6.2.2 e §9 done** (20/10/2026) — os números de linha das outras seções seguem desatualizados |
+| P3-22 | `API-WPA-EDP.md` §6.2.2 e §9 diziam "sem wrapper / nenhum implementado" para 5 endpoints que existem no `wpaService` desde 22–23/08 (e listavam o path errado dos colaboradores); 2 endpoints em uso não estavam no documento | Docs | **§6.2.2 e §9 done** (20/10/2026, aebe97d) — os números de linha das outras seções seguem desatualizados |
 
 ---
 
@@ -6736,7 +6736,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 ## P3-22 — `API-WPA-EDP.md` desatualizado: endpoints "não implementados" que estão em produção
 
 - **Categoria:** Docs
-- **Status:** **§6.2.2 e §9 done** (20/10/2026). Falta: números de linha das outras seções (pending).
+- **Status:** **§6.2.2 e §9 done** (20/10/2026, `aebe97d`). Falta: números de linha das outras seções (pending).
 - **Fonte:** comparativo "API × frontend" pedido pelo José em 20/10/2026 (P0-11).
 - **Evidência (conferida no código em 20/10/2026):**
   - §6.2.2 dizia *"nenhum caminho do cron chama este endpoint — nem existe wrapper em `wpaService`"*. Existe `getNotePoExecution` (`services/wpaService.js:1105`), chamado por `cachearNota` (`services/noteDetailCacher.js:90`) na cauda do snapshot e por `scripts/migrar-po-reparo.js`.
