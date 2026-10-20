@@ -182,6 +182,7 @@
 | P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
 | P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **código done** (19/10/2026) — aba no lugar do Ranking, job 04:30 (D-1), migration 017, Carteira em Gráficos; falta na VM: papel de leitura no gseq + `GSEQ_DATABASE_URL`, migration, deploy, backfill, operação cadastrar placas |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
+| P3-22 | `API-WPA-EDP.md` §6.2.2 e §9 diziam "sem wrapper / nenhum implementado" para 5 endpoints que existem no `wpaService` desde 22–23/08 (e listavam o path errado dos colaboradores); 2 endpoints em uso não estavam no documento | Docs | **§6.2.2 e §9 done** (20/10/2026) — os números de linha das outras seções seguem desatualizados |
 
 ---
 
@@ -6731,3 +6732,19 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Impacto:** o hook de pre-push roda AQUI; depois de um `git pull` que tocasse o `index.html`, o push seria bloqueado — convite ao `--no-verify`. Na VM (Linux) não acontece.
 - **Ação feita:** os testes que leem `index.html`/`app.css` como texto convertem CRLF em LF ao ler. Varredura: com `index.html` e `app.css` em CRLF, a suíte inteira passa (1594/1594); em LF também.
 - **Regra para teste novo de fonte:** converter CRLF em LF ao ler o arquivo.
+
+## P3-22 — `API-WPA-EDP.md` desatualizado: endpoints "não implementados" que estão em produção
+
+- **Categoria:** Docs
+- **Status:** **§6.2.2 e §9 done** (20/10/2026). Falta: números de linha das outras seções (pending).
+- **Fonte:** comparativo "API × frontend" pedido pelo José em 20/10/2026 (P0-11).
+- **Evidência (conferida no código em 20/10/2026):**
+  - §6.2.2 dizia *"nenhum caminho do cron chama este endpoint — nem existe wrapper em `wpaService`"*. Existe `getNotePoExecution` (`services/wpaService.js:1105`), chamado por `cachearNota` (`services/noteDetailCacher.js:90`) na cauda do snapshot e por `scripts/migrar-po-reparo.js`.
+  - §9 ("Endpoints que existem e NÃO usamos") listava 5 endpoints como não implementados. Todos têm wrapper desde 22–23/08 (`87072f5`, `7c47055`, `56a0b80`, `098dcfe`): `getNoteHistoric` (`:1003`), `getNoteInterruptions` (`:1057`), `getSessionBreaks` (`:1137`), `getCollaboratorShifts` (`:1221`), `getSessionCollaborators` (`:2165`). Quatro têm chamador em produção; o `historic` só é chamado por `scripts/diag-nota-posse.js`.
+  - §9 dava o path `/api/Sessions/{id}/collaborators`, que com id de sessão devolve `Data: null` sem erro (`wpaService.js:2154-2160`). O usado é `/api/collaborators/{sessionId}/session`.
+  - `scaletypes/matches` (`getScaleTypes`, `:1341`) e `search/SearchNotesByNumber` (`searchNoteByNumber`, `:945`) estão em uso e não apareciam em lugar nenhum do documento.
+- **Impacto:** o documento existe para reduzir o bus factor (P0-1). Quem lesse a §9 concluiria que essas fontes não existem e poderia reimplementá-las, ou explicar à EDP um volume de requisições sem contar os jobs que as usam (P0-11).
+- **Ação feita:** §6.2.2 ganhou "Onde é chamado"; §9 virou "Endpoints secundários: os que já usamos e os que não usamos", com wrapper, chamador e item do backlog de cada um, a correção do path dos colaboradores, o alerta de fuso do P1-48 para `historic` e `break`, e os dois endpoints que faltavam. O texto antigo ficou registrado como nota datada.
+- **Falta (pending):** as demais seções citam linhas de antes do crescimento do `wpaService.js` (ex.: §5.1 dá `getTeamStatusV2` em `:765`, hoje `:1412`; §6.3 dá `getNotesByDate` em `:834`, hoje `:1633`; §2 dá o `/signin` em `:383-397`, hoje `loginAttempt` em `:421`). Reconferir seção por seção, ou trocar `arquivo:linha` por `arquivo` + nome da função, que não envelhece.
+- **Esforço:** ~1h para o resto do documento.
+- **Rollback:** `git revert` do commit (só documentação).

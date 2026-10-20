@@ -27,7 +27,7 @@
 6. [Endpoints: notas](#6-endpoints-notas)
 7. [Endpoints: motivo de rejeição](#7-endpoints-motivo-de-rejeição)
 8. [Endpoints: notas devolvidas (backoffice)](#8-endpoints-notas-devolvidas-backoffice)
-9. [Endpoints que existem e NÃO usamos](#9-endpoints-que-existem-e-não-usamos)
+9. [Endpoints secundários: os que já usamos e os que não usamos](#9-endpoints-secundários-os-que-já-usamos-e-os-que-não-usamos)
 10. [O fluxo de coleta ao vivo, ponta a ponta](#10-o-fluxo-de-coleta-ao-vivo-ponta-a-ponta)
 11. [O fluxo histórico (backfill por data)](#11-o-fluxo-histórico-backfill-por-data)
 12. [Fechamento do dia (consolidação)](#12-fechamento-do-dia-consolidação)
@@ -436,8 +436,24 @@ campo em vez de bug de código.
 
 **Uma requisição por nota PO.** São ~91 notas PO/dia (8.402 em 92 dias, medido em
 30/08/2026), então o custo corrente é baixo; o backfill das 8.402 já cacheadas é
-um one-off que precisa de throttle. Hoje **nenhum caminho do cron chama este
-endpoint** — nem existe wrapper em `wpaService`.
+um one-off que precisa de throttle.
+
+**Onde é chamado (conferido no código em 20/10/2026).** O wrapper é
+`getNotePoExecution` (`services/wpaService.js:1105`), que devolve o
+`PowerOnExecution` já normalizado (`repairTime`, `hasRepair`, `classe`,
+`causa`, `clima`…). Dois chamadores:
+
+- **ao vivo:** `cachearNota` (`services/noteDetailCacher.js:90`), na cauda do
+  snapshot (`runCacheNotaDetails`, `services/cronService.js:382`, sem `await`).
+  Só para `Type === 'PO'`, depois de gravar o `details/optimized`. Se falhar, a
+  nota **não** é marcada como falha: o backfill pega depois;
+- **backfill:** `scripts/migrar-po-reparo.js`, que retoma por ausência de linha.
+
+Grava em `note_po_reparo` (`db/poReparoQueries.js:116`).
+
+> Até 20/10/2026 este parágrafo dizia que nenhum caminho do cron chamava o
+> endpoint e que não existia wrapper. Era verdade em 30/08; o código andou e o
+> documento não acompanhou (backlog P3-22).
 
 **Cache:** tabela `note_details`, com TTL de **90 dias**
 (`services/dataWriter.js:948-965`). ⚠️ Esse TTL apaga a **única** fonte de
@@ -543,20 +559,53 @@ Cada item tem `Number`, `Type`, `Team.Name`, `Status`, `ConclusionDate`,
 
 ---
 
-## 9. Endpoints que existem e NÃO usamos
+## 9. Endpoints secundários: os que já usamos e os que não usamos
 
 Levantados na revisão de 20/08/2026 comparando com outro projeto que consome a
-mesma API. Todos **confirmados em uso por lá**, nenhum implementado aqui:
+mesma API. **Até 20/10/2026 esta seção dizia que nenhum estava implementado.**
+Conferido no código em 20/10/2026: todos ganharam wrapper em
+`services/wpaService.js` entre 22 e 23/08/2026 (`87072f5`, `7c47055`, `56a0b80`,
+`098dcfe`), e quatro dos cinco têm chamador em produção (backlog P3-22).
 
-| Endpoint | O que traz | Backlog |
+### 9.0 Já implementados
+
+| Endpoint | O que traz | Wrapper | Quem chama | Backlog |
+|---|---|---|---|---|
+| `GET /api/Notes/{id}/historic` | **janela de posse da nota por equipe** — `Team.Name`, `CreatedAt`, `RemovedAt` | `getNoteHistoric` (`wpaService.js:1003`) | **só** `scripts/diag-nota-posse.js`. Nenhum caminho de produção: a posse segue inferida por data de sessão | P1-23 |
+| `GET /api/Notes/{id}/completeInterruptions` | interrupções com `Id`, `TeamName`, `Date`, `Try` e `RejectionReasonId` (que traz o **texto** do motivo), sem `sectorId` | `getNoteInterruptions` (`:1057`) | `runColetaInterrupcoes` (`services/interrupcaoService.js:238`), na cauda do snapshot (`cronService.js:395`) → `note_interrupcoes`. Usar como motivo de rejeição uniforme segue pendente | P1-33 |
+| `GET /api/collaborators/{sessionId}/session` | colaboradores da sessão, com `Code` e `Name` | `getSessionCollaborators` (`:2165`) | coleta ao vivo (`_getTeamsBySectorUncached`, `:2558`), só quando a lista de sessões e o V2 vieram sem colaboradores | P2-14, P2-28 |
+| `GET /api/sessions/{id}/break` | **intervalos** da sessão, com `SessionBreakReason.Text` e `.Responsible` (quem autorizou a parada) | `getSessionBreaks` (`:1137`) | `runSyncIntervalos` (`cronService.js:674`, cron 03:10, sessões de ontem → `sessao_intervalo`); `desviosAoVivo` (`db/rotinaQueries.js:558`, tela de uma equipe no dia de hoje); `runAlertaProdutividade` (`cronService.js:209`, cauda do snapshot) | P2-15 |
+| `GET /api/collaboratorshifts/{setor}/{mes}/{ano}` | **escala do mês** por colaborador, com `ScaleCategoryName`. Códigos que não são dia trabalhado: `FOL, DR, DES, FER, DIS, AFO, NA, SAV, SIN, TRE` | `getCollaboratorShifts` (`:1221`) | `runSyncEscalaDia` (`cronService.js:579`, crons `20 5-22` e `50 5-21`) → `escala_dia` | P1-26, P2-24, P2-65 |
+
+⚠️ **O path dos colaboradores estava errado aqui.** Esta tabela listava
+`GET /api/Sessions/{id}/collaborators`. Com id de **sessão** ela devolve
+`Data: null` sem erro HTTP: espera o id do serviço, apesar do nome (medido por
+outro projeto, comentário em `wpaService.js:2154-2160`). O que usamos é
+`collaborators/{sessionId}/session`, o mesmo que o portal chama (§9.1).
+
+⚠️ **Fuso, pendente (P1-48).** `getNoteHistoric` e `getSessionBreaks` passam as
+datas por `_instanteWpa` → `_normTzIso` (`wpaService.js:963-976`), que anexa `Z`.
+Para o `break`, o P1-48 mediu que a EDP manda hora de **parede**: a
+`sessao_intervalo` está gravada 3h adiantada. O `completeInterruptions` já foi
+corrigido em 07/10/2026 e anexa `-03:00`.
+
+### 9.0.1 Também em uso, e que não estavam neste documento
+
+| Endpoint | Wrapper | Quem chama |
 |---|---|---|
-| `GET /api/Notes/{id}/historic` | **janela de posse da nota por equipe** — `Team.Name`, `CreatedAt`, `RemovedAt`. Hoje inferimos isso por data de sessão. | P1-23 |
-| `GET /api/Notes/{id}/completeInterruptions` | interrupções com `Id`, `TeamName`, `Date`, `Try` e **`RejectionReasonId`** — motivo de rejeição uniforme, 1 request, sem `sectorId` | P1-33 |
-| `GET /api/Sessions/{id}/collaborators` | colaboradores da sessão | P2-14 |
-| `GET /api/sessions/{id}/break` | **intervalos** da sessão, com `SessionBreakReason.Text` e `.Responsible` (quem autorizou a parada) | P2-15 |
-| `GET /api/collaboratorshifts/{setor}/{mes}/{ano}` | **escala do mês** por equipe, com `ScaleCategoryName`. Códigos que não são dia trabalhado: `FOL, DR, DES, FER, DIS, AFO, NA, SAV, SIN, TRE` | P1-26, P2-24 |
+| `GET /api/scaletypes/matches?sectorId={X}` | `getScaleTypes` (`wpaService.js:1341`), cache de 12h | coleta ao vivo via `_safeScaleTypes` (`:2323`; o fim real do turno, que sem ele volta a ser inferido como início + 9h); `runSyncEscalaCatalogo` (`cronService.js:495`, cauda do snapshot) → `escalas_catalogo` |
+| `GET /api/search/SearchNotesByNumber?noteNumber={N}` | `searchNoteByNumber` (`:945`) | `GET /api/wpa/nota/:noteId` (`routes/index.js:1582`), quando chega o número humano da nota e o banco não resolveu; `scripts/diag-nota-posse.js` |
 
-E campos que chegam nos payloads que **já baixamos** e jogamos fora:
+### 9.0.2 Ainda sem uso
+
+Os que existem e seguem sem chamador estão em §6.2.1 (endpoints da nota) e §9.1
+(captura do portal de 20/10/2026): `Notes/archived`, `Sessions/all/online`,
+`Notes/interruptedFilter`, `Notes/v2/operation/{setor}`,
+`sessions/{id}/walletlocklog`, `sessions/{id}/logsworker`,
+`callback-information` e os que vieram vazios na nota testada.
+
+E campos que chegam nos payloads que **já baixamos** e jogamos fora (levantamento
+de 20/08/2026, não reconferido em 20/10):
 `ConclusionStatus` e `DesiredConclusionDate` nas listas baratas de nota (KPI de
 pontualidade a custo zero de rede), `Checkpoints[].Try`, `Team.Description`,
 `Team.LastUpdateWallet`, `LastLocationComunication`, `Assigned[]`.
