@@ -2722,6 +2722,7 @@ feita em PR separado depois dos testes.
   3. ⬜ Se vier diferente, documentar a diferença REAL — o comentário atual pode
      estar descrevendo uma suposição, não um teste.
 - **⚠️** Muda a fonte dos contadores de nota → medir produção antes/depois.
+- **20/10/2026 (captura do portal, P0-11):** o próprio portal, na Gestão Online, chama `GET /api/teamsstatus/V2?sectorId=X` **sem** o parâmetro, a cada 60 s. Mais um consumidor que não usa. E o fallback cross-setor é requisição extra por ciclo, então este item agora também reduz volume para a EDP. A comparação do passo 1 precisa de um momento com equipe visitante no setor. Ver `API-WPA-EDP.md` seção 9.1.
 
 ---
 
@@ -5997,6 +5998,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
     - **Kill-switch total:** `wpaFetch` recusa, sem enviar nada, quando a conta resolvida está em `WPA_ACCOUNTS_DISABLED`. Antes ele usava o token guardado (memória/banco), e os retries do cron seguiam batendo na EDP com todas as contas "desativadas". `test/killSwitchTotal.test.js` (módulo apontado para servidor local antes de carregar). Procedimento no RUNBOOK ("Parar TODA requisição à EDP").
     - **Espera do painel depois de falha de setor:** `getTeamsBySector` com `aceitaCache` responde a mesma falha sem ir à EDP por `WPA_PAINEL_ESPERA_FALHA_MS` (default 5 min). O cron não espera e limpa a marca quando volta. `test/wpaEsperaFalha.test.js`.
     - **Código HTTP no contador:** `porStatus` por hora e por endpoint (`200`, `403`, `5xx`, `timeout`, `rede`) em `/api/admin/wpa-requisicoes` e na linha `wpa_requisicoes_hora`.
+  - **Captura do portal (20/10/2026): não existe atalho por setor.** Procuramos no portal uma chamada por setor que trouxesse executadas e rejeitadas do dia, para trocar os `notes/{rejected,executed}/{id}/session` por sessão. Gestão Online, Sessões, Notas Interrompidas, Operação e Notas Arquivadas, por HAR: **o portal busca as notas sessão a sessão, como nós.** `interruptedFilter` é a fila atual (sem data, sem sessão) e `Notes/v2/operation` é a grade geral paginada de todas as empresas (sem sessão). `POST /api/Notes/archived` (setor + intervalo de datas + `executed`/`rejected`) é o único por setor e por data. No dia fechado (19/10) trouxe 170 concluídas (`ExecutionStatus 4`) em 35 equipes Engelmig, filtradas pela data de **arquivamento**, sem sessão, com 1,8 MB por setor. Serve para auditoria de concluídas, não para a coleta. Detalhe em `API-WPA-EDP.md` seção 9.1. Consequência: a redução de volume que falta vem de frequência (itens 1–5 acima) e do P2-16, não de troca de endpoint. Na resposta à EDP, perguntar se existe endpoint por setor ou com filtro de data de alteração.
   - **Medição antes × depois:** o deploy de `d5a3ae6` leva o contador junto com o corte, então o dia medido já é o "depois". Para ter o "antes" do painel, subir o primeiro dia com `WPA_PAINEL_CACHE_MS=0` no `.env` (o item 2 continua valendo) e, no dia seguinte, tirar a variável (deploy com `delete + start`, regra 4).
 - **Critério de aceite:**
   - [x] Toda requisição à EDP é contada por hora, endpoint e origem; teste garante (`a23d6bc`).

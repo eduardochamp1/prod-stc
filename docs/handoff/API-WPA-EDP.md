@@ -561,6 +561,58 @@ E campos que chegam nos payloads que **já baixamos** e jogamos fora:
 pontualidade a custo zero de rede), `Checkpoints[].Try`, `Team.Description`,
 `Team.LastUpdateWallet`, `LastLocationComunication`, `Assigned[]`.
 
+### 9.1 Captura do portal em 20/10/2026 (P0-11): não há atalho por setor
+
+Objetivo: achar no portal uma chamada **por setor** que trouxesse executadas e
+rejeitadas do dia, para substituir os `notes/{rejected,executed}/{id}/session`
+que fazemos sessão a sessão (o grosso do nosso volume, P0-11). Roteiro em
+[ROTEIRO-captura-portal-wpa-2026-10-20.md](ROTEIRO-captura-portal-wpa-2026-10-20.md).
+Capturado por DevTools (HAR), DESG, 07h37–07h47 BRT, conta `es`.
+
+**Resultado: nenhuma tela do portal traz executadas/rejeitadas ligadas à
+sessão.** Quando precisa disso, o portal chama os mesmos endpoints por sessão
+que nós. O único endpoint por setor e por data é o `Notes/archived` (última
+linha da tabela). Ele traz concluídas por **data de arquivamento**, sem
+sessão: serve para auditoria, não para coleta (veredito abaixo da tabela).
+
+| Tela | Chamadas | O que importa |
+|---|---|---|
+| Gestão Online | `GET /api/Teams?sectorId=X&status=1&filterByExhibitionSector=true` (1×) e `GET /api/teamsstatus/V2?sectorId=X` **a cada 60 s exatos** | Só colunas Atribuídas/Em Campo/Concluídas, de `Assigned`/`Downloaded`/`Concluded`. `Rejected` = `null` e `Executed` = `[]`, como desde 30/05. **O portal chama o V2 SEM `filterByExhibitionSector`** (P2-16). O V2 do portal veio só com equipes Engelmig: aparentemente a EDP já recorta pela empresa da conta. |
+| Sessões | `GET /api/Sessions/all/online?sectorId=X` | Lista das sessões abertas (Team, Vehicle, Device, `BeginTime` + `BeginTime2` com offset). **Sem contagem de notas.** |
+| Sessões → clique | `Sessions/{id}`, `notes/{rejected,executed,surveyed,downloaded}/{id}/session`, `collaborators/{id}/session`, `sessions/{id}/break`, `sessions/{id}/walletlocklog`, `sessions/{id}/logsworker?date_s=AAAA-MM-DD` | **O mesmo padrão por sessão que nós.** |
+| Notas Interrompidas | `POST /api/Notes/interruptedFilter`, form `sectorId=X`, headers `Wpa-Data-Context: default` + `X-Requested-With` | É a **fila atual** de notas interrompidas (`Status 0`, voltaram ao pool), não o histórico do dia: sem filtro de data, sem `SessionId`, sem `TeamId`. Nota redistribuída sai da lista. Não substitui `notes/rejected`. ⚠️ `InterruptedDate` veio 3h à frente do `completeInterruptions.Date` da mesma nota (família do P1-48). |
+| Notas Interrompidas → abrir nota | 34 chamadas (detalhes, histórico, materiais, formulários…) | Abrir uma nota no portal custa mais que coletar uma sessão inteira. |
+| Operação → Buscar | `POST /api/Notes/v2/operation/{setor}`, form com `startDate`, `endDate`, `scheduledDate`, `noteTypeList[]`, `viewTypeList[]` (2–5), `pageNumber`, `pageLength=50`, `userId`, `export=false` | Grade geral do setor, **todas as empresas**, paginada (4043 notas sem filtro de data; 50 por página, 240 kB). Sem `SessionId`. Não tem como atribuir execução/rejeição a sessão, que é o que a regra rejeitada × concluída exige. Não testamos `viewTypeList` nem filtro de data: varrer isso custaria requisição e o problema da sessão continuaria. A cada troca de filtro a tela recarrega ~9 listas de apoio. |
+| Notas Arquivadas → Buscar | `POST /api/Notes/archived`, form `startDate=AAAA-MM-DD&endDate=AAAA-MM-DD&sectorId=X&pageNumber=0&pageLength=0&executed=true&rejected=true` | **O único candidato por setor e por data.** Devolve `Data.{RejectedReasons[], RejectedNotesByTeam[], ExecutedNotesByTeam[], Notes[]}`, agrupado por `Key` (nome da equipe) com `DebtsTotal` e `Values[]` (as notas). Às 07h50 de 20/10 vieram 5 notas, todas `Status 6` + `ExecutionStatus 5`, com `ConclusionDate` do dia, **`Team` = `null`**, sem `Sessions`. Por isso caíram na chave `Auto`. Os motivos (`Baixa via Sistema`, `Poste/pontalete resist.mec inadequada`…) indicam rejeição. Uma chamada por setor e dia: 6,9 kB. **Não sabemos ainda** se a nota executada por equipe vem com `Team` preenchido, se a data é de conclusão ou de arquivamento, e se o setor traz só Engelmig. Ver a próxima captura abaixo. |
+
+**Dia fechado (19/10, DESG, só `executed=true`, capturado 20/10 07h50):**
+
+- **170 notas em 35 equipes**, com o nome da equipe na `Key` e em `Team.Name`
+  (EBGPR63, ECGPR90, ETMRT16, EPMRT31, PPMFL01…). Todas são nomes que já
+  aparecem no nosso repo, o que indica que o recorte é por empresa da conta,
+  como no V2. `TeamId`, `Sessions` e `SessionId` vêm nulos.
+- **Todas com `Status 6` + `ExecutionStatus 4`**: são **concluídas**, o mesmo
+  que já vem de graça no `V2.Concluded`. Não é a categoria "executadas" do
+  painel (`notes/executed` + `Downloaded` com 3/6/7, seção 10).
+- **O filtro de data é o de ARQUIVAMENTO, não o de conclusão:** 159 das 170
+  têm `ConclusionDate` em 19/10, e 11 foram concluídas entre 28/09 e 15/10 e
+  arquivadas em 19/10. E as notas concluídas em 19/10 mas arquivadas depois
+  não aparecem. Para conferir produção, filtre por `ConclusionDate`, e saiba
+  que a última semana fica incompleta até tudo ser arquivado.
+- **Pesado:** 1,8 MB para um setor e um dia, porque cada nota vem com o
+  objeto inteiro.
+
+**Veredito sobre o `Notes/archived`:** não substitui nada da coleta ao vivo.
+Não tem sessão, as executadas dele são as concluídas, e as rejeitadas do dia
+vieram sem equipe (`Auto`). Serve como **segunda fonte para auditoria de
+concluídas por equipe** num dia já arquivado, 1 chamada por setor. É uma
+conferência independente do V2 para quando a EDP questionar um número
+(ao lado do `scripts/audit-indicadores.js`). Não implementado.
+
+**Para a resposta à EDP (P0-11 item 3):** usamos os mesmos endpoints que o
+próprio portal usa para sessão e nota. O que pesava era a **frequência**
+(cron de 15 min + painel por aba), não o endpoint escolhido.
+
 ---
 
 ## 10. O fluxo de coleta ao vivo, ponta a ponta
@@ -846,6 +898,11 @@ não mais `snapshot_skipped_empty`.
 ---
 
 ## Como explorar a API sem quebrar nada
+
+Para descobrir endpoint novo pelo portal (DevTools ou Interceptor do Postman),
+siga [ROTEIRO-captura-portal-wpa-2026-10-20.md](ROTEIRO-captura-portal-wpa-2026-10-20.md):
+quais telas abrir, o que anotar e como validar um candidato sem gastar
+requisição.
 
 ```bash
 # Estado das contas, tokens e breakers — não toca a rede
