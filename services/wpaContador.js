@@ -171,7 +171,10 @@ function _logarHoraFechada(h) {
 
 /** Requisição que nem teve resposta HTTP: timeout (node-fetch) ou erro de rede. */
 function _statusDoErro(err) {
-  return err && err.type === 'request-timeout' ? 'timeout' : 'rede';
+  if (err && err.type === 'request-timeout') return 'timeout';
+  // 24/10/2026: relay do WPA_PROXY fora do ar (services/wpaHttp.js) não é erro da EDP.
+  if (err && err.code === 'WPA_RELAY_INDISPONIVEL') return 'relay';
+  return 'rede';
 }
 
 /** Mede e registra uma chamada de fetch (Promise). Usado pelo wpaHttp. */
