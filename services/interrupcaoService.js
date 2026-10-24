@@ -49,6 +49,7 @@
 'use strict';
 
 const log = require('./logger').forModule('interrupcoes');
+const { ehFalhaDeCaminho } = require('./wpaErros');
 
 // ── TODOS OS TIPOS (15/10/2026) ─────────────────────────────────────────────
 // Pedido do José: "amplia a coleta de interrupções para todos os tipos de nota,
@@ -273,6 +274,7 @@ async function runColetaInterrupcoes(teams) {
         _contarGet(custo, c.tipo, novas.length ? 'com' : 'vazia');
         linhas.push(...novas);
       } catch (err) {
+        if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo
         _contarGet(custo, c.tipo, 'falha');
         falharam.add(c.note_id);
         log.warn('interrupcoes_fetch_falhou', { nota: c.numero || c.note_id, msg: err.message });

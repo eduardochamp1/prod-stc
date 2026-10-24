@@ -7,6 +7,7 @@ const { getMockTeams, getMockTeamDetail, getMockSummary } = require('../mock/moc
 const { getTeamsBySector, isSectorDisabled, REGIONAL_MAP } = require('./wpaService');
 const { isOficial, getMeta } = require('./equipesOficiais');
 const { classifyBuckets } = require('./bucketMath');   // fonte única da aritmética de buckets (P2-2)
+const { ehFalhaDeCaminho } = require('./wpaErros');   // 24/10/2026: falha de proxy/IP para a coleta de todos os setores
 // Nota: regional agora é SEMPRE string[] de siglas reais (GUA/CAC/SJC).
 // Caller (route ou cron) responsável por garantir array válido.
 
@@ -650,18 +651,26 @@ async function _coletarSetores(setores, { coletar, desativado, repetirFalhos = f
   esperaMs = RETRY_SETOR_ESPERA_MS, dormir = (ms) => new Promise(r => setTimeout(r, ms)) }) {
   const report = { ok: [], failed: [], skipped: [] };
   const porSetor = new Map();
+  // 24/10/2026 (spec wpa-acesso-edp.md, R3.1): falha do CAMINHO até a EDP (proxy
+  // fora, IP bloqueado) vale para todos os setores — não tenta os outros, não
+  // repete depois da espera, e não loga setor a setor. Os restantes entram em
+  // `failed` com o mesmo code, e quem chama loga UMA linha.
+  let caminho = null;
   for (const s of setores) {
     if (desativado(s)) { report.skipped.push(s); continue; }
+    if (caminho) { report.failed.push({ sector: s, code: caminho.code, msg: 'não tentado: ' + caminho.code }); continue; }
     try {
       porSetor.set(s, await coletar(s));
       report.ok.push(s);
     } catch (err) {
       const msg = String((err && err.message) || err).slice(0, 140);
-      report.failed.push({ sector: s, msg });
+      report.failed.push({ sector: s, code: (err && err.code) || null, msg });
+      if (ehFalhaDeCaminho(err)) { caminho = err; continue; }
       console.warn(`[dataService] setor ${s} falhou (${msg.slice(0, 90)}) — seguindo com os demais.`);
     }
   }
-  if (repetirFalhos && report.failed.length > 0) {
+  if (caminho) report.caminho = caminho.code;
+  if (repetirFalhos && report.failed.length > 0 && !caminho) {
     report.retried = [];
     await dormir(esperaMs);
     const falhos = report.failed;
@@ -674,7 +683,7 @@ async function _coletarSetores(setores, { coletar, desativado, repetirFalhos = f
         console.warn(`[dataService] setor ${f.sector} recuperado na 2ª tentativa (1ª: ${f.msg.slice(0, 90)}).`);
       } catch (err) {
         const msg = String((err && err.message) || err).slice(0, 140);
-        report.failed.push({ sector: f.sector, msg });
+        report.failed.push({ sector: f.sector, code: (err && err.code) || null, msg });
         report.retried.push({ sector: f.sector, ok: false, msg1: f.msg });
         console.warn(`[dataService] setor ${f.sector} falhou também na 2ª tentativa (${msg.slice(0, 90)}).`);
       }

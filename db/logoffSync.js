@@ -39,6 +39,7 @@
 'use strict';
 
 const { msParede } = require('./heQueries');
+const { ehFalhaDeCaminho } = require('../services/wpaErros');
 
 /** Sentinela de "sem fim" que a API da EDP devolve. */
 const VAZIO_EDP = '0001-01-01T00:00:00';
@@ -159,6 +160,7 @@ async function sincronizarDia(pool, buscarSessoes, dia, opts = {}) {
       const sessoes = await buscarSessoes(setor, dia);
       indice.set(setor, indexarFechadas(sessoes, opts.companyId));
     } catch (err) {
+      if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o dia inteiro
       falhas.push({ setor, erro: err.message });
       log(`[logoff-sync] ${dia} ${setor}: falhou — ${err.message}`);
     }

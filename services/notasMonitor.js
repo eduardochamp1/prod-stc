@@ -245,12 +245,21 @@ async function collectSnapshot() {
   // lista ATIVA em todo o resto pra manter o alinhamento setor↔índice.
   const activeSectors = SECTORS.filter(s => !isSectorDisabled(s));
   // Busca paralelo: teams (1x por setor) + notas (1x por setor).
-  const teamsBySector = await Promise.all(activeSectors.map(s =>
-    getTeamsSimple(s).catch(e => { log.warn('teams_simple_fail', { sector: s, msg: e.message }); return []; })
-  ));
-  const notasBySector = await Promise.all(activeSectors.map(s =>
-    getNotasDevolvidas(s).catch(e => { log.warn('notas_fail', { sector: s, msg: e.message }); return []; })
-  ));
+  //
+  // 24/10/2026 (spec wpa-acesso-edp.md, R3.1/R3.4): falha de UM setor virava []
+  // e o ciclo gravava mesmo assim — as notas daquele setor sumiam do
+  // notas_snapshots e o updateDailyAgg dava as equipes dele como pendentes 0, com
+  // todas as notas "saindo". Agora qualquer setor que falhe derruba o ciclo: nada
+  // gravado, uma linha de log com o code, e o próximo ciclo (xx:05) tenta de novo.
+  const falhas = [];
+  const _ouFalha = (s, oQue) => (e) => { falhas.push({ sector: s, oQue, code: e.code || null, msg: e.message }); return []; };
+  const teamsBySector = await Promise.all(activeSectors.map(s => getTeamsSimple(s).catch(_ouFalha(s, 'teams'))));
+  const notasBySector = await Promise.all(activeSectors.map(s => getNotasDevolvidas(s).catch(_ouFalha(s, 'notas'))));
+  if (falhas.length > 0) {
+    const ms = Date.now() - t0;
+    log.error('notas_coleta_falhou', { code: falhas[0].code, setores: falhas.map(f => `${f.sector}:${f.oQue}`), msg: falhas[0].msg, ms });
+    return { total: 0, engelmig: 0, inserted: 0, deleted: 0, ms, falhou: true, falhas };
+  }
   // Junta dropdown de equipes (Name → CompanyId) — uma equipe pode aparecer
   // em mais de um setor, mas o CompanyId é o mesmo.
   const mapa = new Map();

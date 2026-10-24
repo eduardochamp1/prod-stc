@@ -21,6 +21,7 @@
 'use strict';
 
 const log = require('./logger').forModule('note-cache');
+const { ehFalhaDeCaminho } = require('./wpaErros');
 
 /** Concorrência padrão. 4 é o que o cron usa desde sempre — não satura
  *  `/details/optimized` e não compete com o resto do ciclo de snapshot. */
@@ -72,6 +73,7 @@ async function cachearNota(c) {
           tipo: String(raw.Type).toUpperCase(), sector_id: c.sectorId || null,
         });
       } catch (errInt) {
+        if (ehFalhaDeCaminho(errInt)) throw errInt;   // 24/10/2026: para o lote
         log.warn('interrupcoes_do_detalhe_falhou', { note: raw.Number, msg: errInt.message });
       }
     }
@@ -98,11 +100,15 @@ async function cachearNota(c) {
         if (eq) { linha.team_name = eq.team_name; linha.regional = eq.regional; }
         await upsertPoReparo(raw.Id, { numero: raw.Number, sector_id: c.sectorId }, linha);
       } catch (errPo) {
+        if (ehFalhaDeCaminho(errPo)) throw errPo;   // 24/10/2026: para o lote
         log.warn('po_reparo_falhou', { note: raw.Number, msg: errPo.message });
       }
     }
     return { ok: true, id: c.id, tipo: raw.Type, checkpoints: (processed.checkpoints || []).length };
   } catch (err) {
+    // 24/10/2026 (spec R3.1): proxy fora / IP bloqueado para o lote inteiro (uma
+    // linha de log no job), em vez de uma falha por nota.
+    if (ehFalhaDeCaminho(err)) throw err;
     return { ok: false, id: c.id, reason: err.message };
   }
 }

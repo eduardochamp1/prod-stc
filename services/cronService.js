@@ -14,6 +14,10 @@ const { collectSnapshot: collectNotas } = require('./notasMonitor');
 const { ensureFreshToken, getToken, isSectorDisabled } = require('./wpaService');
 const { dateBRT, hourBRT, dateBRTMinusDays } = require('./timeUtil');
 const log                     = require('./logger').forModule('cron');
+// 24/10/2026 (spec wpa-acesso-edp.md, R3.1): falha do caminho até a EDP (proxy,
+// IP bloqueado) para a rotina inteira no ciclo — uma linha de log com o code, e
+// nada gravado por cima. Ver services/wpaErros.js.
+const { ehWpaAccessError, ehFalhaDeCaminho } = require('./wpaErros');
 
 let tokenJob        = null;
 let snapshotJob     = null;
@@ -167,7 +171,7 @@ async function runTokenRefresh() {
       account: r.account,
     });
   } catch (err) {
-    log.error('token_refresh_failed', { msg: err.message });
+    log.error('token_refresh_failed', { code: err.code || null, msg: err.message });
   }
 }
 
@@ -180,7 +184,7 @@ async function runTokenWarm() {
     const token = await getToken();
     log.info('token_warm_ok', { has_token: Boolean(token) });
   } catch (err) {
-    log.error('token_warm_failed', { msg: err.message });
+    log.error('token_warm_failed', { code: err.code || null, msg: err.message });
   }
 }
 
@@ -191,7 +195,7 @@ async function runNotasCollect() {
     const r = await collectNotas();
     log.info('notas_collect_ok', r);
   } catch (err) {
-    log.error('notas_collect_failed', { msg: err.message });
+    log.error('notas_collect_failed', { code: err.code || null, msg: err.message });
   }
 }
 
@@ -280,6 +284,17 @@ async function runSnapshot() {
     const ghostCount = allTeams.length - teams.length;
     if (ghostCount > 0) {
       log.info('ghost_teams', { count: ghostCount });
+    }
+
+    // 24/10/2026 (spec wpa-acesso-edp.md, R3.1): o caminho até a EDP caiu no meio
+    // do ciclo (proxy, IP bloqueado) — setores coletados antes da queda NÃO são
+    // gravados sozinhos: snapshot parcial vira subcontagem nos totais do dia. Uma
+    // linha de log, snapshot_error registrado, e o próximo ciclo tenta de novo.
+    if (sectorReport && sectorReport.caminho) {
+      log.error('rotina_sem_acesso_edp', { rotina: 'snapshot', code: sectorReport.caminho,
+        coletados_descartados: sectorReport.ok, failed: sectorReport.failed.map(f => f.sector) });
+      await _recordSnapshotError(new Error(`sem acesso à EDP (${sectorReport.caminho}) — ciclo não gravado`));
+      return; // finally abaixo libera isRunning corretamente
     }
 
     if (teams.length === 0) {
@@ -511,6 +526,7 @@ async function runSyncEscalaCatalogo() {
     try {
       catalogo = await getScaleTypes(sectorId);
     } catch (err) {
+      if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
       log.warn('escala_catalogo_fetch_falhou', { sectorId, msg: err.message });
       continue;
     }
@@ -605,6 +621,7 @@ async function runSyncEscalaDia() {
     try {
       linhas = await getCollaboratorShifts(sectorId, mes, ano);
     } catch (err) {
+      if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
       log.warn('escala_dia_fetch_falhou', { sectorId, mes, ano, msg: err.message });
       continue;
     }
@@ -691,6 +708,7 @@ async function runSyncIntervalos(date) {
     try {
       lista = await getSessionsByDate(sectorId, dia);
     } catch (err) {
+      if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
       log.warn('intervalos_sessoes_falhou', { sectorId, dia, msg: err.message });
       continue;
     }
@@ -707,6 +725,7 @@ async function runSyncIntervalos(date) {
       try {
         breaks = await getSessionBreaks(s.Id);
       } catch (err) {
+        if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
         log.warn('intervalos_break_falhou', { sessionId: s.Id, msg: err.message });
         continue;
       }
@@ -961,6 +980,7 @@ async function runClassifyRejections(teams) {
           raw:            det?.raw || null,
         };
       } catch (err) {
+        if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
         console.warn(`[CRON] rejeicoes: ${j.numero || j.note_id} falhou: ${err.message}`);
         return null;
       }
@@ -1084,7 +1104,10 @@ async function runBackfillRejeicoes(daysBack) {
           collaborator_names: j.collaborator_names,
           raw:            det?.raw || null,
         };
-      } catch { return null; }
+      } catch (err) {
+        if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
+        return null;
+      }
     }));
     results.forEach(r => { if (r) linhas.push(r); });
     if (i > 0 && i % 200 === 0) {
@@ -1154,6 +1177,7 @@ async function runRetryRejeicoesVazias(limite = 120) {
            det.raw ? JSON.stringify(det.raw) : null]);
         recuperadas++;
       } catch (err) {
+        if (ehFalhaDeCaminho(err)) throw err;   // 24/10/2026: proxy/IP — para o ciclo, 1 log no job
         console.warn(`[CRON] retry-rej: ${r.numero || r.note_id} falhou: ${err.message}`);
       }
     }));
@@ -1582,7 +1606,16 @@ async function runDailyDriftSweep() {
 // node-cron passa seguem intactos para a função do job.
 function _agendar(nome, expr, fn, opts) {
   const { comOrigem } = require('./wpaContador');
-  return cron.schedule(expr, (...args) => comOrigem(`cron:${nome}`, () => fn(...args)), opts);
+  // 24/10/2026 (R3.1): a rotina que parou por falha de acesso à EDP deixa UMA
+  // linha com o nome e o code, e o processo segue para o próximo ciclo. Antes, a
+  // rejeição ia pro 'task-failed' do node-cron, que ninguém escuta: sem log.
+  const comLog = (...args) => Promise.resolve()
+    .then(() => fn(...args))
+    .catch((err) => {
+      if (!ehWpaAccessError(err)) throw err;
+      log.error('rotina_sem_acesso_edp', { rotina: nome, code: err.code, msg: err.message });
+    });
+  return cron.schedule(expr, (...args) => comOrigem(`cron:${nome}`, () => comLog(...args)), opts);
 }
 
 function startCron() {

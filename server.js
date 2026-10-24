@@ -179,6 +179,17 @@ async function start() {
     console.warn('[BOOT] reconcile do reclassify job falhou (ignorado):', err.message);
   }
 
+  // 24/10/2026 (spec wpa-acesso-edp.md, R4): com WPA_PROXY, avisa já na subida se
+  // o túnel do relay não está de pé — senão o primeiro sinal era o ciclo do cron
+  // falhando com WPA_PROXY_INDISPONIVEL. Não espera nem impede o boot.
+  const wpaProxy = (process.env.WPA_PROXY || '').trim();
+  if (wpaProxy) {
+    require('./services/wpaHttp').testarPortaProxy(wpaProxy, 3000).then((t) => {
+      if (t.ok) console.log(`[BOOT] WPA_PROXY ${t.endereco} aceita conexão — chamadas à EDP saem pelo relay.`);
+      else console.warn(`[BOOT] ⚠️ WPA_PROXY ${t.endereco} NÃO aceita conexão (${t.erro}) — chamadas à EDP vão falhar com WPA_PROXY_INDISPONIVEL até o túnel do relay subir.`);
+    });
+  }
+
   app.listen(PORT, () => {
     console.log(`\n  WPA Monitor — Engelmig Energia`);
     console.log(`  http://localhost:${PORT}`);

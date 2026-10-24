@@ -243,10 +243,12 @@ describe('coleta real', () => {
     assert.equal(n('/api/notes/executed/s-fechada/session'), 3, 'a falha não conta como busca: tenta no ciclo seguinte');
   });
 
-  test('3b: sem memória, falha segue virando [] (como sempre foi)', async () => {
+  // 24/10/2026 (spec wpa-acesso-edp.md, R3.2): era "sem memória, falha segue
+  // virando []" — o bucket vazio ia pro snapshot como sessão sem produção. Agora a
+  // falha sobe e o setor fica de fora do ciclo; a memória continua sem notas.
+  test('3b: sem memória, falha derruba o setor no ciclo (não vira [])', async () => {
     falharExecuted = true;
-    const t = sessaoFechada(await coletar());
-    assert.deepEqual(t.notasExecutadas, []);
+    await assert.rejects(coletar(), (err) => err.code === 'WPA_HTTP_500');
     assert.equal(incr.memoria.encerradas.get('s-fechada').notas, null);
   });
 

@@ -21,10 +21,12 @@
 
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const tls = require('tls');
 const _nodeFetch = require('node-fetch');
 const { medir, origemAtual } = require('./wpaContador');
 const { comVaga } = require('./wpaFila');
+const { WpaAccessError, ehWpaAccessError } = require('./wpaErros');
 
 const WPA_USER_AGENT_PADRAO = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0';
 
@@ -43,13 +45,17 @@ function wpaUserAgent() {
 //
 // Sem dependência nova: o túnel CONNECT é feito com http/tls do próprio Node. O
 // TLS continua de ponta a ponta com a EDP; o proxy só repassa bytes.
-const RELAY_CODE = 'WPA_RELAY_INDISPONIVEL';
-const RELAY_CONNECT_MS = 15000;
+//
+// 24/10/2026 (spec wpa-acesso-edp.md, R2): o código único WPA_RELAY_INDISPONIVEL
+// virou três, para saber de que lado está o problema — túnel/proxy parado,
+// host não liberado no proxy, ou a máquina do relay sem rota para a EDP (o
+// proxy_edp responde 502). Timeout do CONNECT: 10 s.
+const PROXY_CONNECT_MS = 10000;
 
-function _erroRelay(proxy, detalhe) {
-  const err = new Error(`relay WPA indisponível (${proxy.host}): ${detalhe}`);
-  err.code = RELAY_CODE;
-  return err;
+/** Status do CONNECT → code (R2.2). */
+function _codigoDoConnect(status) {
+  if (status === 502) return 'WPA_PROXY_SEM_ROTA';
+  return 'WPA_PROXY_RECUSOU';
 }
 
 class WpaProxyAgent extends https.Agent {
@@ -68,18 +74,23 @@ class WpaProxyAgent extends https.Agent {
       headers: { Host: destino },
     });
     let respondeu = false;
-    const falhar = (detalhe) => {
+    const falhar = (code, info) => {
       if (respondeu) return;
       respondeu = true;
       req.destroy();
-      cb(_erroRelay(this.proxy, detalhe));
+      cb(new WpaAccessError(code, { host: options.host, ...info }));
     };
-    req.setTimeout(RELAY_CONNECT_MS, () => falhar(`proxy não respondeu ao CONNECT em ${RELAY_CONNECT_MS / 1000}s`));
-    req.once('error', (e) => falhar(e.code || e.message));
+    const proxy = `proxy=${this.proxy.host}`;
+    // Túnel no ar com o proxy remoto parado: o SSH aceita e fecha → 'socket hang up'
+    // no 'error' abaixo → INDISPONIVEL, como o túnel caído.
+    req.setTimeout(PROXY_CONNECT_MS, () => falhar('WPA_PROXY_INDISPONIVEL',
+      { detalhe: `${proxy} sem resposta ao CONNECT em ${PROXY_CONNECT_MS / 1000}s` }));
+    req.once('error', (e) => falhar('WPA_PROXY_INDISPONIVEL', { detalhe: `${proxy} ${e.code || e.message}` }));
     req.once('connect', (res, socket) => {
       if (res.statusCode !== 200) {
         socket.destroy();
-        return falhar(`proxy respondeu ${res.statusCode} ao CONNECT ${destino}`);
+        return falhar(_codigoDoConnect(res.statusCode),
+          { status: res.statusCode, detalhe: `${proxy} respondeu ${res.statusCode} ao CONNECT ${destino}` });
       }
       respondeu = true;
       req.setTimeout(0);
@@ -92,6 +103,24 @@ class WpaProxyAgent extends https.Agent {
     });
     req.end();
   }
+}
+
+/**
+ * Só abre e fecha uma conexão TCP com o host:porta do proxy (24/10/2026, spec
+ * R4/R5) — diz se o túnel está de pé, sem falar com a EDP. Nunca lança.
+ * @returns {Promise<{ok:boolean, endereco:string, erro?:string}>}
+ */
+function testarPortaProxy(proxyUrl, timeoutMs = 3000) {
+  let u;
+  try { u = new URL(proxyUrl); } catch { return Promise.resolve({ ok: false, endereco: String(proxyUrl), erro: 'URL inválida' }); }
+  const endereco = `${u.hostname}:${u.port || 80}`;
+  return new Promise((resolve) => {
+    const sock = net.connect({ host: u.hostname, port: Number(u.port || 80) });
+    const fim = (r) => { sock.destroy(); resolve({ endereco, ...r }); };
+    sock.setTimeout(timeoutMs, () => fim({ ok: false, erro: `sem resposta em ${timeoutMs / 1000}s` }));
+    sock.once('connect', () => fim({ ok: true }));
+    sock.once('error', (e) => fim({ ok: false, erro: e.code || e.message }));
+  });
 }
 
 let _agente = null;   // { url, agent } — recriado só se WPA_PROXY mudar
@@ -129,9 +158,29 @@ function _comoObjeto(headers) {
 // 19/10/2026 (P0-11 item 4): e passa pela fila global de services/wpaFila.js —
 // no máximo WPA_MAX_EM_VOO em voo contra a EDP, o painel na frente. A vaga
 // envolve SÓ a chamada: o `medir` e o timeout começam quando ela sai.
+/**
+ * Rejeição do node-fetch → WpaAccessError (24/10/2026, R2). O node-fetch embrulha
+ * o erro do agent num FetchError e só preserva o `code` — o status do CONNECT
+ * volta pela mensagem ("status=403"). Sem proxy: DNS/conexão/TLS/timeout viram
+ * WPA_REDE; `timeout` e `type` ficam no erro porque o wpaService não retenta
+ * timeout (P1-31) e o contador os separa.
+ */
+function _comoErroWpa(err, url) {
+  if (ehWpaAccessError(err)) return err;
+  const msg = String((err && err.message) || err).replace(/^request to \S+ failed, reason: /, '');
+  const code = err && typeof err.code === 'string' && err.code.startsWith('WPA_') ? err.code : 'WPA_REDE';
+  const status = code === 'WPA_REDE' ? null : Number((msg.match(/status=(\d+)/) || [])[1]) || null;
+  // Do erro do agent (proxy) só interessa o trecho depois de host/status: "proxy=... respondeu 403 ...".
+  const detalhe = code === 'WPA_REDE' ? msg : msg.replace(/^\S+( host=\S+)?( status=\d+)? ?/, '');
+  const novo = new WpaAccessError(code, { url, status, detalhe, cause: err });
+  if (err && err.type === 'request-timeout') { novo.type = err.type; novo.timeout = true; }
+  return novo;
+}
+
 //
 // 24/10/2026: com WPA_PROXY, URL https sai pelo relay (agent acima). URL http
-// (só os testes, contra 127.0.0.1) segue direto.
+// (só os testes, contra 127.0.0.1) segue direto. Falha de rede ou de proxy sai
+// daqui já como WpaAccessError — o contador registra pelo code.
 function wpaHttpFetch(url, opts = {}) {
   const prioritaria = origemAtual().startsWith('painel:');
   const agent = opts.agent || (String(url).startsWith('https:') ? agenteWpa() : undefined);
@@ -139,7 +188,7 @@ function wpaHttpFetch(url, opts = {}) {
     ...opts,
     agent,
     headers: { 'User-Agent': wpaUserAgent(), ..._comoObjeto(opts.headers) },
-  })));
+  }).catch((err) => { throw _comoErroWpa(err, url); })));
 }
 
-module.exports = { wpaHttpFetch, wpaUserAgent, agenteWpa, WpaProxyAgent, RELAY_CODE, WPA_USER_AGENT_PADRAO };
+module.exports = { wpaHttpFetch, wpaUserAgent, agenteWpa, testarPortaProxy, WpaProxyAgent, PROXY_CONNECT_MS, WPA_USER_AGENT_PADRAO };

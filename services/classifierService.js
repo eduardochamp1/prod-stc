@@ -34,6 +34,7 @@
  */
 
 const { wpaFetch } = require('./wpaService');
+const { ehFalhaDeCaminho } = require('./wpaErros');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -48,15 +49,21 @@ const FETCH_FAILED = Symbol('fetch_failed');
 async function safeJson(path) {
   try {
     const res = await wpaFetch(path);
-    if (res.ok) return await res.json();
-    // Distingue transiente de definitivo:
-    //   5xx  → servidor instável / cold-start Azure → FETCH_FAILED (retenta)
-    //   4xx  → recurso ausente / definitivo → null (classifica como "sem dados")
+    return await res.json();
+  } catch (err) {
+    // 24/10/2026: o wpaFetch agora LANÇA WpaAccessError em qualquer status fora
+    // de 2xx (spec wpa-acesso-edp.md). Distingue transiente de definitivo:
+    //   404             → recurso ausente / definitivo → null (classifica como "sem dados")
+    //   resto (5xx, 401, 403, 429, rede, JSON inválido) → FETCH_FAILED (retenta)
+    //   caminho (proxy fora, IP bloqueado) → LANÇA: o lote inteiro para, uma
+    //     linha de log no job — não adianta tentar nota por nota.
     // O bug P1-7 era timeout/cold-start (5xx e erro de rede) gravando OUTROS
-    // permanente; 404 legítimo não deve gerar retry infinito.
-    if (res.status >= 500) return FETCH_FAILED;
-    return null;
-  } catch { return FETCH_FAILED; }   // erro de rede/timeout → transiente
+    // permanente; 404 legítimo não deve gerar retry infinito. Antes, QUALQUER 4xx
+    // virava null — 401/403 depois do relogin gravavam OUTROS em definitivo.
+    if (ehFalhaDeCaminho(err)) throw err;
+    if (err && err.status === 404) return null;
+    return FETCH_FAILED;
+  }
 }
 
 // Texto padrão do Comments da MD gerada pela II quando o medidor precisa ser
@@ -442,8 +449,9 @@ async function classificarBatch(jobs, concurrency = 6) {
     const out = [];
     for (let i = 0; i < items.length; i += conc) {
       const chunk = items.slice(i, i + conc);
+      // 24/10/2026: falha do CAMINHO até a EDP para o lote (não vira null por nota).
       const results = await Promise.all(chunk.map(j =>
-        classificar(j.noteId, j.tipo, j).catch(() => null)
+        classificar(j.noteId, j.tipo, j).catch((err) => { if (ehFalhaDeCaminho(err)) throw err; return null; })
       ));
       for (const r of results) { if (r) out.push(r); }
       // Cede o event loop entre chunks → GC pode liberar o JSON do chunk anterior
@@ -459,4 +467,4 @@ async function classificarBatch(jobs, concurrency = 6) {
   return [...lightOut, ...ddOut];
 }
 
-module.exports = { classificar, classificarBatch, classificarRejeicao };
+module.exports = { classificar, classificarBatch, classificarRejeicao, _safeJson: safeJson, _FETCH_FAILED: FETCH_FAILED };   // _ = só pra teste

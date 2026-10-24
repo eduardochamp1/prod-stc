@@ -18,8 +18,8 @@ PORTA = 3128
 # Hosts que a aplicação chama na EDP, em minúsculas e sem https://
 # Inclua também o host de autenticação, se for diferente do da API.
 PERMITIDOS = {
-    "edp-wpa-po.azurewebsites.net",        # login (WPA_URL)
-    "edp-wpa-web-api.azurewebsites.net",   # Web API (WPA_API_URL)
+    "edp-wpa-web-api.azurewebsites.net",   # API de dados
+    "edp-wpa-po.azurewebsites.net",        # login (/identity/signin)
 }
 
 
@@ -55,8 +55,16 @@ async def atender(cliente_r, cliente_w):
             cliente_w.close()
             return
 
-        remoto_r, remoto_w = await asyncio.wait_for(
-            asyncio.open_connection(host, 443), timeout=15)
+        try:
+            remoto_r, remoto_w = await asyncio.wait_for(
+                asyncio.open_connection(host, 443), timeout=15)
+        except (OSError, asyncio.TimeoutError) as erro:
+            # esta máquina não alcança a EDP (VPN caída, DNS, rede)
+            log(f"SEM ROTA {host}: {type(erro).__name__}: {erro}")
+            cliente_w.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            await cliente_w.drain()
+            cliente_w.close()
+            return
         cliente_w.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await cliente_w.drain()
         log(f"OK {host}")

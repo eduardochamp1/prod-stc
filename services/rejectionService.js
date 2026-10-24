@@ -81,6 +81,7 @@
  */
 
 const { wpaFetch } = require('./wpaService');
+const { ehWpaAccessError } = require('./wpaErros');
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
 
@@ -177,19 +178,25 @@ function _resetNoPathCache() { _noPathForTipo.clear(); }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// 24/10/2026 (spec wpa-acesso-edp.md): o wpaFetch LANÇA WpaAccessError fora de
+// 2xx. A sondagem só trata como resposta os dois status que ela usa pra decidir
+// (404 = path não existe pra este tipo; 500 = path existe, nota com problema).
+// Qualquer outra falha (401/403/502/503, rede, proxy, IP bloqueado) SOBE: antes
+// virava {error}, o laço terminava "sem 200" e a estrutura VAZIA era gravada em
+// note_rejections — e erro de rede ainda punha o tipo no cache negativo.
 async function tryEndpoint(path, noteId) {
+  let res;
   try {
-    const res = await wpaFetch(`/api/notes/${path}?noteId=${noteId}`);
-    if (res.status === 404) return { ok: false, status: 404 };
-    if (!res.ok) return { ok: false, status: res.status };
-    const json = await res.json();
-    const rej    = json?.Data?.Rejection;
-    const rejRen = json?.Data?.RejectionRen1000;
-    if (!rej && !rejRen) return { ok: false, status: res.status, noRejection: true };
-    return { ok: true, json };
+    res = await wpaFetch(`/api/notes/${path}?noteId=${noteId}`);
   } catch (err) {
-    return { ok: false, error: err.message };
+    if (ehWpaAccessError(err) && (err.status === 404 || err.status === 500)) return { ok: false, status: err.status };
+    throw err;
   }
+  const json = await res.json();
+  const rej    = json?.Data?.Rejection;
+  const rejRen = json?.Data?.RejectionRen1000;
+  if (!rej && !rejRen) return { ok: false, status: res.status, noRejection: true };
+  return { ok: true, json };
 }
 
 /** Extrai estrutura normalizada de Data.Rejection + Data.RejectionRen1000. */
@@ -346,4 +353,5 @@ module.exports = {
   getNoPathTipos, _resetNoPathCache,   // cache negativo (21/08/2026) — exportado p/ teste
   _isNoPath, _noPathForTipo, NO_PATH_TTL_MS,
   CANDIDATE_PATHS, KNOWN_PATHS,        // exportados p/ teste de cobertura de tipos
+  _tryEndpoint: tryEndpoint,           // 24/10/2026 — exportado p/ teste (404/500 x WpaAccessError)
 };

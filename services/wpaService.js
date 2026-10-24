@@ -31,6 +31,9 @@
 // 16/10/2026 (P0-10): todo HTTP pra EDP sai pelo wpaHttp, com User-Agent próprio.
 // A EDP devolve "Nenhum dado encontrado" pro UA padrão do node-fetch.
 const { wpaHttpFetch: fetch } = require('./wpaHttp');
+// 24/10/2026 (spec wpa-acesso-edp.md): falha de acesso à EDP é WpaAccessError com
+// code — wpaFetch e login LANÇAM, nunca devolvem resposta ruim pra virar vazio.
+const { WpaAccessError, ehWpaAccessError, ehFalhaDeCaminho, ehPaginaIpBloqueado, erroDeResposta } = require('./wpaErros');
 const { dateBRT } = require('./timeUtil');
 // 19/10/2026 (P0-11 itens 3 e 5): memória por sessão da coleta ao vivo.
 const incr = require('./coletaIncremental');
@@ -106,14 +109,24 @@ const SECTOR_ACCOUNT_CHAIN = {
 async function _mapConcurrent(items, concurrency, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
+  // 24/10/2026: desde que falha de nota/colaborador derruba o setor (spec
+  // wpa-acesso-edp.md, R3.2), a 1ª falha para de puxar itens novos, e a rejeição
+  // só sai depois que os que já estavam em voo terminam — senão eles seguiam
+  // batendo na EDP e mexendo na memória incremental DEPOIS do setor ter falhado.
+  let falha = null;
   async function worker() {
-    while (cursor < items.length) {
+    while (!falha && cursor < items.length) {
       const i = cursor++;
-      results[i] = await mapper(items[i], i);
+      try {
+        results[i] = await mapper(items[i], i);
+      } catch (err) {
+        if (!falha) falha = err;
+      }
     }
   }
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
   await Promise.all(workers);
+  if (falha) throw falha;
   return results;
 }
 
@@ -441,15 +454,19 @@ async function loginAttempt(accountKey = DEFAULT_ACCOUNT) {
       timeout: WPA_HTTP_TIMEOUT_MS,   // P1-31 — sem isso o login podia pendurar pra sempre
     });
   } catch (err) {
+    // Já é WpaAccessError (wpaHttp): WPA_REDE ou WPA_PROXY_*.
     err.isNetworkError = true;
     throw err;
   }
 
   if (!res.ok) {
     const txt = await res.text();
-    const isAzureColdStart = /Web App\s*-\s*Unavailable/i.test(txt);
-    const tag = isAzureColdStart ? ' [Azure cold-start]' : '';
-    const error = new Error(`WPA login falhou (${res.status}, account=${accountKey})${tag}: ${txt.slice(0, 200)}`);
+    // 24/10/2026: 403 com "Web App - Unavailable"/"blocked your access" é a
+    // restrição de IP do Azure (WPA_IP_BLOQUEADO), não cold-start — retentar não
+    // muda nada. Cold-start continua sendo a página HTML com outro status (503).
+    const error = erroDeResposta(`${WPA_AUTH}/identity/signin`, res.status, txt);
+    const isAzureColdStart = error.code !== 'WPA_IP_BLOQUEADO' && /Web App\s*-\s*Unavailable/i.test(txt);
+    error.message = `WPA login falhou (account=${accountKey})${isAzureColdStart ? ' [Azure cold-start]' : ''}: ${error.message}`;
     error.isAzureColdStart = isAzureColdStart;
     error.httpStatus       = res.status;
     throw error;
@@ -551,6 +568,10 @@ async function login(opts = {}) {
       if (attempt > 1) console.log(`[WPA] Login OK (account=${accountKey}) na tentativa ${attempt}/${MAX_ATTEMPTS}`);
       return result;
     } catch (err) {
+      // 24/10/2026: falha do CAMINHO (proxy fora, IP bloqueado) não é da conta —
+      // não retenta (não muda em 26 s) e não conta pro breaker, que é persistido
+      // e seguraria o login depois que o túnel voltasse.
+      if (ehFalhaDeCaminho(err)) throw err;
       const transient = err.isAzureColdStart || err.isNetworkError;
       if (!transient || attempt === MAX_ATTEMPTS) {
         // Antes de propagar: se for credencial inválida/bloqueio, abre o breaker
@@ -804,12 +825,13 @@ async function wpaFetch(path, options = {}) {
   const MAX_ATTEMPTS = BACKOFF_MS.length + 1;
 
   let tokenRetried = false;   // relogin por token recusado: no máximo 1 por request
+  const url = `${WPA_API}${path}`;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const token = await getToken(accountKey);
     let res;
     try {
-      res = await fetch(`${WPA_API}${path}`, {
+      res = await fetch(url, {
         timeout: WPA_HTTP_TIMEOUT_MS,   // P1-31 — options pode sobrescrever se precisar
         ...options,
         headers: {
@@ -827,6 +849,8 @@ async function wpaFetch(path, options = {}) {
         console.warn(`[WPA] wpaFetch ${path} TIMEOUT em ${WPA_HTTP_TIMEOUT_MS}ms (tentativa ${attempt}) — sem retry`);
         throw err;
       }
+      // 24/10/2026: proxy fora/recusando não melhora em 9 s — sem retry.
+      if (ehFalhaDeCaminho(err)) throw err;
       if (attempt === MAX_ATTEMPTS) throw err;
       const delay = BACKOFF_MS[attempt - 1];
       console.warn(`[WPA] wpaFetch ${path} erro de rede (tentativa ${attempt}/${MAX_ATTEMPTS}): ${err.message} — retry em ${delay}ms`);
@@ -834,11 +858,20 @@ async function wpaFetch(path, options = {}) {
       continue;
     }
 
+    // 24/10/2026 (spec R2.2): restrição de IP do Azure — 403 com "Web App -
+    // Unavailable" / "has blocked your access" (página que a VM recebeu em 24/10).
+    // Checada ANTES do cold-start: a mesma página caía no _isAzureColdStartResponse
+    // e era retentada 3x como hibernação. Lança na hora, sem retry.
+    if (res.status === 403) {
+      const corpo = await res.clone().text().catch(() => '');
+      if (ehPaginaIpBloqueado(403, corpo)) throw erroDeResposta(url, 403, corpo);
+    }
+
     // Cold-start do App Service da Web API → retry
     if (await _isAzureColdStartResponse(res)) {
       if (attempt === MAX_ATTEMPTS) {
         console.warn(`[WPA] wpaFetch ${path} cold-start persistente (${MAX_ATTEMPTS} tentativas) — desistindo`);
-        return res;
+        throw erroDeResposta(url, res.status, await res.text().catch(() => ''));
       }
       const delay = BACKOFF_MS[attempt - 1];
       console.warn(`[WPA] wpaFetch ${path} Azure cold-start (tentativa ${attempt}/${MAX_ATTEMPTS}) — retry em ${delay}ms`);
@@ -855,13 +888,35 @@ async function wpaFetch(path, options = {}) {
       _invalidateToken(accountKey);
       if (attempt === MAX_ATTEMPTS) {
         console.warn(`[WPA] wpaFetch ${path} token recusado (HTTP ${res.status}, conta=${accountKey}) na última tentativa — propagando`);
-        return res;
+        throw erroDeResposta(url, res.status, await res.text().catch(() => ''));
       }
       console.warn(`[WPA] wpaFetch ${path} token recusado pela EDP (HTTP ${res.status}, conta=${accountKey}) — relogando e repetindo`);
       continue;
     }
 
+    // 24/10/2026 (spec R2.3): fora de 2xx LANÇA WPA_HTTP_<status> — quem chama não
+    // recebe mais Response ruim para virar [] / null. Quem espera um status (404
+    // da sondagem do rejectionService, por exemplo) captura pelo err.status.
+    if (!res.ok) throw erroDeResposta(url, res.status, await res.text().catch(() => ''));
+    await _exigirJson(res, url);
     return res;
+  }
+}
+
+/**
+ * 2xx que não é JSON → WPA_RESPOSTA_INVALIDA (24/10/2026, spec R2.2). A Web API só
+ * responde JSON; HTML aqui é página de erro/proxy no caminho, e virava exceção
+ * genérica no res.json() de quem chama. Só lê o corpo quando o content-type não
+ * diz json.
+ */
+async function _exigirJson(res, url) {
+  const ctype = res.headers.get('content-type') || '';
+  if (/json/i.test(ctype)) return;
+  const corpo = await res.clone().text().catch(() => '');
+  try {
+    JSON.parse(corpo);
+  } catch {
+    throw new WpaAccessError('WPA_RESPOSTA_INVALIDA', { url, status: res.status, corpo, detalhe: `content-type=${ctype || '(vazio)'}` });
   }
 }
 
@@ -946,7 +1001,6 @@ async function searchNoteByNumber(noteNumber) {
   if (!_isNoteNumber(noteNumber)) throw new Error(`número de nota inválido: "${noteNumber}"`);
   const n = String(noteNumber).trim();
   const res = await wpaFetch(`/api/search/SearchNotesByNumber?noteNumber=${encodeURIComponent(n)}`);
-  if (!res.ok) throw new Error(`WPA SearchNotesByNumber ${res.status}`);
   return _normalizeSearchNote(await res.json());
 }
 
@@ -1003,7 +1057,6 @@ function _normalizeNoteHistoric(payload) {
 async function getNoteHistoric(noteId) {
   if (!noteId) return [];
   const res = await wpaFetch(`/api/Notes/${encodeURIComponent(noteId)}/historic`);
-  if (!res.ok) throw new Error(`WPA Notes/historic ${res.status}`);
   return _normalizeNoteHistoric(await res.json());
 }
 
@@ -1057,7 +1110,6 @@ function _normalizeNoteInterruptions(payload) {
 async function getNoteInterruptions(noteId) {
   if (!noteId) return [];
   const res = await wpaFetch(`/api/Notes/${encodeURIComponent(noteId)}/completeInterruptions`);
-  if (!res.ok) throw new Error(`WPA Notes/completeInterruptions ${res.status}`);
   return _normalizeNoteInterruptions(await res.json());
 }
 
@@ -1105,7 +1157,6 @@ function _normalizePoExecution(payload) {
 async function getNotePoExecution(noteId) {
   if (!noteId) return null;
   const res = await wpaFetch(`/api/notes/po?noteId=${encodeURIComponent(noteId)}`);
-  if (!res.ok) throw new Error(`WPA notes/po ${res.status}`);
   return _normalizePoExecution(await res.json());
 }
 
@@ -1137,7 +1188,6 @@ function _normalizeSessionBreaks(payload) {
 async function getSessionBreaks(sessionId) {
   if (!sessionId) return [];
   const res = await wpaFetch(`/api/sessions/${encodeURIComponent(sessionId)}/break`);
-  if (!res.ok) throw new Error(`WPA sessions/break ${res.status}`);
   return _normalizeSessionBreaks(await res.json());
 }
 
@@ -1226,7 +1276,6 @@ async function getCollaboratorShifts(sectorId, mes, ano) {
 
   const path = `/api/collaboratorshifts/${encodeURIComponent(sectorId)}/${m}/${a}`;
   const res = await wpaFetch(path, { account: _resolveUsableAccount(sectorId) });
-  if (!res.ok) throw new Error(`WPA collaboratorshifts ${res.status}`);
   return _normalizeCollaboratorShifts(await res.json(), sectorId);
 }
 
@@ -1343,7 +1392,6 @@ async function getScaleTypes(sectorId) {
   if (hit && Date.now() - hit.at < SCALETYPES_TTL_MS) return hit.list;
 
   const res = await wpaFetch(`/api/scaletypes/matches?sectorId=${encodeURIComponent(sectorId)}`);
-  if (!res.ok) throw new Error(`WPA scaletypes/matches ${res.status}`);
   const j = await res.json();
   const list = (Array.isArray(j?.Data) ? j.Data : []).map(_normalizeScaleType).filter(Boolean);
 
@@ -1357,6 +1405,11 @@ async function _safeScaleTypes(sectorId) {
   try {
     return await getScaleTypes(sectorId);
   } catch (err) {
+    // 24/10/2026: falha do CAMINHO (proxy, IP bloqueado) derruba o setor — o
+    // resto da coleta falharia igual, e o +9h não pode ir pro banco nesse ciclo.
+    // Erro do endpoint (5xx esporádico) mantém o fallback de sempre: +9h é o
+    // mesmo valor que turno fora do catálogo já usa, não dado inventado.
+    if (ehFalhaDeCaminho(err)) throw err;
     console.warn(`[WPA] scaletypes ${sectorId} falhou: ${err.message} — fim de turno volta a ser inferido (+9h)`);
     return [];
   }
@@ -1382,7 +1435,6 @@ async function _safeScaleTypes(sectorId) {
  */
 async function getSessions(sectorId) {
   const res = await wpaFetch(`/api/Sessions/today?sectorId=${sectorId}`);
-  if (!res.ok) throw new Error(`WPA Sessions/today ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : (data.Data || []);
 }
@@ -1413,7 +1465,6 @@ async function getTeamStatusV2(sectorId) {
   const res = await wpaFetch(
     `/api/teamsstatus/V2?sectorId=${sectorId}&filterByExhibitionSector=true`
   );
-  if (!res.ok) throw new Error(`WPA teamsstatus/V2 ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : (data.Data || []);
 }
@@ -1501,7 +1552,6 @@ async function getSessionsByDate(sectorId, isoDate) {
     `/api/Sessions/all/date?sectorId=${sectorId}&date=${encodeURIComponent(wpaDate)}`,
     { method: 'POST' }
   );
-  if (!res.ok) throw new Error(`WPA sessions/date ${res.status}`);
   const data = await res.json();
   const brutas = data.Data || [];
   const unicas = _dedupSessionsById(brutas);
@@ -1635,7 +1685,6 @@ async function getNotesByDate(sectorId, isoDate) {
   const res = await wpaFetch(
     `/api/notes/execution?sectorId=${sectorId}&date=${encodeURIComponent(wpaDate)}`
   );
-  if (!res.ok) throw new Error(`WPA notes/date ${res.status}`);
   const data = await res.json();
   return data.Data?.Notes || [];
 }
@@ -1646,15 +1695,12 @@ async function getNotesByDate(sectorId, isoDate) {
  * Retorna array de notas com Number, Type, ConclusionDate.
  */
 async function getNotesForSession(sessionId, category) {
-  try {
-    // Portal usa sufixo /session: GET /api/notes/{category}/{sessionId}/session
-    const res  = await wpaFetch(`/api/notes/${category}/${sessionId}/session`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.Data || [];
-  } catch {
-    return [];
-  }
+  // 24/10/2026 (spec R3.2): falha devolvia [] e o backfill gravava a data com
+  // buckets vazios, sem sinal de erro. Agora lança (WpaAccessError do wpaFetch).
+  // Portal usa sufixo /session: GET /api/notes/{category}/{sessionId}/session
+  const res  = await wpaFetch(`/api/notes/${category}/${sessionId}/session`);
+  const data = await res.json();
+  return data.Data || [];
 }
 
 /**
@@ -1680,20 +1726,6 @@ async function getNoteDetail(noteId, sectorId) {
   const t0   = Date.now();
   try {
     const res = await wpaFetch(path);
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      const elapsed = Date.now() - t0;
-      console.warn(`[wpa] getNoteDetail !ok status=${res.status} path=${path} body=${body.slice(0,200)} ${elapsed}ms`);
-      // Lança erro estruturado pro caller poder propagar status/body real do WPA
-      // pra UI (em vez de só "HTTP 404"). Útil pra discriminar 401 (token race
-      // em cold-start Vercel) de 404 real ou 5xx (timeout / erro upstream).
-      const err = new Error(`WPA ${res.status} em ${path}`);
-      err.wpaStatus  = res.status;
-      err.wpaBody    = body.slice(0, 300);
-      err.wpaPath    = path;
-      err.wpaElapsed = elapsed;
-      throw err;
-    }
     const data = await res.json();
     console.log(`[wpa] getNoteDetail OK noteId=${noteId} sector=${sectorId} ${Date.now()-t0}ms`);
     return data.Data || data || null;
@@ -1701,6 +1733,19 @@ async function getNoteDetail(noteId, sectorId) {
     if (err.wpaStatus) throw err; // re-lança erro já estruturado
     const elapsed = Date.now() - t0;
     console.warn(`[wpa] getNoteDetail erro noteId=${noteId} sector=${sectorId} ${elapsed}ms — ${err.message}`);
+    // 24/10/2026: o wpaFetch agora LANÇA WpaAccessError (status fora de 2xx,
+    // proxy, IP bloqueado). Mantém o code e ganha os campos wpa* que a rota
+    // /wpa/nota usa — 401 continua 401, 404 continua 404, rede é 0.
+    // Erro estruturado pro caller poder propagar status/body real do WPA pra UI
+    // (em vez de só "HTTP 404"). Útil pra discriminar 401 (token race em
+    // cold-start Vercel) de 404 real ou 5xx (timeout / erro upstream).
+    if (ehWpaAccessError(err)) {
+      err.wpaStatus  = err.status ?? 0;
+      err.wpaBody    = err.message.slice(0, 300);
+      err.wpaPath    = path;
+      err.wpaElapsed = elapsed;
+      throw err;
+    }
     const wrapped = new Error(`WPA fetch falhou: ${err.message}`);
     wrapped.wpaStatus  = 0; // 0 = erro de rede / timeout / aborted
     wrapped.wpaBody    = err.message;
@@ -1717,14 +1762,11 @@ async function getNoteDetail(noteId, sectorId) {
  * sessions/all/date retorna Collaborators vazio.
  */
 async function getSessionDetail(sessionId) {
-  try {
-    const res  = await wpaFetch(`/api/Sessions/${sessionId}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.Data || data;
-  } catch {
-    return null;
-  }
+  // 24/10/2026 (spec R3.2): falha devolvia null e o backfill seguia com
+  // colaboradores vazios. Agora lança (WpaAccessError do wpaFetch).
+  const res  = await wpaFetch(`/api/Sessions/${sessionId}`);
+  const data = await res.json();
+  return data.Data || data;
 }
 
 /**
@@ -2165,7 +2207,6 @@ function _normalizeSessionCollaborators(payload) {
 async function getSessionCollaborators(sessionId) {
   if (!sessionId) return [];
   const res = await wpaFetch(`/api/collaborators/${encodeURIComponent(sessionId)}/session`);
-  if (!res.ok) throw new Error(`WPA collaborators/session ${res.status}`);
   return _normalizeSessionCollaborators(await res.json());
 }
 
@@ -2289,6 +2330,12 @@ function getTeamsBySector(sectorId, opts = {}) {
       const faltaS = Math.ceil((PAINEL_ESPERA_FALHA_MS - (Date.now() - falha.ts)) / 1000);
       const err = new Error(`${falha.msg} (painel aguarda ${faltaS}s antes de tentar ${sectorId} de novo — P0-11)`);
       err.esperaPosFalha = true;
+      // 24/10/2026: a falha repetida carrega o code da original — sem ele o
+      // /api/teams voltava a responder 200 com lista vazia durante a espera
+      // (spec R3.3), e a coleta não reconhecia a falha de caminho.
+      if (falha.code) {
+        err.name = falha.name; err.code = falha.code; err.status = falha.status ?? null;
+      }
       return Promise.reject(err);
     }
   }
@@ -2297,7 +2344,8 @@ function getTeamsBySector(sectorId, opts = {}) {
     try {
       valor = await _getTeamsBySectorUncached(sectorId);
     } catch (err) {
-      _falhaSetor.set(sectorId, { ts: Date.now(), msg: String((err && err.message) || err).slice(0, 200) });
+      _falhaSetor.set(sectorId, { ts: Date.now(), msg: String((err && err.message) || err).slice(0, 200),
+        name: err && err.name, code: (err && err.code) || null, status: err && err.status });
       throw err;
     }
     _falhaSetor.delete(sectorId);
@@ -2396,7 +2444,10 @@ async function _getTeamsBySectorUncached(sectorId) {
             break;
           }
         } catch (err) {
+          // 24/10/2026 (spec R3.2): antes logava e seguia — a equipe virava "SEM V2"
+          // com TODOS os buckets [] e ia assim pro snapshot. Agora o setor falha.
           console.warn(`[WPA] ${sectorId}/${teamName}: falha ao buscar V2 em ${altSector}:`, err.message);
+          throw err;
         }
       }
     }
@@ -2429,20 +2480,21 @@ async function _getTeamsBySectorUncached(sectorId) {
       // Custo: +2 fetches por equipe (~43 equipes × 2 = 86 fetches/snapshot).
       // Cada um leve (~1-5 KB). Tolerável dentro do ciclo de 15min.
       const sessionId = s.Id;
+      // 24/10/2026 (spec R3.2): falha NÃO esvazia mais o bucket. Antes, 500/502 ou
+      // rede viravam [] ("esvaziando bucket") e a equipe ia pro snapshot com 0
+      // rejeitadas — e, pela regra "rejeitada vence concluída", a rejeitada que
+      // também estava em Concluded do V2 contava como PRODUÇÃO no dia. Agora a
+      // falha sobe e o setor inteiro fica de fora do ciclo (nada gravado).
       const _safeNotes = async (status) => {
         if (!sessionId) return [];
         try {
           const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
-          if (!r.ok) {
-            console.warn(`[WPA] ${sectorId}/${teamName}: notes/${status} HTTP ${r.status} — esvaziando bucket`);
-            return [];
-          }
           const j = await r.json();
           const arr = Array.isArray(j) ? j : (j.Data || []);
           return Array.isArray(arr) ? arr : [];
         } catch (err) {
           console.warn(`[WPA] ${sectorId}/${teamName}: notes/${status} falhou: ${err.message}`);
-          return [];
+          throw err;
         }
       };
       const [rejRaw, execRaw] = await Promise.all([
@@ -2480,15 +2532,15 @@ async function _getTeamsBySectorUncached(sectorId) {
       // P0-11 item 3b (19/10/2026): falha devolve null (não []) — só assim dá pra
       // saber se a busca RESPONDEU. Para o bucket, null vira a última busca
       // bem-sucedida (se houver) ou [] como antes — ver logo abaixo.
+      let erroNotas = null;   // 24/10/2026: a falha que deu null, para lançar sem memória
       const _safeNotes = async (status) => {
         if (!sessionId) return null;
         try {
           const r = await wpaFetch(`/api/notes/${status}/${sessionId}/session`);
-          if (!r.ok) return null;
           const j = await r.json();
           const arr = Array.isArray(j) ? j : (j.Data || []);
           return Array.isArray(arr) ? arr : [];
-        } catch (_) { return null; }
+        } catch (err) { erroNotas = err; return null; }
       };
       // Rebusca de HORA EM HORA (WPA_ENCERRADA_REBUSCA_MIN, default 60), e em
       // todo ciclo a partir das 23h BRT. Nos ciclos do meio, a última busca
@@ -2505,9 +2557,11 @@ async function _getTeamsBySectorUncached(sectorId) {
           _safeNotes('executed'),
         ]);
         if (reg) incr.guardarNotas(reg, rejResp, execResp);   // só guarda se as DUAS responderam
-        // Busca que FALHOU: com memória, usa a última bem-sucedida; sem memória,
-        // [] como sempre foi. Vazio de timeout não é "sessão sem produção".
+        // Busca que FALHOU: com memória, usa a última bem-sucedida. Sem memória,
+        // era [] — 24/10/2026 (spec R3.2): agora a falha sobe e o setor fica de
+        // fora do ciclo. Vazio de timeout não é "sessão sem produção".
         const mem = (reg && reg.notas) ? incr.lerNotas(reg) : null;
+        if ((rejResp === null || execResp === null) && !mem && erroNotas) throw erroNotas;
         if ((rejResp === null || execResp === null) && mem) {
           console.warn(`[WPA] ${sectorId}/${teamName}: notas da sessão encerrada falharam — usando a última busca bem-sucedida`);
         }
@@ -2561,7 +2615,13 @@ async function _getTeamsBySectorUncached(sectorId) {
         // Falha aqui não pode esvaziar a equipe: colaborador é enriquecimento,
         // não bucket de produção. Mas logamos — array vazio silencioso foi
         // exatamente o que escondeu este problema por meses.
+        //
+        // 24/10/2026 (spec R3.2): esvaziava, sim — collaborators [] ia pro snapshot
+        // e o runClassifyRejections copiava collaborator_codes [] pra
+        // note_rejections, em definitivo (só insere note_id novo). Agora o setor
+        // falha no ciclo e nada é gravado.
         console.warn(`[WPA] ${sectorId}/${teamName}: collaborators/session falhou: ${err.message}`);
+        throw err;
       }
     }
 

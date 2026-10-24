@@ -1,7 +1,7 @@
 # Manual de restabelecimento do acesso à API WPA da EDP
 
 **Sistema:** WPA Monitor e coletas associadas
-**Versão:** 1.1 (24/10/2026, conferida com o código do repo `prod-stc`)
+**Versão:** 1.2 (24/10/2026, conferida com o código do repo `prod-stc`; proxy com 502, relay em PowerShell e códigos de erro)
 **Responsável:** José, Analista de Desempenho, Engelmig Energia
 
 ---
@@ -320,13 +320,21 @@ Execute:
 python proxy_edp.py        # no Windows: py proxy_edp.py
 ```
 
+**Desktop Windows sem Python** (24/10/2026, o desktop do relay não tinha Python): use `scripts/relay-wpa/proxy_edp.ps1`, que faz o mesmo no Windows PowerShell 5.1, ou o `scripts/relay-wpa/iniciar_relay.ps1`, que sobe o proxy em PowerShell numa janela própria, confere se a EDP responde 200 a partir do desktop e abre o túnel com reconexão automática:
+
+```powershell
+scp usr_jose@172.25.3.154:prod-stc/scripts/relay-wpa/proxy_edp.ps1 $HOME\
+scp usr_jose@172.25.3.154:prod-stc/scripts/relay-wpa/iniciar_relay.ps1 $HOME\
+powershell -ExecutionPolicy Bypass -File $HOME\iniciar_relay.ps1
+```
+
 Saída esperada:
 
 ```
 2026-10-24 08:00:00 proxy em 127.0.0.1:3128, liberado para: edp-wpa-po.azurewebsites.net, edp-wpa-web-api.azurewebsites.net
 ```
 
-O proxy escuta apenas em `127.0.0.1`, então não fica acessível pela rede local da máquina relay. Cada conexão gera uma linha de log: `OK <host>` para as liberadas, `RECUSADO <destino>` para as bloqueadas e `ERRO ...` para falhas de conexão com a EDP.
+O proxy escuta apenas em `127.0.0.1`, então não fica acessível pela rede local da máquina relay. Cada conexão gera uma linha de log: `OK <host>` para as liberadas, `RECUSADO <destino>` para as bloqueadas e `SEM ROTA <host>` quando a máquina relay não alcança a EDP (nesse caso o proxy responde 502).
 
 ### 9.4 Modo paliativo: desktop com VPN
 
@@ -374,6 +382,7 @@ O primeiro número é a resposta do proxy; o segundo, a resposta da EDP.
 | `200 2xx/4xx` (ex.: `200 200`, `200 401`) | Túnel e proxy funcionando; a requisição chegou à EDP | Seguir para a seção 9.6 |
 | `403 000` | O proxy recusou o destino | Conferir o log (`RECUSADO`) e incluir o host em `PERMITIDOS` |
 | `000 000` | Não há proxy respondendo na porta 3128 da VM | Verificar túnel, proxy e VPN (seção 12) |
+| `502 000` | O proxy está no ar, mas a máquina relay não alcança a EDP | Conferir a VPN ou a rede da máquina relay (log `SEM ROTA`) |
 
 Para confirmar o IP que a EDP passa a enxergar, inclua temporariamente `ifconfig.me` em `PERMITIDOS`, reinicie o proxy e execute:
 
@@ -423,7 +432,19 @@ echo "WPA_PROXY=http://127.0.0.1:3128" >> ~/prod-stc/.env
 cd ~/prod-stc && pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save
 ```
 
-**Tratamento de falha (WPA Monitor).** Com o relay fora do ar (nada escutando na 3128, proxy recusando com `403` ou sem resposta ao `CONNECT` em 15 s), a chamada falha com o código `WPA_RELAY_INDISPONIVEL` e a mensagem "relay WPA indisponível (...)". No contador do P0-11 (`GET /api/admin/wpa-requisicoes`) essas falhas aparecem com o status `relay`, separadas de `rede`, `timeout` e dos códigos HTTP da EDP. Erro HTTP da EDP (`401`, `403` etc.) continua aparecendo com o código HTTP, porque nesse caso o túnel funcionou.
+**Tratamento de falha (WPA Monitor).** Toda falha de acesso à EDP vira um `WpaAccessError` (`services/wpaErros.js`), nunca lista vazia:
+
+| Situação | `code` |
+|---|---|
+| Nada escutando na 3128, túnel no ar com o proxy parado, ou sem resposta ao `CONNECT` em 10 s | `WPA_PROXY_INDISPONIVEL` |
+| Proxy respondeu `403` (host fora de `PERMITIDOS`) ou outro status ao `CONNECT` | `WPA_PROXY_RECUSOU` |
+| Proxy respondeu `502` (a máquina relay não alcança a EDP) | `WPA_PROXY_SEM_ROTA` |
+| `403` com a página "Web App - Unavailable" / "has blocked your access" do Azure | `WPA_IP_BLOQUEADO` |
+| Qualquer outro status fora de 2xx | `WPA_HTTP_<status>` |
+| 2xx que não é JSON | `WPA_RESPOSTA_INVALIDA` |
+| DNS, conexão, TLS ou timeout sem proxy | `WPA_REDE` |
+
+No contador do P0-11 (`GET /api/admin/wpa-requisicoes`) as falhas do proxy aparecem pelo próprio `code`, separadas de `rede`, `timeout` e dos códigos HTTP da EDP. Para conferir o caminho sem credenciais, na raiz do projeto: `node scripts/check-wpa.js` (sai com 0 quando a API de dados responde).
 
 **Testes:** `node --test test/wpaProxy.test.js` (proxy falso local; nada sai para a internet).
 
@@ -672,7 +693,8 @@ Uso aceitável: somente execução manual e pontual, com a TI ciente, e apenas s
 | Erro de certificado na VM (`unable to get local issuer certificate`, `self-signed certificate`) | Inspeção SSL do FortiGate no tráfego da VPN, que troca o certificado da EDP | Pedir à TI exceção de inspeção para os hosts da EDP. Como alternativa, confiar na CA da Fortinet na aplicação: no Node, `NODE_EXTRA_CA_CERTS` precisa estar no ambiente **antes** do processo subir (bloco `env` do `ecosystem.config.js` ou o shell que roda o `pm2 start`), porque o `.env` é lido tarde demais para ela; no Python, bundle de CA |
 | Outras chamadas HTTPS da aplicação passam a falhar | `HTTPS_PROXY` definido de forma global | Remover `HTTPS_PROXY` e usar apenas `WPA_PROXY` |
 | Funciona e para depois de algum tempo | Desktop hibernou, VPN caiu ou Termius fechou | Esperado no modo paliativo; migrar para o servidor interno (seção 9.7) |
-| Contador do WPA Monitor mostra status `relay` | O WPA Monitor não conseguiu abrir o túnel (código `WPA_RELAY_INDISPONIVEL`) | Mesmo diagnóstico do `000 000`: túnel, proxy e VPN |
+| Contador ou log do WPA Monitor com `WPA_PROXY_INDISPONIVEL` | O WPA Monitor não conseguiu abrir o túnel | Mesmo diagnóstico do `000 000`: túnel, proxy e VPN. `node scripts/check-wpa.js` confirma |
+| Contador ou log com `WPA_PROXY_SEM_ROTA` | Proxy no ar, máquina relay sem acesso à EDP | Mesmo diagnóstico do `502 000`: VPN da máquina relay |
 | `Permission denied (publickey)` no servidor relay | Chave não cadastrada na VM ou permissões incorretas | Conferir a linha no `authorized_keys` e as permissões 700/600 |
 | `Host key verification failed` no serviço do túnel | Primeira conexão não registrada | Fazer a conexão manual da seção 9.7.3 com o mesmo usuário do serviço |
 
@@ -704,7 +726,7 @@ Uso aceitável: somente execução manual e pontual, com a TI ciente, e apenas s
 - [ ] Teste da seção 9.5 retornando `200` no primeiro número
 - [ ] IP visto pela EDP conferido via `ifconfig.me` pelo proxy
 - [x] WPA Monitor com suporte a `WPA_PROXY` no código (`services/wpaHttp.js`, 24/10/2026)
-- [ ] `WPA_PROXY` no `.env` da VM, `pm2` reiniciado e coletas retomadas (contador sem status `relay`)
+- [ ] `WPA_PROXY` no `.env` da VM, `pm2` reiniciado e coletas retomadas (`node scripts/check-wpa.js` sai com 0; contador sem `WPA_PROXY_*`)
 - [ ] Scripts de ETL ajustados com `WPA_PROXY`
 
 **Fase 2: transição**
@@ -745,8 +767,8 @@ PORTA = 3128
 # Hosts que a aplicação chama na EDP, em minúsculas e sem https://
 # Inclua também o host de autenticação, se for diferente do da API.
 PERMITIDOS = {
-    "edp-wpa-po.azurewebsites.net",        # login (WPA_URL)
-    "edp-wpa-web-api.azurewebsites.net",   # Web API (WPA_API_URL)
+    "edp-wpa-web-api.azurewebsites.net",   # API de dados
+    "edp-wpa-po.azurewebsites.net",        # login (/identity/signin)
 }
 
 
@@ -782,8 +804,16 @@ async def atender(cliente_r, cliente_w):
             cliente_w.close()
             return
 
-        remoto_r, remoto_w = await asyncio.wait_for(
-            asyncio.open_connection(host, 443), timeout=15)
+        try:
+            remoto_r, remoto_w = await asyncio.wait_for(
+                asyncio.open_connection(host, 443), timeout=15)
+        except (OSError, asyncio.TimeoutError) as erro:
+            # esta máquina não alcança a EDP (VPN caída, DNS, rede)
+            log(f"SEM ROTA {host}: {type(erro).__name__}: {erro}")
+            cliente_w.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            await cliente_w.drain()
+            cliente_w.close()
+            return
         cliente_w.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await cliente_w.drain()
         log(f"OK {host}")

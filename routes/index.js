@@ -9,6 +9,18 @@ const { login: wpaLogin, wpaFetch, getTokenStatus, getNoteDetail,
         searchNoteByNumber, _isNoteNumber, REGIONAL_MAP } = require('../services/wpaService');
 const { dateBRT } = require('../services/timeUtil');
 const { inRegionals } = require('../services/regionals');
+const { ehWpaAccessError, ehFalhaDeCaminho } = require('../services/wpaErros');
+
+/**
+ * 24/10/2026 (spec wpa-acesso-edp.md, R3.3): rota que repassa dado da EDP
+ * responde 502 { error, code } quando o acesso à EDP falhou (WpaAccessError), em
+ * vez de dado vazio ou 500 genérico. Devolve true se respondeu.
+ */
+function _responderSemAcessoEdp(res, err) {
+  if (!ehWpaAccessError(err)) return false;
+  res.status(502).json({ error: err.message, code: err.code });
+  return true;
+}
 
 // ── VALIDADORES DE PARAMS ─────────────────────────────────────────────────────
 const _RE_YYYYMM    = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -595,6 +607,17 @@ router.get('/teams', async (req, res) => {
     // 19/10/2026 (P0-11): `usarCachePainel` — aceita a coleta de até 5 min que o
     // snapshot (ou outra aba) acabou de fazer, em vez de ir à EDP por aba aberta.
     const teams = await getTeams({ ...req.query, regionals: req.scope.regionals, usarCachePainel: true }, outColeta);
+    // 24/10/2026 (spec R3.3): TODOS os setores falharam por acesso à EDP e não há
+    // equipe nenhuma → 502 { error, code }, não lista vazia. Falha parcial segue
+    // 200 com `coleta.degradado` (P1-39): ali há dado real para mostrar.
+    const rep = outColeta.report;
+    const falhaAcesso = rep && rep.ok.length === 0 && rep.failed.length > 0 && rep.failed.find(f => f.code);
+    if (teams.length === 0 && falhaAcesso) {
+      return res.status(502).json({
+        error: `sem acesso à EDP: ${rep.failed.map(f => `${f.sector} ${f.code || 'erro'}`).join(', ')}`,
+        code: falhaAcesso.code,
+      });
+    }
 
     // ── Summary do dia (UUID-aware, deduplicado, com canceladas) ──────────
     // Compara PRIMEIRO e ÚLTIMO snapshot do dia de cada equipe pra detectar:
@@ -833,6 +856,7 @@ router.get('/teams/:teamId', async (req, res) => {
     }
     res.json(team);
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;
     res.status(500).json({ error: err.message });
   }
 });
@@ -843,6 +867,7 @@ router.get('/summary', async (req, res) => {
     const summary = await getSummary({ ...req.query, regionals: req.scope.regionals });
     res.json({ summary });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;
     res.status(500).json({ error: err.message });
   }
 });
@@ -1693,6 +1718,8 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
   } catch (err) {
     // Se getNoteDetail lançou erro estruturado (status WPA real), propaga p/ UI
     // poder discriminar 401 (token race) de 404 real ou 5xx (timeout / upstream).
+    // 24/10/2026 (spec R3.3): proxy fora / IP bloqueado → 502 { error, code }.
+    if (ehFalhaDeCaminho(err)) return _responderSemAcessoEdp(res, err);
     if (err.wpaStatus !== undefined) {
       console.warn(`[wpa/nota] WPA falhou — noteId=${noteId} sectorId=${sectorId} wpaStatus=${err.wpaStatus} elapsed=${err.wpaElapsed}ms body=${(err.wpaBody||'').slice(0,200)}`);
       // Mapeia status WPA → status HTTP da nossa rota (mantém 404 p/ compat com UI atual)
@@ -1702,6 +1729,7 @@ router.get('/wpa/nota/:noteId', async (req, res) => {
                        : 404;                          // 404, 403, etc → bucket de "não disponível"
       return res.status(httpStatus).json({
         error: `WPA retornou ${err.wpaStatus || 'erro de rede'}`,
+        code:  err.code || null,
         debug: {
           noteIdOriginal, noteIdUsed: noteId, sectorId, resolvedFromCodigo,
           wpaStatus:  err.wpaStatus,
@@ -1770,6 +1798,7 @@ router.get('/wpa/probe', async (req, res) => {
     } catch {}
     res.json({ status: wpaRes.status, contentType, preview: text.slice(0, 500), firstNote });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;   // 24/10/2026 (R3.3)
     res.status(500).json({ error: err.message });
   }
 });
@@ -1839,6 +1868,7 @@ router.get('/debug/notas', async (req, res) => {
       porEquipe,
     });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;   // 24/10/2026 (R3.3)
     res.status(500).json({ error: err.message });
   }
 });
@@ -1883,6 +1913,7 @@ router.get('/debug/historico-notas', async (req, res) => {
       })),
     });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;   // 24/10/2026 (R3.3)
     res.status(500).json({ error: err.message });
   }
 });
@@ -1916,6 +1947,7 @@ router.get('/debug/historico', async (req, res) => {
       })),
     });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;   // 24/10/2026 (R3.3)
     res.status(500).json({ error: err.message });
   }
 });
@@ -1937,6 +1969,7 @@ router.get('/debug/preroute', async (req, res) => {
       firstItem,
     });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;   // 24/10/2026 (R3.3)
     res.status(500).json({ error: err.message });
   }
 });
@@ -2063,6 +2096,7 @@ router.get('/debug/teamsstatus', async (req, res) => {
       resumo,
     });
   } catch (err) {
+    if (_responderSemAcessoEdp(res, err)) return;   // 24/10/2026 (R3.3)
     res.status(500).json({ error: err.message });
   }
 });
@@ -3681,12 +3715,23 @@ router.post('/admin/backfill', async (req, res) => {
     const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
     console.log(`[BACKFILL] Iniciando para ${date}...`);
 
+    // 24/10/2026 (spec R3.2/R3.4): setor que falhava virava [] e a data era
+    // gravada e consolidada SEM ele — subcontagem silenciosa. Agora, com qualquer
+    // setor falhando, nada é gravado para a data e a resposta diz o code.
+    const falhas = [];
     const resultados = await Promise.all(
       SETORES.map(s => getTeamsByDate(s, date).catch(err => {
         console.warn(`[BACKFILL] Setor ${s} falhou: ${err.message}`);
+        falhas.push({ sector: s, code: err.code || null, msg: err.message });
         return [];
       }))
     );
+    if (falhas.length > 0) {
+      return res.status(502).json({
+        ok: false, date, code: falhas[0].code,
+        error: `backfill de ${date} NÃO gravado: ${falhas.map(f => `${f.sector} ${f.code || f.msg}`).join(', ')}`,
+      });
+    }
     const teams = resultados.flat();
 
     if (teams.length === 0) {
@@ -3758,12 +3803,20 @@ router.post('/admin/backfill/range', async (req, res) => {
 
   for (const date of datas) {
     try {
+      // 24/10/2026 (spec R3.2/R3.4): dia com setor falhando não é gravado.
+      const falhas = [];
       const chunks = await Promise.all(
         SETORES.map(s => getTeamsByDate(s, date).catch(err => {
           console.warn(`[BACKFILL-RANGE] ${date}/${s} falhou: ${err.message}`);
+          falhas.push({ sector: s, code: err.code || null });
           return [];
         }))
       );
+      if (falhas.length > 0) {
+        resultados.push({ date, ok: false, code: falhas[0].code,
+          error: `NÃO gravado: ${falhas.map(f => `${f.sector} ${f.code || 'erro'}`).join(', ')}` });
+        continue;
+      }
       const teams = chunks.flat();
 
       if (teams.length === 0) {

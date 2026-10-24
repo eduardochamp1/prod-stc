@@ -31,15 +31,18 @@ function loadClassifierWith(fixturesByPath) {
     filename: wpaPath,
     loaded: true,
     exports: {
+      // 24/10/2026: o wpaFetch real LANÇA WpaAccessError fora de 2xx (spec
+      // wpa-acesso-edp.md) — o stub segue o mesmo contrato.
       wpaFetch: async (urlPath) => {
+        const { WpaAccessError } = require('../services/wpaErros');
         if (!(urlPath in fixturesByPath)) {
           // Endpoint não mockado → 404 (safeJson devolve null)
-          return { ok: false, status: 404, json: async () => null };
+          throw new WpaAccessError('WPA_HTTP_404', { path: urlPath, status: 404 });
         }
         const data = fixturesByPath[urlPath];
         if (data === null) {
           // Mock explícito de erro 500
-          return { ok: false, status: 500, json: async () => null };
+          throw new WpaAccessError('WPA_HTTP_500', { path: urlPath, status: 500 });
         }
         return { ok: true, json: async () => data };
       },
