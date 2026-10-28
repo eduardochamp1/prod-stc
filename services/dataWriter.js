@@ -642,13 +642,22 @@ async function consolidateDay(date, opts = {}) {
   const dayPlus1  = _addDays(date, 1);
   const dayMinus1 = _addDays(date, -1);
 
-  const { data: snaps, error: e1 } = await sb
-    .from('snapshots')
-    .select('team_name, regional, sector_id, captured_at, data')
-    .in('date', [dayMinus1, date, dayPlus1])
-    .order('captured_at', { ascending: false });
-
-  if (e1) throw e1;
+  // 28/10/2026 (P0-12): `opts.snaps` troca os snapshots do banco por um conjunto
+  // montado fora (scripts/diag-paridade-backfill.js simula o dia só com backfill,
+  // ou com as janelas 08/12/17h). Só em dryRun: gravar a partir de um conjunto
+  // que não está no banco apagaria {D-1, D} e reescreveria com dado que ninguém
+  // consegue reconstruir depois.
+  if (opts.snaps && !opts.dryRun) throw new Error('consolidateDay: opts.snaps só vale com dryRun');
+  let snaps = opts.snaps;
+  if (!snaps) {
+    const { data, error: e1 } = await sb
+      .from('snapshots')
+      .select('team_name, regional, sector_id, captured_at, data')
+      .in('date', [dayMinus1, date, dayPlus1])
+      .order('captured_at', { ascending: false });
+    if (e1) throw e1;
+    snaps = data;
+  }
   if (!snaps || snaps.length === 0) {
     log.info('consolidate_no_snapshot', { date });
     return;
