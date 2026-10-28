@@ -20,15 +20,11 @@ const path = require('node:path');
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'services', 'cronService.js'), 'utf8');
 
 describe('agendamento (fonte)', () => {
-  test('a cada 30 min de 05:20 a 22:20, sem 22:50', () => {
-    // 19/10/2026 (P0-11): os jobs passaram a ser agendados por `_agendar(nome, …)`,
-    // que marca a origem para o contador de requisições à EDP.
-    assert.match(SRC, /_agendar\('escala-dia', '20 5-22 \* \* \*', \(\) => runSyncEscalaDia\(\)/);
-    assert.match(SRC, /_agendar\('escala-dia', '50 5-21 \* \* \*', \(\) => runSyncEscalaDia\(\)/);
-    assert.ok(!/'20 5 \* \* \*', \(\) => runSyncEscalaDia/.test(SRC), 'o 1x/dia antigo saiu');
-  });
-  test('os dois jobs entram em _extraCronJobs (stopCron consegue parar)', () => {
-    assert.match(SRC, /_extraCronJobs\.push\(escalaDiaJob, escalaDiaMeiaJob\)/);
+  // 28/10/2026 (P0-12): a escala saiu do '20 5-22' + '50 5-21' (P2-65) e roda
+  // em cada janela de coleta (08h, 12h, 17h), dentro do runJanela.
+  test('roda dentro da janela, não tem mais agendamento próprio', () => {
+    assert.match(SRC, /\['escala-dia', \(\) => runSyncEscalaDia\(\)\]/);
+    assert.ok(!/_agendar\('escala-dia'/.test(SRC), 'o agendamento de 30 em 30 min saiu');
   });
 });
 

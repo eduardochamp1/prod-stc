@@ -737,8 +737,11 @@ async function getTeams(filters = {}, out = null) {
   // 5 min (wpaService, "CACHE DO PAINEL"). `=== true` de propósito: a rota
   // espalha req.query em `filters`, e a string "true" de uma URL não liga nada.
   const usarCache = filters.usarCachePainel === true;
+  // 28/10/2026 (P0-12): `soGuardado` (o /api/teams do painel) nunca vai à EDP —
+  // lê a última coleta de hoje, feita na janela ou pelo botão do admin.
+  const soGuardado = filters.soGuardado === true;
   const { resultados, report } = await _coletarSetores(setores, {
-    coletar: (s) => getTeamsBySector(s, { aceitaCache: usarCache }), desativado: isSectorDisabled,
+    coletar: (s) => getTeamsBySector(s, { aceitaCache: usarCache, soGuardado }), desativado: isSectorDisabled,
     repetirFalhos: filters.repetirSetorFalho === true,
   });
   // 20/08/2026 (backlog P1-30): o report SÓ vivia no global `_lastSectorReport`,
@@ -789,7 +792,7 @@ async function getTeamDetail(teamId) {
 
   // Busca em todos os setores até achar
   for (const setor of SETORES.ALL) {
-    const teams = _filterOficiais(await getTeamsBySector(setor));
+    const teams = _filterOficiais(await getTeamsBySector(setor, { soGuardado: true }));   // P0-12
     const found = teams.find(t => t.id === teamId || t.sigla === teamId || t.teamName === teamId);
     if (found) return found;
   }
@@ -814,7 +817,7 @@ async function getSummary(filters = {}) {
     : TODAS_REGIONAIS;
 
   return Promise.all(regionais.map(async r => {
-    const resultados = await Promise.all(r.setores.map(s => getTeamsBySector(s)));
+    const resultados = await Promise.all(r.setores.map(s => getTeamsBySector(s, { soGuardado: true })));   // P0-12
     const teams = _filterOficiais(resultados.flat());
     return {
       regionalId:      r.regionalId,

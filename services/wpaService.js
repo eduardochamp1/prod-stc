@@ -2310,6 +2310,47 @@ function _falhaRecente(map, key, esperaMs, agora = Date.now()) {
   return f;
 }
 
+// ── PAINEL SÓ LÊ O GUARDADO (28/10/2026, P0-12) ──────────────────────────────
+// A coleta passou a ter hora marcada (08h, 12h, 17h, e o botão do admin). O
+// painel (`soGuardado`) nunca vai à EDP: serve a última coleta do setor feita
+// HOJE, sem limite de idade, ou [] se ainda não houve. Cada coleta fresca também
+// é gravada em app_settings (`painel_coleta_<setor>`), para o painel não ficar
+// vazio até a próxima janela quando o processo reinicia (max_memory_restart).
+const PAINEL_SETTING_PREFIXO = 'painel_coleta_';
+const _hidratado = new Set();   // setores já procurados no banco neste processo
+
+function _persistirColetaPainel(sectorId) {
+  if (process.env.DATA_MODE !== 'wpa' || process.env.NODE_ENV === 'test') return;
+  const e = _cacheSetor.get(sectorId);
+  if (!e) return;
+  require('../db/queries').setSetting(PAINEL_SETTING_PREFIXO + sectorId, e)
+    .catch(err => console.warn(`[WPA] coleta do painel de ${sectorId} não gravada no banco: ${err.message}`));
+}
+
+async function _hidratarColetaPainel(sectorId, lerSetting) {
+  if (_hidratado.has(sectorId) || _cacheSetor.has(sectorId)) return;
+  _hidratado.add(sectorId);
+  try {
+    const row = await lerSetting(PAINEL_SETTING_PREFIXO + sectorId);
+    const e = row && row.data;
+    if (e && Number.isFinite(e.ts) && e.dia && e.valor && !_cacheSetor.has(sectorId)) _cacheSetor.set(sectorId, e);
+  } catch (err) {
+    console.warn(`[WPA] coleta do painel de ${sectorId} não lida do banco: ${err.message}`);
+  }
+}
+
+/** Cópia da última coleta de hoje do setor, ou [] (nunca chama a EDP). */
+async function _lerGuardadoPainel(sectorId, lerSetting = (k) => require('../db/queries').getSetting(k)) {
+  await _hidratarColetaPainel(sectorId, lerSetting);
+  return _lerCacheSetor(_cacheSetor, sectorId, Infinity) || [];
+}
+
+/** Horário (ms) da última coleta de hoje do setor, ou null. */
+function coletaGuardadaEm(sectorId, agora = Date.now()) {
+  const e = _cacheSetor.get(sectorId);
+  return e && e.dia === dateBRT(agora) ? e.ts : null;
+}
+
 function getTeamsBySector(sectorId, opts = {}) {
   // Conta desativada (kill-switch): pula a extração sem tocar na rede. É o ponto
   // único por onde toda coleta de equipes passa, então isto cobre snapshot,
@@ -2322,6 +2363,7 @@ function getTeamsBySector(sectorId, opts = {}) {
     }
     return Promise.resolve([]);
   }
+  if (opts.soGuardado) return _lerGuardadoPainel(sectorId);
   if (opts.aceitaCache) {
     const guardado = _lerCacheSetor(_cacheSetor, sectorId, PAINEL_CACHE_MS);
     if (guardado) return Promise.resolve(guardado);
@@ -2350,6 +2392,7 @@ function getTeamsBySector(sectorId, opts = {}) {
     }
     _falhaSetor.delete(sectorId);
     _gravarCacheSetor(_cacheSetor, sectorId, valor);
+    _persistirColetaPainel(sectorId);
     return valor;
   });
   // Quem aceita cache recebe cópia também quando pega carona na coleta em voo:
@@ -2817,6 +2860,7 @@ module.exports = {
   _singleFlight,   // exportado p/ teste (coalescência de coletas — incidente 30/07/2026)
   _lerCacheSetor, _gravarCacheSetor, _cacheSetor,   // P0-11: cache do painel por setor
   _falhaRecente, _falhaSetor,                       // P0-11: espera do painel depois de falha
+  coletaGuardadaEm, _lerGuardadoPainel, _hidratado, // P0-12: painel só lê o guardado
   // Histórico
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)

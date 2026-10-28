@@ -1598,6 +1598,138 @@ async function runDailyDriftSweep() {
   }
 }
 
+// ── COLETA EM JANELAS FIXAS (28/10/2026, P0-12) ──────────────────────────────
+// Decisão do José em 28/10/2026, depois de a EDP questionar o volume (P0-11):
+// "em horários específicos do dia iremos fazer as consultas que irão atualizar
+// nosso sistema". A EDP só é chamada nas janelas abaixo, no fechamento das 05h
+// e no botão "Atualizar agora" do admin. O painel só lê o banco.
+const JANELAS_COLETA_H = [8, 12, 17];
+const FECHAMENTO_H     = 5;
+const ATUALIZACAO_MANUAL_MS = 30 * 60_000;   // botão do admin: 1 a cada 30 min
+let _ultimaAtualizacaoManual = 0;            // em memória: instances=1 (regra 8)
+
+/** Próxima janela (ms) depois de `agora`, em BRT. */
+function proximaJanela(agora = Date.now()) {
+  const { instanteBRT } = require('./timeUtil');
+  const hoje = dateBRT(agora);
+  for (const h of JANELAS_COLETA_H) {
+    const t = instanteBRT(hoje, h * 60);
+    if (t > agora) return t;
+  }
+  const amanha = new Date(hoje + 'T12:00:00Z');
+  amanha.setUTCDate(amanha.getUTCDate() + 1);
+  return instanteBRT(amanha.toISOString().slice(0, 10), JANELAS_COLETA_H[0] * 60);
+}
+
+/**
+ * Botão do admin. Devolve { ok: true } e marca o uso, ou { ok: false, liberaEm }
+ * se a última foi há menos de 30 min. Puro com `estado` injetado (teste).
+ */
+function reservarAtualizacaoManual(agora = Date.now(), estado = null) {
+  const ultima = estado ? estado.ultima : _ultimaAtualizacaoManual;
+  if (ultima && agora - ultima < ATUALIZACAO_MANUAL_MS) {
+    return { ok: false, liberaEm: ultima + ATUALIZACAO_MANUAL_MS };
+  }
+  if (estado) estado.ultima = agora; else _ultimaAtualizacaoManual = agora;
+  return { ok: true };
+}
+
+/**
+ * Uma janela: o snapshot completo (com as caudas: classificação, detalhes,
+ * rejeições, interrupções, escala) e, em série, o que antes rodava de hora em
+ * hora ou a cada 30 min. Cada etapa falha sozinha.
+ */
+async function runJanela() {
+  await runSnapshot();
+  const etapas = [
+    ['escala-dia', () => runSyncEscalaDia()],
+    ['notas-devolvidas', () => runNotasCollect()],
+    ['retry-rejeicoes', () => runRetryRejeicoesVazias()],
+    ['retry-outros', () => runRetryRecentOutros()],
+    ['uuid-health', () => runUuidHealthCheck()],
+  ];
+  for (const [nome, fn] of etapas) {
+    try { await fn(); }
+    catch (err) {
+      if (ehWpaAccessError(err)) { log.error('rotina_sem_acesso_edp', { rotina: nome, code: err.code, msg: err.message }); break; }
+      log.error('janela_etapa_falhou', { etapa: nome, msg: err.message });
+    }
+  }
+}
+
+/**
+ * O dia `date` inteiro, já fechado, pelo caminho do backfill (getTeamsByDate):
+ * grava os snapshots, os totais, classifica e consolida. Era o corpo de
+ * POST /admin/backfill; virou função para o fechamento das 05h usar também.
+ * Setor com falha → nada gravado e lança com o code (spec R3.2/R3.4).
+ */
+async function runBackfillDia(date) {
+  const { getTeamsByDate } = require('./wpaService');
+  const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('./dataWriter');
+  const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
+  console.log(`[BACKFILL] Iniciando para ${date}...`);
+
+  // 24/10/2026 (spec R3.2/R3.4): setor que falhava virava [] e a data era
+  // gravada e consolidada SEM ele — subcontagem silenciosa. Agora, com qualquer
+  // setor falhando, nada é gravado para a data e a resposta diz o code.
+  const falhas = [];
+  const resultados = await Promise.all(
+    SETORES.map(s => getTeamsByDate(s, date).catch(err => {
+      console.warn(`[BACKFILL] Setor ${s} falhou: ${err.message}`);
+      falhas.push({ sector: s, code: err.code || null, msg: err.message, caminho: ehFalhaDeCaminho(err) });
+      return [];
+    }))
+  );
+  if (falhas.length > 0) {
+    const err = new Error(`backfill de ${date} NÃO gravado: ${falhas.map(f => `${f.sector} ${f.code || f.msg}`).join(', ')}`);
+    err.code = falhas[0].code;
+    err.falhas = falhas;
+    throw err;
+  }
+  const teams = resultados.flat();
+  if (teams.length === 0) return { ok: false, date, teams: 0 };
+
+  await saveSnapshot(teams, date);
+  await upsertDailyTotals(teams, date);
+  await upsertTeamDailyTotals(teams, date);
+
+  // Classifica subcategorias (incluindo Amount de C93/BTZ013) ANTES de consolidar,
+  // para que upsertSubcatTotals dentro de runConsolidate encontre os dados corretos.
+  console.log(`[BACKFILL] Classificando subcategorias para ${date}...`);
+  await runClassifyNewNotes([...teams]).catch(err =>
+    console.warn(`[BACKFILL] runClassifyNewNotes falhou (não crítico): ${err.message}`)
+  );
+
+  // Consolida ao final para garantir apenas concluídas nos totais históricos
+  await runConsolidate(date);
+
+  console.log(`[BACKFILL] Concluído: ${teams.length} equipes para ${date}`);
+  return {
+    ok: true, date, teams: teams.length,
+    concluidas: teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0),
+    executadas: teams.reduce((s, t) => s + (t.notasExecutadas || []).length, 0),
+  };
+}
+
+/**
+ * Fechamento das 05h: o D-1 pelo backfill (vê as notas que chegam horas depois
+ * do logoff — 40,6% das sessões, diag do P0-11), depois logoffs de D-1/D-2,
+ * intervalos e saída da nota (que lê os dois anteriores). Era 03:00/03:10/04:30.
+ */
+async function runFechamento() {
+  const ontem = dateBRTMinusDays(1);
+  try {
+    const r = await runBackfillDia(ontem);
+    log.info('fechamento_backfill', r);
+  } catch (err) {
+    log.error('fechamento_backfill_falhou', { date: ontem, code: err.code || null, msg: err.message });
+    if ((err.falhas || []).some(f => f.caminho)) return;   // sem caminho até a EDP, o resto também falharia
+  }
+  await runSyncLogoffs().catch(err => log.error('fechamento_logoffs_falhou', { msg: err.message }));
+  await runSyncIntervalos().catch(err => log.error('fechamento_intervalos_falhou', { msg: err.message }));
+  await runSaidaNota();
+}
+
 // ── START / STOP ──────────────────────────────────────────────────────────────
 
 // 19/10/2026 (P0-11): cada job roda marcado como `cron:<nome>`, para o contador
@@ -1623,117 +1755,44 @@ function startCron() {
     console.log('[CRON] Modo mock — cron desativado.');
     return;
   }
-
-  // Heartbeat de token 24/7. ATENÇÃO: no campo de minutos isso dispara às :00 e
-  // :45 (intervalos alternados de 45 e 15 min), não "a cada 45 min" — ver P2-29.
-  // Desde 22/08/2026 o disparo é barato: só faz /signin dentro da margem do exp.
-  tokenJob = _agendar('token', '*/45 * * * *', runTokenRefresh, {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  // Snapshot a cada 15 min entre 05:30 e 23:45.
-  // Janela expandida pra cobrir:
-  //   - logon antecipado de equipes 06h (com tolerância de 30min)
-  //   - logoff de plantão noturno até 23:30
-  // Antes era 06-20h, perdíamos logoffs após 20h — equipes ficavam pra sempre
-  // "em campo" no histórico mesmo tendo deslogado.
-  snapshotJob = _agendar('snapshot', '*/15 5-23 * * *', runSnapshot, {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  // Snapshot extra de madrugada (00:30, 02:00, 04:00) pra capturar logoffs
-  // tardios de equipes que viraram a noite. Sem isso o sessionEnd só
-  // entra no banco no primeiro snap do dia seguinte (= consolidação atrasada).
-  const madrugadaJob = _agendar('snapshot-madrugada', '30 0,2,4 * * *', runSnapshot, {
-    timezone: 'America/Sao_Paulo',
-  });
-  // Guarda referência pra stopCron poder limpar
   if (!global._extraCronJobs) global._extraCronJobs = [];
-  global._extraCronJobs.push(madrugadaJob);
+  const BRT = { timezone: 'America/Sao_Paulo' };
 
-  // Sync de logoffs do dia anterior — roda às 03:00 BRT.
-  // Usa /api/Sessions/all/date pra pegar sessões finalizadas (que somem do
-  // /sessions/current após logoff) e atualiza sessionEnd nos snapshots.
-  // Escala cadastrada do dia, às 05:20 — antes da janela de snapshot (05:30),
-  // pra que o primeiro /admin/health do dia já saiba quem está de folga.
-  // 18/10/2026 (P2-65): e depois a cada 30 min até 22:20 — convocação de folga
-  // é lançada pela EDP ao longo do dia. Duas expressões porque uma só
-  // ('20,50 5-22') rodaria também às 22:50.
-  const escalaDiaJob = _agendar('escala-dia', '20 5-22 * * *', () => runSyncEscalaDia(), {
-    timezone: 'America/Sao_Paulo',
-  });
-  const escalaDiaMeiaJob = _agendar('escala-dia', '50 5-21 * * *', () => runSyncEscalaDia(), {
-    timezone: 'America/Sao_Paulo',
-  });
-  global._extraCronJobs.push(escalaDiaJob, escalaDiaMeiaJob);
+  // 28/10/2026 (P0-12): a EDP só é chamada aqui, nas janelas e no fechamento.
+  // Agenda anterior e o porquê de cada job, preservados como registro (regra 3):
+  //   - token '*/45 * * * *' 24/7. "ATENÇÃO: no campo de minutos isso dispara às
+  //     :00 e :45 (intervalos alternados de 45 e 15 min), não 'a cada 45 min' —
+  //     ver P2-29. Desde 22/08/2026 o disparo é barato: só faz /signin dentro da
+  //     margem do exp." Saiu: o token é pedido sob demanda (getToken) na janela.
+  //   - snapshot '*/15 5-23' — "Janela expandida pra cobrir logon antecipado de
+  //     equipes 06h e logoff de plantão noturno até 23:30. Antes era 06-20h,
+  //     perdíamos logoffs após 20h." E snapshot de madrugada '30 0,2,4' para
+  //     logoffs tardios. Os dois saíram: o logoff vem do fechamento das 05h
+  //     (Sessions/all/date de D-1 e D-2, P1-47).
+  //   - escala-dia '20 5-22' e '50 5-21' — "18/10/2026 (P2-65): a cada 30 min até
+  //     22:20 — convocação de folga é lançada pela EDP ao longo do dia." Agora
+  //     roda em cada janela.
+  //   - sync-logoffs 03:00, intervalos 03:10, saída da nota 04:30 → fechamento 05h.
+  //   - uuid-health '5 6-20', retry-outros '25 6-20', retry-rejeicoes '40 6-20'
+  //     ("Retry das rejeições gravadas vazias por falha de coleta (14/10/2026)"),
+  //     notas-devolvidas '5 * * * *' → em cada janela, depois do snapshot.
+  //   - No boot: warm do token e snapshot imediato se 6–20h. "P1-29 (20/08/2026):
+  //     o boot chamava runTokenRefresh, que usa forceRefresh ... um /signin fresco
+  //     obrigatório a cada reinício. Com autorestart + crash-loop (161 restarts
+  //     num dia) isso queimava o orçamento de 5 tentativas da EDP em segundos."
+  //     Saíram os dois: religar o processo não chama a EDP.
+  snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, runJanela, BRT);
+  const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, runFechamento, BRT);
+  global._extraCronJobs.push(fechamentoJob);
 
-  // Intervalos das sessões de ontem, às 03:10 — depois do sync-logoffs, com o
-  // dia já fechado. 1 request por sessão, ver o comentário da função.
-  const intervalosJob = _agendar('intervalos', '10 3 * * *', () => runSyncIntervalos(), {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  // Saída da nota (P2-70): D-1 às 04:30, depois dos intervalos das 03:10.
-  const saidaNotaJob = _agendar('saida-nota', '30 4 * * *', () => runSaidaNota(), {
-    timezone: 'America/Sao_Paulo',
-  });
-  global._extraCronJobs.push(saidaNotaJob);
-
-  const syncLogoffsJob = _agendar('sync-logoffs', '0 3 * * *', () => runSyncLogoffs(), {
-    timezone: 'America/Sao_Paulo',
-  });
-  global._extraCronJobs.push(syncLogoffsJob);
-
+  // Só banco, sem EDP — ficam como estavam.
   // Consolidação diária às 23:50 (logo após o último snapshot do dia)
-  consolidaJob = _agendar('consolidacao', '50 23 * * *', runConsolidate, {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  // Health-check de UUID 1x por hora durante o expediente (06-20h)
-  // Detecção precoce de regressão no scraper que possa invalidar a classificação
-  uuidHealthJob = _agendar('uuid-health', '5 6-20 * * *', runUuidHealthCheck, {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  // Retry de DD/OUTROS recentes (até 24h) — reclassifica caso Activities[]
-  // tenha sido populada após classificação inicial. Roda no minuto 25 pra
-  // não bater com snapshots (00,15,30,45) nem uuid-health (05).
-  retryOutrosJob = _agendar('retry-outros', '25 6-20 * * *', runRetryRecentOutros, {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  // Retry das rejeições gravadas vazias por falha de coleta (14/10/2026).
-  // Minuto 40: fora de snapshots (00/15/30/45), uuid-health (05) e retry-outros (25).
-  retryRejJob = _agendar('retry-rejeicoes', '40 6-20 * * *', () => runRetryRejeicoesVazias().catch(err =>
-    console.warn('[CRON] retry-rej falhou:', err.message)), {
-    timezone: 'America/Sao_Paulo',
-  });
-
+  consolidaJob = _agendar('consolidacao', '50 23 * * *', runConsolidate, BRT);
   // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
-  driftJob = _agendar('drift-sweep', '0 2 * * *', runDailyDriftSweep, {
-    timezone: 'America/Sao_Paulo',
-  });
+  driftJob = _agendar('drift-sweep', '0 2 * * *', runDailyDriftSweep, BRT);
 
-  // Notas devolvidas: a cada hora no minuto 5 (offset para não colidir com outros jobs)
-  notasJob = _agendar('notas-devolvidas', '5 * * * *', runNotasCollect, {
-    timezone: 'America/Sao_Paulo',
-  });
-
-  console.log('[CRON] Jobs iniciados — token 45 min (24/7), snapshot 15 min (06–20h), uuid-health/retry-outros 1x/h (06–20h), consolidação 20:30, drift-sweep 02:00, notas-devolvidas xx:05');
-
-  // Login imediato ao iniciar para garantir token válido desde o primeiro ciclo
-  // P1-29 (20/08/2026): o boot chamava runTokenRefresh, que usa forceRefresh e
-  // portanto IGNORA o cache em memória E o cache no banco — um /signin fresco
-  // obrigatório a cada reinício. Com autorestart + crash-loop (161 restarts num
-  // dia, ver ecosystem.config.js) isso queimava o orçamento de 5 tentativas da
-  // EDP em segundos. getToken() reaproveita o token válido e só loga se preciso.
-  setTimeout(runTokenWarm, 2000);
-
-  // Snapshot imediato ao iniciar (se dentro do horário — usa hora BRT, não UTC)
-  const horaBRT = hourBRT();
-  if (horaBRT >= 6 && horaBRT <= 20) {
-    setTimeout(runSnapshot, 5000);
-  }
+  console.log(`[CRON] Jobs iniciados — coleta da EDP às ${JANELAS_COLETA_H.map(h => h + 'h').join(', ')} ` +
+    `e fechamento do D-1 às ${FECHAMENTO_H}h (P0-12); consolidação 23:50, drift-sweep 02:00. Boot não coleta.`);
 }
 
 function stopCron() {
@@ -1839,6 +1898,9 @@ async function runSaidaNota(date) {
 module.exports = {
   startCron, stopCron,
   runSnapshot, runConsolidate, runTokenRefresh,
+  // P0-12: coleta em janelas fixas + fechamento + botão do admin.
+  runJanela, runFechamento, runBackfillDia, proximaJanela, reservarAtualizacaoManual,
+  JANELAS_COLETA_H, FECHAMENTO_H, ATUALIZACAO_MANUAL_MS,
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,

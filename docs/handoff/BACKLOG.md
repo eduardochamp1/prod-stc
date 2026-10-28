@@ -33,6 +33,7 @@
 | P0-9 | **INCIDENTE 16/10/2026 ~21:15–21:30:** a Web API da EDP passou a recusar o IP da nossa VM (403 "blocked your access") — painel sem coleta | Ops/Contrato | **aberto** — falta: TI dizer se o IP de saída mudou; EDP liberar; backfill do período. ⚠️ 18/10: a VM voltou a alcançar a API; o que seguia zerando a coleta era o P0-10 |
 | P0-10 | **INCIDENTE 16/10/2026 ~21:30:** a EDP passou a devolver 200 "Nenhum dado encontrado" para o User-Agent do node-fetch — coleta zerada SEM erro no log | Backend/Dados | **código done** (b634816, a4b9371 — 18/10) — falta deploy, reparo do `notas_daily_agg` 17–18/10, backfill + re-consolidação 16–18/10, avisar a EDP do UA |
 | P0-11 | **EDP questionou (19/10/2026) "diversas requisições" congestionando a WPA** — e não tínhamos como dizer quantas são nossas. Pelo código, o painel aberto no navegador faz uma coleta COMPLETA na EDP a cada 5 min **por aba**, sem cache (~200–270 requests cada) | Ops/Contrato | **itens 1–5 no código** (a23d6bc, d5a3ae6, f53a3b9 — 19/10): contador, cache de 5 min, aba escondida, limite de 6 em voo, colaboradores de encerrada 1×, encerrada rebuscada de hora em hora (congelar foi descartado pelo diag) e sombra do V2 — falta: deploy, medir, responder a EDP |
+| P0-12 | Coleta da EDP em **janelas fixas** (08h, 12h, 17h + fechamento D-1 às 05h); painel só lê o banco, botão de atualizar para admin | Ops/Contrato | **passos 2–5 no código (28/10)** — agenda em janelas, boot sem coleta, painel só banco, botão admin; falta a paridade (passo 1, precisa de acesso à EDP) e o deploy |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -6015,6 +6016,58 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Rollback:** `git revert a23d6bc` + deploy. O contador não muda nenhuma requisição, só observa: reverter só tira a medida. Itens 1 e 2: `WPA_PAINEL_CACHE_MS=0` no `.env` desliga o cache sem deploy de código; reverter tudo é `git revert d5a3ae6`.
 - **O que NÃO fazer:** responder à EDP com a estimativa acima como se fosse medida; reduzir o volume escondendo a origem (trocar UA, IP ou conta). O UA próprio é justamente o que permite à EDP separar a gente dos outros sistemas.
 - **Relacionado:** P0-9 (bloqueio de IP, mesma semana), P0-10 (filtro de UA), P1-25 (conta compartilhada), P2-30 (sem orçamento global de concorrência), P2-65, P2-66.
+
+
+## P0-12 — Coleta da EDP em janelas fixas (08h, 12h, 17h + fechamento D-1 às 05h)
+
+- **Categoria:** Ops/Contrato
+- **Status:** passos 2–5 no código (28/10/2026), não commitados nem em produção. Passo 1 (paridade) segue pendente: o script está pronto e testado, mas precisa de acesso à EDP (proxy fora do ar e IP da VM bloqueado em 28/10: `check-wpa --proxy none` → API de dados 403 `WPA_IP_BLOQUEADO`). José pediu em 28/10 para seguir com os horários fixos sem esperar a paridade: *"não quero contar as requisições, quero mudar a forma com que nós fazemos elas, vamos estipular horários fixos"*. **A paridade continua sendo o portão antes do deploy:** é ela que diz se o fechamento das 05h recupera os ~10% que as 3 janelas sozinhas perdem.
+- **Fonte:** José, 28/10/2026, com o `wpa-monitor` parado desde 24/10 (`pm2 stop`): *"quero bolar um fluxo de atualização das informações, talvez em horários específicos do dia iremos fazer as consultas que irão atualizar nosso sistema"*. Decisões dele, na mesma conversa: janelas **08h, 12h e 17h**; fechamento do D-1 às **05h**; painel **só lê o banco**, com **botão de atualizar para admin** (com limite).
+- **Por que é P0:** depende disso religar a coleta sem repetir o volume que a EDP questionou (P0-11). Hoje religar devolve o modelo contínuo.
+- **Evidência (código, conferida em 28/10/2026):**
+  - `services/cronService.js:1630-1718` — 15 agendamentos que chamam a EDP. Os que pesam: snapshot `*/15 5-23` (`:1640`) e de madrugada (`:1647`), `escala-dia` 2×/h (`:1662`, `:1665`), `notas-devolvidas` de hora em hora (`:1718`), `uuid-health`/`retry-outros`/`retry-rejeicoes` de hora em hora das 6h às 20h (`:1694-1707`), token `*/45` 24/7 (`:1630`). No boot: warm do token (`:1730`) e um snapshot se for 6–20h (`:1735`).
+  - `routes/index.js:599` — `GET /api/teams` coleta ao vivo na EDP quando o cache de 5 min do setor venceu (`WPA_PAINEL_CACHE_MS`, `wpaService.js:2263`). `public/index.html:10219` chama isso a cada 5 min com a aba visível.
+  - `services/wpaService.js:1784` — `getTeamsByDate(setor, data)`: o caminho do backfill, que monta um dia inteiro depois de fechado. Já exposto em `POST /admin/backfill` (`routes/index.js:3706`).
+  - Medido no contador (`logs/out.log`, `wpa_requisicoes_hora`): 19–20/10, de 1.000 a 1.600 por hora, todas com erro (a EDP recusando). 24/10, com os freios do P0-11, ~25 por hora (proxy fora do ar, todas com erro). **Não há no log nenhuma hora saudável medida.**
+- **Achado do P0-11 que favorece o modelo:** 40,6% das sessões encerradas ganham nota executada ou rejeitada **horas depois** (até 21h, diag v2 de 19/10). A coleta ao vivo para às 23h45 e não vê o que chega depois. Um fechamento do D-1 às 05h do dia seguinte enxerga até ~29h depois do início do turno.
+- **Ação (nesta ordem; cada passo é um commit):**
+  1. **Paridade antes de tudo (regra 7).** Script read-only: para N dias já fechados, monta o dia pelo `getTeamsByDate` + `consolidateDay` em dry-run e compara com `team_daily_totals` gravado, por equipe e por bucket (concluídas, executadas, rejeitadas, subcategorias). A diferença de fonte das **concluídas** (ao vivo usa `V2.Concluded[]`; o backfill usa `notes/executed`) é o ponto a explicar. Se não fechar, este item para aqui e a divergência vira item próprio.
+     - **Feito (28/10/2026):** `scripts/diag-paridade-backfill.js` (read-only) + `test/diagParidadeBackfill.test.js` (8). `consolidateDay` ganhou `opts.snaps` (só com `dryRun`; sem ele lança) para consolidar um conjunto montado fora do banco. Compara, por dia D na régua de D+1: TABELA × AO VIVO (snapshots do banco) × BACKFILL (só `getTeamsByDate` de D, D+1, D+2) × JANELAS (backfill + só os ciclos das 08h/12h/17h). Mostra também notas concluídas que só um caminho vê e o logon/logoff por equipe. O backfill fica em `logs/paridade-cache/` (rodar de novo não chama a EDP) e o script imprime o total de requisições no fim.
+     - **Custo de rede:** ~400 requisições por data (4 setores, ~80 sessões × 5). Para 3 dias são 5 datas (D até D+2), ~2.000 requisições, em série por setor e pela fila de 6 em voo.
+     - **1ª leitura, só banco (28/10/2026), régua D+1:** as **3 janelas sozinhas perdem ~10%** da produção — 13/10: 963 contra 1.056 do ao vivo; 14/10: 999 contra 1.107. É o `Concluded[]` do V2 rodando ao longo do dia (P1-13). Ou seja, **o modelo novo só fecha se o backfill das 05h recuperar esses ~10%**, e é isso que a rodada com rede mede.
+     - **Achado lateral, não investigado:** a TABELA de 14/10 (1.249) está **142 acima** da régua ao vivo de hoje (1.107); a de 13/10 (1.039) está 17 abaixo (1.056). Pode ser `note_rejections` que mudou depois da consolidação, ou reparo monotônico (P0-7). Conferir com `scripts/verify-consolidacao.js` antes de usar a TABELA como referência.
+     - **Falta:** proxy no ar → `node scripts/diag-paridade-backfill.js 2026-10-07 2026-10-09` → anotar aqui. Dias escolhidos porque a régua usa os snapshots ao vivo de D até D+2, e os de 16 a 18/10 estão zerados pelo P0-10.
+  2. **Agenda nova** no `cronService.js`: snapshot completo às 08:00, 12:00 e 17:00 BRT, com as caudas (classificação, detalhes, rejeições), escala e notas devolvidas **dentro** da janela. Às 05:00: backfill do D-1 pelo `getTeamsByDate`, `sync-logoffs`, intervalos, saída da nota, e consolidação do D-1. Os jobs de hora em hora e o snapshot de 15 min saem. O token só faz login dentro das janelas.
+  3. **Boot sem coleta**: religar o processo não dispara snapshot. Coleta só na janela ou pelo botão.
+  4. **Painel só lê o banco**: `/api/teams` serve o último snapshot gravado, nunca a EDP, com o horário da coleta na resposta. O front mostra "atualizado às HH:MM".
+  5. **Botão "Atualizar agora" (só admin)**: `POST` que roda uma coleta, com no máximo 1 a cada 30 min no processo (estado em memória, instances=1, regra 8). Fora do limite responde 429 com o horário da próxima liberada.
+  6. **Kill-switch e contador continuam valendo** sem mudança (`WPA_ACCOUNTS_DISABLED`, `wpaContador`, fila de 6 em voo).
+  - **Feito, passos 2–5 (28/10/2026), `test/coletaJanelas.test.js` (11):**
+    - `cronService.startCron`: só 4 agendamentos. `janela` às `0 8,12,17` (`runJanela`: snapshot com as caudas, depois escala-dia, notas devolvidas, retry de rejeições, retry de OUTROS, uuid-health, em série) e `fechamento` às `0 5` (`runFechamento`: `runBackfillDia(D-1)`, sync-logoffs de D-1/D-2, intervalos, saída da nota). Sem EDP, como estavam: consolidação 23:50 e drift-sweep 02:00. Saíram token `*/45`, snapshot `*/15 5-23` e de madrugada, escala 2×/h, os de hora em hora e os de 03:00/03:10/04:30. A agenda antiga ficou num comentário no `startCron` (regra 3).
+    - Boot: sem warm de token e sem snapshot imediato. O token é pedido sob demanda dentro da janela (`getToken`).
+    - `runBackfillDia(date)`: o corpo do `POST /admin/backfill` virou função (mesmo comportamento: setor com falha → nada gravado, 502 com o code).
+    - Painel: `getTeamsBySector(s, { soGuardado: true })` serve a última coleta de HOJE do setor, sem limite de idade, ou `[]`; nunca chama a EDP. Toda coleta fresca é gravada em `app_settings.painel_coleta_<setor>`, lida uma vez por setor depois de reiniciar. `/api/teams`, `getTeamDetail` e `getSummary` usam `soGuardado`. `/api/teams` devolve `coleta_em: { em, proxima }` (a coleta mais antiga do escopo e a próxima janela); o cabeçalho mostra "Coleta das HH:MM · próxima HH:MM".
+    - Botão "⇩ Buscar da EDP agora" (só admin, no menu de ações rápidas): `POST /api/admin/atualizar-agora`, 1 a cada 30 min no processo, 429 com `liberaEm`. O antigo `POST /admin/snapshot` passa pelo mesmo limite.
+  - **O que ainda chama a EDP fora das janelas (decisão do José se fecha):**
+    - `GET /api/wpa/nota` (abrir uma OS no painel): lê `note_details` primeiro e vai à EDP se a nota não está em cache. 1–2 requisições por clique. Com 3 janelas, o cache de detalhes cresce no máximo 30 notas por janela (`MAX_CACHE_POR_CICLO`), então mais cliques vão cair na EDP.
+    - Admin: `POST /admin/warm` (botão "Acordar WPA"), backfills manuais, `/debug/*`. Externo: `/api/cron/*` com `CRON_SECRET` (nada no crontab chama).
+    - Scripts manuais em `scripts/`.
+- **Efeitos que o José precisa saber antes do deploy:**
+  - "Em campo agora" vira a foto da última janela, não o tempo real.
+  - Horário de logon e logoff: confirmar no passo 1 que vêm do `Sessions/all/date` do fechamento, e não de quando o snapshot viu a equipe pela primeira e pela última vez. Se vierem do snapshot, perdem precisão.
+  - Alertas e avisos de produtividade que leem snapshot do dia passam a ver só 3 pontos por dia.
+- **Critério de aceite:**
+  - [ ] Paridade: N dias fechados, backfill+consolidação = `team_daily_totals` por equipe e bucket, ou cada diferença explicada e aceita pelo José.
+  - [ ] Teste: fora das janelas e do botão, nenhuma requisição sai para a EDP (contador zerado com o relógio injetado).
+  - [ ] Teste: boot não chama a EDP.
+  - [ ] Teste: `/api/teams` não chama a EDP em nenhum caso.
+  - [ ] Teste: botão admin respeita 1 a cada 30 min, e não-admin recebe 403.
+  - [ ] `node --test` verde.
+  - [ ] Em produção: um dia útil com o contador mostrando requisições só às 05h, 08h, 12h e 17h (e nos cliques do botão), com total por janela anotado aqui.
+- **Esforço:** paridade ~4 h + análise; agenda + boot ~3 h; painel + botão ~4 h; testes ~3 h.
+- **Rollback:** `git revert` dos commits do item + deploy (regra 4). Volta ao modelo contínuo com os freios do P0-11.
+- **Depende de:** proxy `WPA_PROXY` no ar (P0-9) para qualquer medida em produção.
+- **Relacionado:** P0-11 (volume), P0-9 (acesso), P1-15/P1-16 (rejeição tardia tira produção — o fechamento das 05h é quem vê).
 
 
 ## P0-1c — Excluir usuário (excluir = ocultar)

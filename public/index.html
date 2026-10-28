@@ -1742,6 +1742,8 @@
       // 13/10/2026 — P3-20: o botão chama POST /admin/warm (requireAdmin); para
       // não-admin era 403 garantido.
       showOrHide('btn-warm', isAdmin);
+      // 28/10/2026 (P0-12): coleta manual na EDP — POST /admin/atualizar-agora.
+      showOrHide('btn-coleta-agora', isAdmin);
 
       // Re-popula SEMPRE os dropdowns de regional baseado no escopo do user.
       // Antes só modificava quando regional!='ALL', mas isso deixava o dropdown
@@ -7840,8 +7842,11 @@ ${acumuladoHTML}
         // não diz nada sobre ele; por isso só vale no live (P1-39).
         _lastColeta = hist ? null : (res.coleta || null);
         renderColetaAlerta(_lastColeta);
-        document.getElementById('sync-label').textContent =
-          new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        // 28/10/2026 (P0-12): o painel não busca mais na EDP — mostra DE QUANDO é
+        // a coleta servida (janelas 08/12/17h) e quando vem a próxima.
+        document.getElementById('sync-label').textContent = hist
+          ? new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+          : _textoColetaEm(res.coleta_em);
         document.getElementById('last-update').textContent = hist
           ? `Histórico: ${label} — ${allTeams.length} equipes`
           : `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
@@ -9948,6 +9953,42 @@ ${acumuladoHTML}
         document.getElementById('nota-modal-body').innerHTML =
           `<div class="nota-error">⚠️ Não foi possível carregar a OS.<br><small>${err.message}</small></div>`;
       }
+    }
+
+    // ── COLETA EM JANELAS (28/10/2026, P0-12) ─────────────────────────────────
+    function _textoColetaEm(ce) {
+      if (!ce) return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const hm = (iso) => iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : null;
+      const prox = hm(ce.proxima);
+      const base = ce.em ? `Coleta das ${hm(ce.em)}` : 'Sem coleta hoje';
+      return prox ? `${base} · próxima ${prox}` : base;
+    }
+
+    /** Botão "Buscar da EDP agora" (só admin): 1 a cada 30 min, 429 fora disso. */
+    async function coletarAgora() {
+      const btn = document.getElementById('btn-coleta-agora');
+      if (!btn) return;
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '⏳ Buscando na EDP...';
+      try {
+        const r = await fetch(`${API}/admin/atualizar-agora`, { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.ok) {
+          btn.innerHTML = '✓ Dados atualizados';
+          loadData();
+        } else if (r.status === 429 && j.liberaEm) {
+          const h = new Date(j.liberaEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+          btn.innerHTML = `⏱ Liberado às ${h}`;
+        } else {
+          btn.innerHTML = '⚠️ Falhou';
+          console.warn('[coleta-agora]', r.status, j);
+        }
+      } catch (err) {
+        btn.innerHTML = '⚠️ Falhou';
+        console.warn('[coleta-agora]', err.message);
+      }
+      setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 5000);
     }
 
     /** Botão "⚡ Acordar WPA" do header — chama /admin/warm explicitamente. */
@@ -13363,6 +13404,8 @@ ${acumuladoHTML}
       <span class="fab-acoes-alvo" id="fab-acoes-alvo"></span>
       <button class="btn-refresh" id="btn-warm" onclick="acordarWpa()"
         title="Força um login no WPA — útil quando o Azure App Service hiberna e clicar em OS retorna 502">⚡ Acordar WPA</button>
+      <button class="btn-refresh" id="btn-coleta-agora" onclick="coletarAgora()" style="display:none"
+        title="Busca os dados na EDP agora, fora das janelas de 08h, 12h e 17h. No máximo 1 vez a cada 30 min (P0-12).">⇩ Buscar da EDP agora</button>
       <button class="btn-refresh" id="fab-btn-atualizar" onclick="fabRecarregar()">↻ Atualizar</button>
     </div>
     <!-- type="button" explícito: o balão é irmão dos .tab-panel e um dia pode

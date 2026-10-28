@@ -606,7 +606,9 @@ router.get('/teams', async (req, res) => {
     const outColeta = {};
     // 19/10/2026 (P0-11): `usarCachePainel` — aceita a coleta de até 5 min que o
     // snapshot (ou outra aba) acabou de fazer, em vez de ir à EDP por aba aberta.
-    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals, usarCachePainel: true }, outColeta);
+    // 28/10/2026 (P0-12): `soGuardado` — o painel NUNCA vai à EDP. Serve a última
+    // coleta de hoje (janelas 08/12/17h ou o botão do admin); `coleta_em` diz de quando.
+    const teams = await getTeams({ ...req.query, regionals: req.scope.regionals, soGuardado: true }, outColeta);
     // 24/10/2026 (spec R3.3): TODOS os setores falharam por acesso à EDP e não há
     // equipe nenhuma → 502 { error, code }, não lista vazia. Falha parcial segue
     // 200 com `coleta.degradado` (P1-39): ali há dado real para mostrar.
@@ -673,11 +675,27 @@ router.get('/teams', async (req, res) => {
       coleta = buildColetaStatus(outColeta.report, sectorLastOk, req.scope.regionals);
     } catch (_) { /* estado da coleta é observabilidade, não pode derrubar /teams */ }
 
+    // Horário da coleta servida (P0-12): a MAIS ANTIGA entre os setores do escopo
+    // (é a idade do número mais velho na tela) e a próxima janela agendada.
+    let coletaEm = null;
+    try {
+      const { coletaGuardadaEm } = require('../services/wpaService');
+      const c = cron();
+      const setores = [...new Set([...(outColeta.report?.ok || []), ...(outColeta.report?.failed || []).map(f => f.sector)])];
+      const tss = setores.map(s => coletaGuardadaEm(s));
+      const maisAntiga = tss.length && tss.every(Number.isFinite) ? Math.min(...tss) : null;
+      coletaEm = {
+        em: maisAntiga ? new Date(maisAntiga).toISOString() : null,   // null = nenhuma coleta hoje (ou setor sem)
+        proxima: c ? new Date(c.proximaJanela()).toISOString() : null,
+      };
+    } catch (_) { /* observabilidade, não derruba /teams */ }
+
     res.json({
       teams,
       count: teams.length,
       mode: MODE,
       coleta,   // { degradado, regionais: { SJC: {status, setores, parcial, desde, msg} } }
+      coleta_em: coletaEm,   // { em, proxima } (P0-12)
       summary: {
         carteira_inicial_dedup: carteiraInicialDedup,
         dia: diaSummary,  // { inicial, atual, andamento, concluidas, rejeitadas, canceladas }
@@ -3690,16 +3708,27 @@ router.post('/admin/warm', async (_req, res) => {
   }
 });
 
-router.post('/admin/snapshot', async (req, res) => {
+// 28/10/2026 (P0-12): o botão "Atualizar agora" do admin, e o antigo
+// /admin/snapshot, passam pelo MESMO limite: 1 coleta manual a cada 30 min no
+// processo. Fora do limite → 429 com o horário em que libera.
+async function _atualizarAgora(req, res) {
   try {
     const c = cron();
     if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente (Vercel/supabase)' });
+    const r = c.reservarAtualizacaoManual();
+    if (!r.ok) {
+      return res.status(429).json({ ok: false, liberaEm: new Date(r.liberaEm).toISOString(),
+        error: 'coleta manual já feita há menos de 30 min' });
+    }
+    console.log(`[ADMIN] atualização manual da EDP por ${req.user && req.user.username}`);
     await c.runSnapshot();
     res.json({ ok: true, ts: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}
+router.post('/admin/snapshot', _atualizarAgora);
+router.post('/admin/atualizar-agora', _atualizarAgora);
 
 // POST /api/admin/backfill?date=YYYY-MM-DD
 // Busca dados históricos do WPA e salva no Supabase como se o cron tivesse rodado naquele dia
@@ -3708,62 +3737,16 @@ router.post('/admin/backfill', async (req, res) => {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return res.status(400).json({ error: 'Parâmetro date obrigatório no formato YYYY-MM-DD' });
   }
+  // 28/10/2026 (P0-12): o corpo virou cronService.runBackfillDia, que o
+  // fechamento das 05h também usa. O comportamento da rota é o mesmo.
   try {
-    const { getTeamsByDate }                                          = require('../services/wpaService');
-    const { saveSnapshot, upsertDailyTotals, upsertTeamDailyTotals } = require('../services/dataWriter');
-
-    const SETORES = ['DESG', 'DEPT', 'DESC', 'DSSJ'];   // SJC adicionado 08/06/2026
-    console.log(`[BACKFILL] Iniciando para ${date}...`);
-
-    // 24/10/2026 (spec R3.2/R3.4): setor que falhava virava [] e a data era
-    // gravada e consolidada SEM ele — subcontagem silenciosa. Agora, com qualquer
-    // setor falhando, nada é gravado para a data e a resposta diz o code.
-    const falhas = [];
-    const resultados = await Promise.all(
-      SETORES.map(s => getTeamsByDate(s, date).catch(err => {
-        console.warn(`[BACKFILL] Setor ${s} falhou: ${err.message}`);
-        falhas.push({ sector: s, code: err.code || null, msg: err.message });
-        return [];
-      }))
-    );
-    if (falhas.length > 0) {
-      return res.status(502).json({
-        ok: false, date, code: falhas[0].code,
-        error: `backfill de ${date} NÃO gravado: ${falhas.map(f => `${f.sector} ${f.code || f.msg}`).join(', ')}`,
-      });
-    }
-    const teams = resultados.flat();
-
-    if (teams.length === 0) {
-      return res.json({ ok: false, msg: 'Nenhuma equipe encontrada para essa data', date });
-    }
-
-    await saveSnapshot(teams, date);
-    await upsertDailyTotals(teams, date);
-    await upsertTeamDailyTotals(teams, date);
-
-    // Classifica subcategorias (incluindo Amount de C93/BTZ013) ANTES de consolidar,
-    // para que upsertSubcatTotals dentro de runConsolidate encontre os dados corretos.
-    const { runClassifyNewNotes } = require('../services/cronService');
-    const allNotasBackfill = [...teams];
-    console.log(`[BACKFILL] Classificando subcategorias para ${date}...`);
-    await runClassifyNewNotes(allNotasBackfill).catch(err =>
-      console.warn(`[BACKFILL] runClassifyNewNotes falhou (não crítico): ${err.message}`)
-    );
-
-    // Consolida ao final para garantir apenas concluídas nos totais históricos
     const c = cron();
-    if (c) await c.runConsolidate(date);
-
-    console.log(`[BACKFILL] Concluído: ${teams.length} equipes para ${date}`);
-    res.json({
-      ok:     true,
-      date,
-      teams:  teams.length,
-      concluidas: teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0),
-      executadas: teams.reduce((s, t) => s + (t.notasExecutadas || []).length, 0),
-    });
+    if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente' });
+    const r = await c.runBackfillDia(date);
+    if (!r.ok) return res.json({ ok: false, msg: 'Nenhuma equipe encontrada para essa data', date });
+    res.json(r);
   } catch (err) {
+    if (err.falhas) return res.status(502).json({ ok: false, date, code: err.code, error: err.message });
     console.error('[BACKFILL] Erro:', err.message);
     res.status(500).json({ error: err.message });
   }

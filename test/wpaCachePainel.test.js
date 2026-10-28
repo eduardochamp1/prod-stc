@@ -163,13 +163,16 @@ describe('fiação: /api/teams pede o cache, o cron não', () => {
   const DATA = ler('services', 'dataService.js');
   const CRON = ler('services', 'cronService.js');
 
-  test('/api/teams passa usarCachePainel: true DEPOIS do ...req.query (query não forja)', () => {
-    assert.match(ROTAS, /getTeams\(\{ \.\.\.req\.query, regionals: req\.scope\.regionals, usarCachePainel: true \}/);
+  // 28/10/2026 (P0-12): o /api/teams trocou o cache de 5 min por `soGuardado`
+  // (nunca vai à EDP). O cache de 5 min continua no getTeams para quem pedir.
+  test('/api/teams passa soGuardado: true DEPOIS do ...req.query (query não forja)', () => {
+    assert.match(ROTAS, /getTeams\(\{ \.\.\.req\.query, regionals: req\.scope\.regionals, soGuardado: true \}/);
   });
 
   test('getTeams só repassa aceitaCache com o booleano true (string "true" da query não vale)', () => {
     assert.match(DATA, /filters\.usarCachePainel === true/);
-    assert.match(DATA, /getTeamsBySector\(s, \{ aceitaCache: usarCache \}\)/);
+    assert.match(DATA, /filters\.soGuardado === true/);
+    assert.match(DATA, /getTeamsBySector\(s, \{ aceitaCache: usarCache, soGuardado \}\)/);
   });
 
   test('o snapshot do cron não pede cache', () => {
