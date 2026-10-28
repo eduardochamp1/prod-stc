@@ -68,6 +68,36 @@ describe('startCron', () => {
     assert.equal(timers.length, 0, 'boot não agenda login nem snapshot');
   });
 
+  // 28/10/2026: o node-cron chama o job com o Date do disparo; a consolidação
+  // das 23:50 usava esse Date como dia e falhou toda noite de 22/08 a 25/10.
+  test('job da consolidação ignora o Date do node-cron e consolida o dia BRT', async () => {
+    const jobs = {};
+    const modCron = require.resolve('node-cron');
+    const modDw = require.resolve('../services/dataWriter');
+    const originais = { cron: require.cache[modCron], dw: require.cache[modDw] };
+    const dias = [];
+    require.cache[modCron] = { id: modCron, filename: modCron, loaded: true,
+      exports: { schedule: (expr, fn) => { jobs[expr] = fn; return { stop() {} }; } } };
+    require.cache[modDw] = { id: modDw, filename: modDw, loaded: true, exports: {
+      consolidateDay: async (d) => { dias.push(d); }, cleanOldSnapshots: async () => {}, cleanOldNoteDetails: async () => {} } };
+    delete require.cache[require.resolve('../services/cronService')];
+    const modo = process.env.DATA_MODE;
+    try {
+      process.env.DATA_MODE = 'wpa';
+      require('../services/cronService').startCron();
+      await jobs['50 23 * * *'](new Date());
+    } finally {
+      process.env.DATA_MODE = modo;
+      for (const [m, o] of [[modCron, originais.cron], [modDw, originais.dw]]) {
+        if (o) require.cache[m] = o; else delete require.cache[m];
+      }
+      delete require.cache[require.resolve('../services/cronService')];
+      global._extraCronJobs = [];
+    }
+    assert.equal(dias.length, 1);
+    assert.equal(dias[0], require('../services/timeUtil').dateBRT());
+  });
+
   test('fonte: consolidação e drift-sweep não chamam a EDP (só banco)', () => {
     const SRC = fs.readFileSync(path.join(__dirname, '..', 'services', 'cronService.js'), 'utf8');
     const corpo = (nome) => SRC.slice(SRC.indexOf(`async function ${nome}(`), SRC.indexOf('\n}\n', SRC.indexOf(`async function ${nome}(`)));

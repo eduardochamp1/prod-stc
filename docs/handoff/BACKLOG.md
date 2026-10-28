@@ -168,6 +168,7 @@
 | P0-1d | **Incidente 07/10, 16:22–17:03:** pull com código lendo `excluido_em` antes da migration → só a conta de emergência entrava, e nem ela listava usuários. Log dizia "banco indisponível" com o banco no ar | Governança/Ops | **done** (07/10) — resolvido aplicando a migration; código agora tolera coluna opcional faltando e o log nomeia a migration pendente; 7 testes; **falta deploy** |
 | P0-1e | Não há como suspender ou conceder ABA por usuário: todo logado vê as 8 abas, e a API entrega os dados de todas | Governança/Segurança | **especificado** (07/10) — `SPEC-acesso-abas-2026-10-07.md`; bloqueio no servidor, nasce com todas, Admin segue no `role` (escolhas do José); aguardando OK da spec |
 | P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | **código done** (13/10/2026, 5ef43e4) — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
+| P1-53 | **Consolidação das 23:50 falhou toda noite** (`Invalid time value`) de 22/08 a 25/10/2026 — node-cron passava o Date do disparo como dia; 10 dias com a tabela fora da régua | Dados/Contrato | **código done** (28/10/2026) — falta decidir os 10 dias (re-consolidar ou explicar), nada regravado |
 | P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | **código done** (13/10/2026, 06db294) — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
 | P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | **código done** (13/10/2026) — achado no levantamento do P0-1e (`index.html:9222`) |
 | P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
@@ -2085,6 +2086,36 @@ feita em PR separado depois dos testes.
 ---
 
 # P2 — Média prioridade (2 meses)
+
+## P1-53 — Consolidação das 23:50 falhou toda noite (22/08 a 25/10/2026)
+
+- **Categoria:** Dados/Contrato
+- **Status:** código done (28/10/2026). Os 10 dias com divergência **não foram regravados**: decisão do José, dia a dia.
+- **Como foi achado:** 28/10/2026, ao religar o `wpa-monitor`, no `logs/err.log`: `{"event":"consolidate_failed","date":"2026-10-24T23:50:00.000Z","msg":"Invalid time value"}`. Repete às 23:50 BRT de **todas** as noites, de 22/08 (início do log, 21/08) a 25/10 (processo parado em 24/10): 65 ocorrências.
+- **Causa:** `_agendar('consolidacao', '50 23 * * *', runConsolidate, ...)`. O node-cron 3 chama o job com a data/hora do disparo (`Date`) como 1º argumento, e `runConsolidate(date)` usava esse `Date` como o dia a consolidar (`date || dateBRT()`). O agendamento direto vem de `b2b56b7`. Os outros jobs não usavam o argumento.
+- **Por que não virou desastre:** os totais do dia são gravados também ao longo do dia (`upsertTeamDailyTotals` a cada snapshot), e o drift-sweep das 02:00 reconsolida D-1…D-7 quando a tabela **subconta** acima do limiar (`shouldAutoRepair`). Tabela **acima** da régua nunca é reparada automaticamente (P0-6).
+- **Correção (28/10/2026):** `() => runConsolidate()` — e os demais jobs também chamados sem repassar o argumento. Teste em `test/coletaJanelas.test.js` ("job da consolidação ignora o Date do node-cron").
+- **Estado do histórico** (`node scripts/verify-consolidacao.js 2026-08-21 2026-10-27`, régua D+1, read-only, 28/10/2026): 58 de 68 dias ok. Os 10 com drift acima do limiar:
+
+  | Dia | Tabela | Régua | Diff | Sentido |
+  |---|---|---|---|---|
+  | 25/08 | 743 | 988 | +245 | tabela subconta |
+  | 28/08 | 684 | 656 | −28 | tabela acima |
+  | 05/09 | 316 | 323 | +7 | tabela subconta |
+  | 06/09 | 325 | 333 | +8 | tabela subconta |
+  | 18/09 | 835 | 799 | −36 | tabela acima |
+  | 21/09 | 1.049 | 958 | −91 | tabela acima |
+  | 22/09 | 1.020 | 909 | −111 | tabela acima |
+  | 23/09 | 815 | 795 | −20 | tabela acima |
+  | 14/10 | 1.249 | 1.107 | −142 | tabela acima (o "achado lateral" do P0-12) |
+  | 16/10 | 915 | 892 | −23 | tabela acima |
+
+- **Ação pendente:**
+  1. **Tabela subconta (25/08, 05/09, 06/09):** re-consolidar acrescenta produção que falta; é o caso seguro. Mesmo assim, conferir antes por que o drift-sweep não reparou (régua da época diferente da de hoje? snapshots do dia gravados depois?).
+  2. **Tabela acima (os outros 7):** não reconsolidar às cegas: pode apagar produção legítima (P0-6). Hipóteses: rejeição que chegou depois da consolidação e hoje entra pelo `note_rejections` (P1-15/P1-16), ou backfill manual que gravou por cima. Investigar dia a dia por equipe antes de decidir.
+  3. Comando, quando decidido: `node scripts/backfill-consolidate.js <dia> <dia+1> --apply`.
+- **Critério de aceite:** consolidação das 23:50 sem `consolidate_failed` nas noites seguintes ao deploy; cada um dos 10 dias reconsolidado ou com a diferença explicada aqui.
+- **Rollback:** `git revert` do commit.
 
 ## P2-1 — Testes de contrato de rota (login, scope, health)
 
@@ -6035,7 +6066,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
      - **Feito (28/10/2026):** `scripts/diag-paridade-backfill.js` (read-only) + `test/diagParidadeBackfill.test.js` (8). `consolidateDay` ganhou `opts.snaps` (só com `dryRun`; sem ele lança) para consolidar um conjunto montado fora do banco. Compara, por dia D na régua de D+1: TABELA × AO VIVO (snapshots do banco) × BACKFILL (só `getTeamsByDate` de D, D+1, D+2) × JANELAS (backfill + só os ciclos das 08h/12h/17h). Mostra também notas concluídas que só um caminho vê e o logon/logoff por equipe. O backfill fica em `logs/paridade-cache/` (rodar de novo não chama a EDP) e o script imprime o total de requisições no fim.
      - **Custo de rede:** ~400 requisições por data (4 setores, ~80 sessões × 5). Para 3 dias são 5 datas (D até D+2), ~2.000 requisições, em série por setor e pela fila de 6 em voo.
      - **1ª leitura, só banco (28/10/2026), régua D+1:** as **3 janelas sozinhas perdem ~10%** da produção — 13/10: 963 contra 1.056 do ao vivo; 14/10: 999 contra 1.107. É o `Concluded[]` do V2 rodando ao longo do dia (P1-13). Ou seja, **o modelo novo só fecha se o backfill das 05h recuperar esses ~10%**, e é isso que a rodada com rede mede.
-     - **Achado lateral, não investigado:** a TABELA de 14/10 (1.249) está **142 acima** da régua ao vivo de hoje (1.107); a de 13/10 (1.039) está 17 abaixo (1.056). Pode ser `note_rejections` que mudou depois da consolidação, ou reparo monotônico (P0-7). Conferir com `scripts/verify-consolidacao.js` antes de usar a TABELA como referência.
+     - **Achado lateral, não investigado (ver P1-53, 28/10):** a TABELA de 14/10 (1.249) está **142 acima** da régua ao vivo de hoje (1.107); a de 13/10 (1.039) está 17 abaixo (1.056). Pode ser `note_rejections` que mudou depois da consolidação, ou reparo monotônico (P0-7). Conferir com `scripts/verify-consolidacao.js` antes de usar a TABELA como referência.
      - **Falta:** proxy no ar → `node scripts/diag-paridade-backfill.js 2026-10-07 2026-10-09` → anotar aqui. Dias escolhidos porque a régua usa os snapshots ao vivo de D até D+2, e os de 16 a 18/10 estão zerados pelo P0-10.
   2. **Agenda nova** no `cronService.js`: snapshot completo às 08:00, 12:00 e 17:00 BRT, com as caudas (classificação, detalhes, rejeições), escala e notas devolvidas **dentro** da janela. Às 05:00: backfill do D-1 pelo `getTeamsByDate`, `sync-logoffs`, intervalos, saída da nota, e consolidação do D-1. Os jobs de hora em hora e o snapshot de 15 min saem. O token só faz login dentro das janelas.
   3. **Boot sem coleta**: religar o processo não dispara snapshot. Coleta só na janela ou pelo botão.

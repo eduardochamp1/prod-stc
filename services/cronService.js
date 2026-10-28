@@ -1781,15 +1781,20 @@ function startCron() {
   //     obrigatório a cada reinício. Com autorestart + crash-loop (161 restarts
   //     num dia) isso queimava o orçamento de 5 tentativas da EDP em segundos."
   //     Saíram os dois: religar o processo não chama a EDP.
-  snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, runJanela, BRT);
-  const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, runFechamento, BRT);
+  snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, () => runJanela(), BRT);
+  const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, () => runFechamento(), BRT);
   global._extraCronJobs.push(fechamentoJob);
 
   // Só banco, sem EDP — ficam como estavam.
   // Consolidação diária às 23:50 (logo após o último snapshot do dia)
-  consolidaJob = _agendar('consolidacao', '50 23 * * *', runConsolidate, BRT);
+  // 28/10/2026: era `runConsolidate` direto, e o node-cron chama o job com a
+  // data/hora do disparo (Date) como 1º argumento. runConsolidate(date) usava
+  // esse Date como dia: `consolidate_failed ... "Invalid time value"` TODA noite
+  // no err.log, de 22/08 (início do log) a 25/10/2026 — 65 noites. O dia só era
+  // consolidado se o drift-sweep das 02:00 visse drift acima do limiar.
+  consolidaJob = _agendar('consolidacao', '50 23 * * *', () => runConsolidate(), BRT);
   // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
-  driftJob = _agendar('drift-sweep', '0 2 * * *', runDailyDriftSweep, BRT);
+  driftJob = _agendar('drift-sweep', '0 2 * * *', () => runDailyDriftSweep(), BRT);
 
   console.log(`[CRON] Jobs iniciados — coleta da EDP às ${JANELAS_COLETA_H.map(h => h + 'h').join(', ')} ` +
     `e fechamento do D-1 às ${FECHAMENTO_H}h (P0-12); consolidação 23:50, drift-sweep 02:00. Boot não coleta.`);
