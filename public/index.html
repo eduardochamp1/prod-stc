@@ -9961,6 +9961,10 @@ ${acumuladoHTML}
       const hm = (iso) => iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : null;
       const prox = hm(ce.proxima);
       const base = ce.em ? `Coleta das ${hm(ce.em)}` : 'Sem coleta hoje';
+      // P0-13: coletor de fora sem batimento há 5 min = desligado; a próxima não vem.
+      if ('coletor' in ce && (!ce.coletor || Date.now() - Date.parse(ce.coletor.ts) > 5 * 60 * 1000)) {
+        return `${base} · coletor desligado`;
+      }
       return prox ? `${base} · próxima ${prox}` : base;
     }
 
@@ -9974,7 +9978,11 @@ ${acumuladoHTML}
       try {
         const r = await fetch(`${API}/admin/atualizar-agora`, { method: 'POST' });
         const j = await r.json().catch(() => ({}));
-        if (r.ok && j.ok) {
+        if (r.ok && j.ok && j.pedido) {
+          // P0-13: a coleta roda no coletor de fora; ele vê o pedido em até 1 min.
+          btn.innerHTML = '📨 Pedido enviado — atualiza em ~2 min';
+          setTimeout(loadData, 150 * 1000);
+        } else if (r.ok && j.ok) {
           btn.innerHTML = '✓ Dados atualizados';
           loadData();
         } else if (r.status === 429 && j.liberaEm) {

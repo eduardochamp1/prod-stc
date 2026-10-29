@@ -1619,6 +1619,19 @@ async function runDailyDriftSweep() {
 const JANELAS_COLETA_H = [8, 12, 17];
 const FECHAMENTO_H     = 5;
 const ATUALIZACAO_MANUAL_MS = 30 * 60_000;   // botão do admin: 1 a cada 30 min
+const FECHAMENTO_SETTING = 'fechamento_ok';   // { date: D-1 fechado, ts }
+
+// 29/10/2026 (P0-13): quem chama a EDP. A VM está bloqueada pela EDP; a coleta
+// roda num executável na máquina do José (coletor.js), que grava no MESMO banco
+// por túnel SSH. Na VM, WPA_COLETA=remota: o cron fica só com os jobs de banco e
+// o botão do admin vira um pedido no banco para o coletor.
+//   local   (padrão) — este processo coleta (como antes)
+//   remota  — a VM: não coleta; o coletor de fora grava no banco
+//   coletor — o executável (coletor.js): coleta e não serve painel
+function modoColeta() {
+  const m = String(process.env.WPA_COLETA || 'local').trim().toLowerCase();
+  return ['local', 'remota', 'coletor'].includes(m) ? m : 'local';
+}
 let _ultimaAtualizacaoManual = 0;            // em memória: instances=1 (regra 8)
 
 /** Próxima janela (ms) depois de `agora`, em BRT. */
@@ -1737,6 +1750,10 @@ async function runFechamento() {
     // runBackfillDia consolida com o passe de D-1 (o mesmo do /admin/backfill),
     // que subconta; o passe de hoje regrava D-1 com a régua de D+1 (P1-54).
     await runConsolidate(dateBRT());
+    // 29/10/2026 (P0-13): o coletor da máquina do José pode não estar ligado às
+    // 05h; ele lê este carimbo para fechar o D-1 na 1ª coleta do dia.
+    await require('../db/queries').setSetting(FECHAMENTO_SETTING, { date: ontem, ts: new Date().toISOString() })
+      .catch(err => log.warn('fechamento_carimbo_falhou', { msg: err.message }));
   } catch (err) {
     log.error('fechamento_backfill_falhou', { date: ontem, code: err.code || null, msg: err.message });
     if ((err.falhas || []).some(f => f.caminho)) return;   // sem caminho até a EDP, o resto também falharia
@@ -1797,9 +1814,14 @@ function startCron() {
   //     obrigatório a cada reinício. Com autorestart + crash-loop (161 restarts
   //     num dia) isso queimava o orçamento de 5 tentativas da EDP em segundos."
   //     Saíram os dois: religar o processo não chama a EDP.
-  snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, () => runJanela(), BRT);
-  const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, () => runFechamento(), BRT);
-  global._extraCronJobs.push(fechamentoJob);
+  // 29/10/2026 (P0-13): com WPA_COLETA=remota a coleta é do coletor de fora
+  // (services/coletorLocal.js); aqui ficam só os jobs de banco.
+  const remota = modoColeta() === 'remota';
+  if (!remota) {
+    snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, () => runJanela(), BRT);
+    const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, () => runFechamento(), BRT);
+    global._extraCronJobs.push(fechamentoJob);
+  }
 
   // Só banco, sem EDP — ficam como estavam.
   // Consolidação diária às 23:50 (logo após o último snapshot do dia)
@@ -1812,8 +1834,11 @@ function startCron() {
   // Drift sweep noturno às 02:00 — verifica D-1 e D-7, repara se necessário
   driftJob = _agendar('drift-sweep', '0 2 * * *', () => runDailyDriftSweep(), BRT);
 
-  console.log(`[CRON] Jobs iniciados — coleta da EDP às ${JANELAS_COLETA_H.map(h => h + 'h').join(', ')} ` +
-    `e fechamento do D-1 às ${FECHAMENTO_H}h (P0-12); consolidação 23:50, drift-sweep 02:00. Boot não coleta.`);
+  console.log(remota
+    ? '[CRON] Jobs iniciados — WPA_COLETA=remota: este processo NÃO chama a EDP; a coleta vem do coletor ' +
+      'externo pelo banco (P0-13). Consolidação 23:50, drift-sweep 02:00.'
+    : `[CRON] Jobs iniciados — coleta da EDP às ${JANELAS_COLETA_H.map(h => h + 'h').join(', ')} ` +
+      `e fechamento do D-1 às ${FECHAMENTO_H}h (P0-12); consolidação 23:50, drift-sweep 02:00. Boot não coleta.`);
 }
 
 function stopCron() {
@@ -1922,6 +1947,7 @@ module.exports = {
   // P0-12: coleta em janelas fixas + fechamento + botão do admin.
   runJanela, runFechamento, runBackfillDia, proximaJanela, reservarAtualizacaoManual,
   JANELAS_COLETA_H, FECHAMENTO_H, ATUALIZACAO_MANUAL_MS,
+  modoColeta, FECHAMENTO_SETTING,   // P0-13: coletor fora da VM
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,

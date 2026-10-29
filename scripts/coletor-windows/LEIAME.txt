@@ -1,0 +1,45 @@
+WPA Monitor — coletor da EDP (P0-13, 29/10/2026)
+=================================================
+
+O que é
+-------
+A EDP bloqueia o IP da VM. Este pacote roda a coleta NESTA máquina (que a EDP
+aceita) e grava no banco da VM por um túnel SSH. O painel continua na VM.
+
+Horários (só nestes momentos há requisição à EDP)
+-------------------------------------------------
+- 08h, 12h e 17h: coleta completa.
+- Fechamento do dia anterior: às 05h se a máquina estiver ligada; senão, na
+  primeira coleta do dia (ou ao ligar o coletor, a partir das 05h).
+- Ao ligar: se a última janela de hoje já passou sem coleta, roda UMA coleta.
+- Botão "Buscar da EDP agora" no painel (admin): o coletor vê o pedido em até
+  1 minuto. Máximo 1 a cada 30 min.
+Fora disso o coletor só fala com o banco (1 vez por minuto, para o batimento e
+os pedidos do painel).
+
+Como ligar
+----------
+1. Rede da Engelmig / VPN conectada.
+2. Duplo clique em iniciar.bat.
+3. Abrem duas janelas: a do túnel do banco e a do coletor. Deixe as duas abertas.
+   O painel mostra "coletor desligado" se esta máquina parar de responder.
+
+Requisitos
+----------
+- Windows com o cliente SSH (ssh.exe, vem no Windows 10/11) e a chave SSH que
+  já acessa usr_jose@172.25.3.154 (a mesma do relay antigo).
+- Nada para instalar: o Node vem na pasta node\.
+
+Conferir sem coletar
+--------------------
+Com o túnel aberto: checar.bat (banco + EDP, sai com OK ou FALHA).
+
+Segurança
+---------
+O coletor.env tem a senha do banco e as senhas da EDP. Não envie por e-mail
+nem deixe em pasta compartilhada.
+
+Na VM
+-----
+O .env da VM precisa de WPA_COLETA=remota (a VM para de tentar a EDP e o botão
+vira pedido). Ver docs/handoff/BACKLOG.md, item P0-13.

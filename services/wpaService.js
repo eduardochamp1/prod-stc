@@ -2318,6 +2318,12 @@ function _falhaRecente(map, key, esperaMs, agora = Date.now()) {
 // vazio até a próxima janela quando o processo reinicia (max_memory_restart).
 const PAINEL_SETTING_PREFIXO = 'painel_coleta_';
 const _hidratado = new Set();   // setores já procurados no banco neste processo
+// 29/10/2026 (P0-13): na VM com WPA_COLETA=remota quem coleta é outro processo
+// (o coletor na máquina do José), então o guardado do banco muda sem este
+// processo saber. Lá, a cada PAINEL_RECHECA_MS, olha só o `updated_at` da linha
+// e relê o conteúdo (MBs) apenas quando mudou.
+const PAINEL_RECHECA_MS = 60_000;
+const _checadoEm = new Map();   // sectorId → { ms, updatedAt }
 
 function _persistirColetaPainel(sectorId) {
   if (process.env.DATA_MODE !== 'wpa' || process.env.NODE_ENV === 'test') return;
@@ -2325,6 +2331,30 @@ function _persistirColetaPainel(sectorId) {
   if (!e) return;
   require('../db/queries').setSetting(PAINEL_SETTING_PREFIXO + sectorId, e)
     .catch(err => console.warn(`[WPA] coleta do painel de ${sectorId} não gravada no banco: ${err.message}`));
+}
+
+async function _rechecarColetaPainel(sectorId, lerSetting, lerVersao, agora) {
+  const ultimo = _checadoEm.get(sectorId);
+  if (ultimo && agora - ultimo.ms < PAINEL_RECHECA_MS) return;
+  try {
+    const updatedAt = await lerVersao(PAINEL_SETTING_PREFIXO + sectorId);
+    _checadoEm.set(sectorId, { ms: agora, updatedAt });
+    if (!updatedAt || (ultimo && ultimo.updatedAt === updatedAt)) return;
+    const row = await lerSetting(PAINEL_SETTING_PREFIXO + sectorId);
+    const e = row && row.data;
+    const atual = _cacheSetor.get(sectorId);
+    if (e && Number.isFinite(e.ts) && e.dia && e.valor && (!atual || e.ts > atual.ts)) _cacheSetor.set(sectorId, e);
+  } catch (err) {
+    _checadoEm.set(sectorId, { ms: agora, updatedAt: ultimo && ultimo.updatedAt });
+    console.warn(`[WPA] coleta do painel de ${sectorId} não relida do banco: ${err.message}`);
+  }
+}
+
+async function _lerVersaoPainel(key) {
+  const { data, error } = await require('./dbClient').getClient()
+    .from('app_settings').select('updated_at').eq('key', key).maybeSingle();
+  if (error) throw error;
+  return data ? String(data.updated_at) : null;
 }
 
 async function _hidratarColetaPainel(sectorId, lerSetting) {
@@ -2340,8 +2370,13 @@ async function _hidratarColetaPainel(sectorId, lerSetting) {
 }
 
 /** Cópia da última coleta de hoje do setor, ou [] (nunca chama a EDP). */
-async function _lerGuardadoPainel(sectorId, lerSetting = (k) => require('../db/queries').getSetting(k)) {
-  await _hidratarColetaPainel(sectorId, lerSetting);
+async function _lerGuardadoPainel(sectorId, lerSetting = (k) => require('../db/queries').getSetting(k),
+  lerVersao = _lerVersaoPainel, agora = Date.now()) {
+  if (String(process.env.WPA_COLETA || '').trim().toLowerCase() === 'remota') {
+    await _rechecarColetaPainel(sectorId, lerSetting, lerVersao, agora);
+  } else {
+    await _hidratarColetaPainel(sectorId, lerSetting);
+  }
   return _lerCacheSetor(_cacheSetor, sectorId, Infinity) || [];
 }
 
@@ -2861,6 +2896,7 @@ module.exports = {
   _lerCacheSetor, _gravarCacheSetor, _cacheSetor,   // P0-11: cache do painel por setor
   _falhaRecente, _falhaSetor,                       // P0-11: espera do painel depois de falha
   coletaGuardadaEm, _lerGuardadoPainel, _hidratado, // P0-12: painel só lê o guardado
+  _checadoEm,                                       // P0-13: releitura na VM com coletor de fora
   // Histórico
   getTeamsByDate,
   getSessionsByDate,   // usado pelo runSyncLogoffs (cronService)

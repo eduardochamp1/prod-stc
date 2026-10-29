@@ -23,3 +23,6 @@ _local/
 .local/
 *.checkpoint.md
 SESSION-*.md
+
+# P0-13: pacote do coletor Windows (node.exe + coletor.env com senhas)
+dist/

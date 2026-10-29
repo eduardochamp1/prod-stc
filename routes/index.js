@@ -688,6 +688,12 @@ router.get('/teams', async (req, res) => {
         em: maisAntiga ? new Date(maisAntiga).toISOString() : null,   // null = nenhuma coleta hoje (ou setor sem)
         proxima: c ? new Date(c.proximaJanela()).toISOString() : null,
       };
+      // P0-13: último batimento do coletor de fora (1/min). Só com WPA_COLETA=remota.
+      if (c && c.modoColeta() === 'remota') {
+        const sqVivo = sbq();
+        const vivo = sqVivo ? await sqVivo.getSetting(require('../services/coletorLocal').VIVO_SETTING).catch(() => null) : null;
+        coletaEm.coletor = vivo && vivo.data ? { ts: vivo.data.ts, host: vivo.data.host || null } : null;
+      }
     } catch (_) { /* observabilidade, não derruba /teams */ }
 
     res.json({
@@ -3721,6 +3727,14 @@ async function _atualizarAgora(req, res) {
         error: 'coleta manual já feita há menos de 30 min' });
     }
     console.log(`[ADMIN] atualização manual da EDP por ${req.user && req.user.username}`);
+    // 29/10/2026 (P0-13): com a coleta fora da VM (WPA_COLETA=remota), o clique
+    // vira um pedido no banco; o coletor olha a cada 1 min e roda o snapshot.
+    if (c.modoColeta() === 'remota') {
+      const { PEDIDO_SETTING } = require('../services/coletorLocal');
+      const ts = new Date().toISOString();
+      await require('../db/queries').setSetting(PEDIDO_SETTING, { ts, por: req.user && req.user.username });
+      return res.status(202).json({ ok: true, pedido: true, ts });
+    }
     await c.runSnapshot();
     res.json({ ok: true, ts: new Date().toISOString() });
   } catch (err) {

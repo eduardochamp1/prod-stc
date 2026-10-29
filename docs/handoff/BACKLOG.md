@@ -34,6 +34,7 @@
 | P0-10 | **INCIDENTE 16/10/2026 ~21:30:** a EDP passou a devolver 200 "Nenhum dado encontrado" para o User-Agent do node-fetch — coleta zerada SEM erro no log | Backend/Dados | **código done** (b634816, a4b9371 — 18/10) — falta deploy, reparo do `notas_daily_agg` 17–18/10, backfill + re-consolidação 16–18/10, avisar a EDP do UA |
 | P0-11 | **EDP questionou (19/10/2026) "diversas requisições" congestionando a WPA** — e não tínhamos como dizer quantas são nossas. Pelo código, o painel aberto no navegador faz uma coleta COMPLETA na EDP a cada 5 min **por aba**, sem cache (~200–270 requests cada) | Ops/Contrato | **itens 1–5 no código** (a23d6bc, d5a3ae6, f53a3b9 — 19/10): contador, cache de 5 min, aba escondida, limite de 6 em voo, colaboradores de encerrada 1×, encerrada rebuscada de hora em hora (congelar foi descartado pelo diag) e sombra do V2 — falta: deploy, medir, responder a EDP |
 | P0-12 | Coleta da EDP em **janelas fixas** (08h, 12h, 17h + fechamento D-1 às 05h); painel só lê o banco, botão de atualizar para admin | Ops/Contrato | **passos 2–5 no código (28/10)** — agenda em janelas, boot sem coleta, painel só banco, botão admin; falta a paridade (passo 1, precisa de acesso à EDP) e o deploy |
+| P0-13 | **Coletor da EDP fora da VM**: executável (pasta com `iniciar.bat` + node.exe) na máquina do José, na rede que a EDP aceita, grava no Postgres da VM por túnel SSH; VM com `WPA_COLETA=remota` | Ops/Contrato | **código done** (29/10/2026) — falta: `WPA_COLETA=remota` na VM, gerar o pacote com `--com-env`, ligar na máquina do José e acompanhar a 1ª janela |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -6121,6 +6122,34 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Depende de:** proxy `WPA_PROXY` no ar (P0-9) para qualquer medida em produção.
 - **Relacionado:** P0-11 (volume), P0-9 (acesso), P1-15/P1-16 (rejeição tardia tira produção — o fechamento das 05h é quem vê).
 
+
+## P0-13 — Coletor da EDP fora da VM (executável na máquina do José)
+
+- **Categoria:** Ops/Contrato
+- **Status:** código done (29/10/2026), não implantado.
+- **Fonte:** José, 29/10/2026: *"vamos criar um executável do nosso script de coleta na api da edp onde eu vou rodar esse executável do backend na minha máquina e ela irá fazer um túnel para a nossa vm e irá alimentar ela com as informações da consulta"*. Decisões dele, na mesma conversa: (1) grava **direto no banco** da VM pelo túnel (não um endpoint de JSON); (2) **pasta com `iniciar.bat`** (não um .exe único); (3) fechamento do D-1 **na 1ª coleta do dia**, porque a máquina não fica ligada às 05h; (4) o botão do painel **vira pedido no banco** que o coletor atende.
+- **Por que é P0:** a EDP bloqueia o IP da VM (`check-wpa --proxy none` em 28/10: API de dados 403 `WPA_IP_BLOQUEADO`), e o relay (P0-9, proxy + túnel reverso) depende de duas janelas abertas e caiu. Sem isto não há coleta nenhuma.
+- **Como funciona:**
+  - `coletor.js` (raiz): carrega `coletor.env`, força `DATA_MODE=wpa`, `WPA_COLETA=coletor`, sem `WPA_PROXY`; confere o banco e carrega `equipes_oficiais` antes de tudo (o fallback do `equipesOficiais.js` não tem SJC); `--checar` só confere banco + EDP.
+  - `services/coletorLocal.js`: roda as MESMAS rotinas do cron (`runJanela`, `runFechamento`, `runSnapshot`) e só decide quando. Janelas 08/12/17h; fechamento às 05h ou, se pendente (`app_settings.fechamento_ok` ≠ D-1), antes da 1ª janela do dia; ao ligar, fecha o D-1 pendente e roda **uma** janela se a última de hoje passou sem coleta (`snapshot_last_ok`), nunca repõe janelas uma a uma. Fila de 1. A cada 1 min: batimento `coletor_vivo` e pedido do painel (`coleta_pedido` → `coleta_pedido_atendido`). Fora disso, nenhuma requisição à EDP.
+  - VM com `WPA_COLETA=remota`: cron só com consolidação 23:50 e drift-sweep 02:00; `POST /admin/atualizar-agora` grava `coleta_pedido` (limite de 30 min continua na VM) e responde 202; o painel relê `painel_coleta_<setor>` quando o `updated_at` muda (olha a cada 1 min); `/api/teams` devolve `coleta_em.coletor` e o cabeçalho mostra "coletor desligado" sem batimento há 5 min.
+  - Pacote: `node scripts/coletor-windows/montar-pacote.js [--com-env]` → `dist/wpa-coletor-<data>-<commit>.zip` (~34 MB): `node\node.exe` (mesma versão da VM, sha256 conferido com a SHASUMS256 oficial), código, `node_modules`, `iniciar.bat` → `iniciar_coletor.ps1` (confere EDP, abre `tunel_banco.ps1` = `ssh -N -L 127.0.0.1:15432:127.0.0.1:5432 usr_jose@172.25.3.154` com reconexão, roda o coletor com reinício), `checar.bat`, `LEIAME.txt`. `--com-env` gera `coletor.env` de uma lista fechada de chaves do `.env` (WPA_*, DATABASE_URL e GSEQ_DATABASE_URL reescritos para 127.0.0.1:15432); sem JWT, AUTH_USERS, CRON_SECRET, WPA_PROXY. `dist/` no `.gitignore`.
+  - Testes: `test/coletorLocal.test.js` (19). Conferido na VM: `coletor.js --checar` lê o banco (148 equipes oficiais) e chega à EDP (403 daqui, como esperado).
+- **Riscos:**
+  - **Senhas na máquina do José:** `coletor.env` tem a senha do Postgres e das contas EDP. O usuário do banco no `DATABASE_URL` é o da aplicação (escreve tudo). Um usuário próprio do coletor com permissão só nas tabelas que ele grava é melhoria futura.
+  - **Bus factor:** a coleta passa a depender de uma máquina pessoal ligada e na rede. "Coletor desligado" no painel deixa isso visível. Definitivo continua sendo a liberação do IP da VM (P0-9, Método A) — com ela, volta-se a `WPA_COLETA=local` sem mudar código.
+  - **Dois coletores ao mesmo tempo** (VM em `local` + máquina): duplicariam requisições à EDP. Por isso a VM tem que estar em `remota` antes de ligar o pacote.
+- **Implantação:**
+  1. VM: `WPA_COLETA=remota` no `.env` e `pm2 delete wpa-monitor && pm2 start ecosystem.config.js && pm2 save` (regra 4). Pode tirar `WPA_PROXY` (sem efeito em `remota`).
+  2. VM: `node scripts/coletor-windows/montar-pacote.js --com-env`; copiar o zip para a máquina (scp/pasta pessoal, não e-mail).
+  3. Máquina: extrair, `iniciar.bat`, conferir as duas janelas; `checar.bat` deve dar OK.
+  4. Ver no painel "Coleta das HH:MM" depois da próxima janela, e o contador mostrar requisições só nas janelas.
+- **Critério de aceite:**
+  - [ ] Um dia útil com coleta às 08/12/17h vinda da máquina, fechamento do D-1 feito e `verify-consolidacao` do D-1 ok.
+  - [ ] Botão do painel atendido em ≤ 2 min.
+  - [ ] Coletor desligado aparece no painel em ≤ 5 min.
+- **Rollback:** fechar as janelas na máquina; na VM, `WPA_COLETA=local` (ou remover) + restart.
+- **Depende de / relacionado:** P0-12 (janelas e painel só banco), P0-9 (acesso), P1-53/P1-54 (consolidação).
 
 ## P0-1c — Excluir usuário (excluir = ocultar)
 
