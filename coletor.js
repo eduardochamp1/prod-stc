@@ -11,8 +11,8 @@
  * Config: coletor.env ao lado deste arquivo (ou COLETOR_ENV=caminho).
  *   node coletor.js            — liga o coletor
  *   node coletor.js --checar   — só confere banco e EDP e sai (0 = ok)
- *   node coletor.js --diag [SETOR] [AAAA-MM-DD] — UMA consulta de sessões e mostra a
- *                              resposta crua (29/10/2026: 1ª ligação voltou 0 equipes)
+ *   node coletor.js --diag [SETOR] [AAAA-MM-DD] — 3 consultas (V2, sessões de hoje e da
+ *                              data) e a resposta crua (29/10/2026: 1ª ligação voltou 0 equipes)
  */
 
 'use strict';
@@ -65,16 +65,28 @@ async function main() {
     const data = args.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a)) || dateBRT(Date.now() - 86400000);
     const wpa = require('./services/wpaService');
     const { wpaUserAgent } = require('./services/wpaHttp');
-    console.log(`[diag] User-Agent: ${wpaUserAgent()}`);
-    console.log(`[diag] POST /api/Sessions/all/date?sectorId=${setor}&date=${data}`);
-    try {
-      const res = await wpa.wpaFetch(`/api/Sessions/all/date?sectorId=${setor}&date=${encodeURIComponent(wpa.toWpaDate(data))}`, { method: 'POST' });
-      const corpo = await res.text();
-      let n = null; try { const j = JSON.parse(corpo); n = Array.isArray(j.Data) ? j.Data.length : null; } catch {}
-      console.log(`[diag] HTTP ${res.status} · ${corpo.length} bytes · sessões em Data: ${n === null ? '(sem Data)' : n}`);
-      console.log(`[diag] início do corpo: ${corpo.slice(0, 300).replace(/\s+/g, ' ')}`);
-    } catch (err) {
-      console.log(`[diag] falhou: ${err.code || ''} ${err.message}`);
+    console.log(`[diag] User-Agent: ${wpaUserAgent()} · conta do setor ${setor}: ${wpa._accountsForSector(setor).join(' → ')}`);
+    // 29/10/2026: o portal (Gestão Online) mostrava o DESG ao vivo enquanto o
+    // Sessions/all/date de 27/10 voltava vazio. Faz as consultas que o portal faz
+    // (teamsstatus/V2) e o Sessions/all/date de hoje e da data pedida: separa
+    // "conta/cliente bloqueado" de "só a consulta de sessões por data mudou".
+    const hoje = dateBRT();
+    const consultas = [
+      ['V2 (o que a Gestão Online usa)', 'GET', `/api/teamsstatus/V2?sectorId=${setor}`],
+      [`sessões de hoje (${hoje})`, 'POST', `/api/Sessions/all/date?sectorId=${setor}&date=${encodeURIComponent(wpa.toWpaDate(hoje))}`],
+      [`sessões de ${data}`, 'POST', `/api/Sessions/all/date?sectorId=${setor}&date=${encodeURIComponent(wpa.toWpaDate(data))}`],
+    ];
+    for (const [nome, metodo, url] of consultas) {
+      console.log(`[diag] ${nome}: ${metodo} ${decodeURIComponent(url)}`);
+      try {
+        const res = await wpa.wpaFetch(url, { method: metodo });
+        const corpo = await res.text();
+        let n = null; try { const j = JSON.parse(corpo); n = Array.isArray(j) ? j.length : (Array.isArray(j.Data) ? j.Data.length : null); } catch {}
+        console.log(`[diag]   HTTP ${res.status} · ${corpo.length} bytes · itens: ${n === null ? '(nenhuma lista)' : n}`);
+        console.log(`[diag]   início: ${corpo.slice(0, 200).replace(/\s+/g, ' ')}`);
+      } catch (err) {
+        console.log(`[diag]   falhou: ${err.code || ''} ${err.message}`);
+      }
     }
     await require('./services/pgShim')._getPool().end().catch(() => {});
     process.exit(0);
