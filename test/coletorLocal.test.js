@@ -211,7 +211,7 @@ describe('VM remota', () => {
 describe('coletor.env gerado', () => {
   const { gerarColetorEnv } = require('../scripts/coletor-windows/montar-pacote');
   const ENV = [
-    'PORT=3002', 'JWT_SECRET=x', 'AUTH_USERS=a:b', 'CRON_SECRET=y', 'DATA_MODE=wpa',
+    'PORT=3002', 'JWT_SECRET=x', 'WPA_COLETA=remota', 'AUTH_USERS=a:b', 'CRON_SECRET=y', 'DATA_MODE=wpa',
     'WPA_USERNAME=u', 'WPA_PASSWORD=p', 'WPA_PROXY=http://127.0.0.1:3128', 'WPA_ACCOUNTS_DISABLED=sp2',
     'DATABASE_URL=postgresql://wpa:s3nha@localhost:5432/wpa', 'GSEQ_DATABASE_URL=postgresql://g:h@localhost:5432/gseq',
     '# WPA_COMENTADO=1',
@@ -219,7 +219,7 @@ describe('coletor.env gerado', () => {
   const out = gerarColetorEnv(ENV);
 
   test('só as chaves da lista; sem proxy, JWT, usuários do painel nem CRON_SECRET', () => {
-    for (const k of ['PORT', 'JWT_SECRET', 'AUTH_USERS', 'CRON_SECRET', 'WPA_PROXY', 'DATA_MODE', 'WPA_COMENTADO']) {
+    for (const k of ['PORT', 'JWT_SECRET', 'AUTH_USERS', 'CRON_SECRET', 'WPA_PROXY', 'WPA_COLETA', 'DATA_MODE', 'WPA_COMENTADO']) {
       assert.doesNotMatch(out, new RegExp(`^${k}=`, 'm'), k);
     }
     for (const k of ['WPA_USERNAME=u', 'WPA_PASSWORD=p', 'WPA_ACCOUNTS_DISABLED=sp2']) assert.match(out, new RegExp(`^${k}\\r?$`, 'm'));

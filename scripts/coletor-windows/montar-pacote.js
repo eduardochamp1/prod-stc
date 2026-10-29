@@ -30,8 +30,9 @@ const CACHE = path.join(DIST, 'cache');
 const PORTA_TUNEL = 15432;
 
 // Chaves do .env que o coletor usa. Fora da lista ficam JWT, AUTH_USERS,
-// CRON_SECRET, WEBHOOK_SECRET, PORT, WPA_PROXY etc. — o coletor não serve painel.
-const CHAVES = /^(WPA_(?!PROXY$)[A-Z0-9_]+|DATABASE_URL|GSEQ_DATABASE_URL|LOG_LEVEL|DESLOC_USE_FIRST_CP|OSRM_HOST|SNAPSHOT_RETENTION_DAYS|NOTE_DETAILS_RETENTION_DAYS)$/;
+// CRON_SECRET, WEBHOOK_SECRET, PORT, WPA_PROXY, WPA_COLETA (o da VM é `remota`;
+// o coletor.js define o seu) etc. — o coletor não serve painel.
+const CHAVES = /^(WPA_(?!PROXY$|COLETA$)[A-Z0-9_]+|DATABASE_URL|GSEQ_DATABASE_URL|LOG_LEVEL|DESLOC_USE_FIRST_CP|OSRM_HOST|SNAPSHOT_RETENTION_DAYS|NOTE_DETAILS_RETENTION_DAYS)$/;
 
 /** FUNÇÃO PURA: .env da VM → coletor.env (lista fechada; banco pelo túnel). */
 function gerarColetorEnv(textoEnv, porta = PORTA_TUNEL) {
