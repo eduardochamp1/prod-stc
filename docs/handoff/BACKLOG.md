@@ -185,6 +185,7 @@
 | P2-68 | Plantão noturno sumia do Monitor depois da meia-noite: `Sessions/all/date` só com a data de hoje → "0 em campo" e as equipes de 16:00–20:00 como "atrasada +8h" (já era assim antes do P0-10) | Backend/Frontend | **no ar** (18/10/2026, `4266a33`) — só exibição; log conferido de madrugada (DESG 7, DEPT 1, DESC 9, DSSJ 7) e nada gravado para 18/10; falta tela + horário diurno; produção pós-meia-noite do plantão é Fase 2 (medir) |
 | P2-69 | Aba Gráficos não tinha a lista de equipes atrasadas pela escala (login × início da escala) | Produto/Dados | **código done** (18/10/2026) — qualquer atraso ≥ 1 min + "não logou"; falta deploy e conferir na tela |
 | P2-70 | Aba "Saída da nota" substitui o Ranking: equipe apontou execução e o veículo saiu do local (rastreador do gseq × nota) | Produto/Dados | **código done** (19/10/2026) — aba no lugar do Ranking, job 04:30 (D-1), migration 017, Carteira em Gráficos; falta na VM: papel de leitura no gseq + `GSEQ_DATABASE_URL`, migration, deploy, backfill, operação cadastrar placas |
+| P2-71 | `node --test` com o `.env` real presente usava o `DATABASE_URL` de PRODUÇÃO nos testes de rota — 6 arquivos travavam pra sempre e escrita de teste cairia no banco real | Testes/Dados | **done** (29/10/2026, `dcd71a8`) — em `NODE_ENV=test` o `server.js` não carrega o `.env`; suíte 2027/2027 com `.env` presente |
 | P3-21 | Testes de fonte que procuram quebra de linha LF literal no index.html ficavam vermelhos num clone Windows (core.autocrlf=true) e o pre-push desta máquina bloqueava sem motivo | Qualidade | **done** (14/10/2026) — convertem CRLF em LF ao ler; suíte verde com index.html em CRLF e em LF |
 | P3-22 | `API-WPA-EDP.md` §6.2.2 e §9 diziam "sem wrapper / nenhum implementado" para 5 endpoints que existem no `wpaService` desde 22–23/08 (e listavam o path errado dos colaboradores); 2 endpoints em uso não estavam no documento | Docs | **§6.2.2 e §9 done** (20/10/2026, aebe97d) — os números de linha das outras seções seguem desatualizados |
 
@@ -6866,6 +6867,17 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Esforço:** 2–3 dias.
 - **Rollback:** `git revert`; a tabela `saida_nota` pode ficar.
 - **Relacionado:** P2-59 (tiles do mapa bloqueados — a v1 sai sem mapa), P1-48 (fuso de `sessao_intervalo`), P0-1e (catálogo de rotas por aba), P2-63 (padrão de config em `app_settings`).
+
+## P2-71 — Testes de rota usavam o `DATABASE_URL` de produção (suíte travada com `.env` presente)
+
+- **Categoria:** Testes/Dados
+- **Status:** **done** (29/10/2026, `dcd71a8`).
+- **Evidência:** `server.js:11` (antes) fazia `require('dotenv').config({ override: process.env.NODE_ENV !== 'test' })`. Sem override o dotenv não sobrescreve o que o teste define, mas **preenche o resto** a partir do `.env` do cwd. Na pasta com o `.env` real, `node --test` nunca terminava: `loginRateLimit`, `routes`, `alertasRotas`, `equipesImportHttp`, `settingsScope` e `teamsDeslogadasRota` (os que fazem `require('../server')`) ficavam pendurados. Anulando uma variável por vez, só `DATABASE_URL=` destravava: o pool do `pgShim` abria conexão no Postgres de produção e mantinha o processo vivo. Num checkout sem `.env` a suíte passava (2025/2025), por isso ninguém via.
+- **Impacto:** suíte inutilizável na máquina de quem tem o `.env` (a regra 6 do CLAUDE.md vira letra morta) e, pior, qualquer teste de rota que grave cairia no banco que alimenta o painel reportado à EDP. O mesmo vale para a VM se alguém rodar `node --test` lá.
+- **Ação feita:** `if (process.env.NODE_ENV !== 'test') require('dotenv').config({ override: true })` — em teste o `.env` não é carregado; produção (`NODE_ENV=production` no `ecosystem.config.js`) inalterada. Comentário datado de 08/06/2026 preservado, com o porquê novo ao lado. `test/serverDotenvTeste.test.js` sobe o `server.js` num processo filho com um `.env`-isca no cwd: em `test` a isca não pode aparecer, em `development` tem que aparecer. Falha com o código antigo.
+- **Verificação:** `node --test` na pasta com o `.env` real → 2027/2027, ~25s, rc=0.
+- **Rollback:** `git revert dcd71a8`.
+- **Relacionado:** `df6d83c` (isolamento anterior, só das credenciais).
 
 ## P3-21 — Testes de fonte frágeis a CRLF (clone Windows)
 
