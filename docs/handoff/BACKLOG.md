@@ -169,6 +169,7 @@
 | P0-1e | Não há como suspender ou conceder ABA por usuário: todo logado vê as 8 abas, e a API entrega os dados de todas | Governança/Segurança | **especificado** (07/10) — `SPEC-acesso-abas-2026-10-07.md`; bloqueio no servidor, nasce com todas, Admin segue no `role` (escolhas do José); aguardando OK da spec |
 | P1-52 | `GET /teams/deslogadas` nunca é alcançada: `/teams/:teamId` é registrada antes e responde 404 "Equipe não encontrada." — o modo "Todas" do Monitor não mostra as deslogadas | Backend | **código done** (13/10/2026, 5ef43e4) — **reproduzido** em modo mock (07/10); achado no levantamento do P0-1e |
 | P1-53 | **Consolidação das 23:50 falhou toda noite** (`Invalid time value`) de 22/08 a 25/10/2026 — node-cron passava o Date do disparo como dia; 10 dias com a tabela fora da régua | Dados/Contrato | **código done** (28/10/2026) — falta decidir os 10 dias (re-consolidar ou explicar), nada regravado |
+| P1-54 | **`retry-outros` e `revalidate-dd` regravavam 7 dias com a régua errada** (ordem decrescente → cada dia ficava com o passe do próprio dia, que subconta); o mais antigo da janela escapava do drift-sweep. Causa dos −245 de 25/08 | Dados/Contrato | **código done** (28/10/2026) — com o P0-12 o `retry-outros` roda 3×/dia; corrigir antes do deploy |
 | P2-58 | O patch global de `fetch` manda o JWT de sessão do painel para o proxy OSRM no workers.dev — o token sai do domínio | Segurança/Frontend | **código done** (13/10/2026, 06db294) — achado no levantamento do P0-1e (`index.html:1487-1495` + `:11697`) |
 | P3-20 | Botão "⚡ Acordar WPA" do balão aparece para todos, mas chama `/admin/warm` (só admin) — não-admin toma 403 | Frontend | **código done** (13/10/2026) — achado no levantamento do P0-1e (`index.html:9222`) |
 | P2-59 | Aba Mapa sem mapa de fundo: `tile.openstreetmap.org` responde 403 "Access blocked — App is not following the tile usage policy" | Frontend/Infra | pending — visto em produção 07/10 (print do José); pré-requisito do cruzamento com rastreador |
@@ -2110,11 +2111,27 @@ feita em PR separado depois dos testes.
   | 14/10 | 1.249 | 1.107 | −142 | tabela acima (o "achado lateral" do P0-12) |
   | 16/10 | 915 | 892 | −23 | tabela acima |
 
+- **Investigação dos 3 dias em que a tabela subconta (28/10/2026, read-only):**
+  - **25/08 (−245):** é toda de SJC (tabela 136 × régua 374; 20 equipes com 0 na tabela). Foi o incidente do P1-39: a coleta de SJC parou em 24/08 10:15 e voltou em 25/08 17:42 BRT (snapshots de SJC com `date=2026-08-25` só a partir de 20:42 UTC). Quem vê a produção do dia é o passe de D+1, que tem os snapshots de 26/08. CAC (−2) e GUA (−5) estão no ruído. Histórico no log do drift-sweep: 26/08 ok (746 × 737); 27–28/08 tabela acima (1.181 × 976, não reparada, P0-6); **29/08–01/09 ok (976 = 976)**, ou seja, alguém reconsolidou à mão; e em **01/09/2026 18:25 e 19:25 UTC** o `retry-outros` rodou `consolidateDay(26/08)` e depois `consolidateDay(25/08)`. O passe de 25/08 (janela {24, 25}) não vê a produção de SJC: é o P1-54. 25/08 era o mais antigo da janela de 7 dias, e o drift-sweep do dia seguinte já não o olhava.
+  - **05/09 (+7) e 06/09 (+8):** 1 a 2 notas em 6–7 equipes. Mesmo mecanismo: `retry-outros` em 08/09 13:25 UTC regravou 07 → 06 → 05.
+  - **Simulação** (`node scripts/backfill-consolidate.js 2026-08-25 2026-08-26` e `2026-09-05 2026-09-07`, dry-run): **só acrescenta**. 25/08 743 → 988 (+245), 26/08 1.076 → 1.088 (+12), 05/09 316 → 323, 06/09 325 → 333, 07/09 466 → 469. Total +275 OS, nenhum dia perde.
 - **Ação pendente:**
-  1. **Tabela subconta (25/08, 05/09, 06/09):** re-consolidar acrescenta produção que falta; é o caso seguro. Mesmo assim, conferir antes por que o drift-sweep não reparou (régua da época diferente da de hoje? snapshots do dia gravados depois?).
+  1. **Tabela subconta (25/08, 05/09, 06/09):** causa explicada (P1-54). Aplicar com `--apply` depois do OK do José: número reportado à EDP muda (25/08 SJC sobe de 136 para 374).
   2. **Tabela acima (os outros 7):** não reconsolidar às cegas: pode apagar produção legítima (P0-6). Hipóteses: rejeição que chegou depois da consolidação e hoje entra pelo `note_rejections` (P1-15/P1-16), ou backfill manual que gravou por cima. Investigar dia a dia por equipe antes de decidir.
   3. Comando, quando decidido: `node scripts/backfill-consolidate.js <dia> <dia+1> --apply`.
 - **Critério de aceite:** consolidação das 23:50 sem `consolidate_failed` nas noites seguintes ao deploy; cada um dos 10 dias reconsolidado ou com a diferença explicada aqui.
+- **Rollback:** `git revert` do commit.
+
+## P1-54 — `retry-outros` e `revalidate-dd` regravavam 7 dias com a régua errada
+
+- **Categoria:** Dados/Contrato
+- **Status:** código done (28/10/2026), não commitado em produção. Os dias já afetados estão no P1-53.
+- **Como foi achado:** investigação do 25/08 no P1-53. O log mostra `consolidate_start` para 26/08 e depois 25/08 às 18:25 e 19:25 UTC de 01/09, minuto :25, que é o `retry-outros`.
+- **Causa:** `runRetryRecentOutros` (e `runRevalidateDD`), quando reclassificam alguma nota, reconsolidam os dias da janela com `for (const d of [...datas].sort().reverse()) await consolidateDay(d)`. `consolidateDay(X)` regrava {X-1, X}, e o valor certo de um dia D é o do passe de D+1 (régua corrigida em 25/07/2026). Em ordem decrescente, a última gravação de cada dia é o passe do próprio dia, que subconta. O drift-sweep das 02:00 reparava D-1…D-7 no dia seguinte, mas o dia mais antigo da janela (hoje−7) já tinha saído do alcance dele e ficava subcontado para sempre. Em dia normal são poucas notas; em dia em que a produção só aparece nos snapshots de D+1 (coleta fora do ar de dia), é muito: 25/08 perdeu 245.
+- **Agravante com o P0-12:** o `retry-outros` passou a rodar em cada janela (3×/dia). Sem esta correção, o deploy do P0-12 multiplicaria o efeito.
+- **Correção (28/10/2026):** `_ordemDeConsolidacao` (crescente) nos dois loops: cada dia termina gravado pelo passe de D+1. No fechamento das 05h, depois do backfill de D-1 (que consolida com o passe de D-1, como o `/admin/backfill`), roda também `runConsolidate(hoje)`, que regrava D-1 com a régua certa. Testes em `test/coletaJanelas.test.js`.
+- **Não corrigido (mesma classe, manual):** a rota de reclassificar um dia (`routes/index.js`, "4. Re-consolida o dia") e o `POST /admin/backfill` rodam `consolidateDay(date)`, o passe de D. Corrigir um dia isolado exige reconsolidar em cadeia de D+1 até hoje. Registrado aqui; quem usar essas rotas deve rodar depois `node scripts/backfill-consolidate.js <date> <hoje> --apply`.
+- **Critério de aceite:** depois do deploy, `verify-consolidacao` sem drift novo em dias onde o `retry-outros` reclassificou.
 - **Rollback:** `git revert` do commit.
 
 ## P2-1 — Testes de contrato de rota (login, scope, health)

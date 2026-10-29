@@ -1202,6 +1202,19 @@ async function runRetryRejeicoesVazias(limite = 120) {
 // chamada classificarDD faz GET /api/notes/dd (~2 KB) + GET /details/optimized
 // (~50-150 KB), então N*2 chamadas por execução.
 
+// ── ORDEM DE RECONSOLIDAÇÃO DE VÁRIOS DIAS (28/10/2026, P1-54) ────────────────
+// consolidateDay(X) apaga e regrava {X-1, X}, e o valor FINAL de um dia D é o do
+// passe de D+1 (régua corrigida em 25/07/2026, ver detectDrift). Em ordem
+// DECRESCENTE, a última gravação de cada dia era o passe do próprio dia, que
+// subconta: o retry-outros (e o revalidate-dd) regravavam os 7 dias da janela
+// por baixo a cada reclassificação. O drift-sweep reparava D-1…D-7 no dia
+// seguinte, mas o mais antigo da janela já tinha saído do alcance dele: 25/08
+// ficou com 743 contra 988 (SJC sem coleta de dia, P1-39), regravado em
+// 01/09/2026 18:25 UTC. Em ordem CRESCENTE, cada dia termina gravado por D+1.
+function _ordemDeConsolidacao(datas) {
+  return [...new Set(datas)].sort();
+}
+
 async function runRetryRecentOutros(daysBack) {
   const { getClient } = require('./dbClient');
   const { upsertSubcategorias } = require('../db/subcategoriasQueries');
@@ -1277,7 +1290,7 @@ async function runRetryRecentOutros(daysBack) {
   for (let i = 0; i <= DAYS_BACK; i++) {
     datasParaConsolidar.add(new Date(todayMs - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
   }
-  for (const d of [...datasParaConsolidar].sort().reverse()) {
+  for (const d of _ordemDeConsolidacao(datasParaConsolidar)) {   // crescente: P1-54
     try {
       await consolidateDay(d);
     } catch (errC) {
@@ -1382,7 +1395,7 @@ async function runRevalidateDD(daysBack, opts = {}) {
   for (let i = 0; i <= diasConsolidar; i++) {
     datasParaConsolidar.add(new Date(todayMs - i * 24 * 3600 * 1000).toISOString().slice(0, 10));
   }
-  for (const d of [...datasParaConsolidar].sort().reverse()) {
+  for (const d of _ordemDeConsolidacao(datasParaConsolidar)) {   // crescente: P1-54
     try {
       await consolidateDay(d);
     } catch (errC) {
@@ -1721,6 +1734,9 @@ async function runFechamento() {
   try {
     const r = await runBackfillDia(ontem);
     log.info('fechamento_backfill', r);
+    // runBackfillDia consolida com o passe de D-1 (o mesmo do /admin/backfill),
+    // que subconta; o passe de hoje regrava D-1 com a régua de D+1 (P1-54).
+    await runConsolidate(dateBRT());
   } catch (err) {
     log.error('fechamento_backfill_falhou', { date: ontem, code: err.code || null, msg: err.message });
     if ((err.falhas || []).some(f => f.caminho)) return;   // sem caminho até a EDP, o resto também falharia
@@ -1921,4 +1937,5 @@ module.exports = {
   _semSessaoDiaAnterior,   // P2-68
   // Exportado pra teste (P1-39) — merge do carimbo por setor.
   _mergeSectorLastOk,
+  _ordemDeConsolidacao,   // P1-54
 };

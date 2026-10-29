@@ -193,3 +193,21 @@ describe('painel (soGuardado)', () => {
     assert.deepEqual(await wpa._lerGuardadoPainel('DESC', async () => { throw new Error('pg fora'); }), []);
   });
 });
+
+// ── ordem de reconsolidação (P1-54) ─────────────────────────────────────────
+
+describe('reconsolidação de vários dias', () => {
+  const cron = require('../services/cronService');
+
+  test('crescente e sem repetição: cada dia termina gravado pelo passe de D+1', () => {
+    assert.deepEqual(cron._ordemDeConsolidacao(new Set(['2026-09-01', '2026-08-26', '2026-08-25'])),
+      ['2026-08-25', '2026-08-26', '2026-09-01']);
+    assert.deepEqual(cron._ordemDeConsolidacao(['2026-08-26', '2026-08-25', '2026-08-26']), ['2026-08-25', '2026-08-26']);
+  });
+
+  test('fonte: nenhum loop de consolidateDay em ordem decrescente', () => {
+    const SRC = fs.readFileSync(path.join(__dirname, '..', 'services', 'cronService.js'), 'utf8');
+    assert.doesNotMatch(SRC, /sort\(\)\.reverse\(\)\)\s*\{\s*try\s*\{\s*await consolidateDay/);
+    assert.equal((SRC.match(/_ordemDeConsolidacao\(datasParaConsolidar\)/g) || []).length, 2);
+  });
+});
