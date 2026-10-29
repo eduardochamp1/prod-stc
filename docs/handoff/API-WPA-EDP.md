@@ -937,7 +937,8 @@ dias passados que tinham dados. Com qualquer outro UA, mesmo token, mesma VM:
 dados normais. Sem 403 e sem 500, nada de token/cold-start dispara e o painel
 fica zerado **sem um erro no log** — foi o que aconteceu de 16 a 18/10 (P0-10).
 **Solução:** todo HTTP para a EDP sai por `services/wpaHttp.js`, com
-`User-Agent: EngelmigWpaMonitor/1.0` (`WPA_USER_AGENT`). Não importe `node-fetch`
+`User-Agent` próprio (`WPA_USER_AGENT`; default `EngelmigWpaMonitor/1.0` até
+28/10/2026, desde então o UA do Edge 156 no Windows). Não importe `node-fetch`
 direto em código que fala com a EDP (`test/wpaUserAgent.test.js` falha). Para
 reproduzir: `curl -A 'node-fetch/1.0 (+https://github.com/bitinn/node-fetch)'`
 → "Nenhum dado encontrado"; `curl` com o UA padrão dele → dados. E zero sessões

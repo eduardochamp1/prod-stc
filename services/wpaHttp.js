@@ -13,13 +13,17 @@
  * este módulo, que põe um User-Agent PRÓPRIO e honesto (identifica o sistema,
  * não imita navegador nem curl). O teste test/wpaUserAgent.test.js falha se
  * alguém voltar a importar node-fetch em wpaService.js ou routes/index.js.
+ *
+ * 28/10/2026: o default deixou de ser `EngelmigWpaMonitor/1.0` e passou a ser o
+ * UA do Edge 156 no Windows, por decisão do José. O WPA_USER_AGENT do .env
+ * continua tendo precedência — se a VM tiver o valor antigo lá, é ele que sai.
  */
 
 const _nodeFetch = require('node-fetch');
 const { medir, origemAtual } = require('./wpaContador');
 const { comVaga } = require('./wpaFila');
 
-const WPA_USER_AGENT_PADRAO = 'EngelmigWpaMonitor/1.0';
+const WPA_USER_AGENT_PADRAO = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0';
 
 /** Lido a cada chamada: trocar no .env + restart basta, e o teste consegue variar. */
 function wpaUserAgent() {

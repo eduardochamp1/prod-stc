@@ -57,7 +57,7 @@ after(() => new Promise(r => server.close(r)));
 test('wpaHttpFetch manda o UA próprio por default', async () => {
   recebidos.length = 0;
   await wpaHttp.wpaHttpFetch(`${process.env.WPA_API_URL}/api/x`);
-  assert.equal(recebidos[0].ua, 'EngelmigWpaMonitor/1.0');
+  assert.equal(recebidos[0].ua, wpaHttp.WPA_USER_AGENT_PADRAO);
   assert.notEqual(recebidos[0].ua, UA_NODE_FETCH);
 });
 
@@ -76,7 +76,7 @@ test('headers de quem chama são preservados (Headers ou objeto)', async () => {
   const { Headers } = require('node-fetch');
   recebidos.length = 0;
   await wpaHttp.wpaHttpFetch(`${process.env.WPA_API_URL}/api/x`, { headers: new Headers({ Accept: 'application/json' }) });
-  assert.equal(recebidos[0].ua, 'EngelmigWpaMonitor/1.0');
+  assert.equal(recebidos[0].ua, wpaHttp.WPA_USER_AGENT_PADRAO);
   assert.equal(recebidos[0].accept, 'application/json');
 });
 
@@ -86,7 +86,7 @@ test('login (/identity/signin) sai com UA diferente do node-fetch', async () => 
   await wpa.login('es');
   const signin = recebidos.find(r => r.url.startsWith('/identity/signin'));
   assert.ok(signin, 'o login chegou ao servidor local');
-  assert.equal(signin.ua, 'EngelmigWpaMonitor/1.0');
+  assert.equal(signin.ua, wpaHttp.WPA_USER_AGENT_PADRAO);
 });
 
 test('wpaFetch (Web API) sai com UA diferente do node-fetch', async () => {
@@ -96,7 +96,7 @@ test('wpaFetch (Web API) sai com UA diferente do node-fetch', async () => {
   assert.equal(res.status, 200);
   const api = recebidos.find(r => r.url.startsWith('/api/Sessions'));
   assert.ok(api, 'a chamada chegou ao servidor local');
-  assert.equal(api.ua, 'EngelmigWpaMonitor/1.0');
+  assert.equal(api.ua, wpaHttp.WPA_USER_AGENT_PADRAO);
 });
 
 test('nenhum arquivo que fala com a EDP importa node-fetch direto', () => {
