@@ -110,7 +110,7 @@ async function main() {
   }
   fs.mkdirSync(path.join(pasta, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(RAIZ, 'scripts', 'check-wpa.js'), path.join(pasta, 'scripts', 'check-wpa.js'));
-  for (const f of ['iniciar.bat', 'checar.bat', 'iniciar_coletor.ps1', 'tunel_banco.ps1', 'LEIAME.txt', 'coletor.env.exemplo']) {
+  for (const f of ['iniciar.bat', 'checar.bat', 'diag.bat', 'iniciar_coletor.ps1', 'tunel_banco.ps1', 'LEIAME.txt', 'coletor.env.exemplo']) {
     fs.copyFileSync(path.join(__dirname, f), path.join(pasta, f));
   }
   fs.writeFileSync(path.join(pasta, 'VERSAO.txt'), versao + '\r\n');

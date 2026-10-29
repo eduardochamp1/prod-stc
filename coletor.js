@@ -11,6 +11,8 @@
  * Config: coletor.env ao lado deste arquivo (ou COLETOR_ENV=caminho).
  *   node coletor.js            — liga o coletor
  *   node coletor.js --checar   — só confere banco e EDP e sai (0 = ok)
+ *   node coletor.js --diag [SETOR] [AAAA-MM-DD] — UMA consulta de sessões e mostra a
+ *                              resposta crua (29/10/2026: 1ª ligação voltou 0 equipes)
  */
 
 'use strict';
@@ -52,6 +54,31 @@ async function main() {
 
   // Sem isto, a 1ª coleta filtra pela lista de fallback (sem SJC) — equipesOficiais.js
   await require('./services/equipesOficiais').forceRefresh();
+
+  if (process.argv.includes('--diag')) {
+    // 29/10/2026: na 1ª ligação a EDP devolveu 0 equipes em todos os setores, de
+    // hoje e de 27/10. Mostra a resposta crua de UMA consulta para separar
+    // "Nenhum dado encontrado" (P0-10) de erro de login ou de rede.
+    const args = process.argv.slice(process.argv.indexOf('--diag') + 1);
+    const setor = (args.find(a => /^[A-Z]{4}$/.test(a))) || 'DESG';
+    const { dateBRT } = require('./services/timeUtil');
+    const data = args.find(a => /^\d{4}-\d{2}-\d{2}$/.test(a)) || dateBRT(Date.now() - 86400000);
+    const wpa = require('./services/wpaService');
+    const { wpaUserAgent } = require('./services/wpaHttp');
+    console.log(`[diag] User-Agent: ${wpaUserAgent()}`);
+    console.log(`[diag] POST /api/Sessions/all/date?sectorId=${setor}&date=${data}`);
+    try {
+      const res = await wpa.wpaFetch(`/api/Sessions/all/date?sectorId=${setor}&date=${encodeURIComponent(wpa.toWpaDate(data))}`, { method: 'POST' });
+      const corpo = await res.text();
+      let n = null; try { const j = JSON.parse(corpo); n = Array.isArray(j.Data) ? j.Data.length : null; } catch {}
+      console.log(`[diag] HTTP ${res.status} · ${corpo.length} bytes · sessões em Data: ${n === null ? '(sem Data)' : n}`);
+      console.log(`[diag] início do corpo: ${corpo.slice(0, 300).replace(/\s+/g, ' ')}`);
+    } catch (err) {
+      console.log(`[diag] falhou: ${err.code || ''} ${err.message}`);
+    }
+    await require('./services/pgShim')._getPool().end().catch(() => {});
+    process.exit(0);
+  }
 
   if (checar) {
     const { main: checarWpa } = require('./scripts/check-wpa');

@@ -1747,6 +1747,14 @@ async function runFechamento() {
   try {
     const r = await runBackfillDia(ontem);
     log.info('fechamento_backfill', r);
+    // 29/10/2026: 0 equipes no dia inteiro não é dia vazio — é a EDP devolvendo
+    // "Nenhum dado encontrado" (P0-10). Na 1ª ligação do coletor o 27/10 (terça)
+    // voltou com 0 em todos os setores e foi carimbado como fechado. Agora não
+    // consolida nem carimba: o próximo fechamento tenta de novo.
+    if (!r.ok) {
+      log.error('fechamento_vazio', { date: ontem, msg: 'EDP devolveu 0 equipes no dia — não carimbado' });
+      return;
+    }
     // runBackfillDia consolida com o passe de D-1 (o mesmo do /admin/backfill),
     // que subconta; o passe de hoje regrava D-1 com a régua de D+1 (P1-54).
     await runConsolidate(dateBRT());

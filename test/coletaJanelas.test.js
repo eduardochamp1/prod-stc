@@ -211,3 +211,30 @@ describe('reconsolidação de vários dias', () => {
     assert.equal((SRC.match(/_ordemDeConsolidacao\(datasParaConsolidar\)/g) || []).length, 2);
   });
 });
+
+// ── fechamento vazio (29/10/2026) ───────────────────────────────────────────
+
+describe('fechamento', () => {
+  test('dia com 0 equipes não consolida nem carimba fechamento_ok', async () => {
+    const mods = ['../services/wpaService', '../services/dataWriter', '../db/queries'].map(m => require.resolve(m));
+    const originais = mods.map(m => require.cache[m]);
+    const gravados = [], consolidados = [];
+    const fake = (id, exports) => { require.cache[id] = { id, filename: id, loaded: true, exports }; };
+    fake(mods[0], { getTeamsByDate: async () => [], isSectorDisabled: () => false });
+    fake(mods[1], { consolidateDay: async (d) => consolidados.push(d), cleanOldSnapshots: async () => {}, cleanOldNoteDetails: async () => {} });
+    fake(mods[2], { setSetting: async (k, v) => gravados.push(k), getSetting: async () => null });
+    delete require.cache[require.resolve('../services/cronService')];
+    const modo = process.env.DATA_MODE;
+    try {
+      process.env.DATA_MODE = 'mock';   // sync-logoffs/intervalos/saída da nota saem cedo em mock
+      await require('../services/cronService').runFechamento();
+    } finally {
+      process.env.DATA_MODE = modo;
+      mods.forEach((m, i) => { if (originais[i]) require.cache[m] = originais[i]; else delete require.cache[m]; });
+      delete require.cache[require.resolve('../services/cronService')];
+    }
+    assert.deepEqual(consolidados, []);
+    assert.ok(!gravados.includes('fechamento_ok'));
+  });
+});
+

@@ -2873,6 +2873,7 @@ module.exports = {
   ensureFreshToken,   // o que o cron deve usar: só reloga dentro da margem do exp
   getTokenStatus,
   wpaFetch,
+  toWpaDate,   // coletor.js --diag (29/10/2026)
   // Endpoints individuais (usados em rotas de debug)
   getSessions,
   getSessionDetail,
