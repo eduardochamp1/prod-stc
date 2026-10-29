@@ -8,7 +8,14 @@
 // injeta em process.env antes de require('../server'). Sem isso, `node --test`
 // na VM dava 401 em todo teste de rota (o .env real clobbava as credenciais de
 // teste). Em produção NODE_ENV não é 'test' → comportamento acima intacto.
-require('dotenv').config({ override: process.env.NODE_ENV !== 'test' });
+//
+// 29/10/2026: não basta desligar o override — sem override o dotenv ainda
+// PREENCHE o que o teste não definiu, e o DATABASE_URL do .env real chegava aos
+// testes de rota: pool aberto no Postgres de PRODUÇÃO, `node --test` travado
+// pra sempre em 6 arquivos (loginRateLimit, routes, alertasRotas…) na máquina
+// do dev, e qualquer escrita de teste caindo no banco real. Em teste o .env não
+// é carregado; a suíte é autossuficiente (2025/2025 sem .env).
+if (process.env.NODE_ENV !== 'test') require('dotenv').config({ override: true });
 
 const express  = require('express');
 const cors     = require('cors');
