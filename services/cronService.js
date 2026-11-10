@@ -1677,10 +1677,153 @@ async function runJanela() {
   for (const [nome, fn] of etapas) {
     try { await fn(); }
     catch (err) {
-      if (ehWpaAccessError(err)) { log.error('rotina_sem_acesso_edp', { rotina: nome, code: err.code, msg: err.message }); break; }
+      if (ehWpaAccessError(err)) { log.error('rotina_sem_acesso_edp', { rotina: nome, code: err.code, msg: err.message }); return; }
       log.error('janela_etapa_falhou', { etapa: nome, msg: err.message });
     }
   }
+  // 09/11/2026 (P0-14): por último, depois de o painel já estar atualizado.
+  await runRecuperarDias();
+}
+
+// ── RECUPERAÇÃO AUTOMÁTICA DE DIAS SEM FECHAMENTO (09/11/2026, P0-14) ────────
+// Pedido do José em 09/11/2026: "como podemos automatizar a conexao, sem
+// depender de eu abrir o ralay, de eu acessar o sistema e clicar para fazer o
+// backfill". O relay (P0-9) ficou caído de 08/11 19h a 09/11 23h: o fechamento
+// das 05h só tenta o D-1 e, sem caminho até a EDP, o dia ficava perdido até
+// alguém rodar o backfill à mão (08/11 ficou parcial e 09/11 vazio).
+//
+// Agora cada dia fechado é carimbado em `dias_fechados` e, em cada janela e no
+// fechamento, o que estiver sem carimbo nos últimos N dias é refeito — do mais
+// antigo para o mais novo (P1-54), no máximo WPA_RECUPERA_MAX_DIAS por rodada
+// (default 1: a EDP questionou o volume, P0-11; um dia útil ≈ 2.000 requisições).
+const DIAS_FECHADOS_SETTING = 'dias_fechados';   // { dias: { 'YYYY-MM-DD': ts }, desde }
+const DIAS_FECHADOS_RETER = 30;
+let _recuperando = false;                         // em memória: instances=1 (regra 8)
+
+function _diaMais(dia, n) {
+  const d = new Date(dia + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function _envInt(valor, padrao) {
+  const v = parseInt(valor, 10);
+  return Number.isFinite(v) && v >= 0 ? v : padrao;
+}
+
+/**
+ * O backfill de `dia` rodado em `agora` vê o dia inteiro? Só a partir das 05h
+ * BRT de D+1 — antes disso o plantão pode estar aberto e as notas ainda chegam
+ * (40,6% das sessões ganham nota horas depois do logoff, diag do P0-11).
+ */
+function diaFechavel(dia, agora = Date.now(), fechamentoH = FECHAMENTO_H) {
+  const ontem = dateBRT(agora - 86400000);
+  if (dia < ontem) return true;
+  return dia === ontem && hourBRT(agora) >= fechamentoH;
+}
+
+/**
+ * Dias de [hoje-N, ontem] sem carimbo, em ordem crescente. Puro (teste).
+ * `fechados` = mapa { 'YYYY-MM-DD': ts }.
+ */
+function diasPendentes(agora, fechados, janelaDias = 7, fechamentoH = FECHAMENTO_H) {
+  const hoje = dateBRT(agora);
+  const out = [];
+  for (let n = janelaDias; n >= 1; n--) {
+    const dia = _diaMais(hoje, -n);
+    if (fechados && fechados[dia]) continue;
+    if (!diaFechavel(dia, agora, fechamentoH)) continue;
+    out.push(dia);
+  }
+  return out;
+}
+
+async function _lerDiasFechados() {
+  const r = await require('../db/queries').getSetting(DIAS_FECHADOS_SETTING);
+  return r && r.data && r.data.dias ? r.data : null;
+}
+
+async function _gravarDiasFechados(estado) {
+  const corte = _diaMais(dateBRT(), -DIAS_FECHADOS_RETER);
+  const dias = {};
+  for (const [d, ts] of Object.entries(estado.dias || {})) if (d >= corte) dias[d] = ts;
+  await require('../db/queries').setSetting(DIAS_FECHADOS_SETTING, { ...estado, dias });
+}
+
+/** Carimba `dia` como fechado, se o backfill rodou com o dia já fechável. */
+async function _carimbarDiaFechado(dia, agora = Date.now()) {
+  if (!diaFechavel(dia, agora)) return false;
+  try {
+    const estado = (await _lerDiasFechados()) || { dias: {}, desde: new Date(agora).toISOString() };
+    estado.dias[dia] = new Date(agora).toISOString();
+    await _gravarDiasFechados(estado);
+    return true;
+  } catch (err) {
+    log.warn('dia_fechado_carimbo_falhou', { date: dia, msg: err.message });
+    return false;
+  }
+}
+
+/**
+ * Refaz os dias sem carimbo. `exceto`: dias que o chamador acabou de tentar
+ * (o fechamento não repete o D-1 que acabou de falhar). Devolve os tentados.
+ *
+ * 1ª execução (sem `dias_fechados` no banco): os dias da janela até D-2 são
+ * dados como fechados, e o D-1 também se `fechamento_ok` já o cobre. A garantia
+ * vale do deploy em diante — o que faltava antes disso foi refeito à mão (até
+ * 09/11/2026) e não é rebuscado na EDP sem ninguém pedir.
+ */
+async function runRecuperarDias({ exceto = [], agora = Date.now() } = {}) {
+  if (process.env.DATA_MODE === 'mock') return [];
+  if (modoColeta() === 'remota') return [];
+  const janelaDias = _envInt(process.env.WPA_RECUPERA_JANELA_DIAS, 7);
+  const max = _envInt(process.env.WPA_RECUPERA_MAX_DIAS, 1);
+  if (janelaDias === 0 || max === 0) return [];
+  if (_recuperando) return [];
+  _recuperando = true;
+  const tentados = [];
+  try {
+    const sq = require('../db/queries');
+    let estado = await _lerDiasFechados();
+    if (!estado) {
+      const hoje = dateBRT(agora), ontem = _diaMais(hoje, -1);
+      const carimbo = await sq.getSetting(FECHAMENTO_SETTING);
+      const ts = new Date(agora).toISOString();
+      estado = { dias: {}, desde: ts };
+      for (let n = janelaDias; n >= 2; n--) estado.dias[_diaMais(hoje, -n)] = ts;
+      if (carimbo && carimbo.data && carimbo.data.date >= ontem) estado.dias[ontem] = ts;
+      await _gravarDiasFechados(estado);
+      log.info('recuperacao_semeada', { ate: _diaMais(hoje, -2), ontemFechado: !!estado.dias[ontem] });
+    }
+    const pendentes = diasPendentes(agora, estado.dias, janelaDias).filter(d => !exceto.includes(d));
+    if (pendentes.length === 0) return [];
+    log.info('recuperacao_pendente', { dias: pendentes, max });
+    const ontem = dateBRT(agora - 86400000);
+    for (const dia of pendentes.slice(0, max)) {
+      tentados.push(dia);
+      try {
+        if (dia === ontem) {
+          // O D-1 inteiro: backfill + logoffs, intervalos e saída da nota.
+          await runFechamento({ recuperar: false });
+        } else {
+          const r = await runBackfillDia(dia);
+          if (!r.ok) { log.error('recuperacao_vazia', { date: dia, msg: 'EDP devolveu 0 equipes no dia — não carimbado' }); continue; }
+          // runBackfillDia consolida com o passe do próprio dia, que subconta;
+          // o passe de D+1 regrava o dia com a régua certa (P1-54).
+          await runConsolidate(_diaMais(dia, 1));
+          log.info('recuperacao_ok', { date: dia, teams: r.teams });
+        }
+      } catch (err) {
+        log.error('recuperacao_falhou', { date: dia, code: err.code || null, msg: err.message });
+        break;   // sem caminho ou sem acesso: os outros dias também falhariam
+      }
+    }
+  } catch (err) {
+    log.error('recuperacao_erro', { msg: err.message });
+  } finally {
+    _recuperando = false;
+  }
+  return tentados;
 }
 
 /**
@@ -1730,6 +1873,9 @@ async function runBackfillDia(date) {
   await runConsolidate(date);
 
   console.log(`[BACKFILL] Concluído: ${teams.length} equipes para ${date}`);
+  // 09/11/2026 (P0-14): dia refeito com ele já fechado (05h de D+1 em diante)
+  // fica carimbado — vale para o fechamento, a recuperação e o botão do admin.
+  await _carimbarDiaFechado(date);
   return {
     ok: true, date, teams: teams.length,
     concluidas: teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0),
@@ -1742,7 +1888,7 @@ async function runBackfillDia(date) {
  * do logoff — 40,6% das sessões, diag do P0-11), depois logoffs de D-1/D-2,
  * intervalos e saída da nota (que lê os dois anteriores). Era 03:00/03:10/04:30.
  */
-async function runFechamento() {
+async function runFechamento({ recuperar = true } = {}) {
   const ontem = dateBRTMinusDays(1);
   try {
     const r = await runBackfillDia(ontem);
@@ -1769,6 +1915,9 @@ async function runFechamento() {
   await runSyncLogoffs().catch(err => log.error('fechamento_logoffs_falhou', { msg: err.message }));
   await runSyncIntervalos().catch(err => log.error('fechamento_intervalos_falhou', { msg: err.message }));
   await runSaidaNota();
+  // 09/11/2026 (P0-14): dias mais antigos que ficaram sem fechamento. O D-1 fica
+  // de fora: acabou de ser tentado aqui em cima.
+  if (recuperar) await runRecuperarDias({ exceto: [ontem] });
 }
 
 // ── START / STOP ──────────────────────────────────────────────────────────────
@@ -1956,6 +2105,8 @@ module.exports = {
   runJanela, runFechamento, runBackfillDia, proximaJanela, reservarAtualizacaoManual,
   JANELAS_COLETA_H, FECHAMENTO_H, ATUALIZACAO_MANUAL_MS,
   modoColeta, FECHAMENTO_SETTING,   // P0-13: coletor fora da VM
+  // P0-14: recuperação automática de dias sem fechamento.
+  runRecuperarDias, diasPendentes, diaFechavel, DIAS_FECHADOS_SETTING,
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,

@@ -328,6 +328,20 @@ scp usr_jose@172.25.3.154:prod-stc/scripts/relay-wpa/iniciar_relay.ps1 $HOME\
 powershell -ExecutionPolicy Bypass -File $HOME\iniciar_relay.ps1
 ```
 
+**Duplo clique** (29/10/2026, pedido do José: "são muitos comandos"): `scripts/relay-wpa/iniciar_relay.bat` chama o `iniciar_relay.ps1` da mesma pasta. Copie os três arquivos uma vez para uma pasta própria e, daí em diante, é só dar duplo clique no `.bat`:
+
+```powershell
+mkdir $HOME\relay-wpa -Force
+scp "usr_jose@172.25.3.154:prod-stc/scripts/relay-wpa/*.ps1" "usr_jose@172.25.3.154:prod-stc/scripts/relay-wpa/iniciar_relay.bat" $HOME\relay-wpa\
+```
+
+**Automático no logon** (09/11/2026, backlog P0-14, pedido do José: "sem depender de eu abrir o relay"): `scripts/relay-wpa/instalar_auto.bat`, uma vez. Ele cria a chave `~/.ssh/relay_wpa`, cadastra na VM com as restrições da seção 9.7.2 (pede a senha da VM uma vez), põe um atalho na pasta Inicializar do usuário e liga o `relay_auto.ps1`, que roda escondido e reconecta sozinho. Não precisa de administrador. O que acontece fica em `relay.log`, na mesma pasta. Continua exigindo o PC ligado e a VPN conectada. Feche as janelas do relay manual depois de instalar (as duas disputam a porta 3128 da VM). Para desfazer: `powershell -ExecutionPolicy Bypass -File .\instalar_auto.ps1 -Remover`.
+
+```powershell
+mkdir $HOME\relay-wpa -Force
+scp "usr_jose@172.25.3.154:prod-stc/scripts/relay-wpa/*" $HOME\relay-wpa\
+```
+
 Saída esperada:
 
 ```

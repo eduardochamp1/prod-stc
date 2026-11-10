@@ -498,6 +498,28 @@ tabela pode ficar; sem a `GSEQ_DATABASE_URL`, o job não roda.
 
 ## Backfills
 
+### Dia sem coleta (relay/EDP fora do ar) — recuperação automática (P0-14, 09/11/2026)
+
+Não precisa clicar em nada: no fim de cada janela (08h, 12h, 17h) e do fechamento
+(05h), o dia dos últimos 7 que ficou sem fechamento é refeito sozinho, 1 por
+rodada, do mais antigo para o mais novo. Só acontece com caminho até a EDP —
+com o relay caído, espera ele voltar.
+
+```bash
+grep -E 'recuperacao_(pendente|ok|vazia|falhou|semeada)' ~/prod-stc/logs/out.log | tail
+psql -d wpa_monitor -c "select data->'dias' from app_settings where key='dias_fechados'"
+```
+
+- `recuperacao_pendente` sem `recuperacao_ok` depois → veja `recuperacao_falhou`
+  (code da EDP/proxy) ou `recuperacao_vazia` (EDP devolveu 0 equipes).
+- Forçar um dia a ser refeito: apague a data do mapa `dias_fechados` ou rode
+  `POST /api/admin/backfill?date=YYYY-MM-DD` (que também carimba).
+- Mais rápido depois de uma queda longa: `WPA_RECUPERA_MAX_DIAS=2` (cada dia
+  útil ≈ 2.000 requisições à EDP — P0-11). Desligar: `WPA_RECUPERA_MAX_DIAS=0`.
+- Túnel caído: `node scripts/check-wpa.js`. No PC do José, `relay.log` na pasta
+  do relay (manual de acesso, seção 9.4).
+
+
 > ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**
 > Em 09/07/2026 um backfill como `for d in $(seq 0 60); do node -e ...; done`
 > (60 processos node paralelos, cada um abrindo um pool pg) **derrubou o

@@ -35,6 +35,7 @@
 | P0-11 | **EDP questionou (19/10/2026) "diversas requisições" congestionando a WPA** — e não tínhamos como dizer quantas são nossas. Pelo código, o painel aberto no navegador faz uma coleta COMPLETA na EDP a cada 5 min **por aba**, sem cache (~200–270 requests cada) | Ops/Contrato | **itens 1–5 no código** (a23d6bc, d5a3ae6, f53a3b9 — 19/10): contador, cache de 5 min, aba escondida, limite de 6 em voo, colaboradores de encerrada 1×, encerrada rebuscada de hora em hora (congelar foi descartado pelo diag) e sombra do V2 — falta: deploy, medir, responder a EDP |
 | P0-12 | Coleta da EDP em **janelas fixas** (08h, 12h, 17h + fechamento D-1 às 05h); painel só lê o banco, botão de atualizar para admin | Ops/Contrato | **passos 2–5 no código (28/10)** — agenda em janelas, boot sem coleta, painel só banco, botão admin; falta a paridade (passo 1, precisa de acesso à EDP) e o deploy |
 | P0-13 | **Coletor da EDP fora da VM**: executável (pasta com `iniciar.bat` + node.exe) na máquina do José, na rede que a EDP aceita, grava no Postgres da VM por túnel SSH; VM com `WPA_COLETA=remota` | Ops/Contrato | **bloqueado pela EDP** (29/10/2026) — coletor funciona, mas a EDP responde 200 "Nenhum dado encontrado." para o nosso cliente; depende de conversa com a EDP |
+| P0-14 | **Coleta parava até alguém ligar o relay e clicar no backfill** (relay caído de 08/11 19h a 09/11 23h: 08/11 parcial, 09/11 vazio) — recuperação automática dos dias sem fechamento + relay que sobe sozinho no logon do Windows | Ops/Dados | **código done e no ar na VM** (10/11/2026) — falta instalar o relay automático no PC do José (`instalar_auto.bat`; 1ª tentativa travou e o script foi corrigido) e ver a 1ª recuperação real no log |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -6160,6 +6161,39 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - [ ] Coletor desligado aparece no painel em ≤ 5 min.
 - **Rollback:** fechar as janelas na máquina; na VM, `WPA_COLETA=local` (ou remover) + restart.
 - **Depende de / relacionado:** P0-12 (janelas e painel só banco), P0-9 (acesso), P1-53/P1-54 (consolidação).
+
+## P0-14 — Coleta dependia de ligar o relay à mão e clicar no backfill
+
+- **Categoria:** Ops / Dados
+- **Status:** **código done e no ar na VM** (10/11/2026 ~00h45 BRT, deploy pela regra 4 a pedido do José). Falta instalar o relay automático no PC do José (`scripts/relay-wpa/instalar_auto.bat`) e ver a 1ª recuperação real no log. **Os scripts PowerShell não têm teste automatizado** (a VM não tem PowerShell).
+  - **1ª instalação no PC (10/11/2026 ~00h30 BRT):** travou logo depois de "Chave criada". Na VM havia uma sessão `sshd: usr_jose@notty` autenticada, sem processo filho e sem a chave nova no `authorized_keys`: o teste prévio `ssh -i relay_wpa ... exit` entrou por outra chave que o PC já tinha, o comando terminou e o ssh do Windows não voltou. Correção: sem teste prévio; o cadastro é idempotente na VM (`grep -qF` da chave) e quem prova é o túnel de pé; o `relay_auto.ps1` usa só a chave dedicada (`-F none`, sem agente). Falta rodar de novo.
+- **Fonte:** José, 09/11/2026: *"preciso que esse projeto acesse a api edp, porem preciso que ela acesse via tunel partindo do ip do meu computador. atualmente a atualização desse proejto esta parada"* e, depois do backfill manual: *"como podemos automatizar a conexao, sem depender de eu abrir o ralay, de eu acessar o sistema e clicar para fazer o backfill"*.
+- **Evidência (09/11/2026 ~23h BRT, VM em modo relay: `WPA_PROXY=http://127.0.0.1:3128`, sem `WPA_COLETA`):**
+  - `ss -ltn` sem nada na porta 3128; `node scripts/check-wpa.js` → `WPA_PROXY_INDISPONIVEL … ECONNREFUSED` para a API de dados e o login.
+  - `logs/out.log`, `wpa_requisicoes_hora`: última hora com 200 foi `2026-11-08 19h`; `2026-11-09 05h/08h/12h` com 4 requisições e 4 erros `WPA_PROXY_INDISPONIVEL` cada (fechamento e janelas). 07/11 e a manhã de 08/11 idem.
+  - `team_daily_totals` antes do reparo: 08/11 com 45 equipes / 191 notas (coletado só até ~19h); 09/11 (segunda) sem nenhuma linha.
+  - `runFechamento` (`services/cronService.js`) só tenta o D-1, uma vez, às 05h. Sem caminho até a EDP ele sai e ninguém volta àquele dia.
+- **Reparo manual feito em 09/11/2026 ~23h10 BRT** (relay religado pelo José): `runBackfillDia('2026-11-08')` e `('2026-11-09')` em 1 processo, sequencial — 2.192 requisições, todas 200. Depois: 08/11 = 58 equipes / 273 notas; 09/11 = 126 equipes / 834 notas. O 09/11 foi refeito com o dia ainda aberto: o fechamento das 05h de 10/11 o refaz.
+- **Impacto:** dia sem fechamento é dia sem produção no painel que a EDP audita, e só volta se alguém notar e rodar o backfill. Bus factor 1 (P0-1): depende do José ligar o relay e clicar.
+- **O que foi feito:**
+  1. **Recuperação automática** (`services/cronService.js`, `runRecuperarDias`). Cada dia refeito pelo backfill com o dia já fechado (05h BRT de D+1 em diante — `diaFechavel`) é carimbado em `app_settings.dias_fechados` (`{ dias: { 'YYYY-MM-DD': ts } }`, 30 dias retidos). O carimbo é dado dentro do `runBackfillDia`, então vale para o fechamento, a recuperação e o botão/rota `POST /admin/backfill`. No fim de cada janela (08h, 12h, 17h) e do fechamento (05h), o que estiver sem carimbo nos últimos `WPA_RECUPERA_JANELA_DIAS` (7) é refeito do mais antigo para o mais novo (P1-54), no máximo `WPA_RECUPERA_MAX_DIAS` (1) por rodada. Dia mais antigo que o D-1: backfill + `runConsolidate(D+1)` (a régua de D+1, P1-54). O D-1 pendente numa janela roda o `runFechamento` inteiro (logoffs, intervalos, saída da nota), como o coletor do P0-13 já fazia.
+  2. **Não muda a agenda** (P0-12): nenhum horário novo de chamada à EDP. Em dia normal a recuperação não faz requisição nenhuma. `WPA_COLETA=remota` não recupera (quem coleta é o coletor); `0` em qualquer das duas variáveis desliga.
+  3. **Dia com 0 equipes** (a EDP devolvendo "Nenhum dado encontrado", P0-10) e dia com setor falhando **não são carimbados**; falha para a rodada (os outros dias também falhariam).
+  4. **1ª execução depois do deploy:** sem `dias_fechados` no banco, os dias da janela até D-2 são dados como fechados (e o D-1, se o `fechamento_ok` já o cobre). Decisão de volume (P0-11): não rebuscar 7 dias na EDP sem ninguém pedir. **Consequência:** buraco anterior ao deploy não é recuperado sozinho — os de 02 a 09/11 foram refeitos à mão.
+  5. **Relay automático no PC** (`scripts/relay-wpa/relay_auto.ps1`, `instalar_auto.ps1`, `instalar_auto.bat`): chave SSH dedicada sem senha, cadastrada na VM com `restrict,port-forwarding,permitlisten="localhost:3128",command="/bin/false"` (manual §9.7.2); atalho na pasta Inicializar do usuário (sem administrador); proxy e túnel escondidos, reconexão a cada 30 s, log em `relay.log`. `-Remover` desfaz.
+- **O que NÃO resolve:** o PC do José ligado e a VPN conectada continuam sendo necessários (a VPN pede login). Isso só sai com a TI (manual, Método B — saída da VM pela rede da Engelmig — ou §9.7, relay em servidor interno) ou com a liberação de IP pela EDP (Método A). VPN na VM (Método E) foi reavaliada em 09/11 e segue descartada: troca o PC por senha + MFA pessoais em produção.
+- **Limitações conhecidas:**
+  - Recuperação de dia mais antigo que o D-1 não refaz logoffs/intervalos/saída da nota daquele dia (o `runSyncLogoffs` cobre D-1 e D-2; além disso, é manual).
+  - Volume: um dia útil refeito ≈ 2.000 requisições. Uma semana de relay caído volta em ~2 dias (4 rodadas/dia).
+  - O risco contratual do relay (P0-9: sair pelo IP corporativo contorna o bloqueio do IP da VM) segue aberto; este item só o torna mais estável.
+- **Critério de aceite:**
+  - [x] `test/recuperarDias.test.js` (11 testes): pendentes em ordem crescente, D-1 só depois das 05h, semeadura, limite por rodada, 0 equipes e falha sem carimbo, `remota`/`0` sem EDP, backfill manual carimba.
+  - [ ] Deploy na VM; no log, `recuperacao_semeada` na 1ª janela e nenhuma `recuperacao_pendente` em dia normal.
+  - [ ] Relay automático instalado no PC; depois de um logon, `ss -ltn | grep 3128` na VM mostra o túnel sem o José abrir nada.
+  - [ ] Na próxima queda do relay: `recuperacao_pendente` → `recuperacao_ok` no log e `team_daily_totals` do dia preenchido sem clique.
+- **Esforço:** feito (~3h).
+- **Rollback:** `WPA_RECUPERA_MAX_DIAS=0` no `.env` + restart (regra 4) desliga a recuperação sem revert; ou `git revert` do commit. No PC: `instalar_auto.ps1 -Remover` e apagar na VM a linha `relay-wpa-auto` do `~/.ssh/authorized_keys`. O carimbo `dias_fechados` pode ficar.
+- **Depende de / relacionado:** P0-9 (relay), P0-12 (janelas), P0-13 (coletor; `fechamento_ok` mantido), P1-54 (ordem de consolidação), P0-11 (volume), P0-1 (bus factor).
 
 ## P0-1c — Excluir usuário (excluir = ocultar)
 
