@@ -3762,7 +3762,10 @@ router.post('/admin/backfill', async (req, res) => {
     if (!c) return res.status(503).json({ ok: false, error: 'cronService indisponível neste ambiente' });
     const r = await c.runBackfillDia(date);
     if (!r.ok) return res.json({ ok: false, msg: 'Nenhuma equipe encontrada para essa data', date });
-    res.json(r);
+    // 10/11/2026 (P0-16): o botão refazia só a produção. Agora também os
+    // intervalos e a saída da nota do dia (só se o dia já fechou).
+    const derivados = await c.runDerivadosDoDia(date);
+    res.json({ ...r, derivados });
   } catch (err) {
     if (err.falhas) return res.status(502).json({ ok: false, date, code: err.code, error: err.message });
     console.error('[BACKFILL] Erro:', err.message);
@@ -3835,8 +3838,18 @@ router.post('/admin/backfill/range', async (req, res) => {
         console.warn(`[BACKFILL-RANGE] ${date}: runClassifyNewNotes falhou: ${err.message}`)
       );
 
+      // 10/11/2026 (P0-16): rejeições antes de consolidar, como no runBackfillDia.
+      // Falha de caminho derruba o dia (cai no catch abaixo, dia não gravado como ok).
+      const { runClassifyRejections } = require('../services/cronService');
+      const { ehFalhaDeCaminho } = require('../services/wpaErros');
+      await runClassifyRejections(teams).catch(err => {
+        if (ehFalhaDeCaminho(err)) throw err;
+        console.warn(`[BACKFILL-RANGE] ${date}: runClassifyRejections falhou: ${err.message}`);
+      });
+
       const c = cron();
       if (c) await c.runConsolidate(date);
+      if (c) await c.runDerivadosDoDia(date);   // P0-16: intervalos + saída da nota
 
       const concluidas = teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0);
       console.log(`[BACKFILL-RANGE] ${date}: ${teams.length} equipes, ${concluidas} concluídas`);

@@ -1814,6 +1814,7 @@ async function runRecuperarDias({ exceto = [], agora = Date.now() } = {}) {
           // runBackfillDia consolida com o passe do próprio dia, que subconta;
           // o passe de D+1 regrava o dia com a régua certa (P1-54).
           await runConsolidate(_diaMais(dia, 1));
+          await runDerivadosDoDia(dia, agora);   // P0-16: intervalos e saída da nota do dia
           log.info('recuperacao_ok', { date: dia, teams: r.teams });
         }
       } catch (err) {
@@ -1873,6 +1874,22 @@ async function runBackfillDia(date) {
     console.warn(`[BACKFILL] runClassifyNewNotes falhou (não crítico): ${err.message}`)
   );
 
+  // 10/11/2026 (P0-16): as rejeições do dia. Só o snapshot ao vivo chamava
+  // runClassifyRejections; dia fechado por backfill ficava sem linha em
+  // note_rejections. Tela do José de 10/11 (aba Rejeições, Guarapari): zero de
+  // 19/10 em diante, com ~5.080 rejeitadas nos snapshots sem registro. ANTES de
+  // consolidar: a regra "rejeitada > concluída" lê note_rejections (P1-15/P1-16).
+  // Só busca na EDP as que ainda não estão no banco. Falha de caminho no meio
+  // derruba o dia (não consolida nem carimba — a recuperação refaz); outra falha
+  // é de uma nota só e já é tratada lá dentro.
+  await runClassifyRejections([...teams]).catch(err => {
+    if (ehFalhaDeCaminho(err)) {
+      err.falhas = err.falhas || [{ sector: null, code: err.code || null, msg: err.message, caminho: true }];
+      throw err;
+    }
+    console.warn(`[BACKFILL] runClassifyRejections falhou (não crítico): ${err.message}`);
+  });
+
   // Consolida ao final para garantir apenas concluídas nos totais históricos
   await runConsolidate(date);
 
@@ -1893,6 +1910,24 @@ async function runBackfillDia(date) {
  * do logoff — 40,6% das sessões, diag do P0-11), depois logoffs de D-1/D-2,
  * intervalos e saída da nota (que lê os dois anteriores). Era 03:00/03:10/04:30.
  */
+/**
+ * O que o fechamento das 05h faz DEPOIS do backfill do D-1, para um dia
+ * qualquer: intervalos da sessão (1 requisição por sessão) e saída da nota
+ * (banco local + GSEQ, sem EDP).
+ *
+ * 10/11/2026 (P0-16): a recuperação (P0-14) e o botão de backfill do admin só
+ * rodavam runBackfillDia — `sessao_intervalo` e `saida_nota` ficaram sem linha
+ * de 29/10 a 09/11/2026 (e em 19–26/10). Só para dia já fechado: com o plantão
+ * aberto os intervalos ainda mudam. Nunca lança.
+ */
+async function runDerivadosDoDia(date, agora = Date.now()) {
+  if (process.env.DATA_MODE === 'mock') return { ok: false, motivo: 'mock' };
+  if (!diaFechavel(date, agora)) return { ok: false, motivo: 'dia_aberto' };
+  await runSyncIntervalos(date).catch(err => log.error('derivados_intervalos_falhou', { date, code: err.code || null, msg: err.message }));
+  await runSaidaNota(date);
+  return { ok: true, date };
+}
+
 async function runFechamento({ recuperar = true } = {}) {
   const ontem = dateBRTMinusDays(1);
   try {
@@ -2177,6 +2212,7 @@ module.exports = {
   // P0-14: recuperação automática de dias sem fechamento.
   runRecuperarDias, diasPendentes, diaFechavel, DIAS_FECHADOS_SETTING,
   runTunelVoltou, _comColeta,   // P0-15: vigia do túnel
+  runDerivadosDoDia,            // P0-16: intervalos + saída da nota de um dia
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,
