@@ -3890,6 +3890,41 @@
       box.style.display = 'flex';
     }
 
+    // 09/11/2026 (P0-15): motivo curto da falha de caminho até a EDP (coleta_em.falha).
+    function _motivoCaminho(code) {
+      return ({
+        WPA_PROXY_INDISPONIVEL: 'Túnel até a EDP fora do ar',
+        WPA_PROXY_SEM_ROTA: 'Relay sem acesso à EDP',
+        WPA_PROXY_RECUSOU: 'Relay recusou a conexão',
+        WPA_IP_BLOQUEADO: 'EDP recusando o nosso IP',
+      })[code] || 'Sem acesso à EDP';
+    }
+
+    /**
+     * Faixa vermelha acima dos cards quando a coleta inteira está parada por falta
+     * de caminho até a EDP. Roda DEPOIS do renderColetaAlerta e soma à faixa dele.
+     */
+    function renderColetaCaminho(ce) {
+      const box = document.getElementById('coleta-alerta');
+      if (!box || !ce || !ce.falha) return;
+      const desde = _horaCurta(ce.falha.desde);
+      const linha = `<div><strong>Coleta da EDP parada</strong>${desde ? ` desde <strong>${escapeHtml(desde)}</strong>` : ''}: `
+        + `${escapeHtml(_motivoCaminho(ce.falha.code).toLowerCase())}.`
+        + ' <span class="coleta-detalhe">Equipes em campo e andamento não atualizam até o acesso voltar. '
+        + 'A produção dos dias perdidos é recuperada sozinha quando ele voltar.</span>'
+        + `<span class="coleta-motivo">${escapeHtml(String(ce.falha.code || ''))}</span></div>`;
+      const jaVisivel = box.style.display !== 'none' && box.lastElementChild;
+      if (jaVisivel) {
+        box.lastElementChild.insertAdjacentHTML('afterbegin', linha);
+        box.className = 'coleta-alerta';
+        box.firstElementChild.textContent = '⚠';
+      } else {
+        box.className = 'coleta-alerta';
+        box.innerHTML = `<span class="coleta-icone">⚠</span><div>${linha}</div>`;
+        box.style.display = 'flex';
+      }
+    }
+
     // ── GRÁFICOS DE PRODUTIVIDADE ─────────────────────────────────────────────
 
     /** Inicializa filtros da aba Gráficos com datas do mês corrente */
@@ -7842,6 +7877,7 @@ ${acumuladoHTML}
         // não diz nada sobre ele; por isso só vale no live (P1-39).
         _lastColeta = hist ? null : (res.coleta || null);
         renderColetaAlerta(_lastColeta);
+        if (!hist) renderColetaCaminho(res.coleta_em);   // P0-15: coleta parada por falta de caminho
         // 28/10/2026 (P0-12): o painel não busca mais na EDP — mostra DE QUANDO é
         // a coleta servida (janelas 08/12/17h) e quando vem a próxima.
         document.getElementById('sync-label').textContent = hist
@@ -9960,7 +9996,10 @@ ${acumuladoHTML}
       if (!ce) return new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
       const hm = (iso) => iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : null;
       const prox = hm(ce.proxima);
-      const base = ce.em ? `Coleta das ${hm(ce.em)}` : 'Sem coleta hoje';
+      let base = ce.em ? `Coleta das ${hm(ce.em)}` : 'Sem coleta hoje';
+      // 09/11/2026 (P0-15): com a coleta parada por falta de caminho até a EDP, diz
+      // o motivo. Antes era só "Sem coleta hoje" (relay caído 08–09/11, ninguém soube).
+      if (ce.falha) base = `${_motivoCaminho(ce.falha.code)} desde ${_horaCurta(ce.falha.desde) || '?'}` + (ce.em ? ` · última coleta ${hm(ce.em)}` : '');
       // P0-13: coletor de fora sem batimento há 5 min = desligado; a próxima não vem.
       if ('coletor' in ce && (!ce.coletor || Date.now() - Date.parse(ce.coletor.ts) > 5 * 60 * 1000)) {
         return `${base} · coletor desligado`;

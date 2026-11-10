@@ -36,6 +36,7 @@
 | P0-12 | Coleta da EDP em **janelas fixas** (08h, 12h, 17h + fechamento D-1 às 05h); painel só lê o banco, botão de atualizar para admin | Ops/Contrato | **passos 2–5 no código (28/10)** — agenda em janelas, boot sem coleta, painel só banco, botão admin; falta a paridade (passo 1, precisa de acesso à EDP) e o deploy |
 | P0-13 | **Coletor da EDP fora da VM**: executável (pasta com `iniciar.bat` + node.exe) na máquina do José, na rede que a EDP aceita, grava no Postgres da VM por túnel SSH; VM com `WPA_COLETA=remota` | Ops/Contrato | **bloqueado pela EDP** (29/10/2026) — coletor funciona, mas a EDP responde 200 "Nenhum dado encontrado." para o nosso cliente; depende de conversa com a EDP |
 | P0-14 | **Coleta parava até alguém ligar o relay e clicar no backfill** (relay caído de 08/11 19h a 09/11 23h: 08/11 parcial, 09/11 vazio) — recuperação automática dos dias sem fechamento + relay que sobe sozinho no logon do Windows | Ops/Dados | **código done e no ar na VM** (`9f818ad`, 09/11/2026) — relay automático instalado no PC do José (09/11, túnel de pé); falta ver o túnel subir sozinho depois de um logon e a 1ª recuperação real no log |
+| P0-15 | **Túnel caído era invisível**: painel só dizia "Sem coleta hoje", ninguém era avisado, e com o túnel de volta a coleta só vinha na janela seguinte. De quebra, o `/health` respondia 503 quase o dia todo desde as janelas fixas (regra antiga de "snapshot < 30 min") | Ops | **código done** (09/11/2026) — vigia do túnel, faixa com o motivo no painel, aviso no Teams e `/health` no modelo de janelas; commitado em 10/11, falta o deploy, o José criar o webhook do Teams (`WATCHDOG_TEAMS_WEBHOOK`) e ver uma queda real |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -6092,6 +6093,15 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
      - **1ª leitura, só banco (28/10/2026), régua D+1:** as **3 janelas sozinhas perdem ~10%** da produção — 13/10: 963 contra 1.056 do ao vivo; 14/10: 999 contra 1.107. É o `Concluded[]` do V2 rodando ao longo do dia (P1-13). Ou seja, **o modelo novo só fecha se o backfill das 05h recuperar esses ~10%**, e é isso que a rodada com rede mede.
      - **Achado lateral, não investigado (ver P1-53, 28/10):** a TABELA de 14/10 (1.249) está **142 acima** da régua ao vivo de hoje (1.107); a de 13/10 (1.039) está 17 abaixo (1.056). Pode ser `note_rejections` que mudou depois da consolidação, ou reparo monotônico (P0-7). Conferir com `scripts/verify-consolidacao.js` antes de usar a TABELA como referência.
      - **Falta:** proxy no ar → `node scripts/diag-paridade-backfill.js 2026-10-07 2026-10-09` → anotar aqui. Dias escolhidos porque a régua usa os snapshots ao vivo de D até D+2, e os de 16 a 18/10 estão zerados pelo P0-10.
+     - **Rodado em 09/11/2026 ~23h40 BRT** (relay no ar, 3.475 requisições à EDP, só leitura; detalhe em `logs/paridade-2026-10-07-2026-10-09.json`). **A paridade NÃO fecha — o modelo novo conta MAIS que o ao vivo:**
+
+       | Dia | TABELA | AO VIVO | BACKFILL | JANELAS (modelo novo) | JANELAS − AO VIVO |
+       |---|---|---|---|---|---|
+       | 07/10 | 1050 | 1050 | 1099 | 1132 | +82 (+7,8%) |
+       | 08/10 | 1008 | 1008 | 1036 | 1064 | +56 (+5,6%) |
+       | 09/10 | 955 | 953 | 1049 | 1098 | +145 (+15,2%) |
+
+       O que o relatório mostra, **sem causa confirmada**: (a) notas do plantão concluídas depois da meia-noite, que o backfill lança no dia do turno e o ao vivo não via (amostra: EPGPR30/EPGPR32 em 09/10 com conclusão em 10/10 00h–03h); (b) ~8–10 equipes por dia que só existem no backfill — ETCIT19 (0 → 22), ETGPR22 (0 → 13), ECLJA73 (0 → 9) — e que não têm nenhuma linha em `snapshots` nem em `team_daily_totals` antes de 16/10; (c) logon/logoff divergem em ~25% das equipes (sessão dividida em duas no backfill?); (d) JANELAS > BACKFILL em todos os dias, ou seja, a união dos dois caminhos soma mais que cada um. **Não investigado:** se (b) é equipe que a coleta ao vivo perdia ou nota contada a mais, e se (d) é dupla contagem. A hipótese de que "as 3 janelas perdem ~10% e o fechamento recupera" não se confirmou — o desvio é para cima. **Regra 7: antes de tratar o número novo como oficial, cada diferença precisa de causa.** O modelo de janelas está em produção desde 29/10, então os dias desde então já seguem a régua nova.
   2. **Agenda nova** no `cronService.js`: snapshot completo às 08:00, 12:00 e 17:00 BRT, com as caudas (classificação, detalhes, rejeições), escala e notas devolvidas **dentro** da janela. Às 05:00: backfill do D-1 pelo `getTeamsByDate`, `sync-logoffs`, intervalos, saída da nota, e consolidação do D-1. Os jobs de hora em hora e o snapshot de 15 min saem. O token só faz login dentro das janelas.
   3. **Boot sem coleta**: religar o processo não dispara snapshot. Coleta só na janela ou pelo botão.
   4. **Painel só lê o banco**: `/api/teams` serve o último snapshot gravado, nunca a EDP, com o horário da coleta na resposta. O front mostra "atualizado às HH:MM".
@@ -6184,6 +6194,7 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   5. **Relay automático no PC** (`scripts/relay-wpa/relay_auto.ps1`, `instalar_auto.ps1`, `instalar_auto.bat`): chave SSH dedicada sem senha, cadastrada na VM com `restrict,port-forwarding,permitlisten="localhost:3128",command="/bin/false"` (manual §9.7.2); atalho na pasta Inicializar do usuário (sem administrador); proxy e túnel escondidos, reconexão a cada 30 s, log em `relay.log`. `-Remover` desfaz.
 - **O que NÃO resolve:** o PC do José ligado e a VPN conectada continuam sendo necessários (a VPN pede login). Isso só sai com a TI (manual, Método B — saída da VM pela rede da Engelmig — ou §9.7, relay em servidor interno) ou com a liberação de IP pela EDP (Método A). VPN na VM (Método E) foi reavaliada em 09/11 e segue descartada: troca o PC por senha + MFA pessoais em produção.
 - **Limitações conhecidas:**
+  - **Achado em 10/11/2026 — 08/11 fica PARCIAL e a semeadura o carimba como fechado.** Evidência: `logs/out.log` — o último backfill de 08/11 que concluiu é o manual de `2026-11-08 21:11:22` UTC (**18:11 BRT do próprio dia**, 54 equipes), o fechamento de 09/11 05h começou (`Iniciando para 2026-11-08`) e não concluiu (túnel caído), e não há outro depois; `snapshots` de 08/11 vão só até 19:04 BRT. Em `team_daily_totals`, 08/11 tem 281 notas em 58 equipes. A semeadura (`runRecuperarDias`, 1ª execução) marca hoje−7…hoje−2 como fechados sem conferir: na 1ª janela de 10/11 ela carimba 08/11 e só refaz 09/11. **Ação:** refazer 08/11 pelo backfill do admin (carimba sozinho) — pendente de decisão do José. A semeadura roda uma vez só, então o código não muda; o caso é deste incidente.
   - Recuperação de dia mais antigo que o D-1 não refaz logoffs/intervalos/saída da nota daquele dia (o `runSyncLogoffs` cobre D-1 e D-2; além disso, é manual).
   - Volume: um dia útil refeito ≈ 2.000 requisições. Uma semana de relay caído volta em ~2 dias (4 rodadas/dia).
   - O risco contratual do relay (P0-9: sair pelo IP corporativo contorna o bloqueio do IP da VM) segue aberto; este item só o torna mais estável.
@@ -6195,6 +6206,33 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
 - **Esforço:** feito (~3h).
 - **Rollback:** `WPA_RECUPERA_MAX_DIAS=0` no `.env` + restart (regra 4) desliga a recuperação sem revert; ou `git revert` do commit. No PC: `instalar_auto.ps1 -Remover` e apagar na VM a linha `relay-wpa-auto` do `~/.ssh/authorized_keys`. O carimbo `dias_fechados` pode ficar.
 - **Depende de / relacionado:** P0-9 (relay), P0-12 (janelas), P0-13 (coletor; `fechamento_ok` mantido), P1-54 (ordem de consolidação), P0-11 (volume), P0-1 (bus factor).
+
+## P0-15 — Túnel caído era invisível (painel, alerta e retomada)
+
+- **Categoria:** Ops
+- **Status:** **código done e commitado** (09–10/11/2026), **não está no ar**. Falta: deploy (regra 4); o José criar o webhook do Teams e pôr em `WATCHDOG_TEAMS_WEBHOOK` no `.env`; ver uma queda real do túnel de ponta a ponta. O envio ao Teams **não foi testado contra um webhook de verdade** (não há um configurado; o Fortinet pode barrar a saída) e a faixa do painel **não foi vista no navegador** (só sintaxe + teste de fonte).
+- **Fonte:** José, 09/11/2026, depois do P0-14: pediu (1) coletar assim que o túnel voltar, (2) aviso de túnel caído, (3) faixa no painel com o motivo, (4) rodar a paridade do P0-12 (resultado no P0-12).
+- **Evidência:**
+  - Tela do José de 09/11 23:31 (Guarapari): "Sem coleta hoje · próxima 08:00", 0 em campo, "Nenhuma equipe encontrada" — sem dizer que o túnel estava caído desde 08/11 19h. A faixa `coleta-alerta` (P1-39) depende de `outColeta.report.failed`, e o painel `soGuardado` (P0-12) não tenta nada, então nunca há `failed`.
+  - `logs/out.log`: as janelas de 09/11 falharam com `WPA_PROXY_INDISPONIVEL` e nada foi enviado a ninguém. `scripts/watchdog.sh` (P1-1) nunca foi ligado (sem crontab, sem webhook).
+  - `server.js` (`/health`): `emHorarioOperacional && ageMin > 30` → degradado. Com snapshot só às 08h, 12h e 17h (P0-12), isso dá 503 das 06h às 20h fora dos 30 min seguintes a cada janela. Ligar o watchdog assim alertaria o dia inteiro.
+  - Túnel que volta às 09h só era usado na janela das 12h.
+- **O que foi feito:**
+  1. `services/caminhoEdp.js`: um estado só, `coleta_caminho` (`app_settings` + memória): `{ code, desde, ts, rotina }` enquanto a coleta falha por falta de **caminho** (`CODIGOS_CAMINHO` do `wpaErros`). Abre no snapshot/fechamento/recuperação que falha (`cronService`), fecha no 1º snapshot ou backfill que dá certo.
+  2. **Vigia do túnel** (`cronService.startCron`, só `WPA_COLETA=local` com `WPA_PROXY`): com falha em aberto, testa o túnel a cada `WPA_TUNEL_VIGIA_MS` (60 s): primeiro a porta **local** e, com ela de pé, um **CONNECT pelo relay** até o host da Web API (`wpaHttp.testarConnectProxy`; não é requisição HTTP à EDP — com 200, o relay abre um TCP até ela e fechamos). **Corrigido em 10/11/2026:** a 1ª versão testava só a porta, e no fechamento das 05h de 10/11 a porta `127.0.0.1:3128` aceitava com o relay mudo atrás dela ("sem resposta ao CONNECT em 10s" nos 4 setores) — o vigia diria "de pé". Dentro dos 30 min da última tentativa o vigia nem testa. Coleta do vigia pulada por outra em curso (`_comColeta`) não consome a tentativa (10/11/2026). CONNECT com 200 → `runTunelVoltou`: a janela de hoje que ficou sem coleta (`janelaPendente` do coletor, P0-13), que no fim roda a recuperação do P0-14; sem janela pendente, só a recuperação. No máximo 1 tentativa a cada 30 min. Janela, fechamento e vigia passam por `_comColeta` (uma por vez).
+  3. **Painel:** `/api/teams` devolve `coleta_em.falha`; o rótulo vira "Túnel até a EDP fora do ar desde HH:MM · última coleta HH:MM · próxima HH:MM" e a faixa vermelha acima dos cards diz que a coleta está parada e por quê (`renderColetaCaminho`, `public/index.html`).
+  4. **Aviso:** 1 mensagem no Teams quando a falha abre e 1 quando fecha (`alertarTeams`, `WATCHDOG_TEAMS_WEBHOOK` — o mesmo nome do `watchdog.sh`). Sem webhook, não envia; painel e log avisam igual.
+  5. **`/health` no modelo de janelas** (`caminhoEdp.avaliarSaude`): degradado se há falha de caminho em aberto, ou se a última janela de hoje passou há 45 min e o último snapshot é anterior a ela.
+- **Limitações conhecidas:**
+  - Sem `WPA_PROXY` (saída direta) não há vigia: não existe teste local barato. A próxima janela tenta.
+  - Túnel que volta de madrugada (antes das 05h, sem janela pendente): a falha só fecha no fechamento das 05h — até lá o painel e o `/health` seguem dizendo "parada".
+  - Janela que falha por outro motivo (EDP 5xx, conta) não é retomada pelo vigia.
+- **Critério de aceite:**
+  - [x] `test/caminhoEdp.test.js` (21 testes) + `testarConnectProxy` em `test/wpaProxy.test.js` (200 vale; relay mudo, 502 e porta fechada não): transições, alerta só na transição, vigia (30 min, sem falha não age), `/health` por janela, payload do Teams, ganchos na fonte.
+  - [ ] Deploy; `/health` 200 fora de janela em dia normal.
+  - [ ] Queda real: faixa vermelha no painel, mensagem no Teams, e `tunel_voltou` → `snapshot_saved` no log quando o túnel voltar, sem esperar a janela.
+- **Esforço:** feito (~3h). **Rollback:** `WPA_TUNEL_VIGIA_MS=0` desliga o vigia; `WATCHDOG_TEAMS_WEBHOOK` vazio desliga o aviso; ou `git revert`.
+- **Relacionado:** P0-14 (recuperação), P0-9 (relay), P0-12 (janelas), P1-1 (watchdog), P1-39 (faixa por regional).
 
 ## P0-1c — Excluir usuário (excluir = ocultar)
 

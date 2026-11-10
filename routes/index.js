@@ -688,6 +688,10 @@ router.get('/teams', async (req, res) => {
         em: maisAntiga ? new Date(maisAntiga).toISOString() : null,   // null = nenhuma coleta hoje (ou setor sem)
         proxima: c ? new Date(c.proximaJanela()).toISOString() : null,
       };
+      // 09/11/2026 (P0-15): por que não há coleta — { code, desde, rotina } enquanto
+      // a coleta falha por falta de caminho até a EDP (túnel do relay, IP bloqueado).
+      const falha = require('../services/caminhoEdp').falhaAtual();
+      if (falha) coletaEm.falha = falha;
       // P0-13: último batimento do coletor de fora (1/min). Só com WPA_COLETA=remota.
       if (c && c.modoColeta() === 'remota') {
         const sqVivo = sbq();

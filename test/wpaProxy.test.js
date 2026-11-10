@@ -148,6 +148,38 @@ test('testarPortaProxy: aceita quando há proxy, recusa quando não há', async 
   assert.equal(nao.erro, 'ECONNREFUSED');
 });
 
+// 10/11/2026 (P0-15): às 05h a porta do túnel aceitava e o relay estava mudo.
+test('testarConnectProxy: ok só com 200 no CONNECT; mudo, 502 e porta fechada não valem', async () => {
+  const url = `http://127.0.0.1:${proxyPort}`;
+  const ok = await wpaHttp.testarConnectProxy(url, `${HOST_EDP}:443`, 1000);
+  assert.equal(ok.ok, true);
+  assert.equal(connects.length, 0);   // fechou sem mandar byte nenhum pelo túnel
+
+  modo = 'sem-rota';
+  const semRota = await wpaHttp.testarConnectProxy(url, `${HOST_EDP}:443`, 1000);
+  assert.equal(semRota.ok, false);
+  assert.equal(semRota.status, 502);
+  assert.equal(connects[0].alvo, `${HOST_EDP}:443`);
+
+  modo = 'fecha';
+  assert.equal((await wpaHttp.testarConnectProxy(url, `${HOST_EDP}:443`, 1000)).ok, false);
+
+  // Aceita o TCP e nunca responde — a porta "está de pé" e o túnel não.
+  const presos = [];
+  const mudo = net.createServer((s) => { presos.push(s); s.on('error', () => {}); });
+  await new Promise(r => mudo.listen(0, '127.0.0.1', r));
+  try {
+    const m = `http://127.0.0.1:${mudo.address().port}`;
+    assert.equal((await wpaHttp.testarPortaProxy(m, 1000)).ok, true);
+    const r = await wpaHttp.testarConnectProxy(m, `${HOST_EDP}:443`, 300);
+    assert.equal(r.ok, false);
+    assert.match(r.erro, /sem resposta ao CONNECT/);
+  } finally {
+    presos.forEach(s => s.destroy());
+    await new Promise(r => mudo.close(r));
+  }
+});
+
 test('URL http (testes locais) nunca passa pelo proxy', async () => {
   const srv = http.createServer((req, res) => res.end('{}'));
   await new Promise(r => srv.listen(0, '127.0.0.1', r));

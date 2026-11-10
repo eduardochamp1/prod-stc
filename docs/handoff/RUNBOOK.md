@@ -519,6 +519,25 @@ psql -d wpa_monitor -c "select data->'dias' from app_settings where key='dias_fe
 - Túnel caído: `node scripts/check-wpa.js`. No PC do José, `relay.log` na pasta
   do relay (manual de acesso, seção 9.4).
 
+### Túnel do relay caído — o que o sistema faz sozinho (P0-15, 09/11/2026)
+
+- **Painel:** faixa vermelha "Coleta da EDP parada desde HH:MM" e o motivo no
+  rótulo do topo. **Teams:** 1 mensagem quando cai e 1 quando volta, se
+  `WATCHDOG_TEAMS_WEBHOOK` estiver no `.env`. **`/health`:** 503 com o motivo.
+- **Quando o túnel volta:** em até 1 min o vigia roda a janela perdida de hoje
+  (e a recuperação dos dias sem fechamento). Não precisa clicar.
+
+```bash
+grep -E 'caminho_(caiu|voltou)|tunel_voltou|coleta_pulada_em_curso' ~/prod-stc/logs/out.log | tail
+psql -d wpa_monitor -c "select data from app_settings where key='coleta_caminho'"
+curl -s localhost:3002/health
+```
+
+- Faixa "parada" com o túnel de pé: a falha só fecha quando uma coleta chega à
+  EDP. De madrugada, isso é o fechamento das 05h; de dia, a tentativa do vigia
+  (1 a cada 30 min). Para forçar: botão "Buscar da EDP agora" do admin.
+- Desligar o vigia: `WPA_TUNEL_VIGIA_MS=0` + restart (regra 4).
+
 
 > ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**
 > Em 09/07/2026 um backfill como `for d in $(seq 0 60); do node -e ...; done`

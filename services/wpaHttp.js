@@ -123,6 +123,37 @@ function testarPortaProxy(proxyUrl, timeoutMs = 3000) {
   });
 }
 
+/**
+ * Pede ao proxy um CONNECT até `destino` (host:porta da EDP) e fecha — diz se o
+ * túnel REPASSA, não só se a porta local aceita. Nunca lança.
+ *
+ * 10/11/2026 (P0-15): no fechamento das 05h de 10/11 a porta 127.0.0.1:3128
+ * aceitava conexão (o sshd da VM segura a porta do túnel reverso) e o relay atrás
+ * dela estava mudo — "sem resposta ao CONNECT em 10s" nos 4 setores. O
+ * testarPortaProxy diria "de pé". Aqui só vale `ok` com 200 no CONNECT. Não é
+ * requisição HTTP à EDP: com 200, o relay abriu um TCP até ela e nós fechamos.
+ * @returns {Promise<{ok:boolean, endereco:string, status?:number, erro?:string}>}
+ */
+function testarConnectProxy(proxyUrl, destino, timeoutMs = 5000) {
+  let u;
+  try { u = new URL(proxyUrl); } catch { return Promise.resolve({ ok: false, endereco: String(proxyUrl), erro: 'URL inválida' }); }
+  const endereco = `${u.hostname}:${u.port || 80}`;
+  return new Promise((resolve) => {
+    let fechado = false;
+    const req = http.request({ host: u.hostname, port: u.port || 80, method: 'CONNECT', path: destino, headers: { Host: destino } });
+    const fim = (r) => { if (fechado) return; fechado = true; req.destroy(); resolve({ endereco, ...r }); };
+    req.setTimeout(timeoutMs, () => fim({ ok: false, erro: `sem resposta ao CONNECT em ${timeoutMs / 1000}s` }));
+    req.once('error', (e) => fim({ ok: false, erro: e.code || e.message }));
+    req.once('connect', (res, socket) => {
+      socket.destroy();
+      fim(res.statusCode === 200 ? { ok: true, status: 200 } : { ok: false, status: res.statusCode, erro: `CONNECT respondeu ${res.statusCode}` });
+    });
+    // Proxy que responde ao CONNECT como requisição comum (não é um proxy CONNECT).
+    req.once('response', (res) => { res.resume(); fim({ ok: false, status: res.statusCode, erro: `CONNECT respondeu ${res.statusCode}` }); });
+    req.end();
+  });
+}
+
 let _agente = null;   // { url, agent } — recriado só se WPA_PROXY mudar
 
 /** Lido a cada chamada, como o User-Agent. undefined = sem proxy (direto). */
@@ -191,4 +222,4 @@ function wpaHttpFetch(url, opts = {}) {
   }).catch((err) => { throw _comoErroWpa(err, url); })));
 }
 
-module.exports = { wpaHttpFetch, wpaUserAgent, agenteWpa, testarPortaProxy, WpaProxyAgent, PROXY_CONNECT_MS, WPA_USER_AGENT_PADRAO };
+module.exports = { wpaHttpFetch, wpaUserAgent, agenteWpa, testarPortaProxy, testarConnectProxy, WpaProxyAgent, PROXY_CONNECT_MS, WPA_USER_AGENT_PADRAO };

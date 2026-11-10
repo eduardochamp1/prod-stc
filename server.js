@@ -132,14 +132,23 @@ app.get('/health', async (_req, res) => {
     if (last) {
       const ageMin = Math.round((Date.now() - last.getTime()) / 60000);
       out.last_snapshot_min = ageMin;
-      const horaBRT = (new Date(Date.now() - 3 * 3600 * 1000)).getUTCHours();
-      const emHorarioOperacional = horaBRT >= 6 && horaBRT < 20;
-      if (emHorarioOperacional && ageMin > 30) {
-        out.ok = false;
-        out.reason = `último snapshot há ${ageMin}min (esperado <30 em horário operacional)`;
-      }
+      // 09/11/2026 (P0-15): a regra era "snapshot com mais de 30 min entre 06h e
+      // 20h = degradado", do tempo da coleta a cada 15 min. Desde as janelas fixas
+      // (P0-12, 28/10/2026) o snapshot só vem às 08h, 12h e 17h, então o /health
+      // respondia 503 quase o dia inteiro — o watchdog (P1-1) ligado assim
+      // alertaria sem parar. Agora: degradado se há falha de caminho até a EDP em
+      // aberto, ou se a última janela de hoje passou há 45 min e não coletou.
     } else {
       out.last_snapshot_min = null;
+    }
+    if (process.env.DATA_MODE === 'wpa') {
+      const caminhoEdp = require('./services/caminhoEdp');
+      const saude = caminhoEdp.avaliarSaude({
+        ultimoSnapshotMs: last ? last.getTime() : null,
+        janelasH: require('./services/cronService').JANELAS_COLETA_H,
+        falha: caminhoEdp.falhaAtual(),
+      });
+      if (!saude.ok) { out.ok = false; out.reason = saude.reason; }
     }
   } catch (err) {
     out.ok = false;

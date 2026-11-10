@@ -18,6 +18,7 @@ const log                     = require('./logger').forModule('cron');
 // IP bloqueado) para a rotina inteira no ciclo — uma linha de log com o code, e
 // nada gravado por cima. Ver services/wpaErros.js.
 const { ehWpaAccessError, ehFalhaDeCaminho } = require('./wpaErros');
+const caminhoEdp = require('./caminhoEdp');   // 09/11/2026 (P0-15): estado do caminho até a EDP
 
 let tokenJob        = null;
 let snapshotJob     = null;
@@ -294,6 +295,7 @@ async function runSnapshot() {
       log.error('rotina_sem_acesso_edp', { rotina: 'snapshot', code: sectorReport.caminho,
         coletados_descartados: sectorReport.ok, failed: sectorReport.failed.map(f => f.sector) });
       await _recordSnapshotError(new Error(`sem acesso à EDP (${sectorReport.caminho}) — ciclo não gravado`));
+      await caminhoEdp.registrarFalha('snapshot', sectorReport.caminho);   // P0-15: painel, alerta e vigia do túnel
       return; // finally abaixo libera isRunning corretamente
     }
 
@@ -353,6 +355,7 @@ async function runSnapshot() {
     });
     _recordSectorLastOk(sectorReport.ok);   // carimbo por setor (P1-39)
     _clearSnapshotError();   // ciclo deu certo → limpa erro de ciclo antigo
+    caminhoEdp.registrarOk().catch(() => {});   // P0-15: fecha a falha de caminho em aberto
     if (sectorReport.failed.length > 0) {
       log.warn('snapshot_partial', {
         ok: sectorReport.ok, failed: sectorReport.failed, skipped: sectorReport.skipped,
@@ -1815,6 +1818,7 @@ async function runRecuperarDias({ exceto = [], agora = Date.now() } = {}) {
         }
       } catch (err) {
         log.error('recuperacao_falhou', { date: dia, code: err.code || null, msg: err.message });
+        if ((err.falhas || []).some(f => f.caminho)) await caminhoEdp.registrarFalha('recuperacao', err.code);   // P0-15
         break;   // sem caminho ou sem acesso: os outros dias também falhariam
       }
     }
@@ -1876,6 +1880,7 @@ async function runBackfillDia(date) {
   // 09/11/2026 (P0-14): dia refeito com ele já fechado (05h de D+1 em diante)
   // fica carimbado — vale para o fechamento, a recuperação e o botão do admin.
   await _carimbarDiaFechado(date);
+  await caminhoEdp.registrarOk();   // P0-15: o dia veio inteiro da EDP — o caminho está de pé
   return {
     ok: true, date, teams: teams.length,
     concluidas: teams.reduce((s, t) => s + (t.notasConcluidas || []).length, 0),
@@ -1910,7 +1915,10 @@ async function runFechamento({ recuperar = true } = {}) {
       .catch(err => log.warn('fechamento_carimbo_falhou', { msg: err.message }));
   } catch (err) {
     log.error('fechamento_backfill_falhou', { date: ontem, code: err.code || null, msg: err.message });
-    if ((err.falhas || []).some(f => f.caminho)) return;   // sem caminho até a EDP, o resto também falharia
+    if ((err.falhas || []).some(f => f.caminho)) {   // sem caminho até a EDP, o resto também falharia
+      await caminhoEdp.registrarFalha('fechamento', err.code);   // P0-15
+      return;
+    }
   }
   await runSyncLogoffs().catch(err => log.error('fechamento_logoffs_falhou', { msg: err.message }));
   await runSyncIntervalos().catch(err => log.error('fechamento_intervalos_falhou', { msg: err.message }));
@@ -1918,6 +1926,36 @@ async function runFechamento({ recuperar = true } = {}) {
   // 09/11/2026 (P0-14): dias mais antigos que ficaram sem fechamento. O D-1 fica
   // de fora: acabou de ser tentado aqui em cima.
   if (recuperar) await runRecuperarDias({ exceto: [ontem] });
+}
+
+// ── UMA COLETA POR VEZ + VIGIA DO TÚNEL (09/11/2026, P0-15) ──────────────────
+// Janela, fechamento e a coleta disparada pelo vigia do túnel não se sobrepõem:
+// quem chega com outra em curso é pulado (a recuperação do P0-14 cobre o que
+// ficar para trás). Em memória: instances=1 (regra 8).
+let _coletaEmCurso = null;
+async function _comColeta(nome, fn) {
+  if (_coletaEmCurso) { log.warn('coleta_pulada_em_curso', { pulada: nome, emCurso: _coletaEmCurso }); return; }
+  _coletaEmCurso = nome;
+  try { return await fn(); } finally { _coletaEmCurso = null; }
+}
+
+/**
+ * O túnel voltou (ou uma tentativa anterior falhou há 30 min): roda a janela de
+ * hoje que ficou sem coleta — que no fim recupera os dias sem fechamento — ou,
+ * sem janela pendente (ex.: túnel volta às 06h, antes da 1ª janela), só a
+ * recuperação. Mesmas rotinas da agenda; nenhuma chamada nova à EDP.
+ */
+async function runTunelVoltou(agora = Date.now()) {
+  const { janelaPendente } = require('./coletorLocal');
+  let ultimaOk = null;
+  try {
+    const r = await require('../db/queries').getSetting('snapshot_last_ok');
+    ultimaOk = r && r.data && r.data.ts ? Date.parse(r.data.ts) : null;
+  } catch (_) { /* sem carimbo: trata como janela pendente, se alguma já passou */ }
+  const pendente = janelaPendente(agora, ultimaOk, JANELAS_COLETA_H);
+  log.info('tunel_voltou', { janelaPendente: pendente ? new Date(pendente).toISOString() : null });
+  if (pendente) return runJanela();
+  return runRecuperarDias({ agora });
 }
 
 // ── START / STOP ──────────────────────────────────────────────────────────────
@@ -1975,9 +2013,39 @@ function startCron() {
   // (services/coletorLocal.js); aqui ficam só os jobs de banco.
   const remota = modoColeta() === 'remota';
   if (!remota) {
-    snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, () => runJanela(), BRT);
-    const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, () => runFechamento(), BRT);
+    snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, () => _comColeta('janela', () => runJanela()), BRT);
+    const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, () => _comColeta('fechamento', () => runFechamento()), BRT);
     global._extraCronJobs.push(fechamentoJob);
+
+    // 09/11/2026 (P0-15): vigia do túnel. Só com WPA_PROXY (a porta do túnel é
+    // local, testar não custa requisição à EDP) e só age com falha de caminho em
+    // aberto. WPA_TUNEL_VIGIA_MS=0 desliga.
+    const proxy = (process.env.WPA_PROXY || '').trim();
+    const vigiaMs = _envInt(process.env.WPA_TUNEL_VIGIA_MS, 60_000);
+    caminhoEdp.hidratar().then(() => {
+      if (!proxy || vigiaMs === 0 || modoColeta() !== 'local') return;
+      const { comOrigem } = require('./wpaContador');
+      const { testarPortaProxy, testarConnectProxy } = require('./wpaHttp');
+      // 10/11/2026 (P0-15): porta aceitando não basta — às 05h de 10/11 ela
+      // aceitava e o relay não respondia ao CONNECT. Primeiro a porta (local, de
+      // graça); só com ela de pé, um CONNECT até o host da Web API.
+      let destino;
+      try { destino = `${new URL(process.env.WPA_API_URL || 'https://edp-wpa-web-api.azurewebsites.net').hostname}:443`; }
+      catch (_) { destino = 'edp-wpa-web-api.azurewebsites.net:443'; }
+      caminhoEdp.iniciarVigia({
+        intervaloMs: vigiaMs,
+        testarPorta: async () => {
+          const porta = await testarPortaProxy(proxy, 3000);
+          return porta.ok ? testarConnectProxy(proxy, destino, 5000) : porta;
+        },
+        // Devolve false se foi pulada por outra coleta em curso (a tentativa não conta).
+        rodar: () => comOrigem('cron:tunel-voltou', async () => {
+          let rodou = false;
+          await _comColeta('tunel-voltou', () => { rodou = true; return runTunelVoltou(); });
+          return rodou;
+        }),
+      });
+    });
   }
 
   // Só banco, sem EDP — ficam como estavam.
@@ -1999,6 +2067,7 @@ function startCron() {
 }
 
 function stopCron() {
+  caminhoEdp.pararVigia();
   tokenJob?.stop();
   snapshotJob?.stop();
   consolidaJob?.stop();
@@ -2107,6 +2176,7 @@ module.exports = {
   modoColeta, FECHAMENTO_SETTING,   // P0-13: coletor fora da VM
   // P0-14: recuperação automática de dias sem fechamento.
   runRecuperarDias, diasPendentes, diaFechavel, DIAS_FECHADOS_SETTING,
+  runTunelVoltou, _comColeta,   // P0-15: vigia do túnel
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,
