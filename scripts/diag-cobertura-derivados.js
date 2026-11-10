@@ -34,22 +34,22 @@ async function main() {
 
   const medidos = await cobertura.medir(_getPool(), de, ate, { hoje });
   console.log(`\nCobertura por dia · ${de} → ${ate} (só dias fechados)`);
-  console.log('vivo = coletas ao vivo · rej = gravadas/no snapshot · det = concluídas com detalhe/concluídas\n');
+  console.log('vivo = coletas ao vivo · rej = gravadas/no snapshot · det = concluídas com detalhe/concluídas · saida = avaliadas/linhas\n');
   const cab = ['DIA', 'DOW', 'prod', 'vivo', 'rej', 'det', 'interv', 'saida', 'cart', 'notas', 'escala', 'interr'];
-  const larg = [11, 4, 6, 5, 10, 11, 7, 6, 5, 6, 7, 7];
+  const larg = [11, 4, 6, 5, 10, 11, 7, 10, 5, 6, 7, 7];
   const linha = (cols) => cols.map((c, i) => (i < 2 ? String(c).padEnd(larg[i]) : String(c).padStart(larg[i]))).join(' ');
   console.log(linha(cab));
-  console.log('-'.repeat(98));
+  console.log('-'.repeat(102));
   const faltas = [];
   for (const d of medidos) {
     const a = cobertura.avaliarDia(d);
     const marca = a.buracos.length ? ' 🔴' : (a.avisos.length ? ' 🟠' : '');
     console.log(linha([d.dia, DOW[new Date(d.dia + 'T12:00:00Z').getUTCDay()], d.producao, d.coletas_ao_vivo,
       `${d.rej_gravadas}/${d.rej_snapshot}`, `${d.concluidas_com_detalhe}/${d.concluidas}`,
-      d.intervalos, d.saida_nota, d.carteira, d.notas_devolvidas, d.escala, d.interrupcoes]) + marca);
+      d.intervalos, `${d.saida_nota - d.saida_sem_janela}/${d.saida_nota}`, d.carteira, d.notas_devolvidas, d.escala, d.interrupcoes]) + marca);
     if (a.buracos.length || a.avisos.length) faltas.push(a);
   }
-  console.log('-'.repeat(98));
+  console.log('-'.repeat(102));
   if (!faltas.length) { console.log('\n✅ Nenhum dia com falta.\n'); return; }
   const comBuraco = faltas.filter(f => f.buracos.length);
   console.log(`\n🔴 ${comBuraco.length} dia(s) com buraco recarregável · 🟠 ${faltas.length - comBuraco.length} só com aviso (sem retroativo)\n`);

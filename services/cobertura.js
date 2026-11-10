@@ -34,9 +34,12 @@ const REGRAS = [
   { chave: 'intervalos', nivel: 'buraco',
     falta: (d) => d.intervalos === 0,
     texto: () => 'intervalos de sessão: nenhum' },
+  // 10/11/2026: linha existir não basta. Sem o detalhe da nota a avaliação sai
+  // `sem_janela` — em 09/11/2026 eram 818 de 856, com a tabela "preenchida".
   { chave: 'saida_nota', nivel: 'buraco',
-    falta: (d) => d.saida_nota === 0,
-    texto: () => 'saída da nota: nenhuma linha' },
+    falta: (d) => d.saida_nota === 0 || (d.saida_nota >= 20 && d.saida_sem_janela > d.saida_nota * 0.5),
+    texto: (d) => (d.saida_nota === 0 ? 'saída da nota: nenhuma linha'
+      : `saída da nota: ${d.saida_sem_janela} de ${d.saida_nota} sem avaliação (falta o detalhe da nota)`) },
   { chave: 'detalhes', nivel: 'buraco',
     falta: (d) => d.concluidas >= 20 && d.concluidas_com_detalhe < d.concluidas * 0.7,
     texto: (d) => `detalhes de nota: ${d.concluidas_com_detalhe} de ${d.concluidas} concluídas` },
@@ -107,6 +110,7 @@ const SQL_DIA = `
     (SELECT count(*) FROM con c WHERE EXISTS (SELECT 1 FROM note_details d WHERE d.note_id = c.id))::int AS concluidas_com_detalhe,
     (SELECT count(*) FROM sessao_intervalo WHERE data = $1::date)::int AS intervalos,
     (SELECT count(*) FROM saida_nota WHERE data = $1::date)::int AS saida_nota,
+    (SELECT count(*) FROM saida_nota WHERE data = $1::date AND status = 'sem_janela')::int AS saida_sem_janela,
     (SELECT count(*) FROM team_daily_carteira WHERE date = $1::date)::int AS carteira,
     (SELECT count(*) FROM notas_daily_agg WHERE data = $1::date)::int AS notas_devolvidas,
     (SELECT count(*) FROM escala_dia WHERE data = $1::date)::int AS escala,

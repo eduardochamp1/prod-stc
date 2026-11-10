@@ -21,9 +21,9 @@ const cobertura = require('../services/cobertura');
 
 // Linhas medidas em produção em 10/11/2026 (scripts/diag-cobertura-derivados.js).
 const NORMAL_1310 = { dia: '2026-10-13', producao: 1039, coletas_ao_vivo: 77, rej_snapshot: 359, rej_gravadas: 359,
-  concluidas: 1311, concluidas_com_detalhe: 1311, intervalos: 484, saida_nota: 1270, carteira: 127, notas_devolvidas: 133, escala: 679, interrupcoes: 77 };
+  concluidas: 1311, concluidas_com_detalhe: 1311, intervalos: 484, saida_nota: 1270, saida_sem_janela: 68, carteira: 127, notas_devolvidas: 133, escala: 679, interrupcoes: 77 };
 const BACKFILL_0511 = { dia: '2026-11-05', producao: 1202, coletas_ao_vivo: 0, rej_snapshot: 473, rej_gravadas: 0,
-  concluidas: 1172, concluidas_com_detalhe: 0, intervalos: 0, saida_nota: 0, carteira: 0, notas_devolvidas: 0, escala: 621, interrupcoes: 0 };
+  concluidas: 1172, concluidas_com_detalhe: 0, intervalos: 0, saida_nota: 0, saida_sem_janela: 0, carteira: 0, notas_devolvidas: 0, escala: 621, interrupcoes: 0 };
 
 describe('avaliarDia', () => {
   test('dia normal de coleta ao vivo não tem falta', () => {
@@ -46,6 +46,12 @@ describe('avaliarDia', () => {
     assert.ok(!cobertura.avaliarDia({ ...base, rej_snapshot: 477, rej_gravadas: 409 }).chaves.includes('rejeicoes'));
     assert.ok(cobertura.avaliarDia({ ...base, rej_snapshot: 444, rej_gravadas: 8 }).chaves.includes('rejeicoes'));
     assert.ok(!cobertura.avaliarDia({ ...base, rej_snapshot: 5, rej_gravadas: 0 }).chaves.includes('rejeicoes'));
+  });
+
+  test('saída da nota preenchida mas sem avaliação (09/11/2026: 818 de 856 sem_janela) é buraco', () => {
+    const a = cobertura.avaliarDia({ ...NORMAL_1310, saida_nota: 856, saida_sem_janela: 818 });
+    assert.deepEqual(a.chaves, ['saida_nota']);
+    assert.match(a.buracos[0], /818 de 856 sem avaliação/);
   });
 
   test('dia sem produção não é avaliado', () => {
