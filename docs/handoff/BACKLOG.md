@@ -37,6 +37,7 @@
 | P0-13 | **Coletor da EDP fora da VM**: executável (pasta com `iniciar.bat` + node.exe) na máquina do José, na rede que a EDP aceita, grava no Postgres da VM por túnel SSH; VM com `WPA_COLETA=remota` | Ops/Contrato | **bloqueado pela EDP** (29/10/2026) — coletor funciona, mas a EDP responde 200 "Nenhum dado encontrado." para o nosso cliente; depende de conversa com a EDP |
 | P0-14 | **Coleta parava até alguém ligar o relay e clicar no backfill** (relay caído de 08/11 19h a 09/11 23h: 08/11 parcial, 09/11 vazio) — recuperação automática dos dias sem fechamento + relay que sobe sozinho no logon do Windows | Ops/Dados | **código done e no ar na VM** (`9f818ad`, 09/11/2026) — relay automático instalado no PC do José (09/11, túnel de pé); falta ver o túnel subir sozinho depois de um logon e a 1ª recuperação real no log |
 | P0-15 | **Túnel caído era invisível**: painel só dizia "Sem coleta hoje", ninguém era avisado, e com o túnel de volta a coleta só vinha na janela seguinte. De quebra, o `/health` respondia 503 quase o dia todo desde as janelas fixas (regra antiga de "snapshot < 30 min") | Ops | **código done** (09/11/2026) — vigia do túnel, faixa com o motivo no painel, aviso no Teams e `/health` no modelo de janelas; commitado em 10/11, falta o deploy, o José criar o webhook do Teams (`WATCHDOG_TEAMS_WEBHOOK`) e ver uma queda real |
+| P0-16 | **O backfill só grava a produção.** Rejeições, detalhes de nota, intervalos, saída da nota, interrupções, carteira e notas devolvidas só vinham do snapshot ao vivo/fechamento — de 20/10 a 09/11/2026 os dias foram preenchidos por backfill e essas tabelas ficaram vazias sem ninguém ver | Dados/Contrato | **pending** (achado em 10/11/2026) — só diagnóstico; falta decidir código, recarga (volume na EDP) e o radar de cobertura |
 | P1-1 | Alerta ativo (watchdog + Teams) | Ops | **script done** (e4dc4c8) — falta config humana (webhook+crontab) |
 | P1-2 | `/health` real (mover antes de catch-all + SELECT 1) | Ops | **done** (bbc5129, 08/07) |
 | P1-3 | `snapshot_last_ok` em `app_settings` | Ops | **done** (e4dc4c8, 08/07) |
@@ -6233,6 +6234,43 @@ salvou não foi ter previsto, foi o `--dry-run` existir.
   - [ ] Queda real: faixa vermelha no painel, mensagem no Teams, e `tunel_voltou` → `snapshot_saved` no log quando o túnel voltar, sem esperar a janela.
 - **Esforço:** feito (~3h). **Rollback:** `WPA_TUNEL_VIGIA_MS=0` desliga o vigia; `WATCHDOG_TEAMS_WEBHOOK` vazio desliga o aviso; ou `git revert`.
 - **Relacionado:** P0-14 (recuperação), P0-9 (relay), P0-12 (janelas), P1-1 (watchdog), P1-39 (faixa por regional).
+
+## P0-16 — O backfill só grava a produção; o resto ficou vazio de 20/10 a 09/11
+
+- **Categoria:** Dados / Contrato
+- **Status:** **pending** — diagnóstico de 10/11/2026, nada corrigido nem recarregado.
+- **Fonte:** José, 10/11/2026, tela da aba Rejeições (Guarapari, 01/10–10/11): barras zeradas de 19/10 em diante, com exceção de 28/10 e 09/11. "Se as rejeições não vinham, claro que vamos ter mais coisas que não vinham com o backfill e que fugiam do nosso radar."
+- **Evidência (código):**
+  - `runSnapshot` (`services/cronService.js`) grava, além do snapshot e dos totais: `runAlertaProdutividade`, `upsertTeamDailyCarteira`, `runCacheNotaDetails`, `runClassifyRejections` (única chamada, linha ~406), `runColetaInterrupcoes`, escalas. `runJanela` soma escala do dia e notas devolvidas.
+  - `runBackfillDia` grava só `saveSnapshot` + `upsertDailyTotals` + `upsertTeamDailyTotals` + `runClassifyNewNotes` + `runConsolidate`. É o que rodam o botão de backfill do admin e a recuperação do P0-14.
+  - `runFechamento` acrescenta logoffs, intervalos e saída da nota, mas só para o D-1 e só quando o backfill do D-1 dá certo.
+  - `getTeamsByDate` devolve `notasExecutadas: []` ("histórico não distingue em andamento") e não traz `location`, `_carteiraInicialUUIDs`, `escala_inicio/fim`, `isOnline`, `sessionBeginReal`, `shiftType`.
+- **Evidência (banco, 10/11/2026 07h BRT):** coletas ao vivo por dia: 0 em 17/10, 20–27/10 e 30/10–07/11; 14 em 28/10, 6 em 29/10, 15 em 08/11, 3 em 09/11. A produção (`team_daily_totals`) existe em todos os dias, por backfill.
+
+  | Tabela (quem lê) | Último dia normal | Situação 20/10–09/11 |
+  |---|---|---|
+  | `note_rejections` (aba Rejeições, %REJ da matriz, Rotina, consolidação) | 18/10 | 0 linhas, exceto 28/10 (409) e 09/11 (241). Nos snapshots há ~5.080 rejeitadas sem linha (19/10–09/11) |
+  | `note_details` (Deslocamentos, Medição HE, Rotina, reparo de PO) | 18/10 | 0 por dia (30 em 28–29/10 e 09/11); antes ~1.100–1.400/dia útil |
+  | `sessao_intervalo` (Medição HE, Rotina, Saída da nota) | 28/10 | 0 de 19 a 26/10 e de 29/10 em diante (16/10 também 0) |
+  | `saida_nota` (aba Saída da nota) | 28/10 | 0 de 20 a 26/10 e de 29/10 em diante |
+  | `note_interrupcoes` (INTERR da matriz, Rotina, alertas) | 18/10 | 0–6 por dia (32 em 28/10); antes 60–180 |
+  | `team_daily_carteira` (Rotina, carteira) | 19/10 | 0, exceto 28–29/10 e 09/11 |
+  | `notas_snapshots` / `notas_daily_agg` (aba Notas) | 19/10 | 0; última linha em 29/10 |
+  | `escala_dia` (Medição HE, Rotina) | 31/10 | novembro inteiro sem linha |
+  | `alertas_produtividade` | 18/10 | 0 (só existe ao vivo) |
+  | `snapshots.data.notasExecutadas` | 18/10 | 0 em todo dia de backfill |
+
+- **Não é só do incidente:** mesmo em dia normal de janelas, o fechamento do D-1 não classifica rejeições. 28/10: 477 rejeitadas no snapshot final contra 409 gravadas; 09/11: 260 contra 241.
+- **O que foi conferido e NÃO apareceu:** nota contada como produção e também rejeitada. Nos snapshots de backfill de 19/10 a 08/11 nenhuma nota está ao mesmo tempo em `notasConcluidas` e em `notasRejeitadas` (0 candidatas), então não há evidência de produção inflada por falta de `note_rejections`. Não foi medido se a EDP já devolve a nota no bucket final.
+- **Impacto:** aba Rejeições e %REJ subcontados no período; Deslocamentos, Rotina, Saída da nota, aba Notas e interrupções sem dado; Medição HE sem intervalos/retorno à base de 29/10 em diante e sem escala em novembro (`db/heQueries.js` marca "dia sem coleta", não inventa). Números de **produção** não mudam por este item.
+- **Ação (a decidir com o José, por custo na EDP — P0-11):**
+  1. Código: `runBackfillDia` classifica as rejeições das equipes que trouxe; recuperação e botão do admin rodam também intervalos e saída da nota da data.
+  2. Recarga recuperável: rejeições (~5.080 notas, `/api/admin/backfill-rejeicoes`), intervalos (1 requisição por sessão, ~135 por dia útil, 20 dias sem coleta: 16/10, 19–26/10 e 29/10–09/11 menos os já feitos), saída da nota (banco local + GSEQ, sem EDP, depois dos intervalos), escala de novembro (1 por setor; a janela já faz), detalhes de nota (~20 mil notas, o item caro).
+  3. Sem retroativo: carteira, notas devolvidas (aba Notas), alertas, `notasExecutadas`, interrupções (o gatilho é o status ao vivo).
+  4. Radar: relatório diário de cobertura por tabela × dia (as consultas deste item), com aviso quando um dia fecha com produção e sem as tabelas derivadas.
+- **Critério de aceite:** dia fechado por backfill/recuperação tem rejeições, intervalos e saída da nota; relatório de cobertura sem buraco não explicado desde 19/10; teste que falha se `runBackfillDia` deixar de chamar a classificação.
+- **Esforço:** código 0,5 dia; recarga depende do volume aceito; radar 0,5 dia. **Rollback:** `git revert` (código); a recarga é upsert idempotente.
+- **Relacionado:** P0-12 (janelas), P0-14 (recuperação — limitação já anotada para logoffs/intervalos/saída), P0-15, P0-11 (volume), P2-22 (vazio silencioso), P1-15/P1-16 (rejeitada > concluída).
 
 ## P0-1c — Excluir usuário (excluir = ocultar)
 
