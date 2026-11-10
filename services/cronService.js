@@ -1963,6 +1963,37 @@ async function runFechamento({ recuperar = true } = {}) {
   if (recuperar) await runRecuperarDias({ exceto: [ontem] });
 }
 
+// ── RADAR DE COBERTURA (10/11/2026, P0-16) ───────────────────────────────────
+// Depois do fechamento: mede os últimos N dias fechados (produção × rejeições,
+// detalhes, intervalos, saída da nota, escala, carteira, notas devolvidas),
+// grava o resumo em `cobertura_radar` e loga `cobertura_buraco`. Avisa no Teams
+// só pelo D-1 — buraco antigo já foi avisado no dia dele. Só banco, sem EDP.
+// Motivo: três semanas de tabelas vazias (20/10–09/11) sem ninguém ver; ver
+// services/cobertura.js. Nunca lança.
+async function runRadarCobertura({ dias = 7, agora = Date.now(), alertar = caminhoEdp.alertarTeams } = {}) {
+  if (process.env.DATA_MODE === 'mock') return null;
+  try {
+    const cobertura = require('./cobertura');
+    const { _getPool } = require('./pgShim');
+    const hoje = dateBRT(agora), ontem = _diaMais(hoje, -1);
+    const medidos = await cobertura.medir(_getPool(), _diaMais(hoje, -dias), ontem, { hoje });
+    const resumo = cobertura.resumir(medidos, { agora });
+    await require('../db/queries').setSetting(cobertura.SETTING, resumo)
+      .catch(err => log.warn('cobertura_nao_gravada', { msg: err.message }));
+    if (resumo.dias_com_buraco.length) log.error('cobertura_buraco', { dias: resumo.dias_com_buraco });
+    else log.info('cobertura_ok', { de: resumo.de, ate: resumo.ate });
+    const d1 = resumo.dias.find(d => d.dia === ontem && d.buracos.length);
+    if (d1) {
+      await alertar(`🟠 WPA Monitor — ${ontem.split('-').reverse().slice(0, 2).join('/')} fechou com dado faltando: `
+        + `${d1.buracos.join('; ')}. A produção do dia está gravada. Ver RUNBOOK, "Dia fechado com buraco" (P0-16).`);
+    }
+    return resumo;
+  } catch (err) {
+    log.warn('cobertura_falhou', { msg: err.message });
+    return null;
+  }
+}
+
 // ── UMA COLETA POR VEZ + VIGIA DO TÚNEL (09/11/2026, P0-15) ──────────────────
 // Janela, fechamento e a coleta disparada pelo vigia do túnel não se sobrepõem:
 // quem chega com outra em curso é pulado (a recuperação do P0-14 cobre o que
@@ -2049,7 +2080,9 @@ function startCron() {
   const remota = modoColeta() === 'remota';
   if (!remota) {
     snapshotJob = _agendar('janela', `0 ${JANELAS_COLETA_H.join(',')} * * *`, () => _comColeta('janela', () => runJanela()), BRT);
-    const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`, () => _comColeta('fechamento', () => runFechamento()), BRT);
+    // 10/11/2026 (P0-16): o radar de cobertura roda depois do fechamento, dê ele certo ou não.
+    const fechamentoJob = _agendar('fechamento', `0 ${FECHAMENTO_H} * * *`,
+      async () => { await _comColeta('fechamento', () => runFechamento()); await runRadarCobertura(); }, BRT);
     global._extraCronJobs.push(fechamentoJob);
 
     // 09/11/2026 (P0-15): vigia do túnel. Só com WPA_PROXY (a porta do túnel é
@@ -2213,6 +2246,7 @@ module.exports = {
   runRecuperarDias, diasPendentes, diaFechavel, DIAS_FECHADOS_SETTING,
   runTunelVoltou, _comColeta,   // P0-15: vigia do túnel
   runDerivadosDoDia,            // P0-16: intervalos + saída da nota de um dia
+  runRadarCobertura,            // P0-16: radar de cobertura por dia
   runClassifyNewNotes, runCacheNotaDetails,
   runDriftCheck, runDailyDriftSweep,
   runRetryRecentOutros, runRevalidateDD,

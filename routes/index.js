@@ -2201,6 +2201,13 @@ router.get('/admin/health', async (_req, res) => {
       out.token = getTokenStatus();
     } catch (e) { out.token = { error: e.message }; }
 
+    // 10/11/2026 (P0-16): último radar de cobertura (roda depois do fechamento
+    // das 05h) — dias fechados com dado derivado faltando. null = ainda não rodou.
+    try {
+      const r = await require('../db/queries').getSetting(require('../services/cobertura').SETTING);
+      out.cobertura = (r && r.data) || null;
+    } catch (e) { out.cobertura = { error: e.message }; }
+
     // Custo do dia na conta EDP da coleta de interrupções (15/10/2026 — coleta
     // ampliada a todos os tipos). `vazias` = GET que voltou sem interrupção:
     // se um tipo só tem vazias, o gatilho ExecutionStatus 3 não serve pra ele.

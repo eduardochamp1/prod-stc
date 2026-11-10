@@ -538,6 +538,35 @@ curl -s localhost:3002/health
   (1 a cada 30 min). Para forçar: botão "Buscar da EDP agora" do admin.
 - Desligar o vigia: `WPA_TUNEL_VIGIA_MS=0` + restart (regra 4).
 
+### Dia fechado com buraco nas tabelas derivadas (P0-16, 10/11/2026)
+
+A produção de um dia pode estar gravada e o resto não (rejeições, detalhes de
+nota, intervalos, saída da nota). Foi o que aconteceu de 20/10 a 09/11/2026.
+O radar roda sozinho depois do fechamento das 05h; para olhar à mão:
+
+```bash
+node scripts/diag-cobertura-derivados.js                        # últimos 7 dias
+node scripts/diag-cobertura-derivados.js 2026-10-12 2026-11-09  # período
+grep -E 'cobertura_(buraco|ok|falhou)' ~/prod-stc/logs/out.log | tail
+psql -d wpa_monitor -c "select data from app_settings where key='cobertura_radar'"
+```
+
+🔴 = dá para recarregar; 🟠 = sem retroativo (carteira, notas devolvidas). O
+mesmo resumo sai em `/api/admin/health` (campo `cobertura`).
+
+Recarga, **um script por vez** e com o túnel de pé (`node scripts/check-wpa.js`):
+
+| Falta | Comando | Custo na EDP |
+|---|---|---|
+| rejeições | `node scripts/backfill-rejections.js <de> <ate> --limit=1000` (repetir até "Tudo já está") | 1 por nota |
+| intervalos | `node scripts/backfill-intervalos.js --de <de> --ate <ate> --apply` | 1 por sessão (~135/dia) |
+| saída da nota | `node scripts/backfill-saida-nota.js --de <de> --ate <ate> --apply` (depois dos intervalos) | nenhum (banco + GSEQ) |
+| detalhes de nota | `node scripts/backfill-note-details.js --de <de>` (conta) e `--apply` | 1 por nota (~1.200/dia útil) |
+| dia inteiro | botão de backfill do admin — refaz produção, rejeições, intervalos e saída | ~2.000 + os acima |
+
+- ⚠️ `backfill-rejections.js --dry-run` **chama a EDP** (só não grava). Para testar, use `--limit=20`.
+- ⚠️ Se o túnel cair no meio, o `backfill-rejections.js` grava a rejeição **sem motivo**. Rode em lotes (`--limit`) e confira o túnel entre eles; o que ficar vazio se conserta com `--retry-empty`.
+
 
 > ⚠️ **REGRA CRÍTICA — nunca rode backfill em múltiplos processos.**
 > Em 09/07/2026 um backfill como `for d in $(seq 0 60); do node -e ...; done`
