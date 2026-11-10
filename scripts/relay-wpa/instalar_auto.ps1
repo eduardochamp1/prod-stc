@@ -60,7 +60,7 @@ if (-not (Test-Path $chave)) {
 }
 
 # 2. Cadastra a chave na VM, sem duplicar (o grep na VM decide).
-#    10/11/2026: a 1a versao testava antes com "ssh ... exit" e TRAVOU na maquina
+#    09/11/2026: a 1a versao testava antes com "ssh ... exit" e TRAVOU na maquina
 #    do Jose logo depois de "Chave criada": o ssh autenticou (por outra chave que
 #    o PC ja tinha), o comando terminou na VM e o ssh do Windows nao voltou. Sem
 #    teste previo agora; quem prova que funcionou e o tunel de pe no passo 4.
